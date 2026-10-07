@@ -84,14 +84,22 @@ jobs:
         run: |
           set -euo pipefail
           release="$CARGO_TARGET_DIR/universal-apple-darwin/release"
-          app="$release/bundle/macos/Pi Desk.app"
+          dmgs=("$release/bundle/dmg/"*.dmg)
+          test "${#dmgs[@]}" = 1
+          test -s "${dmgs[0]}"
+          # 仅构建 DMG 时 Tauri 会移除中间 app，直接校验最终安装介质。
+          mountpoint="$RUNNER_TEMP/pi-desk-dmg-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$mountpoint"
+          hdiutil attach "${dmgs[0]}" -readonly -nobrowse -mountpoint "$mountpoint"
+          trap 'hdiutil detach "$mountpoint" > /dev/null' EXIT
+          app="$mountpoint/Pi Desk.app"
+          test -f "$app/Contents/Info.plist"
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
           test -s "$app/Contents/MacOS/$executable"
           lipo "$app/Contents/MacOS/$executable" -verify_arch arm64 x86_64
           codesign --verify --deep --strict "$app"
-          dmgs=("$release/bundle/dmg/"*.dmg)
-          test "${#dmgs[@]}" = 1
           version=$(node -p 'require("./apps/desktop/package.json").version')
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
           mkdir -p "$CLIENT_OUTPUT"
           suffix=adhoc
           if [[ "$SIGNED" == true ]]; then suffix=developer-id; fi
