@@ -43,6 +43,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     env:
+      # 系统环境测试共享 Windows 用户会话；用例内部的并发行为仍正常验证。
+      RUST_TEST_THREADS: '1'
       CARGO_TARGET_DIR: ${{ github.workspace }}/temp/build/desktop-ci/${{ github.run_id }}-${{ github.run_attempt }}
       PI_DESK_DESKTOP_WEB_DIST: ${{ github.workspace }}/temp/build/desktop-ci/${{ github.run_id }}-${{ github.run_attempt }}/web
       CLIENT_OUTPUT: ${{ github.workspace }}/temp/package/clients/windows/${{ github.run_id }}-${{ github.run_attempt }}

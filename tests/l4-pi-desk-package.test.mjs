@@ -61,7 +61,10 @@ test('候选预热要求成对提供就绪和激活文件', () => {
       standbyActivateFile: 'C:/temp/activate'
     }
   )
-  assert.throws(() => parseLaunchOptions(['--standby-ready-file', 'C:/temp/ready'], {}), /同时提供/)
+  assert.throws(
+    () => parseLaunchOptions(['--standby-ready-file', 'C:/temp/ready'], {}),
+    /--standby-ready-file.*--standby-activate-file/
+  )
 })
 
 test('SuperTool 托管日志达到上限后只保留固定备份', (context) => {

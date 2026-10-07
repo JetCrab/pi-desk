@@ -350,7 +350,12 @@ fn native_architecture_matches_operating_system_independent_of_shell_bitness() {
         &|| false,
         &[],
     )
-    .unwrap();
+    .unwrap_or_else(|error| {
+        panic!(
+            "系统架构探针失败：{error}\n{}",
+            fs::read_to_string(directory.0.join("desktop.log")).unwrap_or_default()
+        )
+    });
     assert!(output.status.success());
     let actual = native_architecture().unwrap();
     let value = process::decode_output(&output.stdout);
@@ -550,7 +555,12 @@ try {{
                 target.as_os_str().into(),
             )],
         )
-        .unwrap();
+        .unwrap_or_else(|error| {
+            panic!(
+                "隔离注册表探针失败：{error}\n{}",
+                fs::read_to_string(directory.0.join("desktop.log")).unwrap_or_default()
+            )
+        });
         assert!(
             output.status.success(),
             "{}",
