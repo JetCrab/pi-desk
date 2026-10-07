@@ -753,6 +753,10 @@ test('近期报表沿父记录读取旧子代理并去重 Fork 复制 Entry', as
   }
   const runtime = new UsageRuntime({
     sessionsRoot,
+    settings: {
+      getSnapshot: () => ({ region: { locale: 'zh-CN', timeZone: 'Asia/Shanghai' } }),
+      subscribe: () => () => undefined
+    },
     workSessions: {
       listWorkSessions: async () => [
         { source: forkSource, cwd: join(root, 'project'), status: 'idle' as const }
