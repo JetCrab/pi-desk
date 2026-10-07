@@ -67,6 +67,12 @@ test('插件首次启动复制旧配置到 Pi Desk 路径并保留原文件', as
   }
 
   const facade = {
+    host: {
+      settings: {
+        getSnapshot: () => ({ region: { locale: 'zh-CN', timeZone: 'Asia/Shanghai' } }),
+        subscribe: () => () => undefined
+      }
+    },
     registerMethod() {},
     registerBrowserEntry() {},
     setState() {},
@@ -83,6 +89,9 @@ test('插件首次启动复制旧配置到 Pi Desk 路径并保留原文件', as
   const currentPath = join(agentDir, 'pi-desk-tibo-monitor.json')
 
   assert.equal(plugin.name, 'tibo-monitor')
-  assert.equal(await readFile(currentPath, 'utf8'), previousContent)
+  assert.deepEqual(JSON.parse(await readFile(currentPath, 'utf8')), {
+    ...JSON.parse(previousContent),
+    analysisRegion: { locale: 'zh-CN', timeZone: 'Asia/Shanghai' }
+  })
   assert.equal(await readFile(previousPath, 'utf8'), previousContent)
 })

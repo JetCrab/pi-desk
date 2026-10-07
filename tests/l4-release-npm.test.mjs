@@ -39,6 +39,26 @@ test('包管理命令保留参数与带空格路径而不被Shell二次转义', 
   assert.deepEqual(JSON.parse(output), ['value with spaces'])
 })
 
+test('插件独立配置解析SDK发布入口而非宿主源码别名', () => {
+  const directory = resolve('plugins/pi-desk-tibo-monitor')
+  const output = run(
+    process.execPath,
+    [
+      '--import',
+      'tsx',
+      '--input-type=module',
+      '-e',
+      'console.log(import.meta.resolve("@jetcrab/pi-desk-sdk/host-runtime/base.js"))'
+    ],
+    {
+      cwd: directory,
+      capture: true,
+      env: { ...process.env, TSX_TSCONFIG_PATH: join(directory, 'tsconfig.json') }
+    }
+  )
+  assert.match(output.trim(), /\/dist\/host-runtime\/base\.js$/)
+})
+
 test('公开包发布先SDK，允许单独选择包但不接受未知目标', async (context) => {
   const root = await fixture(context)
   const all = await selectPackages(root, 'all')

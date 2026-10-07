@@ -121,7 +121,9 @@ async function verifyArchive(entry, output) {
 async function prepare(entries, output) {
   await mkdir(output, { recursive: true })
   const [sdk] = await selectPackages(projectRoot, 'pi-desk-sdk')
-  run('pnpm', ['--dir', sdk.directory, 'test'])
+  run('pnpm', ['--dir', sdk.directory, 'test'], {
+    env: { ...process.env, TSX_TSCONFIG_PATH: join(sdk.directory, 'tsconfig.json') }
+  })
   run(process.execPath, [
     '--test',
     'tests/l4-public-boundary.test.mjs',
@@ -141,8 +143,9 @@ async function prepare(entries, output) {
         force: true
       })
     } else {
-      run('pnpm', ['--dir', entry.directory, 'build'])
-      run('pnpm', ['--dir', entry.directory, 'test'])
+      const env = { ...process.env, TSX_TSCONFIG_PATH: join(entry.directory, 'tsconfig.json') }
+      run('pnpm', ['--dir', entry.directory, 'build'], { env })
+      run('pnpm', ['--dir', entry.directory, 'test'], { env })
     }
   }
   const packed = entries.some((entry) => entry.manifest.name === sdkName)
