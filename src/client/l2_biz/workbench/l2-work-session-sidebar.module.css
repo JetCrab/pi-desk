@@ -1,0 +1,77 @@
+:global(:root:not(.dark)) .sidebarAction {
+  color: oklch(0.31 0 0);
+}
+
+:global(:root:not(.dark)) .rowMetadata {
+  color: oklch(0.49 0 0);
+}
+
+.sessionRow {
+  --row-background: var(--sidebar);
+  background-color: var(--row-background);
+}
+
+.runningBorder {
+  position: absolute;
+  inset: -1px;
+  width: calc(100% + 2px);
+  height: calc(100% + 2px);
+  pointer-events: none;
+  color: var(--pi-desk-project-color);
+}
+
+.runningBorder rect {
+  rx: calc(var(--radius) - 0.5px);
+  width: calc(100% - 1px);
+  height: calc(100% - 1px);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  stroke-dasharray: 6 6;
+}
+
+.sessionRow[aria-pressed='true'] {
+  --row-background: var(--accent);
+}
+
+.rowActions {
+  background-color: var(--row-background);
+  transition:
+    background-color 150ms ease-out,
+    opacity 150ms ease-out;
+}
+
+@media (hover: hover) {
+  .sessionRow:hover {
+    --row-background: color-mix(in oklab, var(--sidebar), var(--accent) 50%);
+  }
+
+  .sessionRow[aria-pressed='true']:hover {
+    --row-background: color-mix(in oklab, var(--accent), var(--foreground) 4%);
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .desktopRow .rowActions {
+    position: absolute;
+    inset-inline-end: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .desktopRow:is(:hover, :focus-visible, :has(:focus-visible)) .rowActions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .desktopRow:is(:hover, :focus-visible, :has(:focus-visible)) .rowTitle {
+    padding-inline-end: 3.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sessionRow,
+  .rowActions {
+    transition: none;
+  }
+}

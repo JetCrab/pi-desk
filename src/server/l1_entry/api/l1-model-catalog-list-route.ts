@@ -1,0 +1,32 @@
+import 'server-only'
+
+import { L2ModelCatalogListRequestSchema } from '@common/l2_biz/model-settings/l2-model-settings-contract'
+import { listL2ModelCatalog } from '@server/l2_biz/model-settings/l2-model-settings'
+import {
+  createL4ApiErrorResponse,
+  createL4ApiSuccessResponse
+} from '@server/l4_foundation/http/l4-api-response'
+
+export async function POST(request: Request): Promise<Response> {
+  let payload: unknown
+  try {
+    payload = await request.json()
+  } catch {
+    return createL4ApiErrorResponse(400, '请求 JSON 格式无效', { key: 'errors:invalidJson' })
+  }
+  const input = L2ModelCatalogListRequestSchema.safeParse(payload)
+  if (!input.success)
+    return createL4ApiErrorResponse(400, '模型目录参数无效', { key: 'errors:modelCatalogInvalid' })
+
+  try {
+    return createL4ApiSuccessResponse(await listL2ModelCatalog(input.data))
+  } catch (error) {
+    console.error('[Pi Desk][ModelCatalogListApi] 查询模型参考目录失败', {
+      refresh: input.data.refresh,
+      errorName: error instanceof Error ? error.name : 'UnknownError'
+    })
+    return createL4ApiErrorResponse(502, '模型参考目录暂不可用', {
+      key: 'errors:modelCatalogUnavailable'
+    })
+  }
+}

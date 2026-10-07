@@ -1,0 +1,25 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "base-nova",
+  "rsc": true,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "src/client/l4_foundation/styles/l4-globals.css",
+    "baseColor": "mist",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "iconLibrary": "lucide",
+  "rtl": false,
+  "aliases": {
+    "components": "@client/l4_foundation/ui",
+    "utils": "@client/l4_foundation/lib/l4-utils",
+    "ui": "@client/l4_foundation/ui/shadcn",
+    "lib": "@client/l4_foundation/lib",
+    "hooks": "@client/l4_foundation/hooks"
+  },
+  "menuColor": "default",
+  "menuAccent": "subtle",
+  "registries": {}
+}

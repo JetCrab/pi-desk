@@ -1,0 +1,6 @@
+[workspace]
+members = ["client", "common", "server"]
+resolver = "3"
+
+[profile.dev]
+debug = "line-tables-only"

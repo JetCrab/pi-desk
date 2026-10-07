@@ -1,0 +1,122 @@
+{
+  "name": "@jetcrab/pi-desk-sdk",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JetCrab/pi-desk.git",
+    "directory": "plugins/pi-desk-sdk"
+  },
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./settings": {
+      "types": "./dist/settings.d.ts",
+      "import": "./dist/settings.js",
+      "default": "./dist/settings.js"
+    },
+    "./errors": {
+      "types": "./dist/errors.d.ts",
+      "import": "./dist/errors.js",
+      "default": "./dist/errors.js"
+    },
+    "./capabilities": {
+      "types": "./dist/capabilities.d.ts",
+      "import": "./dist/capabilities.js",
+      "default": "./dist/capabilities.js"
+    },
+    "./entry": {
+      "types": "./dist/entry.d.ts",
+      "import": "./dist/entry.js",
+      "default": "./dist/entry.js"
+    },
+    "./session": {
+      "types": "./dist/session.d.ts",
+      "import": "./dist/session.js",
+      "default": "./dist/session.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js",
+      "default": "./dist/browser.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js",
+      "default": "./dist/react.js"
+    },
+    "./react/base": {
+      "types": "./dist/react-base.d.ts",
+      "import": "./dist/react-base.js",
+      "default": "./dist/react-base.js"
+    },
+    "./react/markdown": {
+      "types": "./dist/react-markdown.d.ts",
+      "import": "./dist/react-markdown.js",
+      "default": "./dist/react-markdown.js"
+    },
+    "./host-runtime/*": "./dist/host-runtime/*"
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build-host-runtime.mjs",
+    "prepack": "pnpm run build",
+    "test": "pnpm run build && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@base-ui/react": "^1.7.0",
+    "@earendil-works/pi-coding-agent": "*",
+    "@streamdown/cjk": "^1.0.3",
+    "lucide-react": "^1.31.0",
+    "react": ">=19",
+    "react-dom": ">=19",
+    "streamdown": "^2.5.0"
+  },
+  "peerDependenciesMeta": {
+    "@base-ui/react": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@streamdown/cjk": {
+      "optional": true
+    },
+    "lucide-react": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    },
+    "streamdown": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@base-ui/react": "^1.7.0",
+    "@streamdown/cjk": "^1.0.3",
+    "esbuild": "^0.28.2",
+    "lucide-react": "^1.31.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "streamdown": "^2.5.0"
+  }
+}

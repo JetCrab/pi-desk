@@ -1,0 +1,473 @@
+@import 'tailwindcss' source(none);
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+@import '@fontsource-variable/inter';
+@import 'katex/dist/katex.min.css';
+@import 'streamdown/styles.css';
+@import 'viewerjs/dist/viewer.css';
+
+/* 宿主源码和第三方来源显式声明，避免扫描整个项目及其运行产物。 */
+@source '../../../../src';
+@source '../../../../node_modules/streamdown/dist/*.js';
+@source '../../../../node_modules/@streamdown/cjk/dist/*.js';
+@source '../../../../node_modules/@streamdown/code/dist/*.js';
+@source '../../../../node_modules/@streamdown/math/dist/*.js';
+@source '../../../../node_modules/@streamdown/mermaid/dist/*.js';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-heading:
+    'Inter Variable', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --font-sans: 'Inter Variable', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-status-success: var(--status-success);
+  --color-status-warning: var(--status-warning);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: 0.375rem;
+  --radius-md: 0.375rem;
+  --radius-lg: var(--radius);
+  --radius-xl: 0.75rem;
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --chat-body-font-size: 0.875rem;
+  --chat-user-line-height: 1.25rem;
+  --chat-tool-font-size: 0.75rem;
+  --chat-code-font-size: 0.8125rem;
+  --chat-code-line-height: 1.25rem;
+  font-size: 100%;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.25 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.25 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.25 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.95 0 0);
+  --secondary-foreground: oklch(0.25 0 0);
+  --muted: oklch(0.965 0 0);
+  --muted-foreground: oklch(0.46 0 0);
+  --accent: oklch(0.925 0 0);
+  --accent-foreground: oklch(0.25 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --status-success: oklch(0.46 0.1 160);
+  --status-warning: oklch(0.48 0.1 75);
+  --border: oklch(0.915 0 0);
+  --input: oklch(0.65 0 0);
+  --ring: oklch(0.45 0 0);
+  --chart-1: oklch(0.855 0.138 181.071);
+  --chart-2: oklch(0.704 0.14 182.503);
+  --chart-3: oklch(0.6 0.118 184.704);
+  --chart-4: oklch(0.511 0.096 186.391);
+  --chart-5: oklch(0.437 0.078 188.216);
+  --radius: 0.5rem;
+  --sidebar: oklch(0.975 0 0);
+  --sidebar-foreground: oklch(0.25 0 0);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+  --project-color-lightness: 0.49;
+  --project-color-chroma: 0.1;
+  color-scheme: light;
+}
+
+/* 根级尺度覆盖 Portal 与插件；不改变用户拖拽得到的像素列宽。 */
+:root[data-pi-desk-display-size='standard'] {
+  font-size: 112.5%;
+}
+
+:root[data-pi-desk-display-size='large'] {
+  font-size: 125%;
+}
+
+.dark {
+  --background: oklch(0.21 0 0);
+  --foreground: oklch(0.94 0 0);
+  --card: oklch(0.255 0 0);
+  --card-foreground: oklch(0.94 0 0);
+  --popover: oklch(0.27 0 0);
+  --popover-foreground: oklch(0.94 0 0);
+  --primary: oklch(0.94 0 0);
+  --primary-foreground: oklch(0.2 0 0);
+  --secondary: oklch(0.28 0 0);
+  --secondary-foreground: oklch(0.94 0 0);
+  --muted: oklch(0.245 0 0);
+  --muted-foreground: oklch(0.72 0 0);
+  --accent: oklch(0.29 0 0);
+  --accent-foreground: oklch(0.94 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --status-success: oklch(0.76 0.12 160);
+  --status-warning: oklch(0.78 0.11 80);
+  --border: oklch(0.3 0 0);
+  --input: oklch(0.55 0 0);
+  --ring: oklch(0.76 0 0);
+  --chart-1: oklch(0.855 0.138 181.071);
+  --chart-2: oklch(0.704 0.14 182.503);
+  --chart-3: oklch(0.6 0.118 184.704);
+  --chart-4: oklch(0.511 0.096 186.391);
+  --chart-5: oklch(0.437 0.078 188.216);
+  --sidebar: oklch(0.18 0 0);
+  --sidebar-foreground: oklch(0.94 0 0);
+  --project-color-lightness: 0.76;
+  --project-color-chroma: 0.1;
+  color-scheme: dark;
+}
+
+[data-pi-desk-plugin] {
+  --pi-desk-plugin-background: var(--background);
+  --pi-desk-plugin-foreground: var(--foreground);
+  --pi-desk-plugin-surface: var(--card);
+  --pi-desk-plugin-surface-foreground: var(--card-foreground);
+  --pi-desk-plugin-muted: var(--muted);
+  --pi-desk-plugin-muted-foreground: var(--muted-foreground);
+  --pi-desk-plugin-primary: var(--primary);
+  --pi-desk-plugin-primary-foreground: var(--primary-foreground);
+  --pi-desk-plugin-destructive: var(--destructive);
+  --pi-desk-plugin-border: var(--border);
+  --pi-desk-plugin-input: var(--input);
+  --pi-desk-plugin-ring: var(--ring);
+  --pi-desk-plugin-radius: var(--radius);
+}
+
+[data-pi-desk-kind='session-sidebar-tab'] {
+  --pi-desk-plugin-background: var(--sidebar);
+}
+
+.pi-desk-image-viewer-host {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pi-desk-image-viewer-source {
+  position: fixed;
+  top: -10000px;
+  left: -10000px;
+  display: block;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pi-desk-image-viewer.viewer-container {
+  font-family: var(--font-sans);
+}
+
+.pi-desk-image-viewer-modal.viewer-backdrop {
+  background-color: rgb(3 7 18 / 94%);
+  backdrop-filter: blur(2px);
+}
+
+.pi-desk-image-viewer-inline {
+  background-color: transparent;
+}
+
+.pi-desk-image-viewer .viewer-canvas > img {
+  filter: drop-shadow(0 1rem 2.5rem rgb(0 0 0 / 35%));
+}
+
+.pi-desk-image-viewer .viewer-toolbar > ul {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0 auto max(0.75rem, env(safe-area-inset-bottom));
+  overflow: visible;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 0.75rem;
+  background: rgb(0 0 0 / 48%);
+  padding: 0.25rem;
+  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 24%);
+  backdrop-filter: blur(12px);
+}
+
+.pi-desk-image-viewer .viewer-toolbar > ul > li {
+  display: grid;
+  float: none;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  margin: 0;
+  border-radius: 0.5rem;
+  background-color: transparent;
+  transition:
+    background-color 120ms ease,
+    opacity 120ms ease;
+}
+
+.pi-desk-image-viewer .viewer-toolbar > ul > li + li {
+  margin-left: 0;
+}
+
+.pi-desk-image-viewer .viewer-toolbar > ul > li::before {
+  margin: 0;
+}
+
+.pi-desk-image-viewer .viewer-toolbar > ul > li:hover,
+.pi-desk-image-viewer .viewer-toolbar > ul > li:focus-visible {
+  background-color: rgb(255 255 255 / 16%);
+}
+
+.pi-desk-image-viewer .viewer-toolbar > ul > li:focus-visible,
+.pi-desk-image-viewer .viewer-button:focus-visible,
+.pi-desk-image-viewer .viewer-list > li:focus-visible {
+  outline: 2px solid rgb(255 255 255 / 92%);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+.pi-desk-image-viewer .viewer-button {
+  top: max(0.75rem, env(safe-area-inset-top));
+  right: max(0.75rem, env(safe-area-inset-right));
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 0.625rem;
+  background-color: rgb(0 0 0 / 48%);
+  box-shadow: 0 0.25rem 1rem rgb(0 0 0 / 20%);
+  backdrop-filter: blur(12px);
+}
+
+.pi-desk-image-viewer .viewer-button:hover,
+.pi-desk-image-viewer .viewer-button:focus-visible {
+  background-color: rgb(255 255 255 / 16%);
+}
+
+.pi-desk-image-viewer .viewer-button::before {
+  bottom: 0.625rem;
+  left: 0.625rem;
+}
+
+.pi-desk-image-viewer .viewer-navbar {
+  background: transparent;
+}
+
+.pi-desk-image-viewer .viewer-list {
+  display: inline-flex;
+  width: auto;
+  height: 3.25rem;
+  gap: 0.25rem;
+  margin: 0 auto max(0.5rem, env(safe-area-inset-bottom));
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 0.75rem;
+  background: rgb(0 0 0 / 42%);
+  padding: 0.25rem;
+  backdrop-filter: blur(12px);
+}
+
+.pi-desk-image-viewer .viewer-list > li {
+  float: none;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin: 0;
+  overflow: hidden;
+  border: 2px solid transparent;
+  border-radius: 0.5rem;
+  opacity: 0.56;
+}
+
+.pi-desk-image-viewer .viewer-list > li + li {
+  margin-left: 0;
+}
+
+.pi-desk-image-viewer .viewer-list > li > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pi-desk-image-viewer .viewer-list > .viewer-active {
+  border-color: rgb(255 255 255 / 92%);
+  opacity: 1;
+}
+
+.pi-desk-image-viewer .viewer-title {
+  margin: 0.5rem 4%;
+  border-radius: 0.5rem;
+  background: rgb(0 0 0 / 36%);
+  padding: 0.375rem 0.625rem;
+  color: rgb(255 255 255 / 84%);
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  backdrop-filter: blur(10px);
+}
+
+.pi-desk-image-viewer .viewer-tooltip {
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 0.5rem;
+  background-color: rgb(0 0 0 / 72%);
+  backdrop-filter: blur(10px);
+}
+
+.pi-desk-image-viewer .viewer-move {
+  cursor: grab;
+}
+
+.pi-desk-image-viewer .viewer-canvas:active .viewer-move {
+  cursor: grabbing;
+}
+
+.pi-desk-image-viewer-counter {
+  position: absolute;
+  top: max(0.75rem, env(safe-area-inset-top));
+  left: max(0.75rem, env(safe-area-inset-left));
+  z-index: 2;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 0.625rem;
+  background: rgb(0 0 0 / 48%);
+  padding: 0.5rem 0.75rem;
+  color: rgb(255 255 255 / 84%);
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0.25rem 1rem rgb(0 0 0 / 20%);
+  backdrop-filter: blur(12px);
+}
+
+@media (max-width: 767px) {
+  .pi-desk-image-viewer .viewer-hide-xs-down {
+    display: none;
+  }
+
+  .pi-desk-image-viewer .viewer-toolbar > ul > li {
+    width: 2.125rem;
+    height: 2.125rem;
+  }
+}
+
+@media (max-width: 991px) {
+  .pi-desk-image-viewer .viewer-hide-sm-down {
+    display: none;
+  }
+}
+
+@media (max-width: 1199px) {
+  .pi-desk-image-viewer .viewer-hide-md-down {
+    display: none;
+  }
+}
+
+.pi-desk-chat-turn-contained {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 24rem;
+}
+
+/* 拖拽列宽时由 Separator 状态直接收紧聊天交互，不引入 React resize 状态。 */
+.pi-desk-workbench-resize-group:has(> [data-slot='resizable-handle'][data-separator='active'])
+  .pi-desk-chat-conversation-scroll {
+  overflow-anchor: none;
+}
+
+.pi-desk-workbench-resize-group:has(> [data-slot='resizable-handle'][data-separator='active'])
+  .pi-desk-workbench-resize-interactions {
+  pointer-events: none;
+  user-select: none;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .pi-desk-chat-scrollbar,
+  .pi-desk-chat-scrollbar * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 45%, transparent) transparent;
+  }
+}
+
+.pi-desk-chat-scrollbar::-webkit-scrollbar,
+.pi-desk-chat-scrollbar *::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.pi-desk-chat-scrollbar::-webkit-scrollbar-track,
+.pi-desk-chat-scrollbar *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pi-desk-chat-scrollbar::-webkit-scrollbar-button,
+.pi-desk-chat-scrollbar *::-webkit-scrollbar-button {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.pi-desk-chat-scrollbar::-webkit-scrollbar-thumb,
+.pi-desk-chat-scrollbar *::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
+}
+
+.pi-desk-chat-scrollbar::-webkit-scrollbar-thumb:hover,
+.pi-desk-chat-scrollbar *::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--muted-foreground) 70%, transparent);
+}
+
+@keyframes pi-desk-chat-send-flight {
+  from {
+    transform: translate(-1px, 1px);
+  }
+  to {
+    transform: translate(2px, -2px);
+  }
+}
+
+.pi-desk-chat-send-icon {
+  animation: pi-desk-chat-send-flight 0.72s ease-in-out infinite alternate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pi-desk-chat-send-icon {
+    animation: none;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply min-h-screen bg-background text-foreground antialiased;
+  }
+  html {
+    @apply font-sans;
+  }
+}

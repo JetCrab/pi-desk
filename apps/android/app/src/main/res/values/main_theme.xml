@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.PiDesk.Main" parent="Theme.PiDesk">
+        <item name="android:windowBackground">@color/main_background</item>
+        <item name="android:colorBackground">@color/main_background</item>
+        <item name="android:colorAccent">@color/main_text</item>
+        <item name="android:textColorPrimary">@color/main_text</item>
+        <item name="android:textColorSecondary">@color/main_muted</item>
+        <item name="android:popupBackground">@drawable/main_popup_background</item>
+        <item name="android:alertDialogTheme">@style/Theme.PiDesk.Main.Dialog</item>
+    </style>
+
+    <style name="Theme.PiDesk.Main.Dialog" parent="android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">@drawable/main_popup_background</item>
+        <item name="android:colorBackground">@color/main_surface</item>
+        <item name="android:colorAccent">@color/main_text</item>
+        <item name="android:textColorPrimary">@color/main_text</item>
+        <item name="android:textColorSecondary">@color/main_muted</item>
+    </style>
+</resources>

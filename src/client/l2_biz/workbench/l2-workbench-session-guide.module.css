@@ -1,0 +1,38 @@
+.guide {
+  position: absolute;
+  bottom: calc(100% + 24px);
+  left: 50%;
+  width: max-content;
+  transform: translateX(-50%);
+}
+
+/* 仅调整本页头像的占位，不改变其他场景的动画尺寸。 */
+.otter {
+  width: 120px !important;
+  height: 90px !important;
+}
+
+.arrow {
+  position: absolute;
+  top: 0;
+  right: calc(100% + 12px);
+  width: 32px;
+  height: 32px;
+  overflow: visible;
+  pointer-events: none;
+  color: var(--muted-foreground);
+}
+
+@container empty-state (min-width: 640px) {
+  .otter {
+    width: 180px !important;
+    height: 135px !important;
+  }
+}
+
+@media (max-height: 480px) {
+  .otter {
+    width: 120px !important;
+    height: 90px !important;
+  }
+}

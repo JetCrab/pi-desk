@@ -1,0 +1,32 @@
+[package]
+name = "pi-desk-tunnel-common"
+version = "1.0.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Pi Desk Noise TCP tunnel runtime and encrypted control protocol"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+backoff = { version = "0.4", features = ["tokio"] }
+base64 = "0.13"
+bincode = "1"
+chacha20poly1305 = "0.11"
+getrandom = "0.3"
+hex = "0.4"
+lazy_static = "1.4"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+snowstorm = { version = "0.4", features = ["stream"], default-features = false }
+socket2 = { version = "0.4", features = ["all"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "=0.7.13", features = ["compat", "io"] }
+tracing = "0.1"
+ureq = "3"
+url = "2"
+yamux = "=0.13.10"
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

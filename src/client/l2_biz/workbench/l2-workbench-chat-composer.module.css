@@ -1,0 +1,88 @@
+.inputFrame {
+  position: relative;
+  isolation: isolate;
+  container-type: inline-size;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xl);
+}
+
+.inputText {
+  font-size: var(--chat-body-font-size, 0.875rem);
+  line-height: var(--chat-user-line-height, 1.25rem);
+}
+
+/* 软键盘打开时优先保留聊天阅读空间，长草稿在文本区内滚动。 */
+.inputFrame[data-composer-mobile='true'] .inputText {
+  max-height: 6rem;
+}
+
+.footer {
+  flex-wrap: nowrap;
+  padding-inline: 0.75rem;
+  padding-bottom: 0.625rem;
+}
+
+.primaryTools {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 0;
+}
+
+.metadataTools {
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  gap: 0;
+  overflow: hidden;
+}
+
+.submitTools {
+  margin-left: auto;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.modelTrigger {
+  position: relative;
+  min-width: 2rem;
+  max-width: 13rem;
+  flex: 0 1 auto;
+  gap: 0;
+  overflow: hidden;
+  padding-inline: 0.5rem;
+}
+
+.modelTriggerDetails {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.inputFrame[data-composer-mobile='false'][data-composer-metadata-row='true'] .footer {
+  flex-wrap: wrap;
+  row-gap: 0.25rem;
+}
+
+.inputFrame[data-composer-mobile='false'][data-composer-metadata-row='true'] .metadataTools {
+  order: -1;
+  flex-basis: 100%;
+}
+
+.inputFrame[data-composer-mobile='false'][data-composer-metadata-row='true'] .primaryTools {
+  flex: 1 1 auto;
+}
+
+@container (max-width: 350px) {
+  .inputFrame[data-composer-mobile='true'] .modelTrigger {
+    width: 2rem;
+    max-width: 2rem;
+    flex: 0 0 2rem;
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .inputFrame[data-composer-mobile='true'] .modelTriggerDetails {
+    display: none;
+  }
+}

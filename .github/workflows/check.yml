@@ -1,0 +1,53 @@
+name: Source checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TSX_TSCONFIG_PATH: ${{ github.workspace }}/tsconfig.json
+      PI_CODING_AGENT_DIR: ${{ github.workspace }}/temp/pi/ci-web/web-checks-${{ github.run_id }}-${{ github.run_attempt }}/agent
+      PI_CODING_AGENT_SESSION_DIR: ${{ github.workspace }}/temp/pi/ci-web/web-checks-${{ github.run_id }}-${{ github.run_attempt }}/agent/sessions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+      - name: Install public workspace dependencies
+        run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
+      - name: Prepare SDK Host Runtime
+        run: pnpm build:plugin-host-runtime
+      - name: Check production types
+        run: pnpm typecheck
+      - name: Check test types
+        run: pnpm typecheck:tests
+      - name: Check source lint and dependency layers
+        run: pnpm lint && pnpm check:layers
+      - name: Check formatting
+        run: pnpm format:check
+      - name: Run local protocol and state regressions
+        run: >-
+          node --import tsx --test
+          tests/l4-api-request.test.ts
+          tests/l4-public-boundary.test.mjs
+          tests/l2-chat-state.test.ts
+          tests/l2-task-center-state.test.ts
+          tests/l2-work-session-update.test.ts
+          tests/l2-workbench-layout.test.ts
+          tests/l3-app-runtime-state.test.ts
+          tests/l3-project-file-tree.test.ts

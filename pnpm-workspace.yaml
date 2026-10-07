@@ -1,0 +1,15 @@
+packages:
+  - 'plugins/*'
+
+overrides:
+  '@earendil-works/pi-agent-core': '$@earendil-works/pi-agent-core'
+  '@earendil-works/pi-ai': '$@earendil-works/pi-ai'
+  '@earendil-works/pi-coding-agent': '$@earendil-works/pi-coding-agent'
+  '@earendil-works/pi-tui': '$@earendil-works/pi-tui'
+
+onlyBuiltDependencies:
+  - node-pty
+
+ignoredBuiltDependencies:
+  - sharp
+  - unrs-resolver

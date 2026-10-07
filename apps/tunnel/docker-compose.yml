@@ -1,0 +1,22 @@
+services:
+  pi-desk-tunnel-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pi-desk-tunnel-server:latest
+    restart: always
+    network_mode: host
+    environment:
+      TZ: Asia/Shanghai
+      RUST_LOG: ${RUST_LOG:-info}
+      PI_DESK_TUNNEL_BIND: ${PI_DESK_TUNNEL_BIND:-0.0.0.0:7001}
+      PI_DESK_TUNNEL_SERVER_KEY: ${PI_DESK_TUNNEL_SERVER_KEY}
+      PI_DESK_TUNNEL_RELAY_BIND: ${PI_DESK_TUNNEL_RELAY_BIND:-0.0.0.0:7002}
+      PI_DESK_TUNNEL_PUBLIC_RELAY: ${PI_DESK_TUNNEL_PUBLIC_RELAY}
+      PI_DESK_TUNNEL_PUBLIC_HOST: ${PI_DESK_TUNNEL_PUBLIC_HOST}
+      PI_DESK_TUNNEL_PRIVATE_KEY: ${PI_DESK_TUNNEL_PRIVATE_KEY}
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'

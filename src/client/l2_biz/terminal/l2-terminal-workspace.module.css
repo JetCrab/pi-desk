@@ -1,0 +1,21 @@
+.viewport {
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted-foreground) transparent;
+}
+
+.canvas {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+
+.canvas :global(.xterm-viewport) {
+  scrollbar-width: thin;
+}
+
+.mobile {
+  height: var(--terminal-visible-height, 100%);
+  max-height: 100%;
+}

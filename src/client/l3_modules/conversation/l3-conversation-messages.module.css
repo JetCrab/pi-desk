@@ -1,0 +1,80 @@
+.userText {
+  font-size: var(--chat-body-font-size, 0.875rem);
+  line-height: var(--chat-user-line-height, 1.25rem);
+}
+
+.userTextCollapsed {
+  max-height: 4lh;
+  overflow: hidden;
+}
+
+.detailText {
+  font-size: var(--chat-tool-font-size, 0.75rem);
+  line-height: 1.5;
+}
+
+/* 摘要保持紧凑，工具正文使用适合连续代码阅读的行高。 */
+.toolOutput {
+  font-size: var(--chat-tool-font-size, 0.75rem);
+  line-height: var(--chat-code-line-height, 1.25rem);
+}
+
+.toolCode {
+  white-space: var(--pi-desk-code-white-space, pre-wrap);
+  overflow-wrap: var(--pi-desk-code-overflow-wrap, anywhere);
+}
+
+:global(html[data-pi-desk-code-wrap='false']) .toolCodeLine {
+  min-width: max-content;
+}
+
+.toolFilePath {
+  container: tool-file-path / inline-size;
+}
+
+@container tool-file-path (max-width: 12rem) {
+  .toolFileDirectory {
+    display: none;
+  }
+}
+
+.usageToolbar {
+  container-type: inline-size;
+}
+
+.messageCopyAction {
+  pointer-events: none;
+  opacity: 0;
+}
+
+.copyableMessage:hover .messageCopyAction,
+.copyableMessage:focus-within .messageCopyAction {
+  pointer-events: auto;
+  opacity: 1;
+}
+
+.usageLabeled,
+.usageCompact {
+  white-space: nowrap;
+}
+
+.usageLabeled {
+  display: none;
+}
+
+@container (min-width: 22rem) {
+  .usageLabeled {
+    display: inline;
+  }
+
+  .usageCompact {
+    display: none;
+  }
+}
+
+@media (hover: none), (max-width: 640px) {
+  .messageCopyAction {
+    pointer-events: auto;
+    opacity: 1;
+  }
+}

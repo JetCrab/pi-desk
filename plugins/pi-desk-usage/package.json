@@ -1,0 +1,60 @@
+{
+  "name": "@jetcrab/pi-desk-usage",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JetCrab/pi-desk.git",
+    "directory": "plugins/pi-desk-usage"
+  },
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "description": "Lazy Pi Desk dashboard for recent model, token, cache, and cost usage",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/pi-desk.d.ts",
+      "import": "./dist/pi-desk.js",
+      "default": "./dist/pi-desk.js"
+    }
+  },
+  "types": "./dist/pi-desk.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": []
+  },
+  "piDesk": {
+    "entry": "./dist/pi-desk.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"const fs=require('node:fs');fs.rmSync('dist/browser',{recursive:true,force:true});for(const name of fs.readdirSync('dist'))if(name.startsWith('browser')&&['.js','.d.ts','.js.map'].some(ext=>name.endsWith(ext)))fs.rmSync('dist/'+name,{force:true})\" && esbuild src/browser-entry.ts --bundle --splitting --format=esm --platform=browser --target=es2022 --minify --define:process.env.NODE_ENV='production' --external:react --external:react/jsx-runtime --external:react/jsx-dev-runtime --external:react-dom --external:react-dom/client --external:@jetcrab/pi-desk-sdk/react/base --external:@jetcrab/pi-desk-sdk/react/markdown --outdir=dist/browser --entry-names=entry --chunk-names=chunks/[name]-[hash]",
+    "prepack": "pnpm run build",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@jetcrab/pi-desk-sdk": "workspace:^",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@base-ui/react": "^1.7.0",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "esbuild": "^0.25.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tsx": "^4.23.12",
+    "typescript": "^5"
+  }
+}

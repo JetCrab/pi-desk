@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.PiDesk.Main.Dialog" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">@drawable/main_popup_background</item>
+        <item name="android:colorBackground">@color/main_surface</item>
+        <item name="android:colorAccent">@color/main_text</item>
+        <item name="android:textColorPrimary">@color/main_text</item>
+        <item name="android:textColorSecondary">@color/main_muted</item>
+    </style>
+</resources>

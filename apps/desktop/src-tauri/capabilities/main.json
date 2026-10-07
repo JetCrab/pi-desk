@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "External target pages receive no Tauri API permissions.",
+  "windows": ["browser-*"],
+  "permissions": []
+}

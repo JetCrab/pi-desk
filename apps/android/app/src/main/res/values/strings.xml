@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Pi Desk</string>
+    <string name="main_title">网页</string>
+    <string name="empty_title">打开你的网页</string>
+    <string name="empty_description">添加常用网址，随时打开。</string>
+    <string name="add_url">添加网址</string>
+    <string name="open_url">打开</string>
+    <string name="open_url_accessibility">打开 %1$s</string>
+    <string name="more_actions">更多操作</string>
+    <string name="more_url_accessibility">%1$s 的更多操作</string>
+    <string name="refresh_url">刷新并打开</string>
+    <string name="edit_url">编辑网址</string>
+    <string name="remove_url">移除网址</string>
+    <string name="remove_url_title">移除这个网址？</string>
+    <string name="remove_url_hint">只从此设备移除网址，并关闭对应网页窗口。不会删除网页中的会话、文件或其他数据。</string>
+    <string name="url_label">网址</string>
+    <string name="url_hint">example.com</string>
+    <string name="url_protocol_hint">未填写 http:// 或 https:// 时，将使用 https://。</string>
+    <string name="edit_url_hint">更换网址后，会关闭原来的网页窗口。</string>
+    <string name="cancel">取消</string>
+    <string name="add">添加</string>
+    <string name="save">保存</string>
+    <string name="remove">移除</string>
+</resources>

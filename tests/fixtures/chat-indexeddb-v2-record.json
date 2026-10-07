@@ -1,0 +1,27 @@
+{
+  "sessionId": "44444444-4444-4444-8444-444444444444",
+  "branchId": "v1:main",
+  "index": 0,
+  "entryId": "entry-indexeddb-v2",
+  "fixed": {
+    "timestampMs": 1765800000000,
+    "type": "tool",
+    "status": "completed",
+    "hasDetail": true,
+    "usage": {
+      "inputTokens": 1200,
+      "outputTokens": 345,
+      "cacheReadTokens": 6000,
+      "costUsd": 0.0042
+    }
+  },
+  "summary": {
+    "name": "read",
+    "reasoning": "记录 M0 IndexedDB v2 基线",
+    "inputPreview": "plugins/pi-desk-sdk/docs/development-plan.md",
+    "activity": "42 · L1"
+  },
+  "detail": {
+    "output": "IndexedDB v2 detail"
+  }
+}

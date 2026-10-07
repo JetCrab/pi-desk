@@ -1,0 +1,52 @@
+{
+  "name": "@jetcrab/pi-desk-bg-run",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JetCrab/pi-desk.git",
+    "directory": "plugins/pi-desk-bg-run"
+  },
+  "version": "1.0.0",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "description": "Background shell task extension with Pi Desk Task Center integration",
+  "license": "ISC",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SOURCE.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "pnpm run build",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@jetcrab/pi-desk-sdk": "workspace:^"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4.23.12",
+    "typescript": "^5"
+  },
+  "keywords": [
+    "pi-package",
+    "background-task"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  }
+}

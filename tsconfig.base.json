@@ -1,0 +1,55 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "tsBuildInfoFile": "temp/cache/typescript/source.tsbuildinfo",
+    "plugins": [{ "name": "next" }],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@client/*": ["./src/client/*"],
+      "@server/*": ["./src/server/*"],
+      "@common/*": ["./src/common/*"],
+      "@jetcrab/pi-desk-sdk": ["./plugins/pi-desk-sdk/src/index.ts"],
+      "@jetcrab/pi-desk-sdk/react/base": ["./plugins/pi-desk-sdk/src/react-base.tsx"],
+      "@jetcrab/pi-desk-sdk/react/markdown": ["./plugins/pi-desk-sdk/src/react-markdown.tsx"],
+      "@jetcrab/pi-desk-sdk/*": ["./plugins/pi-desk-sdk/src/*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "next.config.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/**/*.mts",
+    "src/**/*.js",
+    "src/**/*.mjs",
+    "plugins/*/src/**/*.ts",
+    "plugins/*/src/**/*.tsx",
+    "plugins/*/src/**/*.mts",
+    "temp/build/pi-desk/release/.next/types/**/*.ts",
+    "temp/next-dev/types/**/*.ts",
+    "temp/next-dev/dev/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "plugins/*/node_modules",
+    "plugins/*/dist",
+    "**/tests/**",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*"
+  ]
+}

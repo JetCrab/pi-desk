@@ -1,0 +1,37 @@
+.single > [data-panel] {
+  position: absolute;
+  inset: 0;
+  visibility: visible;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity 150ms ease-out,
+    transform 200ms ease-out,
+    visibility 0s;
+}
+
+.single > [data-panel][aria-hidden='true'] {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-8px);
+  transition-delay: 0s, 0s, 200ms;
+}
+
+.single > [data-pane='files'] {
+  z-index: 1;
+}
+
+.single > [data-pane='files'][aria-hidden='true'] {
+  transform: translateX(12px);
+}
+
+.wide > [data-pane='files'] > div {
+  min-width: 320px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .single > [data-panel] {
+    transition: none;
+  }
+}

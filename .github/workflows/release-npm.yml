@@ -1,0 +1,101 @@
+name: Release npm
+run-name: ${{ inputs.publish && '发布 npm 包' || '构建 npm 包' }} · ${{ inputs.package }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 选择公开包，all 按 SDK 优先顺序处理
+        type: choice
+        default: all
+        options:
+          - all
+          - pi-desk
+          - pi-desk-sdk
+          - pi-desk-bg-run
+          - pi-desk-ctx
+          - pi-desk-deliverables
+          - pi-desk-quota-viewer
+          - pi-desk-remote-debug
+          - pi-desk-subagent
+          - pi-desk-tibo-monitor
+          - pi-desk-tool-reason
+          - pi-desk-usage
+      publish:
+        description: 将验证通过的包发布到官方 npm
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-npm
+  cancel-in-progress: false
+
+env:
+  RELEASE_PACKAGE: ${{ inputs.package }}
+  NPM_ARTIFACT_DIR: ${{ github.workspace }}/temp/package/npm-release/${{ github.run_id }}-${{ github.run_attempt }}
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      TSX_TSCONFIG_PATH: ${{ github.workspace }}/tsconfig.json
+      PI_CODING_AGENT_DIR: ${{ github.workspace }}/temp/pi/npm-ci/${{ github.run_id }}-${{ github.run_attempt }}/agent
+      PI_CODING_AGENT_SESSION_DIR: ${{ github.workspace }}/temp/pi/npm-ci/${{ github.run_id }}-${{ github.run_attempt }}/agent/sessions
+    steps:
+      - name: 仅允许 main 分支
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          if ($env:WORKFLOW_REF -ne 'refs/heads/main') { throw '请从 main 分支构建或发布' }
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+      - name: 安装公开依赖
+        run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
+      - name: 构建、测试和校验实际 tarball
+        run: node .github/scripts/release-npm.mjs prepare
+      - name: 保存已验证的包
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-packages-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.NPM_ARTIFACT_DIR }}/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: ${{ inputs.publish }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - name: 准备可信发布所需 npm
+        run: npm install --global npm@11.5.1 --ignore-scripts --registry=https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packages-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.NPM_ARTIFACT_DIR }}
+      - name: 发布同一批已验证制品
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node .github/scripts/release-npm.mjs publish

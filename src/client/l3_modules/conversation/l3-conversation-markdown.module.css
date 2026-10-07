@@ -1,0 +1,341 @@
+.markdown {
+  font-size: var(--chat-body-font-size, 0.875rem);
+  line-height: 1.7;
+}
+
+.markdown > * {
+  margin-block: 0;
+}
+
+.markdown > * + * {
+  margin-block-start: 0.5rem;
+}
+
+.markdown p {
+  margin-block: 0;
+  line-height: 1.7;
+}
+
+.markdown a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.markdown > h1,
+.markdown > h2,
+.markdown > h3,
+.markdown > h4,
+.markdown > h5,
+.markdown > h6 {
+  margin-block: 0;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.markdown > h1 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+}
+
+.markdown > h2 {
+  font-size: 1.25rem;
+  line-height: 1.35;
+}
+
+.markdown > h3 {
+  font-size: 1.125rem;
+  line-height: 1.4;
+}
+
+.markdown > h4 {
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.markdown > h5 {
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.markdown > h6 {
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.markdown > h1:not(:first-child) {
+  margin-block-start: 1rem;
+}
+
+.markdown > h2:not(:first-child) {
+  margin-block-start: 0.875rem;
+}
+
+.markdown > h3:not(:first-child) {
+  margin-block-start: 0.75rem;
+}
+
+.markdown > h4:not(:first-child),
+.markdown > h5:not(:first-child),
+.markdown > h6:not(:first-child) {
+  margin-block-start: 0.625rem;
+}
+
+.markdown > h1 + *,
+.markdown > h2 + *,
+.markdown > h3 + *,
+.markdown > h4 + *,
+.markdown > h5 + *,
+.markdown > h6 + * {
+  margin-block-start: 0.375rem;
+}
+
+.markdown :global([data-streamdown='ordered-list']),
+.markdown :global([data-streamdown='unordered-list']) {
+  margin-block: 0;
+}
+
+.markdown :global([data-streamdown='list-item']) {
+  padding-block: 0.125rem;
+  line-height: 1.625;
+}
+
+.markdown :global([data-streamdown='blockquote']) {
+  margin-block: 0;
+  border-left-width: 2px;
+  padding-left: 0.75rem;
+  line-height: 1.6;
+}
+
+.markdown :global([data-streamdown='horizontal-rule']) {
+  margin-block: 0.875rem;
+}
+
+.markdown :global([data-streamdown='table-wrapper']) {
+  position: relative;
+  display: block;
+  margin-block: 0.375rem;
+  overflow: visible;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.markdown > :global([data-streamdown='table-wrapper']) + * {
+  margin-block-start: 0.375rem;
+}
+
+.markdown
+  > :global([data-streamdown='table-wrapper'])
+  + :global([data-streamdown='horizontal-rule']) {
+  margin-block-start: 0.875rem;
+}
+
+.markdown :global([data-streamdown='table-wrapper'] > div:first-child:not(:last-child)) {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.375rem;
+  z-index: 10;
+  height: auto;
+  margin: 0;
+  border-radius: 0.375rem;
+  background: var(--popover);
+  padding: 0.125rem;
+  opacity: 0;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+  transition: opacity 120ms ease;
+}
+
+.markdown :global([data-streamdown='table-wrapper'] > div:first-child:not(:last-child) > *) {
+  pointer-events: auto;
+}
+
+.markdown :global([data-streamdown='table-wrapper']:hover > div:first-child:not(:last-child)),
+.markdown
+  :global([data-streamdown='table-wrapper']:focus-within > div:first-child:not(:last-child)) {
+  opacity: 1;
+}
+
+.markdown :global([data-streamdown='mermaid-block']) {
+  margin-block: 0;
+}
+
+.markdown :global([data-streamdown='code-block']) {
+  position: relative;
+  display: block;
+  margin-block: 0.375rem;
+  overflow: hidden;
+  /* Streamdown 的 200px 虚拟高度会在代码块首次可见时改变聊天总高度。 */
+  content-visibility: visible !important;
+  contain-intrinsic-size: none !important;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--muted);
+}
+
+.markdown > :global([data-streamdown='code-block']) + * {
+  margin-block-start: 0.375rem;
+}
+
+.markdown > :global([data-streamdown='code-block']) + :global([data-streamdown='horizontal-rule']) {
+  margin-block-start: 0.875rem;
+}
+
+.markdown :global([data-streamdown='code-block-header']) {
+  display: none;
+}
+
+.markdown :global([data-streamdown='code-block-body']) {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.5rem 2.5rem 0.5rem 0.875rem;
+  font-size: var(--chat-code-font-size, 0.8125rem);
+  line-height: var(--chat-code-line-height, 1.25rem);
+}
+
+.markdown :global([data-streamdown='code-block-body'] pre),
+.markdown :global([data-streamdown='code-block-body'] code) {
+  background: transparent;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: var(--pi-desk-code-white-space, pre-wrap);
+  overflow-wrap: var(--pi-desk-code-overflow-wrap, anywhere);
+}
+
+.markdown :global([data-streamdown='code-block-body'] code > span) {
+  display: block;
+}
+
+.markdown :global([data-streamdown='code-block-body'] code > span::before) {
+  display: none;
+  content: none;
+}
+
+.markdown
+  :global([data-streamdown='code-block'] > div:has(> [data-streamdown='code-block-actions'])) {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.375rem;
+  z-index: 10;
+  display: block;
+  height: auto;
+  margin: 0;
+  pointer-events: none;
+}
+
+.markdown :global([data-streamdown='code-block-actions']) {
+  pointer-events: auto;
+  gap: 0;
+  border: 0;
+  background: var(--muted);
+  padding: 0;
+  opacity: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  transition: opacity 120ms ease;
+}
+
+.markdown :global([data-streamdown='code-block-actions'] > button) {
+  display: flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.375rem;
+  padding: 0;
+}
+
+.markdown :global([data-streamdown='code-block-actions'] > button:hover) {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.markdown :global([data-streamdown='code-block']:hover [data-streamdown='code-block-actions']),
+.markdown
+  :global([data-streamdown='code-block']:focus-within [data-streamdown='code-block-actions']) {
+  opacity: 1;
+}
+
+.imageTrigger {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin-block: 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--muted);
+  padding: 0;
+  cursor: zoom-in;
+  outline: none;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.imageTrigger:hover {
+  border-color: color-mix(in oklab, var(--foreground) 24%, var(--border));
+}
+
+.imageTrigger:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.image {
+  display: block;
+  max-width: 100%;
+  max-height: min(28rem, 65dvh);
+  object-fit: contain;
+}
+
+.imageAction {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 0.5rem;
+  background: rgb(0 0 0 / 55%);
+  color: white;
+  opacity: 0;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+  backdrop-filter: blur(8px);
+  transition: opacity 120ms ease;
+}
+
+.imageTrigger:hover .imageAction,
+.imageTrigger:focus-visible .imageAction {
+  opacity: 1;
+}
+
+.imageFallback {
+  display: inline-flex;
+  margin-block: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--muted);
+  padding: 0.75rem;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+@media (hover: none), (max-width: 640px) {
+  .markdown :global([data-streamdown='code-block-actions']),
+  .markdown :global([data-streamdown='table-wrapper'] > div:first-child:not(:last-child)),
+  .imageAction {
+    opacity: 1;
+  }
+}

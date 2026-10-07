@@ -1,0 +1,367 @@
+name: Release clients
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 构建平台
+        type: choice
+        options: [all, windows, android]
+        default: all
+      publish:
+        description: 上传 GitHub Release
+        type: boolean
+        default: false
+      upload_server:
+        description: 上传已有下载站
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-clients
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 仅允许 main 分支
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          if [[ "$RELEASE_REF" != refs/heads/main ]]; then
+            echo '客户端发布工作流仅允许 main 分支' >&2
+            exit 1
+          fi
+
+  windows:
+    needs: guard
+    if: inputs.platform == 'all' || inputs.platform == 'windows'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/temp/build/desktop-ci/${{ github.run_id }}-${{ github.run_attempt }}
+      PI_DESK_DESKTOP_WEB_DIST: ${{ github.workspace }}/temp/build/desktop-ci/${{ github.run_id }}-${{ github.run_attempt }}/web
+      CLIENT_OUTPUT: ${{ github.workspace }}/temp/package/clients/windows/${{ github.run_id }}-${{ github.run_attempt }}
+      PI_CODING_AGENT_DIR: ${{ github.workspace }}/temp/pi/desktop-ci/${{ github.run_id }}-${{ github.run_attempt }}/agent
+      PI_CODING_AGENT_SESSION_DIR: ${{ github.workspace }}/temp/pi/desktop-ci/${{ github.run_id }}-${{ github.run_attempt }}/agent/sessions
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+      - name: 核对版本并生成相对路径配置
+        shell: pwsh
+        run: |
+          @'
+          import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+          import { relative, resolve } from 'node:path'
+          const desktop = resolve('apps/desktop')
+          const rust = resolve(desktop, 'src-tauri')
+          const version = JSON.parse(readFileSync(resolve(desktop, 'package.json'), 'utf8')).version
+          const tauri = JSON.parse(readFileSync(resolve(rust, 'tauri.conf.json'), 'utf8')).version
+          const cargo = readFileSync(resolve(rust, 'Cargo.toml'), 'utf8')
+            .match(/\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m)?.[1]
+          const lock = readFileSync(resolve(rust, 'Cargo.lock'), 'utf8').split('[[package]]')
+            .find(block => /^name\s*=\s*"pi-desk-desktop"/m.test(block))
+            ?.match(/^version\s*=\s*"([^"]+)"/m)?.[1]
+          if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version) ||
+              [tauri, cargo, lock].some(value => value !== version)) {
+            throw new Error('桌面 package.json、Tauri、Cargo.toml 和 Cargo.lock 版本不一致或不是正式版本')
+          }
+          mkdirSync(process.env.CARGO_TARGET_DIR, { recursive: true })
+          const frontendDist = relative(rust, process.env.PI_DESK_DESKTOP_WEB_DIST).replaceAll('\\', '/')
+          writeFileSync(resolve(process.env.CARGO_TARGET_DIR, 'tauri-ci.json'),
+            JSON.stringify({ build: { frontendDist } }))
+          console.log(`桌面版本核对通过：${version}`)
+          '@ | node --input-type=module
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 安装独立桌面依赖
+        working-directory: apps/desktop
+        run: pnpm install --ignore-workspace --frozen-lockfile
+      - name: 安装 Windows x86 Rust 目标
+        run: rustup target add i686-pc-windows-msvc
+      - name: 云端前端准备与桌面 Rust 测试
+        working-directory: apps/desktop
+        run: |
+          pnpm run build:web
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:TAURI_CONFIG = Get-Content "$env:CARGO_TARGET_DIR/tauri-ci.json" -Raw
+          cargo test --manifest-path src-tauri/Cargo.toml --target i686-pc-windows-msvc --release --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 构建 Windows x86 NSIS 安装包
+        working-directory: apps/desktop
+        run: |
+          pnpm exec tauri build --target i686-pc-windows-msvc --bundles nsis --config "$env:CARGO_TARGET_DIR/tauri-ci.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 检查真实 PE 架构并归档
+        shell: pwsh
+        run: |
+          $release = Join-Path $env:CARGO_TARGET_DIR 'i686-pc-windows-msvc/release'
+          $bytes = [System.IO.File]::ReadAllBytes((Join-Path $release 'pi-desk-desktop.exe'))
+          if ($bytes.Length -lt 64 -or [BitConverter]::ToUInt16($bytes, 0) -ne 0x5a4d) {
+            throw '桌面程序不是有效 PE 文件'
+          }
+          $offset = [BitConverter]::ToInt32($bytes, 0x3c)
+          if ($offset -lt 0 -or $offset + 6 -gt $bytes.Length -or
+              [BitConverter]::ToUInt32($bytes, $offset) -ne 0x4550 -or
+              [BitConverter]::ToUInt16($bytes, $offset + 4) -ne 0x14c) {
+            throw '桌面程序不是 Windows x86 PE（machine=0x14c）'
+          }
+          $installers = @(Get-ChildItem (Join-Path $release 'bundle/nsis') -Filter '*.exe' -File)
+          if ($installers.Count -ne 1 -or $installers[0].Length -eq 0) {
+            throw '必须生成一个非空 NSIS 安装包'
+          }
+          node .github/scripts/check-desktop-tunnel.mjs (Join-Path $release 'pi-desk-desktop.exe')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node .github/scripts/pack-client.mjs windows $installers[0].FullName $env:CLIENT_OUTPUT
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CLIENT_OUTPUT }}/
+          retention-days: 7
+          if-no-files-found: error
+
+  android:
+    needs: guard
+    if: inputs.platform == 'all' || inputs.platform == 'android'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ANDROID_BUILD_ROOT: ${{ github.workspace }}/temp/build/android-ci/${{ github.run_id }}-${{ github.run_attempt }}
+      GRADLE_USER_HOME: ${{ github.workspace }}/temp/build/android-ci/${{ github.run_id }}-${{ github.run_attempt }}/gradle-home
+      CLIENT_OUTPUT: ${{ github.workspace }}/temp/package/clients/android/${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: 安装 Android SDK
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: 构建、验证并归档 Android APK
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          DISTRIBUTE: ${{ inputs.publish || inputs.upload_server }}
+        run: |
+          set -euo pipefail
+          umask 077
+          signing_dir="$RUNNER_TEMP/pi-desk-signing-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          trap 'rm -rf "$signing_dir"' EXIT
+          signing_count=0
+          for value in "$ANDROID_KEYSTORE_BASE64" "$ANDROID_STORE_PASSWORD" "$ANDROID_KEY_PASSWORD"; do
+            if [[ -n "$value" ]]; then signing_count=$((signing_count + 1)); fi
+          done
+          if [[ "$signing_count" != 0 && "$signing_count" != 3 ]]; then
+            echo 'Android 签名 Secrets 必须全部配置或全部缺失' >&2
+            exit 1
+          fi
+          if [[ "$DISTRIBUTE" == true && "$signing_count" != 3 ]]; then
+            echo '发布或上传 Android APK 必须配置完整签名' >&2
+            exit 1
+          fi
+          signing_args=()
+          pack_args=()
+          if [[ "$signing_count" == 3 ]]; then
+            export SIGNING_DIR="$signing_dir"
+            node --input-type=module <<'NODE'
+          import { mkdirSync, writeFileSync } from 'node:fs'
+          import { join } from 'node:path'
+          const directory = process.env.SIGNING_DIR
+          mkdirSync(directory, { recursive: true, mode: 0o700 })
+          const escape = value => Array.from(value, character => {
+            if ('\\ =:#!'.includes(character)) return `\\${character}`
+            const code = character.charCodeAt(0)
+            if (code < 0x20 || code > 0x7e) {
+              return character.split('').map(unit => `\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`).join('')
+            }
+            return character
+          }).join('')
+          writeFileSync(join(directory, 'release.p12'), Buffer.from(process.env.ANDROID_KEYSTORE_BASE64, 'base64'), { mode: 0o600 })
+          writeFileSync(join(directory, 'release.properties'),
+            `storePassword=${escape(process.env.ANDROID_STORE_PASSWORD)}\nkeyPassword=${escape(process.env.ANDROID_KEY_PASSWORD)}\n`, { mode: 0o600 })
+          NODE
+            signing_args=("-PpiDeskSigningProperties=$signing_dir/release.properties" "-PpiDeskSigningKeyStore=$signing_dir/release.p12")
+          else
+            pack_args=(--unsigned)
+          fi
+          mkdir -p "$ANDROID_BUILD_ROOT"
+          cat > "$ANDROID_BUILD_ROOT/isolated-build.gradle" <<'GRADLE'
+          gradle.beforeProject { project ->
+              def name = project == project.rootProject ? 'root' : project.path.substring(1).replace(':', '/')
+              project.layout.buildDirectory.set(new File(System.getenv('ANDROID_BUILD_ROOT'), name))
+          }
+          GRADLE
+          chmod +x apps/android/gradlew
+          (
+            cd apps/android
+            ./gradlew --no-daemon --project-cache-dir "$ANDROID_BUILD_ROOT/project-cache" \
+              --init-script "$ANDROID_BUILD_ROOT/isolated-build.gradle" \
+              "${signing_args[@]}" :app:testDebugUnitTest :app:assembleRelease
+          )
+          apk="$ANDROID_BUILD_ROOT/app/outputs/apk/release/app-release.apk"
+          if [[ "$signing_count" == 0 ]]; then
+            apk="$ANDROID_BUILD_ROOT/app/outputs/apk/release/app-release-unsigned.apk"
+          else
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$apk"
+          fi
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk" > "$ANDROID_BUILD_ROOT/badging.txt"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const source = readFileSync('apps/android/app/build.gradle.kts', 'utf8')
+          const version = source.match(/^\s*versionName\s*=\s*"([^"]+)"/m)?.[1]
+          const code = source.match(/^\s*versionCode\s*=\s*(\d+)/m)?.[1]
+          const id = source.match(/^\s*applicationId\s*=\s*"([^"]+)"/m)?.[1]
+          const badging = readFileSync(`${process.env.ANDROID_BUILD_ROOT}/badging.txt`, 'utf8')
+          const actual = badging.match(/^package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'/m)
+          if (id !== 'com.jetcrab.android' || !actual || actual[1] !== id || actual[2] !== code || actual[3] !== version) {
+            throw new Error('APK applicationId、versionName 或 versionCode 与源码不一致')
+          }
+          console.log(`Android APK 身份核对通过：${id} ${version} (${code})`)
+          NODE
+          node .github/scripts/pack-client.mjs android "$apk" "$CLIENT_OUTPUT" "${pack_args[@]}"
+      - name: 清理签名文件
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/pi-desk-signing-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-android-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CLIENT_OUTPUT }}/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    needs: [guard, windows, android]
+    if: >-
+      always() && !cancelled() && inputs.publish && needs.guard.result == 'success' &&
+      (inputs.platform == 'android' || needs.windows.result == 'success') &&
+      (inputs.platform == 'windows' || needs.android.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_SHA: ${{ github.sha }}
+      SELECTED_PLATFORM: ${{ inputs.platform }}
+    steps:
+      - uses: actions/download-artifact@v4
+        if: inputs.platform != 'android'
+        with:
+          name: client-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: temp/package/clients/windows/${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/download-artifact@v4
+        if: inputs.platform != 'windows'
+        with:
+          name: client-android-${{ github.run_id }}-${{ github.run_attempt }}
+          path: temp/package/clients/android/${{ github.run_id }}-${{ github.run_attempt }}
+      - name: 发布平台专属 Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          platforms=(windows android)
+          if [[ "$SELECTED_PLATFORM" != all ]]; then platforms=("$SELECTED_PLATFORM"); fi
+          for platform in "${platforms[@]}"; do
+            directory="temp/package/clients/$platform/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            if find "$directory" -name '*-unsigned.apk' | grep -q .; then
+              echo '拒绝发布未签名 APK' >&2
+              exit 1
+            fi
+            version=$(jq -er '.version' "$directory/release.json")
+            prefix=desktop
+            if [[ "$platform" == android ]]; then prefix=android; fi
+            tag="$prefix-v$version"
+            # 先核对全部目标，避免已有版本导致一半平台发布后才失败。
+            releases=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[].tag_name')
+            if grep -Fxq "$tag" <<< "$releases"; then
+              echo "Release 已存在，拒绝覆盖：$tag" >&2
+              exit 1
+            fi
+            refs=$(gh api "repos/$GH_REPO/git/matching-refs/tags/$tag" --jq '.[].ref')
+            if grep -Fxq "refs/tags/$tag" <<< "$refs"; then
+              commit=$(gh api "repos/$GH_REPO/commits/$tag" --jq '.sha')
+              if [[ "$commit" != "$RELEASE_SHA" ]]; then
+                echo "已有 tag 指向其他提交，拒绝发布：$tag" >&2
+                exit 1
+              fi
+            fi
+          done
+          for platform in "${platforms[@]}"; do
+            directory="temp/package/clients/$platform/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            version=$(jq -er '.version' "$directory/release.json")
+            prefix=desktop
+            if [[ "$platform" == android ]]; then prefix=android; fi
+            mv "$directory/release.json" "$directory/$platform-release.json"
+            gh release create "$prefix-v$version" "$directory"/* --target "$RELEASE_SHA" --title "Pi Desk $platform $version" --notes "由 GitHub Actions 构建，源码提交 $RELEASE_SHA。"
+          done
+
+  server:
+    needs: [guard, windows, android, publish]
+    if: >-
+      always() && !cancelled() && inputs.upload_server && needs.guard.result == 'success' &&
+      (!inputs.publish || needs.publish.result == 'success') &&
+      (inputs.platform == 'android' || needs.windows.result == 'success') &&
+      (inputs.platform == 'windows' || needs.android.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLIENT_SSH_HOST: ${{ secrets.CLIENT_SSH_HOST }}
+      CLIENT_SSH_USER: ${{ secrets.CLIENT_SSH_USER }}
+      CLIENT_SSH_PORT: ${{ vars.CLIENT_SSH_PORT || '22' }}
+      CLIENT_SSH_PRIVATE_KEY: ${{ secrets.CLIENT_SSH_PRIVATE_KEY }}
+      CLIENT_SSH_KNOWN_HOSTS: ${{ secrets.CLIENT_SSH_KNOWN_HOSTS }}
+      CLIENT_UPLOAD_ROOT: ${{ secrets.CLIENT_UPLOAD_ROOT }}
+      CLIENT_DOWNLOAD_BASE_URL: ${{ secrets.CLIENT_DOWNLOAD_BASE_URL }}
+      SELECTED_PLATFORM: ${{ inputs.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: actions/download-artifact@v4
+        if: inputs.platform != 'android'
+        with:
+          name: client-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: temp/package/clients/windows/${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/download-artifact@v4
+        if: inputs.platform != 'windows'
+        with:
+          name: client-android-${{ github.run_id }}-${{ github.run_attempt }}
+          path: temp/package/clients/android/${{ github.run_id }}-${{ github.run_attempt }}
+      - name: 上传已有下载站
+        shell: bash
+        run: |
+          set -euo pipefail
+          platforms=(windows android)
+          if [[ "$SELECTED_PLATFORM" != all ]]; then platforms=("$SELECTED_PLATFORM"); fi
+          for platform in "${platforms[@]}"; do
+            directory="temp/package/clients/$platform/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            if find "$directory" -name '*-unsigned.apk' | grep -q .; then
+              echo '拒绝上传未签名 APK' >&2
+              exit 1
+            fi
+            node .github/scripts/upload-client.mjs "$platform" "$directory"
+          done

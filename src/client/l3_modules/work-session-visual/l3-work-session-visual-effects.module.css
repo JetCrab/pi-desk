@@ -1,0 +1,44 @@
+.surface {
+  position: relative;
+  isolation: isolate;
+}
+
+.identity {
+  color: var(--pi-desk-project-color);
+}
+
+.statusBorder {
+  position: absolute;
+  z-index: 2;
+  inset: -1px;
+  width: calc(100% + 2px);
+  height: calc(100% + 2px);
+  overflow: visible;
+  border-radius: inherit;
+  pointer-events: none;
+  color: var(--foreground);
+  opacity: 0.48;
+}
+
+.statusBorder rect {
+  rx: calc(var(--radius-xl) - 1px);
+  width: calc(100% - 2px);
+  height: calc(100% - 2px);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  stroke-linecap: round;
+  stroke-dasharray: 14 86;
+  stroke-dashoffset: 14;
+}
+
+.statusBorder[data-state='completed'] {
+  color: var(--pi-desk-project-color);
+  opacity: 0.85;
+}
+
+.statusBorder[data-state='completed'] rect {
+  stroke-width: 1.5;
+  stroke-dasharray: 30 70;
+  stroke-dashoffset: 30;
+}

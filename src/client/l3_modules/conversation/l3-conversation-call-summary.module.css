@@ -1,0 +1,30 @@
+.panel {
+  max-height: min(22rem, 60dvh, var(--available-height));
+  max-width: min(calc(100vw - 2rem), var(--available-width));
+}
+
+.table {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(4, max-content);
+  column-gap: 0.75em;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: center;
+  min-height: 2rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.row > span:not(:first-child) {
+  text-align: right;
+}

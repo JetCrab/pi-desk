@@ -1,0 +1,2 @@
+[build]
+target-dir = "../../temp/build/desktop-rust/local"

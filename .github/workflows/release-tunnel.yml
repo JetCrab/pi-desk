@@ -1,0 +1,199 @@
+name: Release tunnel
+run-name: ${{ inputs.publish && '发布隧道镜像' || '构建隧道镜像' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 发布已验证镜像到 GHCR
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: release-tunnel
+  cancel-in-progress: false
+
+env:
+  IMAGE_REPOSITORY: ghcr.io/jetcrab/pi-desk-tunnel
+  PACKAGE_DIR: temp/package/tunnel/${{ github.run_id }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/temp/build/tunnel-ci/${{ github.run_id }}-${{ github.run_attempt }}
+      CONTAINER_NAME: pi-desk-tunnel-ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: 仅允许 main 分支
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          if [[ "$WORKFLOW_REF" != "refs/heads/main" ]]; then
+            echo "::error::隧道构建和发布仅允许从 main 分支运行"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 读取服务端版本
+        id: version
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          manifest = tomllib.loads(Path("apps/tunnel/server/Cargo.toml").read_text())
+          version = manifest["package"]["version"]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"version={version}\n")
+          PY
+
+      - name: Rust workspace 测试
+        working-directory: apps/tunnel
+        run: |
+          cargo --version
+          cargo test --workspace --locked
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 构建并加载 linux/amd64 镜像
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: 'false'
+        with:
+          context: apps/tunnel
+          file: apps/tunnel/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.IMAGE_REPOSITORY }}:${{ steps.version.outputs.version }}
+
+      - name: 容器 HTTP 健康探针
+        env:
+          IMAGE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          export PI_DESK_TUNNEL_SERVER_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+          export PI_DESK_TUNNEL_PRIVATE_KEY="$(python3 -c 'import base64, secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())')"
+          echo "::add-mask::$PI_DESK_TUNNEL_SERVER_KEY"
+          echo "::add-mask::$PI_DESK_TUNNEL_PRIVATE_KEY"
+          docker run --detach --name "$CONTAINER_NAME" --pull=never \
+            --log-opt max-size=10m --log-opt max-file=2 \
+            --publish 127.0.0.1::7001 \
+            --env PI_DESK_TUNNEL_SERVER_KEY --env PI_DESK_TUNNEL_PRIVATE_KEY \
+            "$IMAGE_REPOSITORY:$IMAGE_VERSION"
+          address="$(docker port "$CONTAINER_NAME" 7001/tcp)"
+          HEALTH_URL="http://$address/api/v1/system/health" python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+
+          deadline = time.monotonic() + 30
+          while True:
+              try:
+                  with urllib.request.urlopen(os.environ["HEALTH_URL"], timeout=2) as response:
+                      if response.status != 200 or json.load(response) != {"status": "ok"}:
+                          raise SystemExit("健康接口未返回预期的 HTTP 200 与 status=ok")
+                  print("容器 HTTP 健康探针通过")
+                  break
+              except urllib.error.URLError as error:
+                  if time.monotonic() >= deadline:
+                      raise SystemExit(f"容器 HTTP 健康探针失败：{error}") from error
+                  time.sleep(1)
+          PY
+
+      - name: 保存已验证镜像
+        env:
+          IMAGE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p "$PACKAGE_DIR"
+          docker save "$IMAGE_REPOSITORY:$IMAGE_VERSION" \
+            | gzip > "$PACKAGE_DIR/pi-desk-tunnel-$IMAGE_VERSION-linux-amd64.tar.gz"
+
+      - name: 上传压缩镜像
+        uses: actions/upload-artifact@v4
+        with:
+          name: tunnel-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.PACKAGE_DIR }}/pi-desk-tunnel-${{ steps.version.outputs.version }}-linux-amd64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: 失败时输出容器日志
+        if: failure()
+        run: |
+          if docker container inspect "$CONTAINER_NAME" > /dev/null 2>&1; then
+            docker logs "$CONTAINER_NAME"
+          fi
+
+      - name: 清理探针容器
+        if: always()
+        run: |
+          if docker container inspect "$CONTAINER_NAME" > /dev/null 2>&1; then
+            docker rm --force "$CONTAINER_NAME"
+          fi
+
+  publish:
+    if: ${{ inputs.publish }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: 下载已验证镜像
+        uses: actions/download-artifact@v4
+        with:
+          name: tunnel-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.PACKAGE_DIR }}
+
+      - name: 加载同一镜像并添加 latest 标签
+        run: |
+          gzip --decompress --stdout "$PACKAGE_DIR/pi-desk-tunnel-$IMAGE_VERSION-linux-amd64.tar.gz" | docker load
+          docker tag "$IMAGE_REPOSITORY:$IMAGE_VERSION" "$IMAGE_REPOSITORY:latest"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 确认版本标签尚未发布
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh api --paginate 'users/JetCrab/packages/container/pi-desk-tunnel/versions?per_page=100' \
+            --jq '.[].metadata.container.tags[]' > "$RUNNER_TEMP/tunnel-tags" 2> "$RUNNER_TEMP/tunnel-tags-error"; then
+            if grep -Fxq "$IMAGE_VERSION" "$RUNNER_TEMP/tunnel-tags"; then
+              echo "::error::镜像版本已存在，拒绝覆盖：$IMAGE_VERSION"
+              exit 1
+            fi
+          elif ! grep -q 'HTTP 404' "$RUNNER_TEMP/tunnel-tags-error"; then
+            echo '::error::无法确认镜像版本状态，停止发布'
+            exit 1
+          fi
+
+      - name: 推送已验证镜像
+        run: |
+          docker push "$IMAGE_REPOSITORY:$IMAGE_VERSION"
+          docker push "$IMAGE_REPOSITORY:latest"

@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "temp/cache/typescript/tests.tsbuildinfo"
+  },
+  "include": [
+    "next-env.d.ts",
+    "src/**/*.d.ts",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "plugins/**/tests/**/*.ts",
+    "plugins/**/tests/**/*.tsx",
+    "src/**/__tests__/**/*.ts",
+    "src/**/__tests__/**/*.tsx",
+    "plugins/**/__tests__/**/*.ts",
+    "plugins/**/__tests__/**/*.tsx",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.spec.ts",
+    "src/**/*.spec.tsx",
+    "plugins/**/*.test.ts",
+    "plugins/**/*.test.tsx",
+    "plugins/**/*.spec.ts",
+    "plugins/**/*.spec.tsx"
+  ],
+  "exclude": ["node_modules", "plugins/*/node_modules", "plugins/*/dist"]
+}

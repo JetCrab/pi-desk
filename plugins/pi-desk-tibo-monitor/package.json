@@ -1,0 +1,60 @@
+{
+  "name": "@jetcrab/pi-desk-tibo-monitor",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JetCrab/pi-desk.git",
+    "directory": "plugins/pi-desk-tibo-monitor"
+  },
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "description": "Tibo X RSS monitor with host-language translation and Codex limit reset alerts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/l2-tibo-entry.d.ts",
+      "import": "./dist/l2-tibo-entry.js",
+      "default": "./dist/l2-tibo-entry.js"
+    }
+  },
+  "types": "./dist/l2-tibo-entry.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "pi-package"
+  ],
+  "piDesk": {
+    "entry": "./dist/l2-tibo-entry.js"
+  },
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json && esbuild src/l2-browser-entry.ts --bundle --splitting --format=esm --platform=browser --target=es2022 --minify --define:process.env.NODE_ENV='production' --external:react --external:react/jsx-runtime --external:react/jsx-dev-runtime --external:react-dom --external:react-dom/client --external:@jetcrab/pi-desk-sdk/react/base --outdir=dist/browser --entry-names=entry --chunk-names=chunks/[name]-[hash]",
+    "prepack": "pnpm run build",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@jetcrab/pi-desk-sdk": "workspace:^",
+    "fast-xml-parser": "^5.5.6",
+    "htmlparser2": "^10.0.0",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@base-ui/react": "^1.7.0",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "esbuild": "^0.25.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tsx": "^4.23.12",
+    "typescript": "^5"
+  }
+}

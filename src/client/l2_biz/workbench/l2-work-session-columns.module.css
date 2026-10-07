@@ -1,0 +1,7 @@
+.collapsedText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-orientation: mixed;
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+}

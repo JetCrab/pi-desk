@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="main_background">#171717</color>
+    <color name="main_surface">#262626</color>
+    <color name="main_text">#EEEEEE</color>
+    <color name="main_muted">#B0B0B0</color>
+    <color name="main_primary">#EEEEEE</color>
+    <color name="main_primary_text">#171717</color>
+    <color name="main_border">#3D3D3D</color>
+    <color name="main_input_border">#808080</color>
+    <color name="main_focus">#B0B0B0</color>
+    <color name="main_danger">#FFB4AB</color>
+    <color name="main_ripple">#24EEEEEE</color>
+    <color name="main_primary_ripple">#38262626</color>
+</resources>

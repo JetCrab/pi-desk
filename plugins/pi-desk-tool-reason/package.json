@@ -1,0 +1,47 @@
+{
+  "name": "@jetcrab/pi-desk-tool-reason",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JetCrab/pi-desk.git",
+    "directory": "plugins/pi-desk-tool-reason"
+  },
+  "version": "1.0.0",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "description": "Pi Desk tool reasoning extension",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "UPSTREAM.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "pnpm run build",
+    "test": "node --import tsx --test tests/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4.23.12",
+    "typescript": "^5"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  }
+}
