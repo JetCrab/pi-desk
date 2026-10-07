@@ -163,7 +163,8 @@ function parseAppClientId(requestUrl: URL): string | null {
 }
 
 async function startServer(): Promise<void> {
-  await import('@server/l4_foundation/pi/l4-pi-runtime-register.mjs')
+  // 安装到 node_modules 后，原生 ESM 加载不会应用 TypeScript 路径别名。
+  await import('../../l4_foundation/pi/l4-pi-runtime-register.mjs')
   const startedAt = performance.now()
   const dev = process.argv.includes('--dev')
   const { default: next } = await import('next')
