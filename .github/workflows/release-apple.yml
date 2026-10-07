@@ -85,8 +85,9 @@ jobs:
           set -euo pipefail
           release="$CARGO_TARGET_DIR/universal-apple-darwin/release"
           app="$release/bundle/macos/Pi Desk.app"
-          test -s "$app/Contents/MacOS/pi-desk-desktop"
-          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/pi-desk-desktop"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+          test -s "$app/Contents/MacOS/$executable"
+          lipo "$app/Contents/MacOS/$executable" -verify_arch arm64 x86_64
           codesign --verify --deep --strict "$app"
           dmgs=("$release/bundle/dmg/"*.dmg)
           test "${#dmgs[@]}" = 1

@@ -14,7 +14,7 @@ simulator="$build/simulator/Build/Products/Release-iphonesimulator/PiDesk.app"
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$simulator/Info.plist")
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$simulator/Info.plist")" == com.jetcrab.ios ]]
-lipo -verify_arch arm64 "$simulator/PiDesk"
+lipo "$simulator/PiDesk" -verify_arch arm64
 ditto -c -k --sequesterRsrc --keepParent "$simulator" "$output/pi-desk-ios-$version-simulator-arm64.zip"
 signing=(CODE_SIGNING_ALLOWED=NO)
 if [[ "${APPLE_SIGNED:-false}" == true ]]; then
@@ -28,7 +28,7 @@ app="$archive/Products/Applications/PiDesk.app"
 [[ -d "$app" && -s "$app/PiDesk" ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")" == com.jetcrab.ios ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist")" == "$version" ]]
-lipo -verify_arch arm64 "$app/PiDesk"
+lipo "$app/PiDesk" -verify_arch arm64
 if [[ "${APPLE_SIGNED:-false}" == true ]]; then
   codesign --verify --deep --strict "$app"
   xcodebuild -exportArchive -archivePath "$archive" -exportPath "$build/export" \

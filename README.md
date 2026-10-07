@@ -1,6 +1,6 @@
 # Pi Desk
 
-面向单用户的 Pi 编程代理 Web 工作台，提供会话、文件与 Git 预览、任务中心和插件扩展，可配合 Windows 桌面壳或 Android 网页客户端使用。
+面向单用户的 Pi 编程代理 Web 工作台，提供会话、文件与 Git 预览、任务中心和插件扩展，包含 Windows／macOS 桌面壳和 Android／iOS 网页客户端。
 
 源码仓库：<https://github.com/JetCrab/pi-desk>。自有代码采用 [Apache-2.0](./LICENSE)，第三方代码保留各自授权和来源说明。
 
@@ -25,13 +25,14 @@ pnpm dev
 ```text
 bin/                  命令入口，按功能命名
 src/                  Web 主程序，按 client/server/common 分层
-apps/desktop/         Tauri Windows 桌面壳
+apps/desktop/         Tauri Windows／macOS 桌面壳
 apps/android/         原生 Android 网页客户端
+apps/ios/             SwiftUI／WKWebView iOS 客户端
 apps/tunnel/          Rust TCP 隧道服务与客户端
 plugins/              公开插件与 pi-desk-sdk
 ```
 
-插件列表和源码边界见 [plugins/README.md](./plugins/README.md)。各应用有自己的构建说明；macOS 仍需平台适配，iOS 尚无可用工程，不将 Tauri 的跨平台能力等同于本项目已经支持这些平台。
+插件列表和源码边界见 [plugins/README.md](./plugins/README.md)。各应用有自己的构建说明。Apple 客户端有独立云端打包流程；无开发者账号时，macOS 使用 ad-hoc 签名，iOS 只生成模拟器应用与未签名归档，不能据此宣称已完成 Apple 公证、真机验收或商店分发。
 
 ## 登录与运行边界
 
@@ -64,4 +65,4 @@ node --test tests/l4-public-boundary.test.mjs
 
 公开包名使用 `@jetcrab/`，目标 Registry 为 npmjs；安装包计划由 GitHub Releases 分发，隧道镜像计划由 GHCR 分发。目录和包名迁移不代表这些制品已经发布，当前使用上面的源码入口。
 
-`.github/workflows/` 提供手动触发的 npm、隧道镜像和 Windows／Android 构建发布流程，默认只构建验证；正式发布须显式选择并配置对应授权。首次推送后仍需完成云端与制品验收，不把工作流文件存在当作已经发布。
+`.github/workflows/` 提供手动触发的 npm、隧道镜像、Windows／Android 构建发布流程，以及独立的 Apple 客户端构建流程，默认只构建验证；正式发布须显式选择并配置对应授权。首次推送后仍需完成云端与制品验收，不把工作流文件存在当作已经发布。
