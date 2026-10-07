@@ -14,8 +14,18 @@ import type { UsageSeriesPoint, UsageTotals } from '../src/protocol.js'
 const ZONE = 'Asia/Shanghai'
 const dateStart = (date: string): number => zonedDateStart(date, ZONE)
 const dateKeyAt = (value: number): string => zonedDateKey(value, ZONE)
-const buildUsageCalendar = (month: string, points: UsageSeriesPoint[], model: string | null, endAt?: number): ReturnType<typeof calendar> => calendar(month, points, model, endAt, ZONE)
-const buildUsageCalendarRange = (startAt: number, endAt: number, points: UsageSeriesPoint[], model: string | null): ReturnType<typeof calendarRange> => calendarRange(startAt, endAt, points, model, ZONE)
+const buildUsageCalendar = (
+  month: string,
+  points: UsageSeriesPoint[],
+  model: string | null,
+  endAt?: number
+): ReturnType<typeof calendar> => calendar(month, points, model, endAt, ZONE)
+const buildUsageCalendarRange = (
+  startAt: number,
+  endAt: number,
+  points: UsageSeriesPoint[],
+  model: string | null
+): ReturnType<typeof calendarRange> => calendarRange(startAt, endAt, points, model, ZONE)
 
 const EMPTY_TOTALS: UsageTotals = {
   input: 0,

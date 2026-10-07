@@ -22,8 +22,6 @@ export function useDesktopSettings(
   const [reloadKey, setReloadKey] = useState(0)
   useEffect(() => {
     let disposed = false
-    setLoadError('')
-    setDraft(null)
     void readDesktopSettings(mode, originalUrl).then(
       (next) => {
         if (!disposed) setDraft(next)
@@ -60,7 +58,11 @@ export function useDesktopSettings(
     saveError,
     saving,
     patch,
-    reload: () => setReloadKey((key) => key + 1),
+    reload: () => {
+      setLoadError('')
+      setDraft(null)
+      setReloadKey((key) => key + 1)
+    },
     save
   }
 }

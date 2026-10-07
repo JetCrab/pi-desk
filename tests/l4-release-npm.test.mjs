@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { selectPackages, assertPackedManifest } from '../.github/scripts/release-npm.mjs'
+import { selectPackages, assertPackedManifest, run } from '../.github/scripts/release-npm.mjs'
 
 const publishConfig = { registry: 'https://registry.npmjs.org', access: 'public' }
 async function fixture(context) {
@@ -23,6 +23,21 @@ async function fixture(context) {
   }
   return root
 }
+
+test('包管理命令保留参数与带空格路径而不被Shell二次转义', async (context) => {
+  const root = await fixture(context)
+  const directory = join(root, 'command fixture')
+  await mkdir(directory)
+  await writeFile(join(directory, 'package.json'), '{"private":true}')
+  const script = join(directory, 'arguments.cjs')
+  await writeFile(script, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))')
+  const output = run(
+    'pnpm',
+    ['--dir', directory, 'exec', process.execPath, script, 'value with spaces'],
+    { capture: true }
+  )
+  assert.deepEqual(JSON.parse(output), ['value with spaces'])
+})
 
 test('公开包发布先SDK，允许单独选择包但不接受未知目标', async (context) => {
   const root = await fixture(context)

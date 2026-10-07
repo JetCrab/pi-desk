@@ -24,7 +24,10 @@ test('登录与设置仅接收密码并拒绝用户名及额外字段', () => {
     L2AuthLoginRequestSchema.safeParse({ username: 'legacy', password: PASSWORD }).success,
     false
   )
-  assert.equal(L2AuthLoginRequestSchema.safeParse({ password: PASSWORD, remember: true }).success, false)
+  assert.equal(
+    L2AuthLoginRequestSchema.safeParse({ password: PASSWORD, remember: true }).success,
+    false
+  )
   assert.equal(L2AuthLogoutRequestSchema.safeParse({}).success, true)
   assert.equal(L2AuthLogoutRequestSchema.safeParse({ clientId: 'other' }).success, false)
   assert.equal(L2AuthSettingsGetRequestSchema.safeParse({}).success, true)

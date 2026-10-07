@@ -59,6 +59,7 @@ export function run(tool, args, { cwd = projectRoot, capture = false, env = proc
     {
       cwd,
       env,
+      windowsVerbatimArguments: windows,
       stdio: capture ? ['ignore', 'pipe', 'inherit'] : 'inherit',
       encoding: 'utf8',
       maxBuffer: 16 * 1024 * 1024

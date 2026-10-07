@@ -247,7 +247,12 @@ fn serve(mut stream: TcpStream, shared: &Shared) {
         let mut byte = [0];
         match stream.read(&mut byte) {
             Ok(0) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+            // Windows 主动取消也可能返回 WSAECONNABORTED，而不是连接重置。
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                ) => {}
             result => panic!("取消或超时必须关闭活动请求：{result:?}"),
         }
     }
