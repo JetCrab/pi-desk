@@ -1,0 +1,11 @@
+# project.yml is the only project configuration source.
+PiDesk.xcodeproj/
+*.xcworkspace/
+**/xcuserdata/
+**/userData/
+**/*.xcuserstate
+DerivedData/
+temp/
+*.xcarchive/
+*.ipa
+.DS_Store

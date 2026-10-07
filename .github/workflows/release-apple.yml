@@ -1,0 +1,147 @@
+name: Build Apple clients
+run-name: 构建 Apple 客户端 · ${{ inputs.platform }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 构建平台
+        type: choice
+        options: [all, macos, ios]
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-apple
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 仅允许 main
+        env:
+          REF: ${{ github.ref }}
+        run: test "$REF" = refs/heads/main
+
+  macos:
+    needs: guard
+    if: inputs.platform == 'all' || inputs.platform == 'macos'
+    runs-on: macos-14
+    timeout-minutes: 70
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/temp/build/macos-ci/${{ github.run_id }}-${{ github.run_attempt }}/target
+      PI_DESK_DESKTOP_WEB_DIST: ${{ github.workspace }}/temp/build/macos-ci/${{ github.run_id }}-${{ github.run_attempt }}/web
+      CLIENT_OUTPUT: ${{ github.workspace }}/temp/package/clients/macos/${{ github.run_id }}-${{ github.run_attempt }}
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+      - name: 准备 Apple Silicon 和 Intel 编译目标
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: 安装桌面依赖
+        working-directory: apps/desktop
+        run: pnpm install --ignore-workspace --frozen-lockfile
+      - name: 准备可选 Developer ID 签名
+        id: signing
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: bash .github/scripts/apple-signing.sh macos prepare
+      - name: 核对版本并配置隔离产物目录
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict'
+          import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+          import { relative, resolve } from 'node:path'
+          const root = resolve('apps/desktop/src-tauri')
+          const version = JSON.parse(readFileSync('apps/desktop/package.json', 'utf8')).version
+          assert.match(version, /^\d+\.\d+\.\d+$/)
+          assert.equal(JSON.parse(readFileSync(`${root}/tauri.conf.json`, 'utf8')).version, version)
+          assert.equal(readFileSync(`${root}/Cargo.toml`, 'utf8').match(/^version = "([^"]+)"/m)?.[1], version)
+          mkdirSync(process.env.CARGO_TARGET_DIR, { recursive: true })
+          writeFileSync(`${process.env.CARGO_TARGET_DIR}/tauri-ci.json`, JSON.stringify({
+            build: { frontendDist: relative(root, process.env.PI_DESK_DESKTOP_WEB_DIST) },
+            bundle: { macOS: { minimumSystemVersion: '11.0' } }
+          }))
+          JS
+      - name: 构建通用 macOS DMG
+        working-directory: apps/desktop
+        run: pnpm exec tauri build --target universal-apple-darwin --bundles dmg --config "$CARGO_TARGET_DIR/tauri-ci.json"
+      - name: 检查两种架构与签名结构并归档
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+        run: |
+          set -euo pipefail
+          release="$CARGO_TARGET_DIR/universal-apple-darwin/release"
+          app="$release/bundle/macos/Pi Desk.app"
+          test -s "$app/Contents/MacOS/pi-desk-desktop"
+          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/pi-desk-desktop"
+          codesign --verify --deep --strict "$app"
+          dmgs=("$release/bundle/dmg/"*.dmg)
+          test "${#dmgs[@]}" = 1
+          version=$(node -p 'require("./apps/desktop/package.json").version')
+          mkdir -p "$CLIENT_OUTPUT"
+          suffix=adhoc
+          if [[ "$SIGNED" == true ]]; then suffix=developer-id; fi
+          cp "${dmgs[0]}" "$CLIENT_OUTPUT/pi-desk-macos-$version-universal-$suffix.dmg"
+          (cd "$CLIENT_OUTPUT" && shasum -a 256 ./*.dmg > SHA256SUMS.txt)
+          {
+            echo '## macOS 构建结果'
+            echo "- 版本：$version；架构：Apple Silicon + Intel"
+            echo "- 签名类型：$suffix，未进行 Apple 公证。"
+            echo '- 已检查安装包和程序结构，未进行界面/功能验收。'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: 清理临时签名
+        if: always()
+        run: bash .github/scripts/apple-signing.sh macos cleanup
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CLIENT_OUTPUT }}/
+          retention-days: 7
+          if-no-files-found: error
+
+  ios:
+    needs: guard
+    if: inputs.platform == 'all' || inputs.platform == 'ios'
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: 准备 XcodeGen
+        run: |
+          if ! command -v xcodegen > /dev/null; then brew install xcodegen; fi
+          xcodebuild -version
+      - name: 准备可选 iOS 签名
+        id: signing
+        env:
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+        run: bash .github/scripts/apple-signing.sh ios prepare
+      - name: 构建模拟器与设备归档
+        env:
+          APPLE_SIGNED: ${{ steps.signing.outputs.signed }}
+        run: bash .github/scripts/build-ios.sh
+      - name: 清理临时签名
+        if: always()
+        run: bash .github/scripts/apple-signing.sh ios cleanup
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          path: temp/package/clients/ios/${{ github.run_id }}-${{ github.run_attempt }}/
+          retention-days: 7
+          if-no-files-found: error
