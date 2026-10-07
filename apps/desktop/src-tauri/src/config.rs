@@ -9,8 +9,11 @@ const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 const MAX_URL_LENGTH: usize = 2048;
 const MAX_COMMAND_LENGTH: usize = 8192;
 const DEFAULT_LOCAL_URL: &str = "http://127.0.0.1:30333";
+#[cfg(windows)]
 const DEFAULT_COMMAND: &str =
     "node_modules\\.bin\\pi-desk.cmd start -H 127.0.0.1 -p {port} --no-open";
+#[cfg(not(windows))]
+const DEFAULT_COMMAND: &str = "node_modules/.bin/pi-desk start -H 127.0.0.1 -p {port} --no-open";
 const DEFAULT_PACKAGE: &str = "@jetcrab/pi-desk";
 const DEFAULT_REGISTRY: &str = "https://registry.npmjs.org";
 
@@ -632,10 +635,7 @@ mod tests {
             server.start_command,
             "node_modules\\.bin\\pi-super.cmd start -H 127.0.0.1 -p {port} --no-open"
         );
-        assert_eq!(
-            server.package.as_ref().unwrap().name,
-            "@jetcrab/pi-super"
-        );
+        assert_eq!(server.package.as_ref().unwrap().name, "@jetcrab/pi-super");
         save(&path, &loaded.config).expect("保存时应保留用户配置的服务");
         let rewritten = fs::read_to_string(&path).unwrap();
         assert!(rewritten.contains("@jetcrab/pi-super"));

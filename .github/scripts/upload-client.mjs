@@ -106,13 +106,14 @@ async function main() {
   for (const key of [
     'CLIENT_SSH_HOST',
     'CLIENT_SSH_USER',
-    'CLIENT_SSH_PRIVATE_KEY',
     'CLIENT_SSH_KNOWN_HOSTS',
     'CLIENT_UPLOAD_ROOT',
     'CLIENT_DOWNLOAD_BASE_URL'
   ]) {
     assert.ok(process.env[key]?.trim(), `请配置 GitHub Secret ${key}`)
   }
+  const privateKey = process.env.CLIENT_SSH_PRIVATE_KEY
+  assert.ok(privateKey || process.env.CLIENT_SSH_PASSWORD, '请配置 SSH 私钥或现有账号密码')
   const host = process.env.CLIENT_SSH_HOST
   const user = process.env.CLIENT_SSH_USER
   const port = Number(process.env.CLIENT_SSH_PORT || 22)
@@ -138,33 +139,42 @@ async function main() {
   await mkdir(temporary, { recursive: true })
   const keyPath = join(temporary, 'identity')
   const knownHosts = join(temporary, 'known_hosts')
+  const options = [
+    '-o',
+    'StrictHostKeyChecking=yes',
+    '-o',
+    `UserKnownHostsFile=${knownHosts}`,
+    '-o',
+    'ConnectTimeout=15'
+  ]
+  const env = { ...process.env }
   try {
-    await writeFile(keyPath, process.env.CLIENT_SSH_PRIVATE_KEY.trimEnd() + '\n', { mode: 0o600 })
+    if (privateKey) {
+      await writeFile(keyPath, privateKey.trimEnd() + '\n', { mode: 0o600 })
+      options.push('-i', keyPath, '-o', 'BatchMode=yes')
+    } else {
+      const askpass = join(temporary, 'askpass.sh')
+      await writeFile(askpass, '#!/bin/sh\nprintf \'%s\\n\' "$CLIENT_SSH_PASSWORD"\n', {
+        mode: 0o700
+      })
+      env.SSH_ASKPASS = askpass
+      env.SSH_ASKPASS_REQUIRE = 'force'
+      env.DISPLAY = 'pi-desk-ci'
+      options.push('-o', 'PreferredAuthentications=password', '-o', 'NumberOfPasswordPrompts=1')
+    }
     await writeFile(knownHosts, process.env.CLIENT_SSH_KNOWN_HOSTS.trimEnd() + '\n', {
       mode: 0o600
     })
-    const options = [
-      '-i',
-      keyPath,
-      '-o',
-      'BatchMode=yes',
-      '-o',
-      'StrictHostKeyChecking=yes',
-      '-o',
-      `UserKnownHostsFile=${knownHosts}`,
-      '-o',
-      'ConnectTimeout=15'
-    ]
     const destination = `${user}@${host}`
     execFileSync(
       'ssh',
       [...options, '-p', String(port), destination, `mkdir -p -- ${quote(stage)}`],
-      { stdio: 'inherit', timeout: 30_000 }
+      { env, stdio: 'inherit', timeout: 30_000 }
     )
     execFileSync(
       'scp',
       [...options, '-P', String(port), pkg.path, `${destination}:${stage}/${pkg.filename}`],
-      { stdio: 'inherit', timeout: 600_000 }
+      { env, stdio: 'inherit', timeout: 600_000 }
     )
     const args = [
       root,
@@ -178,29 +188,14 @@ async function main() {
     execFileSync(
       'ssh',
       [...options, '-p', String(port), destination, `bash -s -- ${args.map(quote).join(' ')}`],
-      { input: remotePublishScript, stdio: ['pipe', 'inherit', 'inherit'], timeout: 180_000 }
+      { env, input: remotePublishScript, stdio: ['pipe', 'inherit', 'inherit'], timeout: 180_000 }
     )
   } finally {
     try {
       execFileSync(
         'ssh',
-        [
-          '-i',
-          keyPath,
-          '-o',
-          'BatchMode=yes',
-          '-o',
-          'StrictHostKeyChecking=yes',
-          '-o',
-          `UserKnownHostsFile=${knownHosts}`,
-          '-o',
-          'ConnectTimeout=10',
-          '-p',
-          String(port),
-          `${user}@${host}`,
-          `rm -rf -- ${quote(stage)}`
-        ],
-        { stdio: 'inherit', timeout: 20_000 }
+        [...options, '-p', String(port), `${user}@${host}`, `rm -rf -- ${quote(stage)}`],
+        { env, stdio: 'inherit', timeout: 20_000 }
       )
     } catch {
       console.error('服务器暂存清理未确认，请检查本次运行对应的 staging 目录')

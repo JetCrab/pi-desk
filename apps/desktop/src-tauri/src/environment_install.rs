@@ -2,6 +2,7 @@ use crate::config::{PackageConfig, ServerConfig};
 use crate::environment::{self, Component, EnvironmentState};
 use crate::environment_arch::{native_architecture, WindowsArchitecture};
 use crate::environment_download::{client, download};
+#[cfg(windows)]
 use crate::environment_installer;
 use crate::environment_source::DownloadSource;
 use crate::{logging, packages};
@@ -73,6 +74,7 @@ pub(crate) fn runtime_downloads(architecture: WindowsArchitecture) -> RuntimeDow
     }
 }
 
+#[cfg(windows)]
 fn architecture_for_host(log: &Path) -> Result<WindowsArchitecture, String> {
     let architecture = native_architecture().map_err(|error| {
         logging::write(
@@ -107,6 +109,7 @@ fn staging(state: &EnvironmentState) -> Result<Staging, String> {
     Ok(Staging(temporary))
 }
 
+#[cfg(windows)]
 pub(crate) fn install_node(
     state: &EnvironmentState,
     installer: &Path,
@@ -152,6 +155,17 @@ pub(crate) fn install_node(
         .ok_or_else(|| "Node.js 安装后仍不可用，请检查安装日志或选择已安装的 node.exe".into())
 }
 
+#[cfg(not(windows))]
+pub(crate) fn install_node(
+    _state: &EnvironmentState,
+    _installer: &Path,
+    _cancelled: &dyn Fn() -> bool,
+    _log: &Path,
+) -> Result<PathBuf, String> {
+    Err("当前平台不支持 MSI；macOS 请自动准备 Node.js 或选择已安装环境目录".into())
+}
+
+#[cfg(windows)]
 pub(crate) fn prepare(
     state: &EnvironmentState,
     server: &ServerConfig,
@@ -249,6 +263,145 @@ pub(crate) fn prepare(
     Ok(())
 }
 
+#[cfg(not(any(windows, target_os = "macos")))]
+pub(crate) fn prepare(
+    _state: &EnvironmentState,
+    _server: &ServerConfig,
+    _download_source: DownloadSource,
+    _cancelled: &(dyn Fn() -> bool + Sync),
+    _log: &Path,
+) -> Result<(), String> {
+    Err("当前平台不支持自动准备运行环境，请选择本机环境".into())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn prepare(
+    state: &EnvironmentState,
+    server: &ServerConfig,
+    _download_source: DownloadSource,
+    cancelled: &(dyn Fn() -> bool + Sync),
+    log: &Path,
+) -> Result<(), String> {
+    let needs_pi = environment::requires_pi(server);
+    if !environment::requires_node(server) && !needs_pi {
+        return Ok(());
+    }
+    if std::env::var_os("PI_DESK_DESKTOP_DATA_DIR").is_some() {
+        return Err("隔离模式禁止下载或安装真实运行环境".into());
+    }
+    let node_old = state
+        .snapshot()
+        .components
+        .iter()
+        .find(|item| item.name == Component::Node)
+        .and_then(|item| item.version.as_deref())
+        .and_then(|version| semver::Version::parse(version.trim_start_matches('v')).ok())
+        .is_some_and(|version| version < semver::Version::new(22, 19, 0));
+    for component in [Component::Node, Component::Bash, Component::Pi] {
+        if (component == Component::Node || needs_pi)
+            && state.has_manual_choice(component)
+            && (state.component_path(component).is_none()
+                || (component == Component::Node && needs_pi && node_old))
+        {
+            return Err(format!(
+                "明确选择的 {} 不可用或版本不兼容，请修正选择后重新检测",
+                component.name()
+            ));
+        }
+    }
+    if needs_pi && state.component_path(Component::Bash).is_none() {
+        state.set_component_step(Component::Bash, "正在请求安装 Command Line Tools");
+        let output = crate::process::run_program(
+            Path::new("/usr/bin/xcode-select"),
+            &["--install"],
+            None,
+            Duration::from_secs(15),
+            log,
+            cancelled,
+            &state.child_environment(),
+        )?;
+        logging::write(
+            log,
+            "environment-command-line-tools",
+            &format!(
+                "exit={} stdout={} stderr={}",
+                output.status,
+                crate::process::decode_output(&output.stdout).trim(),
+                crate::process::decode_output(&output.stderr).trim(),
+            ),
+        );
+        return Err(if output.status.success() {
+            "已请求系统安装 Command Line Tools；请在系统对话框中完成安装，然后点击重新检测或重试安装".into()
+        } else {
+            format!(
+                "无法自动确认 Git 和 Bash；请安装 Command Line Tools 或选择已有环境后重新检测：{}",
+                packages::command_failure(&output)
+            )
+        });
+    }
+    let work = staging(state)?;
+    state.set_phase("installing", "正在准备应用运行环境", None);
+    if state.component_path(Component::Node).is_none() || (needs_pi && node_old) {
+        let node = download_node(
+            state,
+            &client()?,
+            &work.0,
+            DownloadSource::Official,
+            cancelled,
+            log,
+        )?;
+        let extracted = work.0.join("node");
+        fs::create_dir_all(&extracted).map_err(|error| error.to_string())?;
+        state.set_component_step(Component::Node, "正在解压并校验 Node.js");
+        let output = crate::process::run_program(
+            Path::new("/usr/bin/tar"),
+            &[
+                "-xzf",
+                &work.0.join(&node.file).to_string_lossy(),
+                "--strip-components=1",
+                "-C",
+                &extracted.to_string_lossy(),
+            ],
+            None,
+            Duration::from_secs(60),
+            log,
+            cancelled,
+            &state.child_environment(),
+        )?;
+        if !output.status.success() {
+            return Err(format!(
+                "解压 Node.js 失败：{}",
+                packages::command_failure(&output)
+            ));
+        }
+        let executable = extracted.join("bin/node");
+        if state.probe(Component::Node, &executable, cancelled, log)? != node.version {
+            return Err("Node.js 实际版本与官方归档版本不一致，已停止安装".into());
+        }
+        if cancelled() {
+            return Err("操作已取消".into());
+        }
+        let installed = state.root.join("node");
+        if installed.exists() {
+            fs::remove_dir_all(&installed)
+                .map_err(|error| format!("替换应用 Node.js 失败：{error}"))?;
+        }
+        fs::rename(extracted, &installed)
+            .map_err(|error| format!("安装应用 Node.js 失败：{error}"))?;
+        state.use_installed(Component::Node, &installed.join("bin/node"), cancelled, log)?;
+    }
+    if needs_pi && state.component_path(Component::Pi).is_none() {
+        prepare_pi(state, &work.0, DownloadSource::Official, cancelled, log)?;
+    }
+    state.verify_global_commands(needs_pi, cancelled, log)?;
+    logging::write(
+        log,
+        "environment-prepared",
+        "应用运行环境已就绪，未修改系统 PATH 或安装系统软件包",
+    );
+    Ok(())
+}
+
 fn parallel<A: Send, B: Send>(
     cancelled: &(dyn Fn() -> bool + Sync),
     first: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<A, String> + Send,
@@ -287,23 +440,45 @@ fn download_node(
     cancelled: &(dyn Fn() -> bool + Sync),
     log: &Path,
 ) -> Result<NodeDownload, String> {
-    let architecture = architecture_for_host(log)?;
     let node_base = download_source.node_base();
-    state.set_component_step(Component::Node, "正在下载 Node.js 版本索引");
-    let index = work.join("node-index.json");
-    download(
-        state,
-        client,
-        &format!("{node_base}index.json"),
-        &index,
-        None,
-        cancelled,
-        log,
-    )?;
-    let node = node_download(
-        &fs::read_to_string(index).map_err(|error| error.to_string())?,
-        architecture,
-    )?;
+    #[cfg(not(target_os = "macos"))]
+    let node = {
+        #[cfg(windows)]
+        let architecture = architecture_for_host(log)?;
+        #[cfg(not(windows))]
+        let architecture = native_architecture()?;
+        state.set_component_step(Component::Node, "正在下载 Node.js 版本索引");
+        let index = work.join("node-index.json");
+        download(
+            state,
+            client,
+            &format!("{node_base}index.json"),
+            &index,
+            None,
+            cancelled,
+            log,
+        )?;
+        node_download(
+            &fs::read_to_string(index).map_err(|error| error.to_string())?,
+            architecture,
+        )?
+    };
+    #[cfg(target_os = "macos")]
+    let node = {
+        let architecture = match std::env::consts::ARCH {
+            "aarch64" => "arm64",
+            "x86_64" => "x64",
+            architecture => {
+                return Err(format!(
+                    "不支持自动准备 macOS {architecture} Node.js，请选择本机环境"
+                ))
+            }
+        };
+        NodeDownload {
+            version: "v22.22.2".into(),
+            file: format!("node-v22.22.2-darwin-{architecture}.tar.gz"),
+        }
+    };
     logging::write(
         log,
         "environment-node-version",
@@ -359,6 +534,7 @@ fn download_node(
     Ok(node)
 }
 
+#[cfg(windows)]
 fn download_bash(
     state: &EnvironmentState,
     client: &reqwest::Client,
@@ -385,6 +561,7 @@ fn download_bash(
     Ok(archive)
 }
 
+#[cfg(windows)]
 fn install_bash(
     state: &EnvironmentState,
     installer: &Path,

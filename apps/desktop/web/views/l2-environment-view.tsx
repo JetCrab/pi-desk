@@ -6,7 +6,12 @@ import type {
 } from '../l4-desktop-ipc'
 import { DesktopError, DesktopIcon } from '../l4-desktop-ui'
 
-const componentLabels = { node: 'Node.js', pi: 'Pi', bash: 'Git Bash' } as const
+const isMacOS = /Macintosh|Mac OS X/u.test(navigator.userAgent)
+const componentLabels = {
+  node: 'Node.js',
+  pi: 'Pi',
+  bash: isMacOS ? 'Git 和 Bash' : 'Git Bash'
+} as const
 const componentOrder = ['node', 'bash', 'pi'] as const
 
 export type EnvironmentViewAction =
@@ -200,7 +205,7 @@ export function EnvironmentView({
                   })
                 }
               >
-                <option value="npmmirror">国内镜像（npmmirror）</option>
+                {!isMacOS && <option value="npmmirror">国内镜像（npmmirror）</option>}
                 <option value="official">官方源</option>
               </select>
             </label>
@@ -251,7 +256,7 @@ export function EnvironmentView({
                         <DesktopIcon name="folder" />
                         选择已安装的位置
                       </button>
-                      {component.name === 'node' && (
+                      {component.name === 'node' && !isMacOS && (
                         <button
                           className="quiet"
                           type="button"

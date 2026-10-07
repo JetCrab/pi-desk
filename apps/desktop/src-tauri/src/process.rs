@@ -14,6 +14,8 @@ pub struct ManagedProcess {
     child: Child,
     #[cfg(windows)]
     job: windows_job::Job,
+    #[cfg(unix)]
+    process_group: Option<i32>,
     stdout: Option<JoinHandle<io::Result<Vec<u8>>>>,
     stderr: Option<JoinHandle<io::Result<Vec<u8>>>>,
     log_path: PathBuf,
@@ -59,11 +61,16 @@ impl ManagedProcess {
         {
             self.job.terminate()?;
         }
-        #[cfg(not(windows))]
-        {
-            if self.child.try_wait()?.is_none() {
-                self.child.kill()?;
+        #[cfg(unix)]
+        if let Some(group) = self.process_group {
+            // 仅向 spawn 时创建的独立进程组发信号，不按端口或进程名结束用户服务。
+            if unsafe { libc::killpg(group, libc::SIGKILL) } == -1 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(error);
+                }
             }
+            self.process_group = None;
         }
         Ok(())
     }
@@ -290,6 +297,11 @@ fn spawn_command(
     environment: &[(OsString, OsString)],
 ) -> Result<ManagedProcess, String> {
     process.envs(environment.iter().cloned());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        process.process_group(0);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -338,8 +350,12 @@ fn spawn_command(
             return Err(format!("创建命令进程树失败：{error}"));
         }
     };
+    #[cfg(unix)]
+    let process_group = Some(child.id() as i32);
     let mut managed = ManagedProcess {
         child,
+        #[cfg(unix)]
+        process_group,
         #[cfg(windows)]
         job,
         stdout: None,
@@ -521,7 +537,7 @@ fn shell_command(command: &str) -> Command {
     };
     #[cfg(not(windows))]
     let process = {
-        let mut process = Command::new("sh");
+        let mut process = Command::new("/bin/sh");
         process.args(["-c", command]);
         process
     };

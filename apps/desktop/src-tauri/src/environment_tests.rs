@@ -164,8 +164,10 @@ fn chosen_runtime_is_injected_only_into_child_environment() {
     let path = env.iter().find(|(name, _)| name == "PATH").unwrap();
     let parts = std::env::split_paths(&path.1).collect::<Vec<_>>();
     assert_eq!(parts.first().unwrap(), node.parent().unwrap());
+    #[cfg(not(target_os = "macos"))]
     assert!(parts.contains(&directory.0.join("pi")));
     assert!(parts.contains(&directory.0.join("git/bin")));
+    #[cfg(windows)]
     assert!(parts.contains(&directory.0.join("git/cmd")));
     assert!(env
         .iter()

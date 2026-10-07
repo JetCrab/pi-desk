@@ -57,8 +57,25 @@ pub fn wait_until_free(port: u16, timeout: Duration, log_path: &Path) -> Result<
 }
 
 #[cfg(not(windows))]
-fn listener_description(_port: u16) -> String {
-    "未查询监听进程 PID".into()
+fn listener_description(port: u16) -> String {
+    match std::process::Command::new("/usr/sbin/lsof")
+        .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-t"])
+        .output()
+    {
+        Ok(output) => {
+            let pids = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| line.parse::<u32>().ok())
+                .map(|pid| pid.to_string())
+                .collect::<Vec<_>>();
+            if pids.is_empty() {
+                "未取得监听进程 PID".into()
+            } else {
+                format!("同端口监听进程 PID：{}", pids.join(", "))
+            }
+        }
+        Err(error) => format!("监听进程 PID 查询失败：{error}"),
+    }
 }
 
 #[cfg(windows)]

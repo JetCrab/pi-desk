@@ -72,7 +72,7 @@ jobs:
           mkdirSync(process.env.CARGO_TARGET_DIR, { recursive: true })
           writeFileSync(`${process.env.CARGO_TARGET_DIR}/tauri-ci.json`, JSON.stringify({
             build: { frontendDist: relative(root, process.env.PI_DESK_DESKTOP_WEB_DIST) },
-            bundle: { macOS: { minimumSystemVersion: '11.0' } }
+            bundle: { macOS: { minimumSystemVersion: '11.0', signingIdentity: process.env.APPLE_SIGNING_IDENTITY, hardenedRuntime: process.env.APPLE_SIGNING_IDENTITY !== '-' } }
           }))
           JS
       - name: 构建通用 macOS DMG

@@ -64,10 +64,13 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("无法构建 Pi Desk");
 
-    app.run(|app_handle, event| {
-        if let RunEvent::ExitRequested { .. } = event {
-            runtime::shutdown(app_handle);
+    app.run(|app_handle, event| match event {
+        RunEvent::ExitRequested { .. } => runtime::shutdown(app_handle),
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => {
+            let _ = runtime::open_control_window(app_handle);
         }
+        _ => {}
     });
 }
 
@@ -110,6 +113,8 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
         runtime_path,
         log_path,
     ));
+    #[cfg(target_os = "macos")]
+    app.set_menu(tauri::menu::Menu::default(app.handle())?)?;
     build_tray(app)?;
     runtime::open_control_window(app.handle())?;
     runtime::check_environment(app.handle(), true)?;
@@ -125,17 +130,23 @@ fn build_tray(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
     let icon = app.default_window_icon().cloned();
     let mut tray = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        .show_menu_on_left_click(false)
-        .tooltip("Pi Desk（右键打开菜单）")
+        .show_menu_on_left_click(cfg!(target_os = "macos"))
+        .tooltip(if cfg!(target_os = "macos") {
+            "Pi Desk"
+        } else {
+            "Pi Desk（右键打开菜单）"
+        })
         .on_tray_icon_event(|tray, event| {
-            if matches!(
-                event,
-                TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                }
-            ) {
+            if !cfg!(target_os = "macos")
+                && matches!(
+                    event,
+                    TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    }
+                )
+            {
                 let _ = runtime::open_control_window(tray.app_handle());
             }
         });

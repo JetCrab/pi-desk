@@ -54,6 +54,17 @@ pub(crate) fn pick_file(
     }
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn pick_directory(
+    title: &str,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Option<PathBuf> {
+    if cancelled() {
+        return None;
+    }
+    rfd::FileDialog::new().set_title(title).pick_folder()
+}
+
 #[cfg(windows)]
 unsafe extern "system" fn close_dialog(
     window: windows_sys::Win32::Foundation::HWND,

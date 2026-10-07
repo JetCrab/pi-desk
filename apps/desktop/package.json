@@ -9,6 +9,7 @@
     "typecheck:web": "tsc --noEmit",
     "dev": "tauri dev --target i686-pc-windows-msvc",
     "build": "tauri build --target i686-pc-windows-msvc",
+    "build:mac": "tauri build --target universal-apple-darwin",
     "package:install:start": "node scripts/package-install-start.mjs",
     "check": "cargo check --manifest-path src-tauri/Cargo.toml --target i686-pc-windows-msvc",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml --target i686-pc-windows-msvc"

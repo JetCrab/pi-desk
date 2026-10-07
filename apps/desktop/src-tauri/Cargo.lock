@@ -2932,6 +2932,7 @@ name = "pi-desk-desktop"
 version = "1.0.0"
 dependencies = [
  "chrono",
+ "libc",
  "pi-desk-tunnel-common",
  "reqwest 0.12.28",
  "rfd",

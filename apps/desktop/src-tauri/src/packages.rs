@@ -8,8 +8,15 @@ use std::time::Duration;
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
 
-fn quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', ""))
+pub(crate) fn quote(value: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("\"{}\"", value.replace('"', ""))
+    }
+    #[cfg(not(windows))]
+    {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
 }
 
 #[cfg(test)]

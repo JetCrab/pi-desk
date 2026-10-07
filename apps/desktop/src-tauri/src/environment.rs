@@ -159,6 +159,9 @@ impl EnvironmentState {
     }
 
     pub(crate) async fn download_source(&self, lookup_url: &str, log: &Path) -> DownloadSource {
+        if cfg!(target_os = "macos") {
+            return DownloadSource::Official;
+        }
         if let Some(source) = self.data.lock().unwrap().choices.download_source {
             return source;
         }
@@ -312,6 +315,20 @@ impl EnvironmentState {
                         }
                     }
                     Component::Pi => {
+                        #[cfg(target_os = "macos")]
+                        if let Some(modules) = path.parent().and_then(Path::parent) {
+                            paths.push(modules.join(".bin"));
+                            if let Some(prefix) = modules
+                                .parent()
+                                .filter(|parent| {
+                                    parent.file_name().is_some_and(|name| name == "lib")
+                                })
+                                .and_then(Path::parent)
+                            {
+                                paths.push(prefix.join("bin"));
+                            }
+                        }
+                        #[cfg(not(target_os = "macos"))]
                         if let Some(prefix) =
                             path.parent().and_then(Path::parent).and_then(Path::parent)
                         {
@@ -321,6 +338,7 @@ impl EnvironmentState {
                     Component::Bash => {
                         if let Some(parent) = path.parent() {
                             paths.push(parent.to_path_buf());
+                            #[cfg(windows)]
                             if let Some(root) = parent.parent() {
                                 paths.push(root.join("cmd"));
                             }
@@ -344,6 +362,11 @@ impl EnvironmentState {
                 OsString::from("10"),
             ),
         ];
+        #[cfg(target_os = "macos")]
+        environment.push((
+            OsString::from("npm_config_prefix"),
+            self.root.join("npm").into_os_string(),
+        ));
         if let Some(pi) = data
             .snapshot
             .components
@@ -377,6 +400,34 @@ impl EnvironmentState {
         environment
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn verify_global_commands(
+        &self,
+        needs_pi: bool,
+        cancelled: &dyn Fn() -> bool,
+        log: &Path,
+    ) -> Result<(), String> {
+        let node = self
+            .component_path(Component::Node)
+            .ok_or("Node.js 尚未就绪")?;
+        self.probe(Component::Node, &node, cancelled, log)?;
+        if needs_pi {
+            let bash = self
+                .component_path(Component::Bash)
+                .ok_or("Git 和 Bash 尚未就绪")?;
+            self.probe(Component::Bash, &bash, cancelled, log)?;
+            let pi = self.component_path(Component::Pi).ok_or("Pi 尚未就绪")?;
+            self.probe(Component::Pi, &pi, cancelled, log)?;
+        }
+        logging::write(
+            log,
+            "environment-commands",
+            "所选运行环境校验通过，未修改系统 PATH",
+        );
+        Ok(())
+    }
+
+    #[cfg(windows)]
     pub(crate) fn verify_global_commands(
         &self,
         needs_pi: bool,
@@ -423,6 +474,7 @@ impl EnvironmentState {
         Ok(())
     }
 
+    #[cfg(windows)]
     fn register_command_path(
         &self,
         component: Component,
@@ -438,6 +490,7 @@ impl EnvironmentState {
         })
     }
 
+    #[cfg(windows)]
     fn check_global_command(
         &self,
         command: &str,
@@ -495,6 +548,7 @@ impl EnvironmentState {
         result
     }
 
+    #[cfg(windows)]
     fn invalidate_component(&self, component: Component, error: &str) {
         let mut data = self.data.lock().unwrap();
         if let Some(slot) = data
@@ -508,6 +562,16 @@ impl EnvironmentState {
         }
     }
 
+    #[cfg(not(any(windows, target_os = "macos")))]
+    pub(crate) fn verify_global_commands(
+        &self,
+        _needs_pi: bool,
+        _cancelled: &dyn Fn() -> bool,
+        _log: &Path,
+    ) -> Result<(), String> {
+        Err("当前平台不支持自动准备运行环境，请选择本机环境".into())
+    }
+
     pub(crate) fn run_node(
         &self,
         arguments: &[&str],
@@ -516,9 +580,9 @@ impl EnvironmentState {
         cancelled: &dyn Fn() -> bool,
         log: &Path,
     ) -> Result<String, String> {
-        let node = self
-            .component_path(Component::Node)
-            .ok_or_else(|| "请先准备 Node.js 和 npm，或选择有效的 node.exe".to_string())?;
+        let node = self.component_path(Component::Node).ok_or_else(|| {
+            "请先准备 Node.js 和 npm，或选择有效的 Node.js 可执行文件".to_string()
+        })?;
         let output = process::run_program(
             &node,
             arguments,
@@ -541,7 +605,11 @@ impl EnvironmentState {
         let npm = npm_cli(&node).ok_or_else(|| {
             "Node.js 目录缺少 npm，请选择包含 npm 的完整 Node.js 环境".to_string()
         })?;
-        let command = format!("\"{}\" \"{}\"", node.display(), npm.display());
+        let command = format!(
+            "{} {}",
+            packages::quote(&node.to_string_lossy()),
+            packages::quote(&npm.to_string_lossy())
+        );
         Ok(command)
     }
 
@@ -581,10 +649,10 @@ impl EnvironmentState {
         choices.pi = choices.pi.filter(|path| !self.is_private_path(path));
         choices.bash = choices.bash.filter(|path| !self.is_private_path(path));
         let node_candidates = candidates(
-            "node.exe",
+            if cfg!(windows) { "node.exe" } else { "node" },
             choices.node.clone(),
             &search,
-            if !include_system {
+            if !include_system || !cfg!(windows) {
                 &[]
             } else if matches!(native_architecture(), Ok(WindowsArchitecture::X64)) {
                 &[
@@ -596,6 +664,14 @@ impl EnvironmentState {
             },
             include_system,
         );
+        #[cfg(target_os = "macos")]
+        let node_candidates = {
+            let mut paths = node_candidates;
+            if include_system && choices.node.is_none() {
+                paths.insert(0, self.root.join("node/bin/node"));
+            }
+            paths
+        };
         let node = self.probe_candidates(
             Component::Node,
             choices.node.is_some(),
@@ -605,6 +681,10 @@ impl EnvironmentState {
         );
         self.replace_component(node);
         let mut pi_candidates = Vec::new();
+        #[cfg(target_os = "macos")]
+        if include_system && choices.pi.is_none() {
+            pi_candidates.push(self.root.join("npm/lib/node_modules").join(PI_PACKAGE));
+        }
         if let Some(path) = choices.pi.clone() {
             pi_candidates.push(path);
         } else {
@@ -619,6 +699,8 @@ impl EnvironmentState {
             if let Some(node) = self.component_path(Component::Node) {
                 if let Some(parent) = node.parent() {
                     pi_candidates.push(parent.join("node_modules").join(PI_PACKAGE));
+                    #[cfg(target_os = "macos")]
+                    pi_candidates.push(parent.join("../lib/node_modules").join(PI_PACKAGE));
                 }
                 if let Some(cli) = npm_cli(&node) {
                     if let Ok(output) = self.run_node(
@@ -643,6 +725,8 @@ impl EnvironmentState {
             }
             for directory in std::env::split_paths(&search) {
                 pi_candidates.push(directory.join("node_modules").join(PI_PACKAGE));
+                #[cfg(target_os = "macos")]
+                pi_candidates.push(directory.join("../lib/node_modules").join(PI_PACKAGE));
             }
         }
         pi_candidates.retain(|path| !self.is_private_path(path));
@@ -660,10 +744,10 @@ impl EnvironmentState {
             .cloned();
         let explicit_bash = configured_bash.is_some() || choices.bash.is_some();
         let mut bash_candidates = candidates(
-            "bash.exe",
+            if cfg!(windows) { "bash.exe" } else { "bash" },
             configured_bash.clone().or(choices.bash.clone()),
             &search,
-            if !include_system {
+            if !include_system || !cfg!(windows) {
                 &[]
             } else {
                 &[
@@ -674,7 +758,7 @@ impl EnvironmentState {
             },
             include_system,
         );
-        if !explicit_bash {
+        if !explicit_bash && cfg!(windows) {
             for directory in std::env::split_paths(&search) {
                 if directory.join("git.exe").is_file() {
                     if let Some(root) = directory.parent() {
@@ -683,7 +767,7 @@ impl EnvironmentState {
                 }
             }
         }
-        if !explicit_bash && include_system {
+        if !explicit_bash && include_system && cfg!(windows) {
             for key in ["LOCALAPPDATA", "USERPROFILE"] {
                 if let Some(home) = std::env::var_os(key) {
                     bash_candidates.push(PathBuf::from(home).join("Programs/Git/bin/bash.exe"));
@@ -747,6 +831,10 @@ impl EnvironmentState {
     }
 
     pub(crate) fn is_private_path(&self, path: &Path) -> bool {
+        #[cfg(target_os = "macos")]
+        if path.starts_with(self.root.join("node/bin")) || path.starts_with(self.root.join("npm")) {
+            return false;
+        }
         if path.starts_with(&self.root) {
             return true;
         }
@@ -947,10 +1035,74 @@ impl EnvironmentState {
                     packages::command_failure(&npm_output)
                 ));
             }
-        } else if !text.contains("GNU bash") {
-            return Err("所选程序不是可用的 GNU Bash".into());
+        } else {
+            if !text.contains("GNU bash") {
+                return Err("所选程序不是可用的 GNU Bash".into());
+            }
+            #[cfg(target_os = "macos")]
+            self.probe_git(path, cancelled, log)?;
         }
         Ok(text.lines().next().unwrap_or("").to_string())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn probe_git(
+        &self,
+        bash: &Path,
+        cancelled: &dyn Fn() -> bool,
+        log: &Path,
+    ) -> Result<(), String> {
+        let mut environment = self.child_environment();
+        if let Some((_, path)) = environment.iter_mut().find(|(key, _)| key == "PATH") {
+            let mut paths = bash
+                .parent()
+                .map(Path::to_path_buf)
+                .into_iter()
+                .collect::<Vec<_>>();
+            paths.extend(std::env::split_paths(path));
+            *path = std::env::join_paths(paths).map_err(|error| error.to_string())?;
+        }
+        let git = environment
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .into_iter()
+            .flat_map(|(_, path)| std::env::split_paths(path))
+            .map(|directory| directory.join("git"))
+            .find(|path| path.is_file())
+            .ok_or("未找到 Git，请安装 Command Line Tools 后重新检测")?;
+        if git == Path::new("/usr/bin/git") {
+            let tools = process::run_program(
+                Path::new("/usr/bin/xcode-select"),
+                &["-p"],
+                None,
+                Duration::from_secs(10),
+                log,
+                cancelled,
+                &environment,
+            )?;
+            if !tools.status.success() {
+                return Err(
+                    "Git 需要 Command Line Tools；点击安装并打开可请求系统安装，安装完成后重新检测"
+                        .into(),
+                );
+            }
+        }
+        let output = process::run_program(
+            &git,
+            &["--version"],
+            None,
+            Duration::from_secs(10),
+            log,
+            cancelled,
+            &environment,
+        )?;
+        if !output.status.success() {
+            return Err(format!(
+                "Git 不可用：{}",
+                packages::command_failure(&output)
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn select(
@@ -960,9 +1112,16 @@ impl EnvironmentState {
         cancelled: &(dyn Fn() -> bool + Sync),
         log: &Path,
     ) -> Result<bool, String> {
+        if archive && !cfg!(windows) {
+            return Err(
+                "macOS 请使用自动准备 Node.js，或选择已安装的环境目录；不支持 Windows MSI 安装包"
+                    .into(),
+            );
+        }
         if archive && component != Component::Node {
             return Err("只有 Node.js 支持选择 MSI 安装包".into());
         }
+        #[cfg(not(target_os = "macos"))]
         let filter = if archive {
             vec!["msi"]
         } else if component == Component::Pi {
@@ -970,17 +1129,34 @@ impl EnvironmentState {
         } else {
             vec!["exe"]
         };
+        #[cfg(not(target_os = "macos"))]
         let title = match (component, archive) {
             (Component::Node, true) => "选择 Node.js MSI 安装包",
             (Component::Node, false) => "选择 node.exe",
             (Component::Pi, _) => "选择 Pi package.json 或 CLI 入口",
             (Component::Bash, _) => "选择 bash.exe",
         };
-        let Some(mut path) = crate::environment_dialog::pick_file(title, &filter, cancelled) else {
+        #[cfg(target_os = "macos")]
+        let selected = crate::environment_dialog::pick_directory("选择运行环境目录", cancelled);
+        #[cfg(not(target_os = "macos"))]
+        let selected = crate::environment_dialog::pick_file(title, &filter, cancelled);
+        let Some(mut path) = selected else {
             return Ok(false);
         };
         if cancelled() {
             return Err("操作已取消".into());
+        }
+        #[cfg(target_os = "macos")]
+        if component != Component::Pi {
+            let executable = if component == Component::Node {
+                "node"
+            } else {
+                "bash"
+            };
+            path = [path.join(executable), path.join("bin").join(executable)]
+                .into_iter()
+                .find(|path| path.is_file())
+                .ok_or_else(|| format!("所选目录中没有 {executable} 或 bin/{executable}"))?;
         }
         if archive {
             self.set_phase("installing", "正在安装 Node.js", None);
@@ -1096,6 +1272,10 @@ pub(crate) fn npm_cli(node: &Path) -> Option<PathBuf> {
 }
 
 fn pi_root(path: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    let resolved = fs::canonicalize(path).ok()?;
+    #[cfg(target_os = "macos")]
+    let path = resolved.as_path();
     let mut directory = if path.is_dir() { path } else { path.parent()? };
     for _ in 0..6 {
         if fs::read(directory.join("package.json"))
@@ -1155,7 +1335,8 @@ fn configured_shell(root: &Path) -> Option<PathBuf> {
             if std::env::var_os("PI_DESK_DESKTOP_DATA_DIR").is_some() {
                 Some(root.join("pi-agent"))
             } else {
-                std::env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join(".pi/agent"))
+                std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                    .map(|home| PathBuf::from(home).join(".pi/agent"))
             }
         })?;
     let value: serde_json::Value =
@@ -1165,7 +1346,8 @@ fn configured_shell(root: &Path) -> Option<PathBuf> {
         .strip_prefix("~/")
         .or_else(|| shell.strip_prefix("~\\"))
     {
-        return std::env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join(rest));
+        return std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .map(|home| PathBuf::from(home).join(rest));
     }
     Some(PathBuf::from(shell))
 }
@@ -1176,6 +1358,7 @@ fn discovery_path_override() -> Option<OsString> {
     std::env::var_os("PI_DESK_DESKTOP_DISCOVERY_PATH")
 }
 
+#[cfg(windows)]
 pub(crate) fn windows_system_directory() -> PathBuf {
     let root = PathBuf::from(
         std::env::var_os("SystemRoot").unwrap_or_else(|| OsString::from("C:\\Windows")),
@@ -1183,6 +1366,7 @@ pub(crate) fn windows_system_directory() -> PathBuf {
     root.join("System32")
 }
 
+#[cfg(windows)]
 fn user_path_script(directory: &Path) -> String {
     let directory = directory.to_string_lossy().replace('\'', "''");
     format!(
@@ -1208,6 +1392,7 @@ try {{
     )
 }
 
+#[cfg(windows)]
 fn ensure_user_path(
     directory: &Path,
     cancelled: &dyn Fn() -> bool,
@@ -1304,7 +1489,20 @@ fn refreshed_path(log: &Path, cancelled: &dyn Fn() -> bool, include_current: boo
         }
     }
     #[cfg(not(windows))]
-    let _ = (log, cancelled);
+    {
+        let _ = (log, cancelled);
+        let mut paths = vec![
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+            PathBuf::from("/usr/sbin"),
+            PathBuf::from("/sbin"),
+        ];
+        paths.extend(std::env::split_paths(&current));
+        return std::env::join_paths(paths).unwrap_or(current);
+    }
+    #[cfg(windows)]
     current
 }
 

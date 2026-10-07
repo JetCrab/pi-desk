@@ -111,11 +111,10 @@ pub fn open_browser(app: &AppHandle, value: &str) -> Result<(), String> {
     let popup_app = app.clone();
     let popup_label = label.clone();
     let invalid = Arc::new(AtomicBool::new(false));
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()))
+    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()))
         .title(format!("Pi Desk · {}", url.host_str().unwrap_or("网页")))
         .inner_size(1280.0, 820.0)
         .min_inner_size(720.0, 480.0)
-        .data_directory(registry.data_directory.clone())
         .on_navigation(move |next| {
             if next.origin() == origin {
                 return true;
@@ -154,7 +153,10 @@ pub fn open_browser(app: &AppHandle, value: &str) -> Result<(), String> {
                     payload.url()
                 ),
             );
-        })
+        });
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.data_directory(registry.data_directory.clone());
+    let window = builder
         .build()
         .map_err(|error| format!("创建网页窗口失败：{error}"))?;
     #[cfg(windows)]

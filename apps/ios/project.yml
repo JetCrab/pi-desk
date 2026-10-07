@@ -1,6 +1,8 @@
 name: PiDesk
 options:
   minimumXcodeGenVersion: 2.42.0
+  xcodeVersion: '15.4'
+  projectFormat: xcode15_3
   deploymentTarget:
     iOS: '17.0'
   developmentLanguage: zh-Hans
