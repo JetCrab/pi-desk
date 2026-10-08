@@ -5,7 +5,8 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   prepareStableVersions,
-  prepareDevelopmentVersions
+  prepareDevelopmentVersions,
+  nextDevelopmentVersion
 } from '../.github/scripts/prepare-stable-release.mjs'
 import {
   createReleasePlan,
@@ -25,7 +26,8 @@ import { validateRecord, changeSections } from '../.github/scripts/release-recor
 import { packageClient } from '../.github/scripts/pack-client.mjs'
 import {
   developmentBaseline,
-  manualDevelopmentTargets
+  manualDevelopmentTargets,
+  readPublishedVersions
 } from '../.github/scripts/prepare-dev-release.mjs'
 
 async function fixture(t) {
@@ -232,17 +234,27 @@ test('dev普通源码推送自动生成测试版本，纯文档推送不发npm�
   const repo = await fixture(t)
   await repo.save('src/main.ts', 'export const value = 1')
   const head = repo.commit()
-  const result = await prepareDevelopmentVersions(repo.root, { before: repo.head, number: 12001 })
+  const result = await prepareDevelopmentVersions(repo.root, {
+    before: repo.head,
+    readVersions: async () => ['1.0.1-dev.9001']
+  })
   assert.deepEqual(result.selected, ['pi-desk'])
   assert.equal(
     JSON.parse(await readFile(join(repo.root, 'package.json'), 'utf8')).version,
-    '1.0.1-dev.12001'
+    '1.0.1-dev.9002'
   )
   repo.git('checkout', head, '--', 'package.json')
   await repo.save('README.md', '仅文档')
   repo.commit()
   assert.deepEqual(
-    (await prepareDevelopmentVersions(repo.root, { before: head, number: 13001 })).selected,
+    (
+      await prepareDevelopmentVersions(repo.root, {
+        before: head,
+        readVersions: async () => {
+          throw Error('文档改动不应查询版本')
+        }
+      })
+    ).selected,
     []
   )
 })
@@ -256,14 +268,127 @@ test('dev未回合并版本提交时测试版本仍高于main已发布版本', a
   repo.commit()
   const result = await prepareDevelopmentVersions(repo.root, {
     before: repo.head,
-    number: 15001,
+    readVersions: async () => ['1.0.1-dev.9001'],
     stableBase
   })
   assert.deepEqual(result.selected, ['pi-desk'])
   assert.equal(
     JSON.parse(await readFile(join(repo.root, 'package.json'), 'utf8')).version,
-    '1.2.1-dev.15001'
+    '1.2.1-dev.1'
   )
+})
+
+test('开发编号按同一基础版本的已发布最大值递增，旧高编号不回退', () => {
+  const versions = ['0.0.0-stage', '1.0.0', '1.0.1-rc.9', '1.0.1-dev.9001', '1.0.1-dev.2']
+  assert.equal(nextDevelopmentVersion('1.0.1-dev.1', versions), '1.0.1-dev.9002')
+  assert.equal(nextDevelopmentVersion('1.0.2-dev.1', versions), '1.0.2-dev.1')
+  assert.equal(nextDevelopmentVersion('1.0.1-dev.1', ['1.0.1-dev.1']), '1.0.1-dev.2')
+  assert.throws(() => nextDevelopmentVersion('1.0.0-dev.1', versions), /低于已发布版本/)
+  assert.throws(
+    () => nextDevelopmentVersion('1.0.1-dev.1', ['1.0.1-dev.9007199254740991']),
+    /安全整数/
+  )
+})
+
+test('SDK和消费者分别分配开发编号，并一次同步真实依赖范围', async (t) => {
+  const repo = await fixture(t)
+  await repo.pkg('pi-desk', '1.0.0', { dependencies: { '@jetcrab/pi-desk-sdk': '>=1.0.0 <2.0.0' } })
+  await repo.pkg('pi-desk-usage', '1.0.0')
+  const before = repo.commit()
+  await repo.save('plugins/pi-desk-sdk/src/feature.ts', 'export const ready = true')
+  repo.commit()
+  const queries = []
+  const result = await prepareDevelopmentVersions(repo.root, {
+    before,
+    readVersions: async (name) => {
+      queries.push(name)
+      if (name === '@jetcrab/pi-desk-sdk') return ['1.0.1-dev.7']
+      assert.equal(name, '@jetcrab/pi-desk')
+      return ['1.0.1-dev.9001']
+    }
+  })
+  assert.deepEqual(result.selected, ['pi-desk-sdk', 'pi-desk'])
+  assert.deepEqual(queries.sort(), ['@jetcrab/pi-desk', '@jetcrab/pi-desk-sdk'])
+  assert.equal(
+    result.packages.find((item) => item.name === '@jetcrab/pi-desk-sdk').version,
+    '1.0.1-dev.8'
+  )
+  assert.equal(
+    result.packages.find((item) => item.name === '@jetcrab/pi-desk').version,
+    '1.0.1-dev.9002'
+  )
+  const main = JSON.parse(await readFile(join(repo.root, 'package.json'), 'utf8'))
+  assert.equal(main.dependencies['@jetcrab/pi-desk-sdk'], '>=1.0.1-dev.8 <2.0.0')
+  assert.equal(
+    result.packages.find((item) => item.name === '@jetcrab/pi-desk-usage').version,
+    '1.0.0'
+  )
+})
+
+test('开发版本查询失败时不写入任何清单', async (t) => {
+  const repo = await fixture(t)
+  await repo.save('src/feature.ts', 'export const ready = true')
+  repo.commit()
+  const before = await readFile(join(repo.root, 'package.json'), 'utf8')
+  await assert.rejects(
+    prepareDevelopmentVersions(repo.root, {
+      before: repo.head,
+      readVersions: async () => {
+        throw Error('registry unavailable')
+      }
+    }),
+    /registry unavailable/
+  )
+  assert.equal(await readFile(join(repo.root, 'package.json'), 'utf8'), before)
+})
+
+test('官方Registry版本查询带去缓存参数，不以dev标签代替完整历史', async () => {
+  const versions = await readPublishedVersions('@jetcrab/pi-desk', async (url, options) => {
+    const parsed = new URL(url)
+    assert.equal(parsed.origin, 'https://registry.npmjs.org')
+    assert.equal(decodeURIComponent(parsed.pathname), '/@jetcrab/pi-desk')
+    assert.ok(parsed.searchParams.has('devVersions'))
+    assert.equal(options.headers['cache-control'], 'no-cache')
+    assert.ok(options.signal instanceof AbortSignal)
+    return new Response(
+      JSON.stringify({
+        'dist-tags': { dev: '1.0.1-dev.1' },
+        versions: { '1.0.1-dev.1': {}, '1.0.1-dev.7': {} }
+      })
+    )
+  })
+  assert.equal(nextDevelopmentVersion('1.0.1-dev.1', versions), '1.0.1-dev.8')
+  assert.deepEqual(
+    await readPublishedVersions('@jetcrab/pi-desk', async () => new Response('', { status: 404 })),
+    []
+  )
+  await assert.rejects(
+    readPublishedVersions('@jetcrab/pi-desk', async () => new Response('', { status: 503 })),
+    /HTTP 503/
+  )
+  await assert.rejects(
+    readPublishedVersions('@jetcrab/pi-desk', async () => new Response('{}')),
+    /版本清单无效/
+  )
+  await assert.rejects(
+    readPublishedVersions(
+      '@jetcrab/pi-desk',
+      async () => new Response(new Uint8Array(16 * 1024 * 1024 + 1))
+    ),
+    /读取上限/
+  )
+})
+
+test('开发发布只在重试时启用已发布制品的摘要复用', async () => {
+  const workflow = await readFile(
+    new URL('../.github/workflows/release-npm.yml', import.meta.url),
+    'utf8'
+  )
+  assert.match(
+    workflow,
+    /RELEASE_RESUME:.*github.ref == 'refs\/heads\/dev'.*github.run_attempt > 1/
+  )
+  assert.doesNotMatch(workflow, /name: dev-manifests-.*github.run_attempt/)
 })
 
 test('桌面四份版本和Android构建号在正式准备时自动保持一致', async (t) => {

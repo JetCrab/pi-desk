@@ -236,5 +236,5 @@ jobs:
       - name: 发布同一批已验证制品
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          RELEASE_RESUME: ${{ inputs.source_sha && 'true' || 'false' }}
+          RELEASE_RESUME: ${{ (inputs.source_sha || (github.ref == 'refs/heads/dev' && github.run_attempt > 1)) && 'true' || 'false' }}
         run: node .github/scripts/release-npm.mjs publish

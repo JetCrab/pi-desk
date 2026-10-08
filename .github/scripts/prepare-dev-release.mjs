@@ -51,13 +51,49 @@ export async function manualDevelopmentTargets(root, target) {
     .map((entry) => entry.manifest.name.slice('@jetcrab/'.length))
 }
 
+export async function readPublishedVersions(name, fetchImpl = fetch) {
+  assert.match(name, /^@jetcrab\/pi-desk(?:-[a-z0-9-]+)?$/)
+  const response = await fetchImpl(
+    `https://registry.npmjs.org/${encodeURIComponent(name)}?devVersions=${Date.now()}`,
+    {
+      headers: { accept: 'application/vnd.npm.install-v1+json', 'cache-control': 'no-cache' },
+      signal: AbortSignal.timeout(30_000)
+    }
+  ).catch(() => {
+    throw new Error(`无法读取 ${name} 的已发布版本：网络失败或超时`)
+  })
+  if (!response.ok) {
+    await response.body?.cancel()
+    if (response.status === 404) return []
+    throw new Error(`无法读取 ${name} 的已发布版本：HTTP ${response.status}`)
+  }
+  const chunks = []
+  let size = 0
+  for await (const chunk of response.body) {
+    size += chunk.length
+    assert.ok(size <= 16 * 1024 * 1024, `${name} 的版本清单超过读取上限`)
+    chunks.push(chunk)
+  }
+  let metadata
+  try {
+    metadata = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    throw new Error(`${name} 的版本响应无效`)
+  }
+  assert.ok(
+    metadata?.versions &&
+      typeof metadata.versions === 'object' &&
+      !Array.isArray(metadata.versions),
+    `${name} 的已发布版本清单无效`
+  )
+  return Object.keys(metadata.versions)
+}
+
 async function main() {
   assert.equal(process.env.GITHUB_ACTIONS, 'true')
   assert.equal(process.env.GITHUB_REF, 'refs/heads/dev')
   const root = resolve(import.meta.dirname, '../..')
   const output = resolve(process.env.DEV_MANIFEST_DIR)
-  const number =
-    Number(process.env.GITHUB_RUN_NUMBER) * 1000 + Number(process.env.GITHUB_RUN_ATTEMPT)
   const stableBase = execFileSync('git', ['rev-parse', 'origin/main'], {
     cwd: root,
     encoding: 'utf8',
@@ -68,7 +104,7 @@ async function main() {
       process.env.GITHUB_EVENT_NAME === 'workflow_dispatch'
         ? '0'.repeat(40)
         : developmentBaseline(root, process.env.RELEASE_BEFORE),
-    number,
+    readVersions: readPublishedVersions,
     stableBase
   })
   if (process.env.GITHUB_EVENT_NAME === 'workflow_dispatch') {
