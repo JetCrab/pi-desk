@@ -179,7 +179,8 @@ jobs:
       - name: 上传压缩镜像
         uses: actions/upload-artifact@v4
         with:
-          name: tunnel-image-${{ github.run_id }}-${{ github.run_attempt }}
+          name: tunnel-image-${{ github.run_id }}
+          overwrite: true
           path: ${{ env.PACKAGE_DIR }}/pi-desk-tunnel-${{ needs.plan.outputs.version }}-linux-amd64.tar.gz
           if-no-files-found: error
           retention-days: 7
@@ -220,7 +221,7 @@ jobs:
       - name: 下载已验证镜像
         uses: actions/download-artifact@v4
         with:
-          name: tunnel-image-${{ github.run_id }}-${{ github.run_attempt }}
+          name: tunnel-image-${{ github.run_id }}
           path: ${{ env.PACKAGE_DIR }}
 
       - name: 加载同一镜像并核对源码

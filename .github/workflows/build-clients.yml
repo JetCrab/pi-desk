@@ -179,7 +179,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
-          name: client-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          name: client-windows-${{ github.run_id }}
+          overwrite: true
           path: ${{ env.CLIENT_OUTPUT }}/
           retention-days: 7
           if-no-files-found: error
@@ -309,7 +310,8 @@ jobs:
         run: rm -rf "$RUNNER_TEMP/pi-desk-signing-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
       - uses: actions/upload-artifact@v4
         with:
-          name: client-android-${{ github.run_id }}-${{ github.run_attempt }}
+          name: client-android-${{ github.run_id }}
+          overwrite: true
           path: ${{ env.CLIENT_OUTPUT }}/
           retention-days: 7
           if-no-files-found: error

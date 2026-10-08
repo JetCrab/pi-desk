@@ -22,7 +22,19 @@ export async function transferRustCache(source, destination) {
     await cp(join(source, entry.name), join(destination, entry.name), {
       recursive: true,
       preserveTimestamps: true,
-      filter: (path) => !['bundle', 'nsis', '.tauri'].includes(basename(path))
+      filter: (path) => {
+        const name = basename(path)
+        if (['bundle', 'nsis', '.tauri'].includes(name)) return false
+        const parts = relative(source, path).split(sep)
+        // build-script 元数据包含旧任务的绝对 OUT_DIR，必须在新目录重新生成。
+        if (parts.includes('.fingerprint') && name.startsWith('run-build-script-')) return false
+        const build = parts.indexOf('build')
+        return !(
+          build >= 0 &&
+          parts.length === build + 3 &&
+          ['out', 'output', 'stderr', 'root-output', 'invoked.timestamp'].includes(name)
+        )
+      }
     })
     copied++
   }

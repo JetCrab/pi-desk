@@ -175,7 +175,8 @@ jobs:
         run: bash .github/scripts/apple-signing.sh macos cleanup
       - uses: actions/upload-artifact@v4
         with:
-          name: client-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: client-macos-${{ github.run_id }}
+          overwrite: true
           path: ${{ env.CLIENT_OUTPUT }}/
           retention-days: 7
           if-no-files-found: error
@@ -210,7 +211,8 @@ jobs:
         run: bash .github/scripts/apple-signing.sh ios cleanup
       - uses: actions/upload-artifact@v4
         with:
-          name: client-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          name: client-ios-${{ github.run_id }}
+          overwrite: true
           path: temp/package/clients/ios/${{ github.run_id }}-${{ github.run_attempt }}/
           retention-days: 7
           if-no-files-found: error

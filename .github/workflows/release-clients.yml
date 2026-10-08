@@ -80,12 +80,12 @@ jobs:
       - uses: actions/download-artifact@v4
         if: inputs.platform != 'android'
         with:
-          name: client-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          name: client-windows-${{ github.run_id }}
           path: temp/package/clients/windows/${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/download-artifact@v4
         if: inputs.platform != 'windows'
         with:
-          name: client-android-${{ github.run_id }}-${{ github.run_attempt }}
+          name: client-android-${{ github.run_id }}
           path: temp/package/clients/android/${{ github.run_id }}-${{ github.run_attempt }}
       - name: 发布平台专属 Release
         shell: bash
@@ -156,12 +156,12 @@ jobs:
       - uses: actions/download-artifact@v4
         if: inputs.platform != 'android'
         with:
-          name: client-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          name: client-windows-${{ github.run_id }}
           path: temp/package/clients/windows/${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/download-artifact@v4
         if: inputs.platform != 'windows'
         with:
-          name: client-android-${{ github.run_id }}-${{ github.run_attempt }}
+          name: client-android-${{ github.run_id }}
           path: temp/package/clients/android/${{ github.run_id }}-${{ github.run_attempt }}
       - name: 上传已有下载站
         shell: bash

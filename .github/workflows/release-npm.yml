@@ -114,7 +114,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: github.ref == 'refs/heads/dev' && steps.selection.outputs.packages != '[]'
         with:
-          name: dev-manifests-${{ github.run_id }}-${{ github.run_attempt }}
+          name: dev-manifests-${{ github.run_id }}
+          overwrite: true
           path: ${{ env.DEV_MANIFEST_DIR }}/
           retention-days: 7
           if-no-files-found: error
@@ -149,7 +150,7 @@ jobs:
       - uses: actions/download-artifact@v4
         if: github.ref == 'refs/heads/dev'
         with:
-          name: dev-manifests-${{ github.run_id }}-${{ github.run_attempt }}
+          name: dev-manifests-${{ github.run_id }}
           path: .
       - name: 核对并固定 Windows Git Bash
         run: |
@@ -194,7 +195,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
-          name: npm-packages-${{ github.run_id }}-${{ github.run_attempt }}
+          name: npm-packages-${{ github.run_id }}
+          overwrite: true
           path: ${{ env.NPM_ARTIFACT_DIR }}/*.tgz
           if-no-files-found: error
           retention-days: 7
@@ -223,13 +225,13 @@ jobs:
       - uses: actions/download-artifact@v4
         if: github.ref == 'refs/heads/dev'
         with:
-          name: dev-manifests-${{ github.run_id }}-${{ github.run_attempt }}
+          name: dev-manifests-${{ github.run_id }}
           path: .
       - name: 准备可信发布所需 npm
         run: npm install --global npm@11.5.1 --ignore-scripts --registry=https://registry.npmjs.org
       - uses: actions/download-artifact@v4
         with:
-          name: npm-packages-${{ github.run_id }}-${{ github.run_attempt }}
+          name: npm-packages-${{ github.run_id }}
           path: ${{ env.NPM_ARTIFACT_DIR }}
       - name: 发布同一批已验证制品
         env:

@@ -55,7 +55,8 @@ jobs:
         run: node .github/scripts/release-main.mjs prepare
       - uses: actions/upload-artifact@v4
         with:
-          name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-plan-${{ github.run_id }}
+          overwrite: true
           path: ${{ env.RELEASE_ROOT }}/plan.json
           retention-days: 7
           if-no-files-found: error
@@ -85,7 +86,7 @@ jobs:
           node-version: 22.22.2
       - uses: actions/download-artifact@v4
         with:
-          name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-plan-${{ github.run_id }}
           path: ${{ env.RELEASE_ROOT }}
       - name: 安装隔离审查 Agent
         working-directory: .github/release-agent
@@ -103,7 +104,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: release-review-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-review-${{ github.run_id }}
+          overwrite: true
           path: ${{ env.RELEASE_ROOT }}/changes.json.evidence.json
           retention-days: 7
           if-no-files-found: ignore
@@ -183,7 +185,7 @@ jobs:
           node-version: 22.22.2
       - uses: actions/download-artifact@v4
         with:
-          name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-plan-${{ github.run_id }}
           path: ${{ env.RELEASE_ROOT }}
       - uses: actions/download-artifact@v4
         if: needs.prepare.outputs.windows == 'true' || needs.prepare.outputs.macos == 'true' || needs.prepare.outputs.android == 'true'
@@ -193,7 +195,7 @@ jobs:
       - uses: actions/download-artifact@v4
         if: needs.prepare.outputs.npm != '[]' && needs.prepare.outputs.npm_ready != 'true'
         with:
-          name: npm-packages-${{ github.run_id }}-${{ github.run_attempt }}
+          name: npm-packages-${{ github.run_id }}
           path: ${{ env.NPM_ARTIFACT_DIR }}
       - name: 校验并归档当前客户端或复用包
         env:
@@ -207,7 +209,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: needs.prepare.outputs.npm != '[]'
         with:
-          name: npm-packages-${{ github.run_id }}-${{ github.run_attempt }}
+          name: npm-packages-${{ github.run_id }}
           path: ${{ env.NPM_ARTIFACT_DIR }}/*.tgz
           overwrite: true
           retention-days: 7
@@ -257,7 +259,7 @@ jobs:
           node-version: 22.22.2
       - uses: actions/download-artifact@v4
         with:
-          name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-plan-${{ github.run_id }}
           path: ${{ env.RELEASE_ROOT }}
       - name: 自动打 tag 并公开正式 Release
         env:
@@ -285,7 +287,7 @@ jobs:
           run_install: false
       - uses: actions/download-artifact@v4
         with:
-          name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-plan-${{ github.run_id }}
           path: ${{ env.RELEASE_ROOT }}
       - name: 同步正式发布记录与下载信息
         env:
@@ -300,7 +302,8 @@ jobs:
         run: node .github/scripts/build-website.mjs "$RELEASE_ROOT/site.tar.gz" "${{ needs.prepare.outputs.tag }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: website-${{ github.run_id }}-${{ github.run_attempt }}
+          name: website-${{ github.run_id }}
+          overwrite: true
           path: ${{ env.RELEASE_ROOT }}/site.tar.gz
           retention-days: 7
           if-no-files-found: error
@@ -319,7 +322,7 @@ jobs:
           node-version: 22.22.2
       - uses: actions/download-artifact@v4
         with:
-          name: website-${{ github.run_id }}-${{ github.run_attempt }}
+          name: website-${{ github.run_id }}
           path: ${{ env.RELEASE_ROOT }}
       - name: 更新官网并验证公网日志
         env:
