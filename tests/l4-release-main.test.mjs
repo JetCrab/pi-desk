@@ -395,6 +395,7 @@ test('正式准备回写固定版本提交，重跑不新增提交或推进失�
   const request = github.request
   github.request = async (path, options) => {
     if (path !== '/releases') return request(path, options)
+    assert.equal(options.body.name, options.body.tag_name)
     const release = {
       id: 10,
       draft: true,
@@ -470,9 +471,7 @@ test('正式记录持久保存后才移除内部附件，公开失败仍可重�
     record.clients.map((item) => item.file).sort()
   )
   await publishBatch({ github, release, repository: 'fixture/project' })
-  assert.ok(
-    github.calls.some((call) => call.method === 'PATCH' && call.body.name === 'Pi Desk v1.0.0')
-  )
+  assert.ok(github.calls.some((call) => call.method === 'PATCH' && call.body.name === 'v1.0.0'))
   await assert.rejects(saveReleaseRecord(github, { ...record, date: 2 }), /拒绝覆盖/)
 })
 

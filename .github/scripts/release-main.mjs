@@ -112,7 +112,7 @@ export async function prepareBatch(
         body: {
           tag_name: plan.record.tag,
           target_commitish: head,
-          name: `Pi Desk ${plan.record.tag}`,
+          name: plan.record.tag,
           body: 'Preparing release notes and verified downloads.',
           draft: true,
           prerelease: false
@@ -268,7 +268,7 @@ export async function publishBatch({ github, release, repository }) {
   await github.request(`/releases/${release.id}`, {
     method: 'PATCH',
     body: {
-      name: `Pi Desk ${record.tag}`,
+      name: record.tag,
       draft: false,
       make_latest: 'true',
       body: renderReleaseNotes(record, { repository })
