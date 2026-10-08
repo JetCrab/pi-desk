@@ -1,0 +1,125 @@
+.desk {
+  height: 100%;
+}
+.menuLabel {
+  padding: 6px 8px 4px;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+.menuReference {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 0.875rem;
+}
+.working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.working svg {
+  animation: working 1.2s linear infinite;
+}
+.application {
+  width: 100%;
+  min-height: 180px;
+}
+.application > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.application h3,
+.panel h3,
+.settingsForm h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.application > div:first-child > span {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.applicationRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.875rem;
+}
+.applicationRow > span {
+  flex: 1;
+}
+.applicationRow > small {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.settingsForm {
+  display: grid;
+  gap: 12px;
+  max-width: 640px;
+}
+.settingsForm > button:last-child {
+  justify-self: start;
+  margin-top: 8px;
+}
+.panel {
+  display: grid;
+  gap: 12px;
+}
+.panelFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+}
+.checkMessage {
+  margin-bottom: 22px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.checkMessage > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px;
+  text-align: left;
+  font-size: 0.875rem;
+}
+.checkMessage > button > span {
+  flex: 1;
+}
+.checkMessage > div {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+@keyframes working {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@container stage (min-width:640px) {
+  .desk > aside {
+    display: flex;
+    width: 28%;
+    min-width: 220px;
+    max-width: 300px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .working svg {
+    animation: none;
+  }
+}

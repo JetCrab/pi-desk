@@ -1,12 +1,34 @@
 name: Release npm
-run-name: ${{ github.event_name == 'push' && '版本变更发布 npm 包' || (inputs.publish && '发布 npm 包' || '构建 npm 包') }} · ${{ inputs.package || '自动选择' }}
+run-name: ${{ github.ref_name }} · npm · ${{ inputs.phase || inputs.package || '自动选择' }}
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
     paths:
       - package.json
-      - plugins/*/package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - src/**
+      - bin/**
+      - plugins/**
+      - next.config.ts
+      - tsconfig*.json
+      - .github/scripts/prepare*-release.mjs
+      - .github/workflows/release-npm.yml
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      packages:
+        type: string
+        required: true
+      phase:
+        type: string
+        default: all
+    secrets:
+      NPM_TOKEN:
+        required: false
   workflow_dispatch:
     inputs:
       package:
@@ -14,18 +36,20 @@ on:
         type: choice
         default: all
         options:
-          - all
-          - pi-desk
-          - pi-desk-sdk
-          - pi-desk-bg-run
-          - pi-desk-ctx
-          - pi-desk-deliverables
-          - pi-desk-quota-viewer
-          - pi-desk-remote-debug
-          - pi-desk-subagent
-          - pi-desk-tibo-monitor
-          - pi-desk-tool-reason
-          - pi-desk-usage
+          [
+            all,
+            pi-desk,
+            pi-desk-sdk,
+            pi-desk-bg-run,
+            pi-desk-ctx,
+            pi-desk-deliverables,
+            pi-desk-quota-viewer,
+            pi-desk-remote-debug,
+            pi-desk-subagent,
+            pi-desk-tibo-monitor,
+            pi-desk-tool-reason,
+            pi-desk-usage
+          ]
       publish:
         description: 将验证通过的包发布到官方 npm
         type: boolean
@@ -35,13 +59,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-npm
+  group: release-npm-${{ github.ref_name }}-${{ inputs.phase || 'all' }}
   cancel-in-progress: false
 
 env:
   RELEASE_PACKAGE: ${{ inputs.package }}
   NPM_ARTIFACT_DIR: ${{ github.workspace }}/temp/package/npm-release/${{ github.run_id }}-${{ github.run_attempt }}
   NEXT_TELEMETRY_DISABLED: '1'
+  DEV_MANIFEST_DIR: ${{ github.workspace }}/temp/build/dev-manifests/${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   plan:
@@ -52,21 +77,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.source_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.2
-      - name: 选择版本变化的公开包
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+      - name: 选择发布包
         id: selection
         env:
           RELEASE_BEFORE: ${{ github.event.before }}
-        run: node .github/scripts/release-versions.mjs npm
+          CALL_PACKAGES: ${{ inputs.packages }}
+          CALL_PHASE: ${{ inputs.phase }}
+          CALL_SHA: ${{ inputs.source_sha }}
+        run: |
+          if [ -n "$CALL_SHA" ]; then
+            node --input-type=module <<'JS'
+          import assert from 'node:assert/strict'
+          import { appendFileSync } from 'node:fs'
+          assert.equal(process.env.GITHUB_REF, 'refs/heads/main')
+          assert.match(process.env.CALL_SHA, /^[a-f0-9]{40}$/)
+          assert.ok(['build', 'publish', 'all'].includes(process.env.CALL_PHASE))
+          const packages = JSON.parse(process.env.CALL_PACKAGES)
+          assert.ok(Array.isArray(packages) && packages.every(name => /^pi-desk(?:-[a-z0-9-]+)?$/.test(name)))
+          appendFileSync(process.env.GITHUB_OUTPUT, `packages=${JSON.stringify(packages)}\n`)
+          JS
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/dev ]; then
+            node .github/scripts/prepare-dev-release.mjs
+          else
+            node .github/scripts/release-versions.mjs npm
+          fi
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev' && steps.selection.outputs.packages != '[]'
+        with:
+          name: dev-manifests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.DEV_MANIFEST_DIR }}/
+          retention-days: 7
+          if-no-files-found: error
 
   build:
     needs: plan
-    if: needs.plan.outputs.packages != '[]'
+    if: needs.plan.outputs.packages != '[]' && inputs.phase != 'publish'
     runs-on: windows-latest
     timeout-minutes: 60
     env:
@@ -75,13 +130,14 @@ jobs:
       PI_CODING_AGENT_DIR: ${{ github.workspace }}/temp/pi/npm-ci/${{ github.run_id }}-${{ github.run_attempt }}/agent
       PI_CODING_AGENT_SESSION_DIR: ${{ github.workspace }}/temp/pi/npm-ci/${{ github.run_id }}-${{ github.run_attempt }}/agent/sessions
     steps:
-      - name: 仅允许 main 分支
+      - name: 仅允许 main 或 dev 分支
         env:
           WORKFLOW_REF: ${{ github.ref }}
         run: |
-          if ($env:WORKFLOW_REF -ne 'refs/heads/main') { throw '请从 main 分支构建或发布' }
+          if ($env:WORKFLOW_REF -notin @('refs/heads/main', 'refs/heads/dev')) { throw '请从 main 或 dev 分支构建或发布' }
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
@@ -90,12 +146,16 @@ jobs:
         with:
           node-version: 22.22.2
           cache: pnpm
+      - uses: actions/download-artifact@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        with:
+          name: dev-manifests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .
       - name: 安装公开依赖
         run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
       - name: 构建、测试和校验实际 tarball
         run: node .github/scripts/release-npm.mjs prepare
-      - name: 保存已验证的包
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: npm-packages-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.NPM_ARTIFACT_DIR }}/*.tgz
@@ -103,7 +163,10 @@ jobs:
           retention-days: 7
 
   publish:
-    if: ${{ (github.event_name == 'push' || inputs.publish) && needs.build.result == 'success' }}
+    if: >-
+      always() && !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.packages != '[]' &&
+      ((inputs.source_sha && inputs.phase == 'publish') ||
+       (inputs.phase != 'build' && (github.event_name == 'push' || inputs.publish || inputs.source_sha) && needs.build.result == 'success'))
     needs: [plan, build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -115,10 +178,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.2
+      - uses: actions/download-artifact@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        with:
+          name: dev-manifests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .
       - name: 准备可信发布所需 npm
         run: npm install --global npm@11.5.1 --ignore-scripts --registry=https://registry.npmjs.org
       - uses: actions/download-artifact@v4
@@ -128,4 +197,5 @@ jobs:
       - name: 发布同一批已验证制品
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_RESUME: ${{ inputs.source_sha && 'true' || 'false' }}
         run: node .github/scripts/release-npm.mjs publish

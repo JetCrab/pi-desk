@@ -47,9 +47,44 @@ jobs:
           tests/l4-public-boundary.test.mjs
           tests/l4-release-versions.test.mjs
           tests/l4-release-npm.test.mjs
+          tests/l4-release-main.test.mjs
+          tests/l4-release-website.test.mjs
           tests/l2-chat-state.test.ts
           tests/l2-task-center-state.test.ts
           tests/l2-work-session-update.test.ts
           tests/l2-workbench-layout.test.ts
           tests/l3-app-runtime-state.test.ts
           tests/l3-project-file-tree.test.ts
+
+  website:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+      - run: pnpm install --ignore-workspace --frozen-lockfile --ignore-scripts --registry=https://registry.npmjs.org
+        working-directory: apps/website
+      - run: pnpm typecheck && pnpm lint && pnpm check:layers
+        working-directory: apps/website
+
+  release-agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+        working-directory: .github/release-agent
+      - run: node --test tests/l4-release-agent.test.mjs

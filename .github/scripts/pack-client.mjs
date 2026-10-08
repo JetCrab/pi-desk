@@ -3,8 +3,15 @@ import { copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/pro
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-export async function packageClient({ platform, unsigned = false, version, source, output }) {
-  if (!['windows', 'android'].includes(platform)) {
+export async function packageClient({
+  platform,
+  unsigned = false,
+  developerId = false,
+  version,
+  source,
+  output
+}) {
+  if (!['windows', 'android', 'macos'].includes(platform)) {
     throw new Error(`不支持的客户端平台：${platform}`)
   }
   if (
@@ -17,6 +24,9 @@ export async function packageClient({ platform, unsigned = false, version, sourc
   if (unsigned && platform !== 'android') {
     throw new Error('unsigned 仅适用于 Android')
   }
+  if (developerId && platform !== 'macos') {
+    throw new Error('developerId 仅适用于 macOS')
+  }
   const sourceInfo = await stat(source)
   if (!sourceInfo.isFile() || sourceInfo.size === 0) {
     throw new Error('客户端安装文件必须是非空文件')
@@ -28,7 +38,9 @@ export async function packageClient({ platform, unsigned = false, version, sourc
   const filename =
     platform === 'windows'
       ? `pi-desk-windows-${version}-x86-setup.exe`
-      : `pi-desk-android-${version}${unsigned ? '-unsigned' : ''}.apk`
+      : platform === 'macos'
+        ? `pi-desk-macos-${version}-universal-${developerId ? 'developer-id' : 'adhoc'}.dmg`
+        : `pi-desk-android-${version}${unsigned ? '-unsigned' : ''}.apk`
   const destination = join(output, filename)
   await copyFile(source, destination)
   const sha256 = createHash('sha256')
@@ -39,20 +51,34 @@ export async function packageClient({ platform, unsigned = false, version, sourc
 
 async function main() {
   const [platform, source, output, ...flags] = process.argv.slice(2)
-  if (!source || !output || flags.some((flag) => flag !== '--unsigned') || flags.length > 1) {
-    throw new Error('用法：pack-client.mjs <windows|android> <source> <output> [--unsigned]')
+  if (
+    !source ||
+    !output ||
+    flags.some((flag) => !['--unsigned', '--developer-id'].includes(flag)) ||
+    flags.length > 1
+  ) {
+    throw new Error(
+      '用法：pack-client.mjs <windows|android|macos> <source> <output> [--unsigned|--developer-id]'
+    )
   }
-  if (!['windows', 'android'].includes(platform)) {
+  if (!['windows', 'android', 'macos'].includes(platform)) {
     throw new Error(`不支持的客户端平台：${platform}`)
   }
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
   const version =
-    platform === 'windows'
+    platform !== 'android'
       ? JSON.parse(await readFile(join(root, 'apps/desktop/package.json'), 'utf8')).version
       : (await readFile(join(root, 'apps/android/app/build.gradle.kts'), 'utf8')).match(
           /^\s*versionName\s*=\s*"([^"]+)"/m
         )?.[1]
-  await packageClient({ platform, unsigned: flags.includes('--unsigned'), version, source, output })
+  await packageClient({
+    platform,
+    unsigned: flags.includes('--unsigned'),
+    developerId: flags.includes('--developer-id'),
+    version,
+    source,
+    output
+  })
   console.log(`已归档 ${platform} ${version}：${output}`)
 }
 

@@ -1,0 +1,18 @@
+.transition::view-transition {
+  pointer-events: none;
+}
+
+.transition::view-transition-group(root),
+.transition::view-transition-old(root),
+.transition::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+.transition::view-transition-old(root) {
+  z-index: 1;
+}
+
+.transition::view-transition-new(root) {
+  z-index: 2;
+}

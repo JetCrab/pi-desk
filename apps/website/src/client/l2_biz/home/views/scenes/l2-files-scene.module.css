@@ -1,0 +1,421 @@
+.desk {
+  height: 100%;
+}
+.fileBrowser {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+.projectHeader,
+.treeHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 4px;
+}
+.projectHeader strong,
+.treeHeading strong {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.projectHeader button {
+  max-width: 120px;
+  font-size: 0.75rem !important;
+}
+.search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--input);
+  border-radius: 8px;
+  color: var(--muted-foreground);
+}
+.search input {
+  min-width: 0;
+  width: 100%;
+  outline: none;
+  font-size: 0.875rem;
+}
+.filter {
+  width: 100%;
+  justify-content: flex-start;
+  font-size: 0.75rem !important;
+}
+.filter > span {
+  margin-left: auto;
+}
+.fileList {
+  min-height: 0;
+}
+.nested {
+  padding-left: 16px;
+}
+.fileLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+  text-decoration: underline;
+  font-size: 0.875rem;
+}
+.document {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  width: 56%;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--background);
+}
+.documentContent {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.contentToolbar {
+  display: flex;
+  gap: 4px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.preview {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: white;
+}
+.fileFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.previewBackdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  background: #0005;
+  padding: 12px;
+}
+.projectPreview {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 96%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+  container: project-preview / size;
+}
+.projectPreviewHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 56px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--muted);
+  flex-shrink: 0;
+}
+.projectPreviewHeader > div {
+  flex: 1;
+  min-width: 0;
+}
+.projectPreviewHeader strong,
+.projectPreviewHeader > div > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.projectPreviewHeader strong {
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+.projectPreviewHeader > div > span {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+.maximizeIcon {
+  padding: 6px;
+  color: var(--muted-foreground);
+}
+.previewPages {
+  display: none;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  padding: 4px 8px;
+}
+.projectPreviewBody {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+.previewTree {
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  border-right: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+.treeHeading > span {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.previewCode {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.previewFileTab {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  min-height: 36px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.875rem;
+}
+.previewCodeContent {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+.previewGit {
+  display: none;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+.previewGit > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  min-height: 36px;
+  background: var(--muted);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.875rem;
+}
+.previewGit > header > span {
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.projectPreview[data-git='true'] .projectPreviewBody {
+  grid-template-rows: minmax(0, 1fr) minmax(220px, 44%);
+}
+.projectPreview[data-git='true'] .previewGit {
+  display: flex;
+  grid-column: 1/-1;
+}
+.projectPreview[data-directory='false'] .previewTree {
+  display: none;
+}
+.projectPreview[data-directory='false'] .projectPreviewBody {
+  grid-template-columns: minmax(0, 1fr);
+}
+.historyToolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem;
+}
+.historyToolbar input {
+  min-width: 120px;
+  flex: 1;
+  border: 1px solid var(--input);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.historyBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+.commitList {
+  padding: 4px;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+}
+.commitList button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 8px;
+  border-radius: 6px;
+}
+.commitList button:hover,
+.selectedCommit {
+  background: var(--accent);
+}
+.commitList strong,
+.commitList small {
+  display: block;
+}
+.commitList strong {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.commitList small {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.commitDot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--muted-foreground);
+}
+.commitDetail {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  font-size: 0.875rem;
+}
+.commitDetail p {
+  margin: 8px 0;
+  color: var(--muted-foreground);
+}
+.changedFile {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 6px;
+  background: var(--accent);
+  text-align: left;
+  font-size: 0.75rem;
+}
+.changedFile > span:last-child {
+  margin-left: auto;
+}
+.repositorySummary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 0 10px;
+  font-size: 0.875rem;
+}
+.repositorySummary > span {
+  flex: 1;
+  color: var(--muted-foreground);
+}
+.sectionLabel {
+  margin: 14px 0 6px;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.branchRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 8px;
+  text-align: left;
+  border-radius: 8px;
+  font-size: 0.875rem;
+}
+.branchRow > span {
+  flex: 1;
+  font-family: monospace;
+}
+.branchRow small {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.branchActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 24px;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+@container stage (min-width:640px) {
+  .desk > aside {
+    display: flex;
+    min-width: 220px;
+    max-width: 290px;
+    width: 27%;
+  }
+}
+@container stage (max-width:639px) {
+  .document {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    width: 100%;
+    border: 0;
+  }
+  .previewBackdrop {
+    padding: 0;
+  }
+  .projectPreview {
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    border: 0;
+  }
+}
+@container project-preview (max-width:899px) {
+  .previewPages {
+    display: flex;
+  }
+  .maximizeIcon {
+    display: none;
+  }
+  .projectPreviewBody,
+  .projectPreview[data-git='true'] .projectPreviewBody {
+    display: flex;
+    flex-direction: column;
+  }
+  .projectPreviewBody > * {
+    display: none !important;
+  }
+  .projectPreview[data-page='files'] .previewTree {
+    display: block !important;
+    flex: 1;
+    border: 0;
+  }
+  .projectPreview[data-page='code'] .previewCode,
+  .projectPreview[data-page='git'] .previewGit {
+    display: flex !important;
+    flex: 1;
+  }
+  .historyBody {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .commitDetail {
+    border-top: 1px solid var(--border);
+  }
+  .projectPreviewHeader > button:first-child {
+    display: none;
+  }
+}

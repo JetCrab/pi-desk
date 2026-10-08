@@ -1,0 +1,127 @@
+.desk {
+  height: 100%;
+}
+.contextPanel {
+  position: absolute;
+  left: 16px;
+  bottom: calc(100% + 6px);
+  z-index: 5;
+  width: min(320px, calc(100% - 32px));
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--popover);
+  box-shadow: 0 8px 24px #0002;
+  font-size: 0.875rem;
+}
+.current {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.current > span {
+  color: var(--muted-foreground);
+}
+.current strong {
+  white-space: nowrap;
+  font-weight: 500;
+}
+.track {
+  display: flex;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--muted);
+  margin: 8px 0 12px;
+}
+.track > i {
+  background: var(--foreground);
+}
+.track > span {
+  background: var(--muted-foreground);
+}
+.contextPanel dl {
+  display: grid;
+  gap: 8px;
+}
+.contextPanel dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+.contextPanel dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+}
+.contextPanel dt i,
+.contextPanel dt span {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--foreground);
+}
+.contextPanel dt span {
+  background: var(--muted-foreground);
+}
+.contextPanel dd {
+  font-weight: 500;
+}
+.panelActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.panelActions > button {
+  border: 1px solid var(--input);
+  min-height: 32px;
+}
+.identity {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 0.75rem;
+}
+.identity > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 24px;
+}
+.identity span {
+  color: var(--muted-foreground);
+}
+.identity code {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.history {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 22px;
+}
+.history header {
+  padding: 8px 12px;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border);
+}
+@container stage (min-width:640px) {
+  .desk > aside {
+    display: flex;
+    width: 28%;
+    min-width: 220px;
+    max-width: 300px;
+  }
+}

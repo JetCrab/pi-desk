@@ -1,0 +1,330 @@
+name: Release main
+run-name: 正式发布 · ${{ github.sha }}
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+env:
+  RELEASE_ROOT: ${{ github.workspace }}/temp/run/release-main/${{ github.run_id }}-${{ github.run_attempt }}
+  NPM_ARTIFACT_DIR: ${{ github.workspace }}/temp/package/npm-release/${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.plan.outputs.sha }}
+      tag: ${{ steps.plan.outputs.tag }}
+      published: ${{ steps.plan.outputs.published }}
+      deploy: ${{ steps.plan.outputs.deploy }}
+      npm: ${{ steps.plan.outputs.npm }}
+      npm_ready: ${{ steps.plan.outputs.npm_ready }}
+      notes_ready: ${{ steps.plan.outputs.notes_ready }}
+      windows: ${{ steps.plan.outputs.windows }}
+      macos: ${{ steps.plan.outputs.macos }}
+      android: ${{ steps.plan.outputs.android }}
+      tunnel: ${{ steps.plan.outputs.tunnel }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+      - name: 自动准备正式版本和固定发布草稿
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-main.mjs prepare
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RELEASE_ROOT }}/plan.json
+          retention-days: 7
+          if-no-files-found: error
+
+  notes:
+    needs: [prepare, npm-build, windows, macos, android]
+    if: >-
+      always() && !cancelled() && needs.prepare.result == 'success' &&
+      needs.prepare.outputs.published != 'true' && needs.prepare.outputs.notes_ready != 'true' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RELEASE_ROOT }}
+      - name: 写入实际构建结果
+        env:
+          BUILD_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs'
+          const file = `${process.env.RELEASE_ROOT}/plan.json`
+          const plan = JSON.parse(readFileSync(file, 'utf8'))
+          const results = JSON.parse(process.env.BUILD_RESULTS)
+          plan.tests = Object.fromEntries(['npm-build', 'windows', 'macos', 'android'].map(name => [name, results[name].result]))
+          writeFileSync(file, JSON.stringify(plan))
+          JS
+      - name: 安装隔离审查 Agent
+        working-directory: .github/release-agent
+        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+      - name: 作者和审核者独立多轮核对累计变更
+        env:
+          RELEASE_MODEL_BASE_URL: ${{ secrets.RELEASE_MODEL_BASE_URL }}
+          RELEASE_MODEL: ${{ vars.RELEASE_MODEL }}
+          RELEASE_MODEL_API_KEY: ${{ secrets.RELEASE_MODEL_API_KEY }}
+        run: node .github/release-agent/run.mjs "$RELEASE_ROOT/plan.json" "$RELEASE_ROOT/changes.json"
+      - name: 固定已核验的变更记录
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-main.mjs save-notes
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RELEASE_ROOT }}/changes.json.evidence.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+  npm-build:
+    needs: prepare
+    if: needs.prepare.outputs.published != 'true' && needs.prepare.outputs.npm != '[]' && needs.prepare.outputs.npm_ready != 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/release-npm.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.sha }}
+      packages: ${{ needs.prepare.outputs.npm }}
+      phase: build
+
+  windows:
+    needs: prepare
+    if: needs.prepare.outputs.published != 'true' && needs.prepare.outputs.windows == 'true'
+    uses: ./.github/workflows/build-clients.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.sha }}
+      platform: windows
+      distribute: true
+
+  macos:
+    needs: prepare
+    if: needs.prepare.outputs.published != 'true' && needs.prepare.outputs.macos == 'true'
+    uses: ./.github/workflows/release-apple.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.sha }}
+      platform: macos
+    secrets:
+      MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+
+  android:
+    needs: prepare
+    if: needs.prepare.outputs.published != 'true' && needs.prepare.outputs.android == 'true'
+    uses: ./.github/workflows/build-clients.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.sha }}
+      platform: android
+      distribute: true
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+  assemble:
+    needs: [prepare, notes, npm-build, windows, macos, android]
+    if: >-
+      always() && !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.published != 'true' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RELEASE_ROOT }}
+      - uses: actions/download-artifact@v4
+        if: needs.prepare.outputs.windows == 'true' || needs.prepare.outputs.macos == 'true' || needs.prepare.outputs.android == 'true'
+        with:
+          pattern: client-*
+          path: ${{ env.RELEASE_ROOT }}/clients
+      - uses: actions/download-artifact@v4
+        if: needs.prepare.outputs.npm != '[]' && needs.prepare.outputs.npm_ready != 'true'
+        with:
+          name: npm-packages-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.NPM_ARTIFACT_DIR }}
+      - name: 校验并归档当前客户端或复用包
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-main.mjs assemble
+      - name: 保留可重试的同一批 npm 制品
+        if: needs.prepare.outputs.npm != '[]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-main.mjs stage-npm
+      - uses: actions/upload-artifact@v4
+        if: needs.prepare.outputs.npm != '[]'
+        with:
+          name: npm-packages-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.NPM_ARTIFACT_DIR }}/*.tgz
+          overwrite: true
+          retention-days: 7
+          if-no-files-found: error
+
+  npm-publish:
+    needs: [prepare, assemble]
+    if: needs.prepare.outputs.npm != '[]'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/release-npm.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.sha }}
+      packages: ${{ needs.prepare.outputs.npm }}
+      phase: publish
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  tunnel:
+    needs: [prepare, assemble]
+    if: needs.prepare.outputs.tunnel == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release-tunnel.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.sha }}
+
+  publish:
+    needs: [prepare, assemble, npm-publish, tunnel]
+    if: >-
+      always() && !cancelled() && needs.assemble.result == 'success' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RELEASE_ROOT }}
+      - name: 自动打 tag 并公开正式 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-main.mjs publish
+
+  website-build:
+    needs: [prepare, publish]
+    if: >-
+      always() && !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.deploy == 'true' &&
+      (needs.publish.result == 'success' || needs.prepare.outputs.published == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RELEASE_ROOT }}
+      - name: 同步正式发布记录与下载信息
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-main.mjs website
+      - name: 安装独立官网依赖
+        working-directory: apps/website
+        run: pnpm install --ignore-workspace --frozen-lockfile --ignore-scripts --registry=https://registry.npmjs.org
+      - name: 构建并校验官网静态产物
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: node .github/scripts/build-website.mjs "$RELEASE_ROOT/site.tar.gz" "${{ needs.prepare.outputs.tag }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: website-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RELEASE_ROOT }}/site.tar.gz
+          retention-days: 7
+          if-no-files-found: error
+
+  website-deploy:
+    needs: [prepare, website-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: website-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RELEASE_ROOT }}
+      - name: 更新官网并验证公网日志
+        env:
+          WEBSITE_SSH_HOST: ${{ secrets.WEBSITE_SSH_HOST }}
+          WEBSITE_SSH_USER: ${{ secrets.WEBSITE_SSH_USER }}
+          WEBSITE_SSH_PORT: ${{ vars.WEBSITE_SSH_PORT || '22' }}
+          WEBSITE_SSH_PRIVATE_KEY: ${{ secrets.WEBSITE_SSH_PRIVATE_KEY }}
+          WEBSITE_SSH_PASSWORD: ${{ secrets.WEBSITE_SSH_PASSWORD }}
+          WEBSITE_SSH_KNOWN_HOSTS: ${{ secrets.WEBSITE_SSH_KNOWN_HOSTS }}
+          WEBSITE_ROOT: ${{ secrets.WEBSITE_ROOT }}
+          WEBSITE_URL: ${{ secrets.WEBSITE_URL }}
+        run: node .github/scripts/deploy-website.mjs "$RELEASE_ROOT/site.tar.gz" "${{ needs.prepare.outputs.tag }}"

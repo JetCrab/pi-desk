@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { appendFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { npmTagFor, versionParts } from './npm-channel.mjs'
 
 const registry = 'https://registry.npmjs.org'
 const sdkName = '@jetcrab/pi-desk-sdk'
@@ -19,7 +21,7 @@ export async function selectPackages(root, target = 'all') {
     const manifest = JSON.parse(await readFile(join(root, directory, 'package.json'), 'utf8'))
     assert.match(manifest.name, /^@jetcrab\/pi-desk(?:-[a-z0-9-]+)?$/)
     assert.notEqual(manifest.private, true, `不可公开发布私有包：${manifest.name}`)
-    assert.match(manifest.version, /^\d+\.\d+\.\d+$/)
+    versionParts(manifest.version)
     assert.equal(manifest.publishConfig?.registry, registry)
     assert.equal(manifest.publishConfig?.access, 'public')
     entries.push({ directory: join(root, directory), manifest })
@@ -55,6 +57,9 @@ export function assertPackedManifest(packed, source) {
     for (const [name, value] of Object.entries(packed[group] ?? {})) {
       assert.ok(!name.startsWith('@jetcrab-private/'), `制品依赖私有包：${name}`)
       assert.doesNotMatch(value, /^(?:workspace:|file:|link:)/, `制品包含本地依赖：${name}`)
+      if (versionParts(packed.version)[3] === null && name.startsWith('@jetcrab/')) {
+        assert.doesNotMatch(value, /-dev\./, `稳定包不得依赖开发包：${name}`)
+      }
     }
   }
 }
@@ -185,7 +190,7 @@ async function prepare(entries, output) {
 }
 
 async function publish(entries, output) {
-  assert.equal(process.env.GITHUB_REF, 'refs/heads/main', '正式发布只允许 main 分支')
+  for (const entry of entries) npmTagFor(process.env.GITHUB_REF, entry.manifest.version)
   assert.equal(process.env.GITHUB_REPOSITORY, 'JetCrab/pi-desk', '仓库与 npm 授权不匹配')
   const config = join(process.env.RUNNER_TEMP, 'pi-desk-publish.npmrc')
   const env = { ...process.env, NPM_CONFIG_USERCONFIG: config }
@@ -198,12 +203,26 @@ async function publish(entries, output) {
   await writeFile(config, npmrc, { mode: 0o600 })
   try {
     const selected = new Set(entries.map((entry) => entry.manifest.name))
+    const existing = new Set()
     for (const entry of entries) {
       const packed = await verifyArchive(entry, output)
       const response = await fetch(
         `${registry}/${encodeURIComponent(packed.name)}/${packed.version}`,
         { signal: AbortSignal.timeout(30_000) }
       )
+      if (response.ok && process.env.RELEASE_RESUME === 'true') {
+        const metadata = await response.json()
+        const integrity = `sha512-${createHash('sha512')
+          .update(await readFile(archivePath(entry, output)))
+          .digest('base64')}`
+        assert.equal(
+          metadata.dist?.integrity,
+          integrity,
+          `${packed.name}@${packed.version} 已存在不同内容，拒绝覆盖`
+        )
+        existing.add(packed.name)
+        continue
+      }
       assert.equal(
         response.status,
         404,
@@ -222,6 +241,10 @@ async function publish(entries, output) {
       }
     }
     for (const entry of entries) {
+      if (existing.has(entry.manifest.name)) {
+        console.info(`复用已验证发布：${entry.manifest.name}@${entry.manifest.version}`)
+        continue
+      }
       console.info(`发布：${entry.manifest.name}@${entry.manifest.version}`)
       run(
         'npm',
@@ -230,7 +253,7 @@ async function publish(entries, output) {
           archivePath(entry, output),
           '--ignore-scripts',
           '--access=public',
-          '--tag=latest',
+          `--tag=${npmTagFor(process.env.GITHUB_REF, entry.manifest.version)}`,
           `--registry=${registry}`
         ],
         { env }
@@ -243,7 +266,10 @@ async function publish(entries, output) {
 
 async function main() {
   assert.equal(process.env.GITHUB_ACTIONS, 'true', '正式构建与发布仅在 GitHub Actions 中执行')
-  assert.equal(process.env.GITHUB_REF, 'refs/heads/main', '请从 main 分支执行')
+  assert.ok(
+    ['refs/heads/main', 'refs/heads/dev'].includes(process.env.GITHUB_REF),
+    '请从 main 或 dev 分支执行'
+  )
   const [command] = process.argv.slice(2)
   assert.ok(command === 'prepare' || command === 'publish', '请指定 prepare 或 publish')
   const output = resolve(process.env.NPM_ARTIFACT_DIR)
@@ -251,6 +277,7 @@ async function main() {
     ? JSON.parse(process.env.RELEASE_PACKAGES_JSON)
     : (process.env.RELEASE_PACKAGE ?? 'all')
   const entries = await selectPackages(projectRoot, targets)
+  for (const entry of entries) npmTagFor(process.env.GITHUB_REF, entry.manifest.version)
   if (command === 'prepare') await prepare(entries, output)
   else await publish(entries, output)
 }

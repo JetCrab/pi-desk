@@ -1,0 +1,149 @@
+.timeline {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 1440px;
+  min-width: 0;
+  margin-inline: auto;
+  padding-inline: 14px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.timeline::-webkit-scrollbar {
+  display: none;
+}
+.progress {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.steps {
+  display: flex;
+  width: 100%;
+  min-width: max-content;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.step {
+  position: relative;
+  height: 36px;
+  min-width: 28px;
+  flex-basis: 0;
+  flex-shrink: 1;
+}
+.track {
+  position: absolute;
+  top: calc(50% - 1px);
+  inset-inline: 0;
+  height: 2px;
+  background: var(--border);
+}
+.track > span {
+  display: block;
+  height: 100%;
+  background: var(--foreground);
+  opacity: 0.55;
+  transform-origin: left;
+}
+.node {
+  position: absolute;
+  inset-inline-start: 0;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  outline-offset: -2px;
+  transition: background-color 150ms;
+}
+.node:hover,
+.node[data-popup-open] {
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+.node:active {
+  background: color-mix(in oklab, var(--foreground) 14%, transparent);
+}
+.node:focus-visible {
+  outline: 2px solid var(--ring);
+}
+.node > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--muted-foreground);
+  background: var(--muted-foreground);
+  box-shadow: 0 0 0 3px var(--showcase-background);
+  transition:
+    background-color 150ms,
+    box-shadow 150ms;
+}
+.node[data-waiting] > span {
+  background: var(--showcase-background);
+}
+.node[data-complete] > span {
+  border-color: var(--foreground);
+}
+.node[aria-current='step'] > span {
+  width: 8px;
+  height: 8px;
+  border-color: var(--foreground);
+  box-shadow:
+    0 0 0 3px var(--showcase-background),
+    0 0 0 4px var(--muted-foreground);
+}
+.node[aria-current='step']:not([data-waiting]) > span {
+  background: var(--foreground);
+}
+.positioner {
+  z-index: 40;
+}
+.preview {
+  width: 256px;
+  max-width: calc(100vw - 24px);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--popover);
+  color: var(--foreground);
+  box-shadow: 0 4px 16px #0002;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 100ms,
+    transform 100ms;
+}
+.preview[data-starting-style],
+.preview[data-ending-style] {
+  opacity: 0;
+  transform: translateY(3px);
+}
+.time {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.title {
+  margin-top: 4px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  font-weight: 500;
+}
+.description {
+  margin-top: 4px;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .node,
+  .node > span,
+  .preview {
+    transition: none;
+  }
+}

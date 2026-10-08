@@ -114,12 +114,11 @@ test('源码目录不包含真实签名文件或维护者配置', async () => {
   await visit(root)
 })
 
-test('官网与维护资料不进入公开源码', async () => {
+test('官网应用可独立公开，维护资料仍留在私有侧', async () => {
   const sdk = await manifest(join(root, 'plugins/pi-desk-sdk'))
   assert.equal(sdk.files.includes('docs'), false)
   assert.equal(sdk.files.includes('PLUGIN-UI-STANDARD.md'), false)
   for (const path of [
-    'apps/website',
     '.pi',
     'config',
     'secrets',
@@ -130,4 +129,18 @@ test('官网与维护资料不进入公开源码', async () => {
   ]) {
     await assert.rejects(access(join(root, path)), { code: 'ENOENT' })
   }
+  const website = await manifest(join(root, 'apps/website'))
+  assert.equal(website.private, true, '官网应用不发布到 npm')
+  assert.equal(website.name, '@jetcrab/pi-desk-website')
+  assert.ok(!JSON.stringify(website).includes('.pi/打包'))
+  const docs = await readdir(join(root, 'apps/website/content/docs'))
+  assert.deepEqual(docs.sort(), [
+    'development.md',
+    'devices.md',
+    'faq.md',
+    'installation.md',
+    'overview.md',
+    'plugins.md',
+    'quickstart.md'
+  ])
 })

@@ -1,0 +1,7 @@
+/node_modules/
+/temp/
+/out/
+/.next/
+/next-env.d.ts
+/content/changelog/*.md
+/content/changelog/*.json

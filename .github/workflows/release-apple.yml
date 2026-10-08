@@ -2,6 +2,27 @@ name: Build Apple clients
 run-name: 构建 Apple 客户端 · ${{ inputs.platform }}
 
 on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: 固定构建源码提交（完整 SHA）
+        type: string
+        required: true
+      platform:
+        description: 构建平台（all/macos/ios）
+        type: string
+        default: macos
+    secrets:
+      MACOS_CERTIFICATE_BASE64:
+        required: false
+      MACOS_CERTIFICATE_PASSWORD:
+        required: false
+      IOS_CERTIFICATE_BASE64:
+        required: false
+      IOS_CERTIFICATE_PASSWORD:
+        required: false
+      IOS_PROVISION_PROFILE_BASE64:
+        required: false
   workflow_dispatch:
     inputs:
       platform:
@@ -14,17 +35,34 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-apple
+  group: release-apple-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
-      - name: 仅允许 main
+      - name: 核对分支、平台和源码 SHA
         env:
           REF: ${{ github.ref }}
-        run: test "$REF" = refs/heads/main
+          REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
+          SELECTED_PLATFORM: ${{ inputs.platform }}
+          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF" != refs/heads/main &&
+                ( "$REF" != refs/heads/dev || -z "$REQUESTED_SOURCE_SHA" ) ]]; then
+            echo 'Apple 构建仅允许 main 或指定源码 SHA 的 dev 调用' >&2
+            exit 1
+          fi
+          case "$SELECTED_PLATFORM" in
+            all|macos|ios) ;;
+            *) echo 'Apple 平台必须为 all、macos 或 ios' >&2; exit 1 ;;
+          esac
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo '源码 SHA 必须为完整的 40 位十六进制提交 SHA' >&2
+            exit 1
+          fi
 
   macos:
     needs: guard
@@ -39,6 +77,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -100,10 +139,13 @@ jobs:
           codesign --verify --deep --strict "$app"
           version=$(node -p 'require("./apps/desktop/package.json").version')
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
-          mkdir -p "$CLIENT_OUTPUT"
           suffix=adhoc
-          if [[ "$SIGNED" == true ]]; then suffix=developer-id; fi
-          cp "${dmgs[0]}" "$CLIENT_OUTPUT/pi-desk-macos-$version-universal-$suffix.dmg"
+          pack_args=()
+          if [[ "$SIGNED" == true ]]; then
+            suffix=developer-id
+            pack_args=(--developer-id)
+          fi
+          node .github/scripts/pack-client.mjs macos "${dmgs[0]}" "$CLIENT_OUTPUT" "${pack_args[@]}"
           (cd "$CLIENT_OUTPUT" && shasum -a 256 ./*.dmg > SHA256SUMS.txt)
           {
             echo '## macOS 构建结果'
@@ -129,6 +171,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - name: 准备 XcodeGen
         run: |

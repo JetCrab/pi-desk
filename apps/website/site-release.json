@@ -1,0 +1,11 @@
+{
+  "siteUrl": "https://pidesk.dev",
+  "sourceUrl": "https://github.com/JetCrab/pi-desk",
+  "license": {
+    "name": "Apache-2.0",
+    "url": "https://www.apache.org/licenses/LICENSE-2.0"
+  },
+  "installCommand": null,
+  "desktop": null,
+  "androidUrl": null
+}

@@ -1,0 +1,189 @@
+.desk {
+  height: 100%;
+}
+.menuReference {
+  display: block;
+  padding: 6px 8px;
+  font-size: 0.875rem;
+}
+.pickerLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+.pickerShade {
+  position: absolute;
+  inset: 56px 0 0;
+  background: color-mix(in srgb, var(--background) 65%, transparent);
+  pointer-events: auto;
+}
+.picker {
+  position: absolute;
+  inset: auto 8px 8px;
+  height: 82%;
+  max-height: calc(100% - 56px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--popover);
+  box-shadow: 0 8px 24px #0002;
+  overflow: hidden;
+  pointer-events: auto;
+}
+.picker > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.picker > header > strong {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.picker > header > span {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+.search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.search > input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--input);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 0.875rem;
+}
+.search > select {
+  max-width: 92px;
+  padding: 6px;
+  border: 1px solid var(--input);
+  border-radius: 8px;
+  background: var(--background);
+  font-size: 0.875rem;
+}
+.detail {
+  height: 144px;
+  flex-shrink: 0;
+  overflow: auto;
+  padding: 12px;
+  background: var(--muted);
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+.detail > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+.detail p {
+  font-size: 0.875rem;
+  line-height: 1.7;
+  margin-top: 8px;
+}
+.tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+  scrollbar-width: thin;
+}
+.row {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  gap: 4px;
+  border-radius: 6px;
+}
+.row:hover,
+.selected {
+  background: var(--accent);
+}
+.node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  height: 36px;
+  text-align: left;
+}
+.connector {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  flex-shrink: 0;
+}
+.kind {
+  width: 28px;
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.875rem;
+}
+.selected .text {
+  font-weight: 600;
+}
+.row > button:not(.node) {
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  font-size: 0.75rem !important;
+  padding: 3px 6px;
+}
+.picker > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding: 6px 8px;
+  min-height: 36px;
+  flex-shrink: 0;
+}
+.picker > footer > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+@container stage (min-width:640px) {
+  .desk > aside {
+    display: flex;
+    width: 28%;
+    min-width: 220px;
+    max-width: 300px;
+  }
+}
+@container stage (max-width:639px) {
+  .picker {
+    inset: 56px 0 0;
+    height: auto;
+    max-height: none;
+    border: 0;
+    border-radius: 16px 16px 0 0;
+  }
+}

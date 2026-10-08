@@ -1,0 +1,118 @@
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.header h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+.header p {
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  margin-top: 4px;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.875rem;
+}
+.restart {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--input);
+  border-radius: 8px;
+}
+.install {
+  padding: 16px 0;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.875rem;
+}
+.install summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+.install label {
+  display: block;
+  margin-top: 12px;
+}
+.install label > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.install input {
+  min-width: 0;
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--input);
+  border-radius: 8px;
+}
+.install span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--muted);
+  border-radius: 8px;
+}
+.plugins {
+  display: grid;
+  gap: 8px;
+}
+.plugin {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 16px;
+}
+.trigger > div {
+  min-width: 0;
+}
+.trigger strong {
+  font-size: 0.875rem;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.trigger p {
+  margin-top: 4px;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+.trigger:hover {
+  background: var(--accent);
+}
+.detail {
+  border-top: 1px solid var(--border);
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+}
+.capabilities {
+  display: grid;
+  gap: 8px;
+}
+.capabilities strong {
+  color: var(--foreground);
+  font-weight: 500;
+}

@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { selectRelease } from '../.github/scripts/release-versions.mjs'
+import { npmTagFor, versionIncreased } from '../.github/scripts/npm-channel.mjs'
 
 async function repository(context) {
   const parent = resolve('temp/tests/release-versions/push-selection')
@@ -89,15 +90,19 @@ test('镜像仅随服务版本变化选择，不因npm版本变化触发', async
   assert.deepEqual(await selectRelease(repo.root, 'npm', event), [])
 })
 
-test('dev推送和PR不具备发布资格，手动主分支首发仍可选择', async (context) => {
+test('dev上的正式版本与PR不发布，手动主分支首发仍可选择', async (context) => {
   const repo = await repository(context)
   await repo.packageFile('pi-desk-usage', '1.0.1')
   const after = repo.commit()
+  assert.deepEqual(
+    await selectRelease(repo.root, 'npm', push(repo.before, after, 'refs/heads/dev')),
+    []
+  )
+  await assert.rejects(
+    selectRelease(repo.root, 'tunnel', push(repo.before, after, 'refs/heads/dev')),
+    /main/
+  )
   for (const kind of ['npm', 'tunnel']) {
-    await assert.rejects(
-      selectRelease(repo.root, kind, push(repo.before, after, 'refs/heads/dev')),
-      /main/
-    )
     await assert.rejects(
       selectRelease(repo.root, kind, { event: 'pull_request', ref: 'refs/heads/main' })
     )
@@ -126,6 +131,42 @@ test('拒绝版本回退或无效比较基线，不把查询失败当作首次�
   await assert.rejects(selectRelease(repo.root, 'npm', push(repo.before, after)), /递增/)
   await assert.rejects(selectRelease(repo.root, 'npm', push('1'.repeat(40), after)))
   assert.deepEqual(await selectRelease(repo.root, 'npm', push('0'.repeat(40), after)), [])
+})
+
+test('开发包版本变化才发布，合main前必须去掉开发后缀', async (context) => {
+  const repo = await repository(context)
+  await repo.packageFile('pi-desk-usage', '1.0.1-dev.1')
+  const first = repo.commit()
+  assert.deepEqual(
+    await selectRelease(repo.root, 'npm', push(repo.before, first, 'refs/heads/dev')),
+    ['pi-desk-usage']
+  )
+  await assert.rejects(selectRelease(repo.root, 'npm', push(repo.before, first)), /通道不匹配/)
+  await repo.save('change.js', '/* no version change */')
+  assert.deepEqual(
+    await selectRelease(repo.root, 'npm', push(first, repo.commit(), 'refs/heads/dev')),
+    []
+  )
+  await repo.packageFile('pi-desk-usage', '1.0.1-dev.12')
+  const second = repo.commit()
+  assert.deepEqual(await selectRelease(repo.root, 'npm', push(first, second, 'refs/heads/dev')), [
+    'pi-desk-usage'
+  ])
+  await repo.packageFile('pi-desk-usage', '1.0.1')
+  assert.deepEqual(await selectRelease(repo.root, 'npm', push(repo.before, repo.commit())), [
+    'pi-desk-usage'
+  ])
+})
+
+test('标签按分支与版本绑定，版本按预发布编号数值而非字符串排序', () => {
+  assert.equal(npmTagFor('refs/heads/main', '1.0.1'), 'latest')
+  assert.equal(npmTagFor('refs/heads/dev', '1.0.2-dev.12'), 'dev')
+  assert.throws(() => npmTagFor('refs/heads/main', '1.0.2-dev.12'), /通道不匹配/)
+  assert.throws(() => npmTagFor('refs/heads/dev', '1.0.2'), /通道不匹配/)
+  assert.throws(() => npmTagFor('refs/heads/other', '1.0.2'))
+  assert.equal(versionIncreased('1.0.2-dev.9', '1.0.2-dev.12', 'fixture'), true)
+  assert.equal(versionIncreased('1.0.2-dev.12', '1.0.2', 'fixture'), true)
+  assert.throws(() => versionIncreased('1.0.2', '1.0.2-dev.13', 'fixture'), /递增/)
 })
 
 test('新增包进入该次发布候选，删除包不触发注册表删除', async (context) => {

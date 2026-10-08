@@ -1,0 +1,29 @@
+.desk {
+  height: 100%;
+}
+.working {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.working svg {
+  animation: working 1.2s linear infinite;
+}
+@keyframes working {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@container stage (min-width:640px) {
+  .desk > aside {
+    display: flex;
+    width: 28%;
+    min-width: 220px;
+    max-width: 300px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .working svg {
+    animation: none;
+  }
+}

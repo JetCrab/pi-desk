@@ -92,6 +92,17 @@ test('验证tarball身份与普通版本依赖，不允许workspace或文件路�
   const source = { name: '@jetcrab/pi-desk', version: '1.0.0' }
   const packed = { ...source, publishConfig, dependencies: { '@jetcrab/pi-desk-sdk': '^1.0.0' } }
   assert.doesNotThrow(() => assertPackedManifest(packed, source))
+  const developmentSource = { ...source, version: '1.0.1-dev.1' }
+  const development = {
+    ...packed,
+    ...developmentSource,
+    dependencies: { '@jetcrab/pi-desk-sdk': '^1.0.1-dev.1' }
+  }
+  assert.doesNotThrow(() => assertPackedManifest(development, developmentSource))
+  assert.throws(
+    () => assertPackedManifest({ ...packed, dependencies: development.dependencies }, source),
+    /稳定包不得依赖开发包/
+  )
   for (const version of ['workspace:^', 'file:../sdk', 'link:../sdk']) {
     assert.throws(() =>
       assertPackedManifest({ ...packed, dependencies: { '@jetcrab/pi-desk-sdk': version } }, source)

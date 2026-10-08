@@ -1,0 +1,41 @@
+{
+  "name": "@jetcrab/pi-desk-website",
+  "version": "1.0.1-dev.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --webpack -p 6240",
+    "typecheck": "next typegen && tsc --noEmit",
+    "lint": "eslint src scripts next.config.ts",
+    "check:layers": "depcruise --config dependency-cruiser.cjs \"src/**/*.{ts,tsx}\"",
+    "check:release": "node scripts/check-release.mjs",
+    "build": "pnpm check:release && next build --webpack",
+    "sync:release": "node scripts/sync-release.mjs"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.7.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.31.0",
+    "marked": "^18.0.5",
+    "motion": "^13.1.0",
+    "next": "16.3.1",
+    "qrcode": "^1.5.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "server-only": "^0.0.1",
+    "tailwind-merge": "^3.6.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "dependency-cruiser": "^18.2.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.1",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

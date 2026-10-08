@@ -39,6 +39,7 @@ const eslintConfig = defineConfig([
     'out/**',
     'build/**',
     'plugins/*/dist/**',
+    'apps/website/**',
     'apps/desktop/web-dist/**',
     'apps/desktop/src-tauri/target/**',
     'temp/**',
