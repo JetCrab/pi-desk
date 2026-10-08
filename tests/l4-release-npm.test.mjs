@@ -69,6 +69,14 @@ test('公开包发布先SDK，允许单独选择包但不接受未知目标', as
     '@jetcrab/pi-desk-usage'
   )
   await assert.rejects(selectPackages(root, '../private'))
+  assert.deepEqual(
+    (await selectPackages(root, ['pi-desk-usage', 'pi-desk-sdk'])).map(
+      (entry) => entry.manifest.name
+    ),
+    ['@jetcrab/pi-desk-sdk', '@jetcrab/pi-desk-usage']
+  )
+  await assert.rejects(selectPackages(root, []))
+  await assert.rejects(selectPackages(root, ['pi-desk-usage', 'pi-desk-usage']))
 })
 
 test('拒绝把私有包或私有Registry纳入公开发布', async (context) => {

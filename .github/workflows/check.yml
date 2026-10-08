@@ -45,6 +45,8 @@ jobs:
           node --import tsx --test
           tests/l4-api-request.test.ts
           tests/l4-public-boundary.test.mjs
+          tests/l4-release-versions.test.mjs
+          tests/l4-release-npm.test.mjs
           tests/l2-chat-state.test.ts
           tests/l2-task-center-state.test.ts
           tests/l2-work-session-update.test.ts

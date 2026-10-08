@@ -32,8 +32,16 @@ export async function selectPackages(root, target = 'all') {
         : a.manifest.name.localeCompare(b.manifest.name)
   )
   if (target === 'all') return entries
-  const selected = entries.filter((entry) => entry.manifest.name === `@jetcrab/${target}`)
-  assert.equal(selected.length, 1, `未知公开包：${target}`)
+  const targets = Array.isArray(target) ? target : [target]
+  assert.ok(
+    targets.length > 0 && targets.every((name) => typeof name === 'string'),
+    '发布目标列表不能为空'
+  )
+  assert.equal(new Set(targets).size, targets.length, '发布目标重复')
+  const selected = entries.filter((entry) =>
+    targets.includes(entry.manifest.name.slice('@jetcrab/'.length))
+  )
+  assert.equal(selected.length, targets.length, `未知公开包：${targets.join('、')}`)
   return selected
 }
 
@@ -239,7 +247,10 @@ async function main() {
   const [command] = process.argv.slice(2)
   assert.ok(command === 'prepare' || command === 'publish', '请指定 prepare 或 publish')
   const output = resolve(process.env.NPM_ARTIFACT_DIR)
-  const entries = await selectPackages(projectRoot, process.env.RELEASE_PACKAGE ?? 'all')
+  const targets = process.env.RELEASE_PACKAGES_JSON
+    ? JSON.parse(process.env.RELEASE_PACKAGES_JSON)
+    : (process.env.RELEASE_PACKAGE ?? 'all')
+  const entries = await selectPackages(projectRoot, targets)
   if (command === 'prepare') await prepare(entries, output)
   else await publish(entries, output)
 }

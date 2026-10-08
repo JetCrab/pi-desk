@@ -1,7 +1,11 @@
 name: Release tunnel
-run-name: ${{ inputs.publish && '发布隧道镜像' || '构建隧道镜像' }}
+run-name: ${{ (github.event_name == 'push' || inputs.publish) && '发布隧道镜像' || '构建隧道镜像' }}
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - apps/tunnel/server/Cargo.toml
   workflow_dispatch:
     inputs:
       publish:
@@ -26,7 +30,29 @@ env:
   PACKAGE_DIR: temp/package/tunnel/${{ github.run_id }}
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.selection.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - name: 检测服务版本变化
+        id: selection
+        env:
+          RELEASE_BEFORE: ${{ github.event.before }}
+        run: node .github/scripts/release-versions.mjs tunnel
+
   build:
+    needs: plan
+    if: needs.plan.outputs.changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
@@ -150,7 +176,7 @@ jobs:
           fi
 
   publish:
-    if: ${{ inputs.publish }}
+    if: ${{ (github.event_name == 'push' || inputs.publish) && needs.build.result == 'success' }}
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
