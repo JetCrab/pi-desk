@@ -39,13 +39,6 @@ function markdownText(value) {
   return value.replace(/[\\`*_{}\[\]()<>|]/gu, '\\$&')
 }
 
-function encodeSegment(value) {
-  return encodeURIComponent(value).replace(
-    /[!'()*]/gu,
-    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`
-  )
-}
-
 export function renderReleaseNotes(record, { repository }) {
   const changes = validateChanges(record.changes)
   if (
@@ -59,14 +52,7 @@ export function renderReleaseNotes(record, { repository }) {
   ) {
     throw failure('INVALID_RECORD')
   }
-  const downloadRoot = `https://github.com/${repository.split('/').map(encodeSegment).join('/')}/releases/download/${encodeSegment(record.tag)}`
-  const version = record.packages.find((item) => item.name === '@jetcrab/pi-desk')?.version
-  const lines = [
-    `## Pi Desk${version ? ` ${markdownText(version)}` : ' 更新'}`,
-    '',
-    `[发布记录](https://github.com/${repository.split('/').map(encodeSegment).join('/')}/releases/tag/${encodeSegment(record.tag)})`,
-    ''
-  ]
+  const lines = []
   categories.forEach((key, index) => {
     if (!changes[key].length) return
     lines.push(
@@ -76,48 +62,17 @@ export function renderReleaseNotes(record, { repository }) {
       ''
     )
   })
-  const labels = { windows: 'Windows', macos: 'macOS', android: 'Android' }
-  const components = record.packages.map(({ name, version }) => [name, version])
   for (const client of record.clients) {
     if (
-      !Object.hasOwn(labels, client.platform) ||
+      !['windows', 'macos', 'android'].includes(client.platform) ||
       typeof client.file !== 'string' ||
       !client.file
     ) {
       throw failure('INVALID_RECORD')
     }
-    components.push([labels[client.platform], client.version])
   }
-  if (components.length) {
-    lines.push(
-      '### 组件版本',
-      '',
-      '| 组件 | 版本 |',
-      '| --- | --- |',
-      ...components.map(
-        ([name, version]) => `| ${markdownText(name)} | ${markdownText(version)} |`
-      ),
-      ''
-    )
-  }
-  if (record.clients.length) {
-    lines.push(
-      '### 下载',
-      '',
-      ...record.clients.map((client) => {
-        let note = ''
-        if (client.platform === 'macos') {
-          const signing = client.file.endsWith('-adhoc.dmg')
-            ? '临时签名，未公证'
-            : client.file.endsWith('-developer-id.dmg')
-              ? 'Developer ID 签名，未公证'
-              : '未公证'
-          note = `（${signing}）`
-        }
-        return `- [${labels[client.platform]} ${markdownText(client.version)}](${downloadRoot}/${encodeSegment(client.file)})${note}`
-      }),
-      ''
-    )
+  if (record.clients.some((client) => client.platform === 'macos')) {
+    lines.push('### Notes', '', 'The macOS build is experimental and not notarized.', '')
   }
   return lines.join('\n')
 }

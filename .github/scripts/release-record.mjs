@@ -2,13 +2,23 @@ import assert from 'node:assert/strict'
 
 export const changeSections = ['breaking', 'features', 'added', 'changed', 'fixed', 'removed']
 export const clientPlatforms = ['windows', 'macos', 'android']
+export const releaseTagPattern = /^v\d+\.\d+\.\d+$/
+
+export function clientFilename(platform) {
+  const files = {
+    windows: 'PiDesk-Windows-x86-Setup.exe',
+    macos: 'PiDesk-macOS-universal.dmg',
+    android: 'PiDesk-Android.apk'
+  }
+  assert.ok(Object.hasOwn(files, platform), '客户端平台无效')
+  return files[platform]
+}
 
 export function validateRecord(record) {
   assert.ok(record && typeof record === 'object', '发布记录必须是对象')
-  assert.match(record.tag, /^release-[a-f0-9]{12}$/)
+  assert.match(record.tag, releaseTagPattern)
   assert.ok(Number.isSafeInteger(record.date) && record.date > 0, '发布日期无效')
   assert.match(record.source?.head, /^[a-f0-9]{40}$/)
-  assert.equal(record.tag, `release-${record.source.head.slice(0, 12)}`)
   if (record.source.base !== null) assert.match(record.source.base, /^[a-f0-9]{40}$/)
   assert.ok(Array.isArray(record.packages) && record.packages.length > 0, '缺少 npm 版本清单')
   const names = new Set()
@@ -26,18 +36,7 @@ export function validateRecord(record) {
     platforms.add(item.platform)
     assert.match(item.version, /^\d+\.\d+\.\d+$/)
     assert.match(item.sha256, /^[a-f0-9]{64}$/)
-    const filenames = {
-      windows: `pi-desk-windows-${item.version}-x86-setup.exe`,
-      android: `pi-desk-android-${item.version}.apk`
-    }
-    if (item.platform === 'macos') {
-      assert.ok(
-        ['adhoc', 'developer-id'].some(
-          (signing) => item.file === `pi-desk-macos-${item.version}-universal-${signing}.dmg`
-        ),
-        'macOS 安装包文件名无效'
-      )
-    } else assert.equal(item.file, filenames[item.platform])
+    assert.equal(item.file, clientFilename(item.platform))
   }
   assert.deepEqual(Object.keys(record.changes).sort(), [...changeSections].sort())
   for (const key of changeSections) {

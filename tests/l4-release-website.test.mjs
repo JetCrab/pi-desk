@@ -15,7 +15,7 @@ async function directory(t) {
 }
 
 const record = {
-  tag: 'release-123456abcdef',
+  tag: 'v1.0.0',
   date: Date.parse('2026-10-08T05:00:00Z'),
   source: { base: null, head: '123456abcdef' + '0'.repeat(28) },
   packages: [{ name: '@jetcrab/pi-desk', version: '1.2.0' }],
@@ -23,13 +23,13 @@ const record = {
     {
       platform: 'windows',
       version: '1.1.0',
-      file: 'pi-desk-windows-1.1.0-x86-setup.exe',
+      file: 'PiDesk-Windows-x86-Setup.exe',
       sha256: 'a'.repeat(64)
     },
     {
       platform: 'android',
       version: '1.0.0',
-      file: 'pi-desk-android-1.0.0.apk',
+      file: 'PiDesk-Android.apk',
       sha256: 'b'.repeat(64)
     }
   ],
@@ -67,14 +67,14 @@ test('官网复用同一记录并同步实际安装版本与下载链接', async
     markdown: `## ${record.tag}\n\n### Fixed\n- 修复下载源选择。\n`
   }
   const result = await syncRelease(input)
-  assert.ok(result.changelogPath.endsWith('2026-10-08-130000-release-123456abcdef.md'))
+  assert.ok(result.changelogPath.endsWith('2026-10-08-130000-v1.0.0.md'))
   assert.equal(await readFile(result.changelogPath, 'utf8'), input.markdown)
   const site = JSON.parse(await readFile(result.siteReleasePath, 'utf8'))
   assert.equal(
     site.desktop.url,
-    `https://github.com/fixture/project/releases/download/${record.tag}/pi-desk-windows-1.1.0-x86-setup.exe`
+    `https://github.com/fixture/project/releases/download/${record.tag}/PiDesk-Windows-x86-Setup.exe`
   )
-  assert.ok(site.androidUrl.endsWith('/pi-desk-android-1.0.0.apk'))
+  assert.ok(site.androidUrl.endsWith('/PiDesk-Android.apk'))
   assert.match(site.installCommand, /@jetcrab\/pi-desk@1\.2\.0/)
   assert.equal(site.siteUrl, 'https://example.test')
   assert.equal(site.license.name, 'Apache-2.0')
@@ -125,7 +125,7 @@ test('静态分段规范化并要求产物确实包含本批日志', async (t) =
     await readFile(join(root, 'changelog/__next.changelog.__PAGE__.txt'), 'utf8'),
     'rsc fixture'
   )
-  await assert.rejects(verifyWebsite(root, 'release-ffffffffffff'), /缺少本次/)
+  await assert.rejects(verifyWebsite(root, 'v1.0.1'), /缺少本次/)
   await writeFile(join(root, 'auth.json'), '{}')
   await assert.rejects(verifyWebsite(root, record.tag), /私有配置/)
 })
@@ -149,7 +149,7 @@ test('官网部署配置只允许限定应用目录与HTTPS入口', () => {
     { WEBSITE_SSH_PORT: '0' }
   ])
     assert.throws(() => deploymentConfig({ ...env, ...extra }))
-  assert.match(websiteDeployScript, /grep -Fq "\$tag"/)
+  assert.match(websiteDeployScript, /grep -Fwq "\$tag"/)
   assert.match(websiteDeployScript, /rsync -a --delete "\$backup\/" "\$root\/data\/"/)
   assert.doesNotMatch(websiteDeployScript, /docker|nginx -s|set -x/)
 })

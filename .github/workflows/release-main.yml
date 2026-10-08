@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      website_tag:
+        description: '仅重新同步并部署最新已公开正式 Release 的 tag；留空执行正常发布'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -52,6 +58,7 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          WEBSITE_RELEASE_TAG: ${{ inputs.website_tag }}
         run: node .github/scripts/release-main.mjs prepare
       - uses: actions/upload-artifact@v4
         with:
@@ -310,6 +317,9 @@ jobs:
 
   website-deploy:
     needs: [prepare, website-build]
+    if: >-
+      always() && !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.deploy == 'true' &&
+      needs.website-build.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

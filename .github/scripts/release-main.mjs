@@ -6,11 +6,28 @@ import { pathToFileURL } from 'node:url'
 import { prepareStableVersions } from './prepare-stable-release.mjs'
 import { createReleasePlan, git, latestSuccessfulRelease } from './release-plan.mjs'
 import { createGitHubClient, sha256 } from './release-github.mjs'
-import { validateRecord } from './release-record.mjs'
+import { clientFilename, releaseTagPattern, validateRecord } from './release-record.mjs'
+import { loadReleaseRecord, saveReleaseRecord } from './release-metadata.mjs'
 import { renderReleaseNotes, validateChanges } from './release-notes.mjs'
 
 const jsonBytes = (value) => Buffer.from(JSON.stringify(value, null, 2) + '\n')
 const archiveName = (item) => `${item.name.slice(1).replace('/', '-')}-${item.version}.tgz`
+
+function completedPlan(record) {
+  return {
+    record,
+    npm: [],
+    clients: record.clients.map((item) => ({ ...item, build: false })),
+    tunnel: false
+  }
+}
+
+async function batchRecord(github, release) {
+  return (
+    (await loadReleaseRecord(github, release.tag_name, { optional: true })) ??
+    validateRecord(JSON.parse(await github.asset(release, 'release.json')))
+  )
+}
 
 export async function prepareBatch(
   root,
@@ -31,9 +48,7 @@ export async function prepareBatch(
   // 重跑原始合并事件时，继续使用此前已回写的正式版本提交。
   const releases = await github.releases()
   const latest = latestSuccessfulRelease(releases)
-  const previous = latest
-    ? validateRecord(JSON.parse(await github.asset(latest, 'release.json')))
-    : null
+  const previous = latest ? await loadReleaseRecord(github, latest.tag_name) : null
   const message = `chore(release): prepare ${source}`
   const prepared = git(
     root,
@@ -47,7 +62,9 @@ export async function prepareBatch(
     .filter(Boolean)
     .find((sha) => git(root, 'show', '-s', '--format=%P', sha) === source)
   const candidate = prepared || source
-  const fixed = releases.find((item) => item.tag_name === `release-${candidate.slice(0, 12)}`)
+  const fixed = releases.find(
+    (item) => releaseTagPattern.test(item.tag_name) && item.target_commitish === candidate
+  )
   git(root, 'checkout', '--detach', candidate)
   if (!prepared && !fixed) {
     const result = await prepareVersions(root, { base: previous?.source.head ?? null })
@@ -68,32 +85,35 @@ export async function prepareBatch(
     }
   }
   const head = git(root, 'rev-parse', 'HEAD')
-  const tag = `release-${head.slice(0, 12)}`
-  let release = releases.find((item) => item.tag_name === tag)
+  let release = releases.find(
+    (item) => releaseTagPattern.test(item.tag_name) && item.target_commitish === head
+  )
+  const saved = release
+    ? await loadReleaseRecord(github, release.tag_name, { optional: true })
+    : null
   let plan
-  if (release && !release.draft) {
-    const record = validateRecord(JSON.parse(await github.asset(release, 'release.json')))
-    assert.equal(record.source.head, head)
-    plan = {
-      record,
-      npm: [],
-      clients: record.clients.map((item) => ({ ...item, build: false })),
-      tunnel: false
-    }
+  if (saved) {
+    assert.equal(saved.source.head, head)
+    plan = completedPlan(saved)
   } else if (release?.assets.some((item) => item.name === 'plan.json')) {
     plan = JSON.parse(await github.asset(release, 'plan.json'))
     validateRecord(plan.record)
     assert.equal(plan.record.source.head, head)
   } else {
-    plan = createReleasePlan(root, { head, previous })
+    assert.ok(!release || release.draft, '已发布版本缺少机器记录')
+    plan = createReleasePlan(root, {
+      head,
+      previous,
+      reservedTags: releases.map((item) => item.tag_name)
+    })
     if (!release)
       release = await github.request('/releases', {
         method: 'POST',
         body: {
-          tag_name: tag,
+          tag_name: plan.record.tag,
           target_commitish: head,
-          name: `Pi Desk ${plan.record.packages.find((item) => item.name === '@jetcrab/pi-desk').version} · ${new Date(plan.record.date).toISOString().slice(0, 10)}`,
-          body: '正在验证本批发布内容。',
+          name: `Pi Desk ${plan.record.tag}`,
+          body: 'Preparing release notes and verified downloads.',
           draft: true,
           prerelease: false
         }
@@ -106,8 +126,9 @@ export async function prepareBatch(
     const item = plan.record.packages.find((entry) => entry.name === `@jetcrab/${name}`)
     return release.assets.some((entry) => entry.name === archiveName(item))
   })
-  const clientsReady = release.assets.some((entry) => entry.name === 'release.json')
-  const notesReady = !release.draft || release.assets.some((entry) => entry.name === 'changes.json')
+  const clientsReady = !!saved || release.assets.some((entry) => entry.name === 'release.json')
+  const notesReady = !!saved || release.assets.some((entry) => entry.name === 'changes.json')
+  const tag = plan.record.tag
   const values = {
     sha: head,
     tag,
@@ -125,6 +146,34 @@ export async function prepareBatch(
   return { plan, release, outputs: values }
 }
 
+export async function prepareWebsiteBatch({ github, tag, source, output }) {
+  assert.match(tag, releaseTagPattern)
+  assert.match(source, /^[a-f0-9]{40}$/)
+  const release = latestSuccessfulRelease(await github.releases())
+  assert.equal(release?.tag_name, tag, '只能重新部署最新已公开版本，不能回退官网')
+  const record = await loadReleaseRecord(github, tag)
+  const plan = completedPlan(record)
+  await mkdir(output, { recursive: true })
+  await writeFile(join(output, 'plan.json'), jsonBytes(plan))
+  return {
+    plan,
+    release,
+    outputs: {
+      sha: source,
+      tag,
+      published: true,
+      deploy: true,
+      npm: '[]',
+      npm_ready: true,
+      notes_ready: true,
+      tunnel: false,
+      windows: false,
+      macos: false,
+      android: false
+    }
+  }
+}
+
 export async function stageNpm({ github, release, plan, directory }) {
   await mkdir(directory, { recursive: true })
   for (const name of plan.npm) {
@@ -138,17 +187,14 @@ export async function stageNpm({ github, release, plan, directory }) {
   }
 }
 
-export async function assembleBatch({ github, release, plan, directory, repository }) {
-  if (release.assets.some((entry) => entry.name === 'release.json')) {
-    const record = validateRecord(JSON.parse(await github.asset(release, 'release.json')))
+export async function assembleBatch({ github, release, plan, directory }) {
+  const persisted = await loadReleaseRecord(github, release.tag_name, { optional: true })
+  if (persisted || release.assets.some((entry) => entry.name === 'release.json')) {
+    const record =
+      persisted ?? validateRecord(JSON.parse(await github.asset(release, 'release.json')))
     assert.equal(record.source.head, plan.record.source.head)
     for (const item of record.clients)
       assert.equal(sha256(await github.asset(release, item.file)), item.sha256)
-    await github.putAsset(
-      release,
-      'release.md',
-      Buffer.from(renderReleaseNotes(record, { repository }))
-    )
     return record
   }
   const changes = validateChanges(JSON.parse(await github.asset(release, 'changes.json')))
@@ -164,9 +210,9 @@ export async function assembleBatch({ github, release, plan, directory, reposito
       assert.equal(manifest.version, item.version)
       const names = (await readdir(root)).filter((name) => /\.(exe|dmg|apk)$/.test(name))
       assert.equal(names.length, 1, '每个平台必须只有一个安装包')
-      file = names[0]
+      file = clientFilename(item.platform)
       hash = manifest.sha256
-      bytes = await readFile(join(root, file))
+      bytes = await readFile(join(root, names[0]))
       assert.equal(sha256(bytes), hash, `${item.platform} 安装包摘要不匹配`)
       const saved = release.assets.find((entry) => entry.name === file)
       if (saved) {
@@ -180,9 +226,9 @@ export async function assembleBatch({ github, release, plan, directory, reposito
         (entry) => entry.tag_name === item.reuse.tag && !entry.draft && !entry.prerelease
       )
       assert.ok(previous, '无法找到已成功发布的复用来源')
-      file = item.reuse.file
+      file = clientFilename(item.platform)
       hash = item.reuse.sha256
-      bytes = await github.asset(previous, file)
+      bytes = await github.asset(previous, item.reuse.file)
     }
     assert.equal(sha256(bytes), hash, `${item.platform} 安装包摘要不匹配`)
     const client = { platform: item.platform, version: item.version, file, sha256: hash }
@@ -193,17 +239,13 @@ export async function assembleBatch({ github, release, plan, directory, reposito
   const record = validateRecord({ ...plan.record, clients, changes })
   assert.equal(record.clients.length, 3, '正式 Release 必须附带三个平台的当前安装包')
   await github.putAsset(release, 'release.json', jsonBytes(record))
-  await github.putAsset(
-    release,
-    'release.md',
-    Buffer.from(renderReleaseNotes(record, { repository }))
-  )
   return record
 }
 
 export async function publishBatch({ github, release, repository }) {
-  const record = validateRecord(JSON.parse(await github.asset(release, 'release.json')))
+  const record = await batchRecord(github, release)
   if (!release.draft) return record
+  assert.equal(record.clients.length, 3, '正式 Release 必须包含全部客户端制品')
   const existing = await github.request(`/git/ref/tags/${record.tag}`, { allow404: true })
   if (existing) {
     const commit = await github.request(`/commits/${record.tag}`)
@@ -214,23 +256,24 @@ export async function publishBatch({ github, release, repository }) {
       body: { ref: `refs/tags/${record.tag}`, sha: record.source.head }
     })
   }
+  await saveReleaseRecord(github, record)
+  // 记录已持久保存，即使清理或公开失败，重试也不依赖这些临时附件。
+  for (const entry of release.assets.filter(
+    (item) =>
+      ['plan.json', 'changes.json', 'release.json', 'release.md'].includes(item.name) ||
+      item.name.endsWith('.tgz')
+  )) {
+    await github.request(`/releases/assets/${entry.id}`, { method: 'DELETE' })
+  }
   await github.request(`/releases/${release.id}`, {
     method: 'PATCH',
     body: {
+      name: `Pi Desk ${record.tag}`,
       draft: false,
       make_latest: 'true',
       body: renderReleaseNotes(record, { repository })
     }
   })
-  for (const entry of release.assets.filter(
-    (item) => ['plan.json', 'changes.json'].includes(item.name) || item.name.endsWith('.tgz')
-  )) {
-    try {
-      await github.request(`/releases/assets/${entry.id}`, { method: 'DELETE' })
-    } catch {
-      console.warn(`正式发布已完成，暂存附件清理未确认：${entry.name}`)
-    }
-  }
   return record
 }
 
@@ -249,7 +292,14 @@ async function main() {
       false,
       '官网使用 GitHub Release 下载；首次启用前须确认仓库公开，流程不会自行改变可见性'
     )
-    const result = await prepareBatch(root, { github, source: process.env.GITHUB_SHA, output })
+    const result = process.env.WEBSITE_RELEASE_TAG
+      ? await prepareWebsiteBatch({
+          github,
+          tag: process.env.WEBSITE_RELEASE_TAG,
+          source: process.env.GITHUB_SHA,
+          output
+        })
+      : await prepareBatch(root, { github, source: process.env.GITHUB_SHA, output })
     for (const [key, value] of Object.entries(result.outputs))
       await appendFile(process.env.GITHUB_OUTPUT, `${key}=${value}\n`)
     return
@@ -265,7 +315,7 @@ async function main() {
   } else if (command === 'stage-npm') {
     await stageNpm({ github, release, plan, directory: resolve(process.env.NPM_ARTIFACT_DIR) })
   } else if (command === 'assemble') {
-    await assembleBatch({ github, release, plan, directory: join(output, 'clients'), repository })
+    await assembleBatch({ github, release, plan, directory: join(output, 'clients') })
   } else if (command === 'publish') {
     await publishBatch({ github, release, repository })
   } else if (command === 'website') {
@@ -281,23 +331,23 @@ async function main() {
       pathToFileURL(join(websiteRoot, 'scripts/sync-release.mjs')).href
     )
     for (const item of published.filter(
-      (item) => !item.draft && !item.prerelease && /^release-[a-f0-9]{12}$/.test(item.tag_name)
+      (item) => !item.draft && !item.prerelease && releaseTagPattern.test(item.tag_name)
     )) {
-      const record = validateRecord(JSON.parse(await github.asset(item, 'release.json')))
+      const record = await loadReleaseRecord(github, item.tag_name)
       await syncRelease({
         websiteRoot,
         record,
         repository,
-        markdown: renderReleaseNotes(record, { repository })
+        markdown: `## Pi Desk ${record.tag}\n\n${renderReleaseNotes(record, { repository })}`
       })
     }
     // 最后再次写入本批，避免历史遍历顺序改变首页当前版本。
-    const record = validateRecord(JSON.parse(await github.asset(release, 'release.json')))
+    const record = await loadReleaseRecord(github, release.tag_name)
     await syncRelease({
       websiteRoot,
       record,
       repository,
-      markdown: renderReleaseNotes(record, { repository })
+      markdown: `## Pi Desk ${record.tag}\n\n${renderReleaseNotes(record, { repository })}`
     })
   } else throw new Error('未知正式发布阶段')
 }

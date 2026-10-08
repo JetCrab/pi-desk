@@ -7,12 +7,18 @@ import {
   prepareStableVersions,
   prepareDevelopmentVersions
 } from '../.github/scripts/prepare-stable-release.mjs'
-import { createReleasePlan, latestSuccessfulRelease } from '../.github/scripts/release-plan.mjs'
+import {
+  createReleasePlan,
+  latestSuccessfulRelease,
+  nextReleaseTag
+} from '../.github/scripts/release-plan.mjs'
+import { loadReleaseRecord, saveReleaseRecord } from '../.github/scripts/release-metadata.mjs'
 import {
   assembleBatch,
   publishBatch,
   stageNpm,
-  prepareBatch
+  prepareBatch,
+  prepareWebsiteBatch
 } from '../.github/scripts/release-main.mjs'
 import { sha256 } from '../.github/scripts/release-github.mjs'
 import { validateRecord, changeSections } from '../.github/scripts/release-record.mjs'
@@ -72,12 +78,11 @@ function completed(record) {
     clients: ['windows', 'macos', 'android'].map((platform) => ({
       platform,
       version: '1.0.0',
-      file:
-        platform === 'windows'
-          ? 'pi-desk-windows-1.0.0-x86-setup.exe'
-          : platform === 'macos'
-            ? 'pi-desk-macos-1.0.0-universal-adhoc.dmg'
-            : 'pi-desk-android-1.0.0.apk',
+      file: {
+        windows: 'PiDesk-Windows-x86-Setup.exe',
+        macos: 'PiDesk-macOS-universal.dmg',
+        android: 'PiDesk-Android.apk'
+      }[platform],
       sha256: sha256(Buffer.from(platform))
     }))
   }
@@ -85,8 +90,12 @@ function completed(record) {
 
 function githubFixture(releases) {
   const calls = []
+  const records = new Map()
+  let branch = false
+  let pending
   return {
     calls,
+    records,
     releases: async () => releases,
     asset: async (release, name) => {
       assert.ok(release.files.has(name), name)
@@ -100,8 +109,40 @@ function githubFixture(releases) {
         release.assets.push({ id: release.assets.length + 1, name })
       }
     },
-    request: async (path, options) => {
+    request: async (path, options = {}) => {
       calls.push({ path, ...options })
+      if (path === '/git/ref/heads/release-data')
+        return branch ? { object: { sha: 'data-head' } } : null
+      if (path.startsWith('/contents/releases/')) {
+        const tag = path.split('/').at(-1).split('.json')[0]
+        if (options.method === 'PUT') {
+          records.set(tag, JSON.parse(Buffer.from(options.body.content, 'base64')))
+          return { content: { sha: 'file' } }
+        }
+        return records.has(tag)
+          ? {
+              encoding: 'base64',
+              content: Buffer.from(JSON.stringify(records.get(tag))).toString('base64')
+            }
+          : null
+      }
+      if (path === '/git/trees') {
+        pending = JSON.parse(options.body.tree[0].content)
+        return { sha: 'tree' }
+      }
+      if (path === '/git/commits') return { sha: 'data-commit' }
+      if (path === '/git/refs' && options.body.ref === 'refs/heads/release-data') {
+        branch = true
+        records.set(pending.tag, pending)
+      }
+      if (path.startsWith('/releases/assets/') && options.method === 'DELETE') {
+        const id = Number(path.split('/').at(-1))
+        for (const release of releases) {
+          const asset = release.assets.find((item) => item.id === id)
+          if (asset) release.files.delete(asset.name)
+          release.assets = release.assets.filter((item) => item.id !== id)
+        }
+      }
       return null
     }
   }
@@ -113,6 +154,7 @@ function draft(record) {
     draft: true,
     prerelease: false,
     tag_name: record.tag,
+    target_commitish: record.source.head,
     assets: [],
     files: new Map()
   }
@@ -296,7 +338,7 @@ test('客户端代码变更未升版和历史回退均被阻止', async (t) => {
 
 test('草稿、开发版和平台Release不能推进正式变更基线', () => {
   const valid = {
-    tag_name: 'release-' + 'a'.repeat(12),
+    tag_name: 'v1.0.0',
     draft: false,
     prerelease: false,
     published_at: '2026-10-01T00:00:00Z'
@@ -332,7 +374,7 @@ test('复用安装包需验证实际字节摘要，最终记录包含三个平�
   assert.equal(record.clients.length, 3)
   for (const item of record.clients) assert.equal(sha256(release.files.get(item.file)), item.sha256)
   assert.ok(release.files.has('release.json'))
-  assert.ok(release.files.has('release.md'))
+  assert.ok(!release.files.has('release.md'))
   release.files.set(oldRecord.clients[0].file, Buffer.from('tampered'))
   await assert.rejects(
     assembleBatch({ github, release, plan, directory: repo.root, repository: 'fixture/project' })
@@ -350,13 +392,15 @@ test('正式准备回写固定版本提交，重跑不新增提交或推进失�
   repo.git('fetch', 'origin')
   const releases = []
   const github = githubFixture(releases)
+  const request = github.request
   github.request = async (path, options) => {
-    assert.equal(path, '/releases')
+    if (path !== '/releases') return request(path, options)
     const release = {
       id: 10,
       draft: true,
       prerelease: false,
       tag_name: options.body.tag_name,
+      target_commitish: options.body.target_commitish,
       assets: [],
       files: new Map()
     }
@@ -390,6 +434,74 @@ test('正式准备回写固定版本提交，重跑不新增提交或推进失�
   assert.equal(releases.length, 1)
 })
 
+test('正式tag独立递增且不复用失败批次占用的版本', () => {
+  assert.equal(nextReleaseTag('1.0.0', null), 'v1.0.0')
+  assert.equal(nextReleaseTag('1.0.0', 'v1.0.0'), 'v1.0.1')
+  assert.equal(nextReleaseTag('1.1.0', 'v1.0.3'), 'v1.1.0')
+  assert.equal(nextReleaseTag('1.0.0', 'v1.0.0', ['v1.0.2', 'v1.0.1']), 'v1.0.3')
+})
+
+test('正式记录持久保存后才移除内部附件，公开失败仍可重试', async (t) => {
+  const repo = await fixture(t)
+  const record = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
+  const release = draft(record)
+  const github = githubFixture([release])
+  await github.putAsset(release, 'release.json', Buffer.from(JSON.stringify(record)))
+  await github.putAsset(release, 'release.md', Buffer.from('old presentation'))
+  await github.putAsset(release, 'plan.json', Buffer.from('{}'))
+  for (const client of record.clients)
+    await github.putAsset(release, client.file, Buffer.from(client.platform))
+  const request = github.request
+  let failed = false
+  github.request = async (path, options) => {
+    if (path === `/releases/${release.id}` && options?.method === 'PATCH' && !failed) {
+      failed = true
+      throw Error('临时公开失败')
+    }
+    return request(path, options)
+  }
+  await assert.rejects(
+    publishBatch({ github, release, repository: 'fixture/project' }),
+    /临时公开失败/
+  )
+  assert.deepEqual(await loadReleaseRecord(github, record.tag), record)
+  assert.deepEqual(
+    release.assets.map((item) => item.name).sort(),
+    record.clients.map((item) => item.file).sort()
+  )
+  await publishBatch({ github, release, repository: 'fixture/project' })
+  assert.ok(
+    github.calls.some((call) => call.method === 'PATCH' && call.body.name === 'Pi Desk v1.0.0')
+  )
+  await assert.rejects(saveReleaseRecord(github, { ...record, date: 2 }), /拒绝覆盖/)
+})
+
+test('只重部署最新官网，不创建新Release或重发产品', async (t) => {
+  const repo = await fixture(t)
+  const record = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
+  const release = { ...draft(record), draft: false, published_at: '2026-10-08T00:00:00Z' }
+  const github = githubFixture([release])
+  await saveReleaseRecord(github, record)
+  const before = github.calls.length
+  const result = await prepareWebsiteBatch({
+    github,
+    tag: 'v1.0.0',
+    source: 'b'.repeat(40),
+    output: join(repo.root, 'temp/website')
+  })
+  assert.equal(result.outputs.sha, 'b'.repeat(40))
+  assert.equal(result.plan.record.source.head, repo.head)
+  assert.equal(result.outputs.npm, '[]')
+  assert.equal(result.outputs.published, true)
+  for (const platform of ['windows', 'macos', 'android', 'tunnel'])
+    assert.equal(result.outputs[platform], false)
+  assert.ok(github.calls.slice(before).every((call) => !call.method))
+  await assert.rejects(
+    prepareWebsiteBatch({ github, tag: 'v0.9.0', source: repo.head, output: repo.root }),
+    /不能回退/
+  )
+})
+
 test('发布自动创建固定提交tag，不移动已有不同提交的tag', async (t) => {
   const repo = await fixture(t)
   const record = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
@@ -399,8 +511,12 @@ test('发布自动创建固定提交tag，不移动已有不同提交的tag', as
   await publishBatch({ github, release, repository: 'fixture/project' })
   assert.ok(github.calls.some((call) => call.path === '/git/refs' && call.body.sha === repo.head))
   assert.ok(github.calls.some((call) => call.method === 'PATCH' && call.body.draft === false))
-  github.request = async (path) =>
-    path.startsWith('/git/ref/') ? { object: { sha: 'b'.repeat(40) } } : { sha: 'b'.repeat(40) }
+  const request = github.request
+  github.request = async (path, options) => {
+    if (path.startsWith('/git/ref/tags/')) return { object: { sha: 'b'.repeat(40) } }
+    if (path.startsWith('/commits/')) return { sha: 'b'.repeat(40) }
+    return request(path, options)
+  }
   await assert.rejects(publishBatch({ github, release, repository: 'fixture/project' }), /拒绝移动/)
 })
 

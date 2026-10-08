@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { releaseTagPattern } from './release-record.mjs'
 
 export const websiteDeployScript = `set -euo pipefail
 root=$1
@@ -40,7 +41,7 @@ with tarfile.open(archive, 'r:gz') as stream:
     Path(destination).mkdir()
     stream.extractall(destination, filter='data')
 PY
-grep -Fq "$tag" "$stage/site/changelog/index.html"
+grep -Fwq "$tag" "$stage/site/changelog/index.html"
 echo '官网归档和发布批次校验通过，开始保存上一版。'
 mkdir -p "$backup"
 rsync -a --delete "$root/data/" "$backup/"
@@ -49,7 +50,7 @@ rsync -a --delete "$stage/site/" "$root/data/"
 echo '静态页面已同步，开始验证公网。'
 for path in / /docs/ /changelog/; do
   curl --fail --silent --show-error --compressed --max-time 30 "$url$path" -o "$stage/probe"
-  if [[ "$path" == /changelog/ ]]; then grep -Fq "$tag" "$stage/probe"; fi
+  if [[ "$path" == /changelog/ ]]; then grep -Fwq "$tag" "$stage/probe"; fi
 done
 echo '官网发布完成，公网更新日志已包含本次批次。'
 `
@@ -91,7 +92,7 @@ async function main() {
   assert.equal(process.env.GITHUB_ACTIONS, 'true', '官网正式部署仅从 GitHub Actions 执行')
   assert.equal(process.env.GITHUB_REF, 'refs/heads/main')
   const [archive, tag] = process.argv.slice(2)
-  assert.match(tag, /^release-[a-f0-9]{12}$/)
+  assert.match(tag, releaseTagPattern)
   const config = deploymentConfig(process.env)
   const run = `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`
   assert.match(run, /^\d+-\d+$/)

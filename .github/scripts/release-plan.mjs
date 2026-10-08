@@ -2,7 +2,12 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { isDeepStrictEqual } from 'node:util'
 import { productionContent } from './prepare-stable-release.mjs'
-import { changeSections, clientPlatforms, validateRecord } from './release-record.mjs'
+import {
+  changeSections,
+  clientPlatforms,
+  releaseTagPattern,
+  validateRecord
+} from './release-record.mjs'
 import { versionIncreased } from './npm-channel.mjs'
 
 export function git(root, ...args) {
@@ -66,7 +71,23 @@ function runtimeChanged(root, base, head, paths) {
     })
 }
 
-export function createReleasePlan(root, { head, previous = null, date = Date.now() }) {
+export function nextReleaseTag(version, previousTag, reservedTags = []) {
+  assert.match(version, /^\d+\.\d+\.\d+$/)
+  let next = version.split('.').map(Number)
+  for (const tag of [previousTag, ...reservedTags].filter(Boolean)) {
+    if (!releaseTagPattern.test(tag)) continue
+    const used = tag.slice(1).split('.').map(Number)
+    const difference =
+      used.map((value, index) => value - next[index]).find((value) => value !== 0) ?? 0
+    if (difference >= 0) next = [used[0], used[1], used[2] + 1]
+  }
+  return `v${next.join('.')}`
+}
+
+export function createReleasePlan(
+  root,
+  { head, previous = null, reservedTags = [], date = Date.now() }
+) {
   assert.match(head, /^[a-f0-9]{40}$/)
   if (previous) {
     validateRecord(previous)
@@ -111,7 +132,11 @@ export function createReleasePlan(root, { head, previous = null, date = Date.now
   assert.match(nextTunnel, /^\d+\.\d+\.\d+$/)
   const tunnel = !base || versionIncreased(tunnelVersion(base), nextTunnel, 'tunnel')
   const record = {
-    tag: `release-${head.slice(0, 12)}`,
+    tag: nextReleaseTag(
+      packages.find((item) => item.name === '@jetcrab/pi-desk').version,
+      previous?.tag,
+      reservedTags
+    ),
     date,
     source: { base, head },
     packages,
@@ -127,7 +152,7 @@ export function latestSuccessfulRelease(releases) {
     releases
       .filter(
         (release) =>
-          !release.draft && !release.prerelease && /^release-[a-f0-9]{12}$/.test(release.tag_name)
+          !release.draft && !release.prerelease && releaseTagPattern.test(release.tag_name)
       )
       .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at))[0] ?? null
   )

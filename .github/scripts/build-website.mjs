@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { access, cp, mkdir, readFile, readdir, rename, rm, rmdir, symlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { releaseTagPattern } from './release-record.mjs'
 
 export async function normalizeStaticSegments(directory) {
   async function visit(parts) {
@@ -34,11 +35,15 @@ export async function normalizeStaticSegments(directory) {
 }
 
 export async function verifyWebsite(directory, tag) {
-  assert.match(tag, /^release-[a-f0-9]{12}$/)
+  assert.match(tag, releaseTagPattern)
   for (const path of ['index.html', 'docs/index.html', 'changelog/index.html', '404.html'])
     await access(join(directory, path))
   const changes = await readFile(join(directory, 'changelog/index.html'), 'utf8')
-  assert.ok(changes.includes(tag), '官网更新日志缺少本次正式发布')
+  assert.match(
+    changes,
+    new RegExp(`\\b${tag.replaceAll('.', '\\.')}\\b`),
+    '官网更新日志缺少本次正式发布'
+  )
   const entries = await readdir(directory, { recursive: true })
   assert.ok(
     !entries.some((path) =>

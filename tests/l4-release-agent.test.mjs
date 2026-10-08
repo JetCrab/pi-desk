@@ -112,7 +112,7 @@ test('大diff必须逐页读完，作者与审核者的读取证据独立', asyn
 test('真实Pi SDK运行两个独立会话，通过工具多轮读取后提交一致记录', async (t) => {
   const repo = await fixture(t)
   const requests = []
-  const changes = { ...empty(), added: ['新增示例功能。'] }
+  const changes = { ...empty(), added: ['Added a sample feature.'] }
   const commands = [
     ['list_changes', {}],
     ['read_diff', { path: 'source.js' }],
@@ -165,6 +165,8 @@ test('真实Pi SDK运行两个独立会话，通过工具多轮读取后提交�
     assert.ok(audit.reviewer.reads.some((item) => item.tool === 'read_file'))
     for (const request of requests) {
       const text = JSON.stringify(request)
+      assert.match(text, /精简英文发布说明/)
+      assert.match(text, /六类英文字符串数组/)
       assert.ok(!text.includes('fixture-token'))
       assert.ok(!text.includes('FIXTURE_SECRET'))
       const names = request.tools.map((item) => item.function.name)
@@ -219,19 +221,18 @@ test('模型拒绝请求时只返回类别并释放会话，不暴露认证响�
   }
 })
 
-test('Markdown固定标题、转义模型内容，并保留macOS签名限制', () => {
+test('英文正文不重复标题、版本表和下载清单，保留必要安装限制', () => {
   const record = {
-    tag: 'release-123456abcdef',
-    changes: { ...empty(), fixed: ['修复 <script> 与 [伪链接](https://evil.example)。'] },
+    tag: 'v1.0.0',
+    changes: { ...empty(), fixed: ['Fixed <script> and [a link](https://evil.example).'] },
     packages: [{ name: '@jetcrab/pi-desk', version: '1.0.0' }],
-    clients: [
-      { platform: 'macos', version: '1.0.0', file: 'pi-desk-macos-1.0.0-universal-adhoc.dmg' }
-    ]
+    clients: [{ platform: 'macos', version: '1.0.0', file: 'PiDesk-macOS-universal.dmg' }]
   }
   const markdown = renderReleaseNotes(record, { repository: 'fixture/project' })
-  assert.match(markdown, /^## Pi Desk 1\.0\.0/)
-  assert.match(markdown, /releases\/tag\/release-123456abcdef/)
-  assert.match(markdown, /临时签名，未公证/)
+  assert.match(markdown, /^### Fixed/)
+  assert.doesNotMatch(markdown, /## Pi Desk|@jetcrab|releases\/|### Downloads|### Added/)
+  assert.match(markdown, /The macOS build is experimental and not notarized\./)
+  assert.doesNotMatch(markdown, /[\u4e00-\u9fff]/)
   assert.ok(!markdown.includes('<script>'))
   assert.throws(() => validateChanges({ ...empty(), fixed: ['bad\nsecond heading'] }))
   assert.throws(() => validateChanges({ ...empty(), extra: [] }))
