@@ -531,12 +531,7 @@ export function L3ConversationMessageView({
   }
   if (!entriesInitialized) {
     if (builtinView) return <>{defaultView}</>
-    return (
-      <div className="flex min-h-12 items-center justify-center rounded-lg text-xs text-muted-foreground">
-        <LoaderCircleIcon className="mr-2 size-4 animate-spin" />
-        {t('initializingViews')}
-      </div>
-    )
+    return <div className="min-h-12" aria-busy="true" />
   }
   if (resolution?.status === 'conflict') {
     return (
@@ -552,12 +547,7 @@ export function L3ConversationMessageView({
   }
   if (!resolution) {
     if (waitingForView) {
-      return (
-        <div className="flex min-h-12 items-center justify-center rounded-lg text-xs text-muted-foreground">
-          <LoaderCircleIcon className="mr-2 size-4 animate-spin" />
-          {t('initializingViews')}
-        </div>
-      )
+      return <div className="min-h-12" aria-busy="true" />
     }
     if (builtinView) return <>{defaultView}</>
     return (
@@ -620,19 +610,17 @@ export function L3ConversationMessageView({
   }
 
   return (
-    <div className="relative min-h-12" data-message-id={message.identity}>
+    <div
+      className="relative min-h-12"
+      data-message-id={message.identity}
+      aria-busy={mountState.status === 'loading'}
+    >
       <div
         ref={containerRef}
         data-pi-desk-plugin={resolution.pluginName}
         data-pi-desk-kind="message-view"
         data-pi-desk-contribution={resolution.descriptor.contributionName}
       />
-      {mountState.status === 'loading' ? (
-        <div className="absolute inset-0 flex min-h-12 items-center justify-center rounded-lg bg-background/90 text-xs text-muted-foreground">
-          <LoaderCircleIcon className="mr-2 size-4 animate-spin" />
-          {t('loadingView')}
-        </div>
-      ) : null}
     </div>
   )
 }

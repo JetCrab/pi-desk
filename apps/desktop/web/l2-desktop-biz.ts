@@ -4,8 +4,10 @@ import {
   getTunnelConnection,
   type DownloadSource,
   type EnvironmentComponent,
+  type ReleaseChannel,
   type TargetConfig,
-  type TunnelConnection
+  type TunnelConnection,
+  type UpdatePolicy
 } from './l4-desktop-ipc'
 
 export type DesktopAction =
@@ -48,7 +50,9 @@ export async function prepareEnvironment(
 
 export function piInstallCommand(downloadSource: DownloadSource): string {
   const registry =
-    downloadSource === 'npmmirror' ? 'https://registry.npmmirror.com' : 'https://registry.npmjs.org'
+    downloadSource === 'npmmirror'
+      ? 'https://mirrors.cloud.tencent.com/npm'
+      : 'https://registry.npmjs.org'
   return `npm install -g --ignore-scripts --registry ${registry} @earendil-works/pi-coding-agent`
 }
 
@@ -94,8 +98,9 @@ export type SettingsDraft = {
   packageEnabled: boolean
   packageName: string
   packageRegistry: string
-  autoUpdateOnStart: boolean
-  periodicUpdateCheck: boolean
+  startupUpdate: UpdatePolicy
+  periodicUpdate: UpdatePolicy
+  channel: ReleaseChannel
   tunnelEnabled: boolean
   publicPort: string
   tunnelAutoStart: boolean
@@ -119,8 +124,9 @@ export async function readDesktopSettings(
     packageEnabled: Boolean(server?.package),
     packageName: server?.package?.name ?? '',
     packageRegistry: server?.package?.registry ?? '',
-    autoUpdateOnStart: Boolean(target?.server?.package?.autoUpdateOnStart),
-    periodicUpdateCheck: Boolean(target?.server?.package?.periodicUpdateCheck),
+    startupUpdate: server?.package?.startupUpdate ?? 'check',
+    periodicUpdate: server?.package?.periodicUpdate ?? 'none',
+    channel: server?.package?.channel ?? 'stable',
     tunnelEnabled: Boolean(target?.tunnel),
     publicPort: target?.tunnel ? String(target.tunnel.publicPort) : '',
     tunnelAutoStart: Boolean(target?.tunnel?.enabled),
@@ -152,8 +158,9 @@ export async function saveDesktopSettings(
             ? {
                 name: draft.packageName,
                 registry: draft.packageRegistry.trim() || null,
-                autoUpdateOnStart: draft.autoUpdateOnStart,
-                periodicUpdateCheck: draft.periodicUpdateCheck
+                startupUpdate: draft.startupUpdate,
+                periodicUpdate: draft.periodicUpdate,
+                channel: draft.channel
               }
             : null
         }

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { appendFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { appendFile, cp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { npmTagFor, versionParts } from './npm-channel.mjs'
@@ -131,55 +132,124 @@ async function verifyArchive(entry, output) {
   return packed
 }
 
-async function prepare(entries, output) {
-  await mkdir(output, { recursive: true })
-  const [sdk] = await selectPackages(projectRoot, 'pi-desk-sdk')
-  run('pnpm', ['--dir', sdk.directory, 'test'], {
-    env: { ...process.env, TSX_TSCONFIG_PATH: join(sdk.directory, 'tsconfig.json') }
-  })
-  run(process.execPath, [
-    '--test',
-    'tests/l4-public-boundary.test.mjs',
-    'tests/l4-release-npm.test.mjs'
-  ])
-  for (const entry of entries) {
-    if (entry.manifest.name === sdkName) continue
-    console.info(`构建与测试：${entry.manifest.name}@${entry.manifest.version}`)
-    if (entry.directory === projectRoot) {
-      run('pnpm', ['typecheck'])
-      run('pnpm', ['lint:production'])
-      run('pnpm', ['check:layers'])
-      run('pnpm', ['test:package'])
-      run('pnpm', ['build'])
-      await rm(join(projectRoot, 'temp/build/pi-desk/release/.next/cache'), {
-        recursive: true,
-        force: true
-      })
-    } else {
-      const env = { ...process.env, TSX_TSCONFIG_PATH: join(entry.directory, 'tsconfig.json') }
-      run('pnpm', ['--dir', entry.directory, 'build'], { env })
-      run('pnpm', ['--dir', entry.directory, 'test'], { env })
-    }
+export function npmValidationMode(ref) {
+  assert.ok(['refs/heads/main', 'refs/heads/dev'].includes(ref), '请从 main 或 dev 分支执行')
+  return ref === 'refs/heads/main' ? 'full' : 'lightweight'
+}
+
+async function stage(name, action) {
+  const started = performance.now()
+  console.info(`[${name}] 开始`)
+  try {
+    return await action()
+  } finally {
+    console.info(`[${name}] 耗时 ${((performance.now() - started) / 1000).toFixed(1)} 秒`)
   }
-  const packed = entries.some((entry) => entry.manifest.name === sdkName)
-    ? entries
-    : [sdk, ...entries]
-  for (const entry of packed) {
+}
+
+async function pack(entry, output) {
+  await mkdir(output, { recursive: true })
+  await stage(`pack ${entry.manifest.name}`, async () => {
     run('pnpm', ['--dir', entry.directory, 'pack', '--pack-destination', output], {
       env: { ...process.env, npm_config_ignore_scripts: 'true' }
     })
     await verifyArchive(entry, output)
+  })
+}
+
+async function prepare(entries, output) {
+  const mode = npmValidationMode(process.env.GITHUB_REF)
+  const full = mode === 'full'
+  console.info(`npm 验证模式：${mode}`)
+  // main 发布回归测试会解析 SDK dist；dev 仅为选中的包补齐依赖底座。
+  const needsSdk =
+    full ||
+    entries.some(
+      ({ manifest }) =>
+        manifest.name === sdkName ||
+        [manifest.dependencies, manifest.optionalDependencies, manifest.peerDependencies].some(
+          (dependencies) => dependencies?.[sdkName]
+        )
+    )
+  const [sdk] = needsSdk ? await selectPackages(projectRoot, 'pi-desk-sdk') : []
+  if (sdk) {
+    const env = { ...process.env, TSX_TSCONFIG_PATH: join(sdk.directory, 'tsconfig.json') }
+    await stage(`build ${sdkName}`, () => run('pnpm', ['--dir', sdk.directory, 'build'], { env }))
+    if (full) {
+      // SDK test 脚本内含 build；直接执行同一测试集合，复用刚生成的产物。
+      const tests = (await readdir(join(sdk.directory, 'tests')))
+        .filter((file) => file.endsWith('.test.mjs'))
+        .map((file) => join('tests', file))
+      await stage(`test ${sdkName}`, () =>
+        run(process.execPath, ['--test', ...tests], { cwd: sdk.directory, env })
+      )
+    }
   }
+  if (full) {
+    await stage('test 发布边界', () =>
+      run(process.execPath, [
+        '--test',
+        'tests/l4-public-boundary.test.mjs',
+        'tests/l4-release-npm.test.mjs'
+      ])
+    )
+  }
+  for (const entry of entries) {
+    if (entry.manifest.name === sdkName) continue
+    if (entry.directory === projectRoot) {
+      if (full) {
+        for (const command of ['typecheck', 'lint:production', 'check:layers', 'test:package']) {
+          await stage(`test ${command}`, () => run('pnpm', [command]))
+        }
+      }
+      const nextCache = join(projectRoot, 'temp/build/pi-desk/release/.next/cache')
+      const savedCache = join(projectRoot, 'temp/cache/next/npm-dev')
+      if (!full && existsSync(savedCache)) {
+        await cp(savedCache, nextCache, { recursive: true })
+      }
+      // 主包 build 的前半段只重复 SDK build；这里执行同一 Next 构建入口。
+      await stage(`build ${entry.manifest.name}`, () =>
+        run('pnpm', ['exec', 'next', 'build', '--webpack'])
+      )
+      if (!full && existsSync(nextCache)) {
+        await mkdir(join(projectRoot, 'temp/cache/next'), { recursive: true })
+        await rm(savedCache, { recursive: true, force: true })
+        await rename(nextCache, savedCache)
+      }
+      await rm(nextCache, { recursive: true, force: true })
+    } else {
+      const env = { ...process.env, TSX_TSCONFIG_PATH: join(entry.directory, 'tsconfig.json') }
+      await stage(`build ${entry.manifest.name}`, () =>
+        run('pnpm', ['--dir', entry.directory, 'build'], { env })
+      )
+      if (full) {
+        await stage(`test ${entry.manifest.name}`, () =>
+          run('pnpm', ['--dir', entry.directory, 'test'], { env })
+        )
+      }
+    }
+  }
+  for (const entry of entries) await pack(entry, output)
   const host = entries.find((entry) => entry.directory === projectRoot)
   if (host) {
-    const { verifyNpmInstall } = await import('./verify-npm-install.mjs')
-    await verifyNpmInstall({
-      root: projectRoot,
-      sdkArchive: archivePath(sdk, output),
-      hostArchive: archivePath(host, output),
-      version: host.manifest.version,
-      run
-    })
+    const sdkSelected = entries.some((entry) => entry.manifest.name === sdkName)
+    const verificationOutput = join(projectRoot, 'temp/package/npm-smoke', basename(output))
+    const sdkOutput = sdkSelected ? output : verificationOutput
+    try {
+      if (!sdkSelected) await pack(sdk, sdkOutput)
+      const { verifyNpmInstall } = await import('./verify-npm-install.mjs')
+      await stage('smoke 隔离安装与启动', () =>
+        verifyNpmInstall({
+          root: projectRoot,
+          sdkArchive: archivePath(sdk, sdkOutput),
+          hostArchive: archivePath(host, output),
+          version: host.manifest.version,
+          run
+        })
+      )
+    } finally {
+      if (!sdkSelected) await rm(verificationOutput, { recursive: true, force: true })
+    }
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
     await appendFile(
@@ -187,6 +257,27 @@ async function prepare(entries, output) {
       `## 已验证 npm 制品\n\n${entries.map((entry) => `- ${entry.manifest.name}@${entry.manifest.version}`).join('\n')}\n`
     )
   }
+}
+
+export function assertDevelopmentTags(tags, name, version) {
+  assert.ok(
+    typeof tags.latest === 'string' && /^\d+\.\d+\.\d+$/.test(tags.latest),
+    `${name} 尚无稳定 latest，开发制品已构建但不能发布；请先完成首次正式发布`
+  )
+  if (version) assert.equal(tags.dev, version, `${name} 的 dev 标签未指向本次版本`)
+}
+
+async function readTags(name) {
+  const response = await fetch(
+    `${registry}/-/package/${encodeURIComponent(name)}/dist-tags?validation=${Date.now()}`,
+    {
+      headers: { 'cache-control': 'no-cache' },
+      signal: AbortSignal.timeout(30_000)
+    }
+  )
+  if (response.status === 404) return {}
+  assert.ok(response.ok, `无法核对 ${name} 标签：HTTP ${response.status}`)
+  return response.json()
 }
 
 async function publish(entries, output) {
@@ -206,6 +297,10 @@ async function publish(entries, output) {
     const existing = new Set()
     for (const entry of entries) {
       const packed = await verifyArchive(entry, output)
+      if (npmTagFor(process.env.GITHUB_REF, packed.version) === 'dev') {
+        // npm 首次发布可能补充 latest；发布授权不一定允许随后删除标签。
+        assertDevelopmentTags(await readTags(packed.name), packed.name)
+      }
       const response = await fetch(
         `${registry}/${encodeURIComponent(packed.name)}/${packed.version}`,
         { signal: AbortSignal.timeout(30_000) }
@@ -258,6 +353,13 @@ async function publish(entries, output) {
         ],
         { env }
       )
+      if (npmTagFor(process.env.GITHUB_REF, entry.manifest.version) === 'dev') {
+        assertDevelopmentTags(
+          await readTags(entry.manifest.name),
+          entry.manifest.name,
+          entry.manifest.version
+        )
+      }
     }
   } finally {
     await rm(config, { force: true })
@@ -266,10 +368,7 @@ async function publish(entries, output) {
 
 async function main() {
   assert.equal(process.env.GITHUB_ACTIONS, 'true', '正式构建与发布仅在 GitHub Actions 中执行')
-  assert.ok(
-    ['refs/heads/main', 'refs/heads/dev'].includes(process.env.GITHUB_REF),
-    '请从 main 或 dev 分支执行'
-  )
+  npmValidationMode(process.env.GITHUB_REF)
   const [command] = process.argv.slice(2)
   assert.ok(command === 'prepare' || command === 'publish', '请指定 prepare 或 publish')
   const output = resolve(process.env.NPM_ARTIFACT_DIR)

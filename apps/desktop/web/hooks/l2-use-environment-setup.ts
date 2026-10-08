@@ -21,7 +21,7 @@ export function useEnvironmentSetup(
   activeUrl: string | null
   showOptions: (url: string) => void
   onAction: (target: TargetSnapshot, input: EnvironmentViewAction) => void
-  view: Omit<EnvironmentViewProps, 'environment' | 'target' | 'optionsOpen' | 'onAction'>
+  view: Omit<EnvironmentViewProps, 'environment' | 'target' | 'optionsOpen' | 'mode' | 'onAction'>
 } {
   const [optionsUrl, setOptionsUrl] = useState<string | null>(null)
   const [activeUrl, setActiveUrl] = useState<string | null>(null)

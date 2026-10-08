@@ -168,8 +168,30 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 安装公开依赖
         run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
-      - name: 构建、测试和校验实际 tarball
-        run: node .github/scripts/release-npm.mjs prepare
+      - name: 复用 dev npm 包缓存
+        if: github.ref == 'refs/heads/dev'
+        uses: actions/cache@v4
+        with:
+          path: temp/cache/npm-release/_cacache
+          key: ${{ runner.os }}-npm-dev-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-dev-
+      - name: 复用 dev Next 构建缓存
+        if: github.ref == 'refs/heads/dev' && contains(fromJSON(needs.plan.outputs.packages), 'pi-desk')
+        uses: actions/cache@v4
+        with:
+          path: temp/cache/next/npm-dev
+          key: ${{ runner.os }}-next-npm-dev-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-next-npm-dev-${{ hashFiles('pnpm-lock.yaml') }}-
+            ${{ runner.os }}-next-npm-dev-
+      - name: 构建、验证和校验实际 tarball
+        run: |
+          if ($env:GITHUB_REF -eq 'refs/heads/dev') {
+            $env:NPM_CONFIG_CACHE = Join-Path $env:GITHUB_WORKSPACE 'temp/cache/npm-release'
+          }
+          node .github/scripts/release-npm.mjs prepare
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: npm-packages-${{ github.run_id }}-${{ github.run_attempt }}

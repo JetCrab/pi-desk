@@ -51,11 +51,15 @@ export type ControlState = {
   environment: EnvironmentSnapshot
 }
 
+export type UpdatePolicy = 'none' | 'check' | 'update'
+export type ReleaseChannel = 'stable' | 'dev'
+
 export type PackageConfig = {
   name: string
   registry: string | null
-  autoUpdateOnStart: boolean
-  periodicUpdateCheck: boolean
+  startupUpdate: UpdatePolicy
+  periodicUpdate: UpdatePolicy
+  channel: ReleaseChannel
 }
 
 export type ServerConfig = {

@@ -2,7 +2,13 @@ name: Source checks
 
 on:
   push:
+    branches: [dev]
   pull_request:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -12,7 +18,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.select.outputs.full }}
+      web: ${{ steps.select.outputs.web }}
+      website: ${{ steps.select.outputs.website }}
+      agent: ${{ steps.select.outputs.agent }}
+      automation: ${{ steps.select.outputs.automation }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - id: select
+        env:
+          CHECK_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CHECK_HEAD: ${{ inputs.source_sha || github.sha }}
+        run: node .github/scripts/select-ci-checks.mjs
+
+  core:
+    needs: changes
+    if: needs.changes.outputs.full != 'true' && (needs.changes.outputs.web == 'true' || needs.changes.outputs.automation == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - name: 源码公开边界
+        run: node --test tests/l4-public-boundary.test.mjs
+      - name: 发布流程核心回归
+        if: needs.changes.outputs.automation == 'true'
+        run: node --test tests/l4-release-main.test.mjs tests/l4-release-website.test.mjs tests/l4-release-versions.test.mjs tests/l4-release-speed.test.mjs
+
   web:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -21,6 +70,9 @@ jobs:
       PI_CODING_AGENT_SESSION_DIR: ${{ github.workspace }}/temp/pi/ci-web/web-checks-${{ github.run_id }}-${{ github.run_attempt }}/agent/sessions
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 10.15.0
@@ -49,6 +101,7 @@ jobs:
           tests/l4-release-npm.test.mjs
           tests/l4-release-main.test.mjs
           tests/l4-release-website.test.mjs
+          tests/l4-release-speed.test.mjs
           tests/l2-chat-state.test.ts
           tests/l2-task-center-state.test.ts
           tests/l2-work-session-update.test.ts
@@ -57,34 +110,47 @@ jobs:
           tests/l3-project-file-tree.test.ts
 
   website:
+    needs: changes
+    if: needs.changes.outputs.website == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.22.2
       - uses: pnpm/action-setup@v4
         with:
           version: 10.15.0
           run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+          cache-dependency-path: apps/website/pnpm-lock.yaml
       - run: pnpm install --ignore-workspace --frozen-lockfile --ignore-scripts --registry=https://registry.npmjs.org
         working-directory: apps/website
-      - run: pnpm typecheck && pnpm lint && pnpm check:layers
+      - run: pnpm typecheck
+        working-directory: apps/website
+      - if: needs.changes.outputs.full == 'true'
+        run: pnpm lint && pnpm check:layers
         working-directory: apps/website
 
   release-agent:
+    needs: changes
+    if: needs.changes.outputs.agent == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.2
+          cache: npm
+          cache-dependency-path: .github/release-agent/package-lock.json
       - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
         working-directory: .github/release-agent
       - run: node --test tests/l4-release-agent.test.mjs

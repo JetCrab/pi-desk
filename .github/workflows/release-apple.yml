@@ -70,6 +70,8 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 70
     env:
+      BUILD_PROFILE: ${{ github.ref == 'refs/heads/dev' && 'debug' || 'release' }}
+      RUST_CACHE_STAGE: ${{ github.workspace }}/temp/cache/rust/macos-${{ github.ref == 'refs/heads/dev' && 'debug' || 'release' }}
       CARGO_TARGET_DIR: ${{ github.workspace }}/temp/build/macos-ci/${{ github.run_id }}-${{ github.run_attempt }}/target
       PI_DESK_DESKTOP_WEB_DIST: ${{ github.workspace }}/temp/build/macos-ci/${{ github.run_id }}-${{ github.run_attempt }}/web
       CLIENT_OUTPUT: ${{ github.workspace }}/temp/package/clients/macos/${{ github.run_id }}-${{ github.run_attempt }}
@@ -88,6 +90,14 @@ jobs:
           run_install: false
       - name: 准备 Apple Silicon 和 Intel 编译目标
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        env:
+          CARGO_TARGET_DIR: ${{ env.RUST_CACHE_STAGE }}
+        with:
+          key: macos-universal-${{ env.BUILD_PROFILE }}
+          cache-bin: 'false'
+          workspaces: apps/desktop/src-tauri -> ../../../temp/cache/rust/macos-${{ env.BUILD_PROFILE }}
+      - run: node .github/scripts/rust-cache.mjs restore
       - name: 安装桌面依赖
         working-directory: apps/desktop
         run: pnpm install --ignore-workspace --frozen-lockfile
@@ -114,15 +124,22 @@ jobs:
             bundle: { macOS: { minimumSystemVersion: '11.0', signingIdentity: process.env.APPLE_SIGNING_IDENTITY, hardenedRuntime: process.env.APPLE_SIGNING_IDENTITY !== '-' } }
           }))
           JS
+      - name: 前端类型检查
+        working-directory: apps/desktop
+        run: pnpm run typecheck:web
       - name: 构建通用 macOS DMG
         working-directory: apps/desktop
-        run: pnpm exec tauri build --target universal-apple-darwin --bundles dmg --config "$CARGO_TARGET_DIR/tauri-ci.json"
+        run: |
+          build_args=(exec tauri build --target universal-apple-darwin --bundles dmg --config "$CARGO_TARGET_DIR/tauri-ci.json")
+          if [[ "$BUILD_PROFILE" == debug ]]; then build_args+=(--debug); fi
+          pnpm "${build_args[@]}"
+      - run: node .github/scripts/rust-cache.mjs save
       - name: 检查两种架构与签名结构并归档
         env:
           SIGNED: ${{ steps.signing.outputs.signed }}
         run: |
           set -euo pipefail
-          release="$CARGO_TARGET_DIR/universal-apple-darwin/release"
+          release="$CARGO_TARGET_DIR/universal-apple-darwin/$BUILD_PROFILE"
           dmgs=("$release/bundle/dmg/"*.dmg)
           test "${#dmgs[@]}" = 1
           test -s "${dmgs[0]}"

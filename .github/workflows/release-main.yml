@@ -60,8 +60,15 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  checks:
+    needs: prepare
+    if: needs.prepare.outputs.published != 'true'
+    uses: ./.github/workflows/check.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.sha }}
+
   notes:
-    needs: [prepare, npm-build, windows, macos, android]
+    needs: [prepare, checks, npm-build, windows, macos, android]
     if: >-
       always() && !cancelled() && needs.prepare.result == 'success' &&
       needs.prepare.outputs.published != 'true' && needs.prepare.outputs.notes_ready != 'true' &&
@@ -92,7 +99,7 @@ jobs:
           const file = `${process.env.RELEASE_ROOT}/plan.json`
           const plan = JSON.parse(readFileSync(file, 'utf8'))
           const results = JSON.parse(process.env.BUILD_RESULTS)
-          plan.tests = Object.fromEntries(['npm-build', 'windows', 'macos', 'android'].map(name => [name, results[name].result]))
+          plan.tests = Object.fromEntries(['checks', 'npm-build', 'windows', 'macos', 'android'].map(name => [name, results[name].result]))
           writeFileSync(file, JSON.stringify(plan))
           JS
       - name: 安装隔离审查 Agent
@@ -162,7 +169,7 @@ jobs:
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
   assemble:
-    needs: [prepare, notes, npm-build, windows, macos, android]
+    needs: [prepare, checks, notes, npm-build, windows, macos, android]
     if: >-
       always() && !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.published != 'true' &&
       !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')

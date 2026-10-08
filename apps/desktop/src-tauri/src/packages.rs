@@ -1,4 +1,7 @@
-use crate::{config::PackageConfig, logging, process};
+use crate::{
+    config::{PackageConfig, ReleaseChannel},
+    logging, process,
+};
 use semver::Version;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -103,10 +106,14 @@ pub(crate) fn query_version_with_environment(
     npm: &str,
     environment: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> Result<String, String> {
+    let tag = match package.channel {
+        ReleaseChannel::Stable => "latest",
+        ReleaseChannel::Dev => "dev",
+    };
     let output = run_with_environment(
         &format!(
             "{npm} view {} version --json{}",
-            quote(&format!("{}@latest", package.name)),
+            quote(&format!("{}@{tag}", package.name)),
             registry_argument(package)
         ),
         None,
@@ -117,13 +124,35 @@ pub(crate) fn query_version_with_environment(
     )?;
     let version: String =
         serde_json::from_str(&output).map_err(|error| format!("npm 版本响应无效：{error}"))?;
-    let parsed = Version::parse(&version).map_err(|_| "npm 返回的版本号无效")?;
-    if !parsed.pre.is_empty() {
+    channel_version(package, &version)?;
+    Ok(version)
+}
+
+fn channel_version(package: &PackageConfig, version: &str) -> Result<Version, String> {
+    let parsed = Version::parse(version).map_err(|_| "npm 返回的版本号无效".to_string())?;
+    if package.channel == ReleaseChannel::Stable && !parsed.pre.is_empty() {
         return Err(format!(
-            "npm latest 指向预发布版本 {version}，请等待正式版本或检查下载源"
+            "稳定通道不接受预发布版本 {version}，请等待正式版本或检查下载源"
         ));
     }
-    Ok(version)
+    Ok(parsed)
+}
+
+pub fn should_select_version(
+    package: &PackageConfig,
+    next: Option<&str>,
+    current: Option<&str>,
+) -> bool {
+    let Some(next) = next else {
+        return false;
+    };
+    if channel_version(package, next).is_err() {
+        return false;
+    }
+    if current.is_some_and(|current| channel_version(package, current).is_err()) {
+        return true;
+    }
+    is_newer(Some(next), current)
 }
 
 pub fn version_directory(base: &Path, package: &PackageConfig, version: &str) -> PathBuf {
@@ -133,6 +162,7 @@ pub fn version_directory(base: &Path, package: &PackageConfig, version: &str) ->
 }
 
 pub fn installed_directory(base: &Path, package: &PackageConfig, version: &str) -> Option<PathBuf> {
+    channel_version(package, version).ok()?;
     let directory = version_directory(base, package, version);
     directory
         .join("node_modules")
@@ -187,6 +217,7 @@ pub(crate) fn install_with_environment(
     if cancelled() {
         return Err("操作已取消".into());
     }
+    channel_version(package, version)?;
     if let Some(directory) = installed_directory(base, package, version) {
         logging::write(
             log,
@@ -278,7 +309,7 @@ pub(crate) mod tests {
         install, installed_directory, is_newer, previous_installed_directory, query_version, run,
         version_directory,
     };
-    use crate::config::PackageConfig;
+    use crate::config::{PackageConfig, ReleaseChannel, UpdatePolicy};
     use std::collections::HashMap;
     use std::fs;
     use std::io::{Read, Write};
@@ -332,8 +363,9 @@ pub(crate) mod tests {
         let package = PackageConfig {
             name: PACKAGE_NAME.into(),
             registry: None,
-            auto_update_on_start: false,
-            periodic_update_check: false,
+            startup_update: UpdatePolicy::None,
+            periodic_update: UpdatePolicy::None,
+            channel: ReleaseChannel::Stable,
         };
 
         let versioned = version_directory(&directory, &package, "1.2.3");
@@ -433,6 +465,10 @@ pub(crate) mod tests {
 
     impl LocalRegistry {
         pub(crate) fn new(tarballs: Vec<FixtureTarball>) -> Self {
+            Self::with_tags(tarballs, None)
+        }
+
+        fn with_tags(tarballs: Vec<FixtureTarball>, tags: Option<serde_json::Value>) -> Self {
             let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
             listener.set_nonblocking(true).unwrap();
             let address = format!("http://{}", listener.local_addr().unwrap());
@@ -466,7 +502,7 @@ pub(crate) mod tests {
             let latest = versions.keys().max().unwrap().clone();
             let metadata = serde_json::to_vec(&serde_json::json!({
                 "name": PACKAGE_NAME,
-                "dist-tags": { "latest": latest },
+                "dist-tags": tags.unwrap_or_else(|| serde_json::json!({"latest":latest})),
                 "versions": versions
             }))
             .unwrap();
@@ -571,8 +607,9 @@ pub(crate) mod tests {
         let package = PackageConfig {
             name: PACKAGE_NAME.into(),
             registry: Some(registry.address.clone()),
-            auto_update_on_start: false,
-            periodic_update_check: false,
+            startup_update: UpdatePolicy::None,
+            periodic_update: UpdatePolicy::None,
+            channel: ReleaseChannel::Stable,
         };
         let cancelled = || false;
         let base = directory.join("packages");
@@ -614,6 +651,32 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn configured_channel_queries_the_correct_npm_tag() {
+        let directory = test_directory("npm-release-channels");
+        let _npm_environment = crate::test_support::NpmEnvironment::new(&directory);
+        let log = directory.join("desktop.log");
+        let stable = pack_fixture(&directory, "1.2.3", None, None, &log);
+        let development = pack_fixture(&directory, "2.0.0-dev.9", None, None, &log);
+        let registry = LocalRegistry::with_tags(
+            vec![stable, development],
+            Some(serde_json::json!({
+                "latest":"1.2.3", "dev":"2.0.0-dev.9"
+            })),
+        );
+        let mut package = crate::config::default_server_config().package.unwrap();
+        package.name = PACKAGE_NAME.into();
+        package.registry = Some(registry.address.clone());
+        assert_eq!(query_version(&package, &log, &|| false).unwrap(), "1.2.3");
+        package.channel = ReleaseChannel::Dev;
+        assert_eq!(
+            query_version(&package, &log, &|| false).unwrap(),
+            "2.0.0-dev.9"
+        );
+        drop(registry);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn latest_tag_must_resolve_to_a_stable_version() {
         let directory = test_directory("npm-stable-version");
         let _npm_environment = crate::test_support::NpmEnvironment::new(&directory);
@@ -624,8 +687,9 @@ pub(crate) mod tests {
         let package = PackageConfig {
             name: PACKAGE_NAME.into(),
             registry: Some(registry.address.clone()),
-            auto_update_on_start: false,
-            periodic_update_check: false,
+            startup_update: UpdatePolicy::None,
+            periodic_update: UpdatePolicy::None,
+            channel: ReleaseChannel::Stable,
         };
         let error = query_version(&package, &log, &|| false).unwrap_err();
         assert!(error.contains("预发布版本 2.0.0-beta.1"), "{error}");
@@ -641,8 +705,9 @@ pub(crate) mod tests {
         let package = PackageConfig {
             name: "@desktop-private/fixture".into(),
             registry: Some("http://127.0.0.1:12345".into()),
-            auto_update_on_start: false,
-            periodic_update_check: false,
+            startup_update: UpdatePolicy::None,
+            periodic_update: UpdatePolicy::None,
+            channel: ReleaseChannel::Stable,
         };
         let arguments = super::registry_argument(&package);
         let original = run(

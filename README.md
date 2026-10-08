@@ -1,68 +1,130 @@
 # Pi Desk
 
-面向单用户的 Pi 编程代理 Web 工作台，提供会话、文件与 Git 预览、任务中心和插件扩展，包含 Windows／macOS 桌面壳和 Android／iOS 网页客户端。
+**English** | [简体中文](./README.zh-CN.md)
 
-源码仓库：<https://github.com/JetCrab/pi-desk>。自有代码采用 [Apache-2.0](./LICENSE)，第三方代码保留各自授权和来源说明。
+> Pi Desk stays simple and lightweight. Models evolve rapidly and keep getting more capable. I believe a single, more capable model will directly handle an increasing share of complex work. Agents should minimize extra context and guiding prompts, retaining only essential project rules; subagents stay lightweight and are used on demand, without elaborate team orchestration.
 
-## 从源码运行
+A client for the Pi coding agent — in your browser, on your desktop, and on your phone.
 
-需要 Node.js 22.19.0 或以上、pnpm 10.15.0，以及兼容的全局 Pi。当前开发依赖基线为 Pi 1.0.1。
+[Website](https://pidesk.dev) · [Documentation](https://pidesk.dev/docs/) · [Upstream Pi](https://github.com/earendil-works/pi)
+
+Pi Desk is a visual, single-user client for [Pi](https://github.com/earendil-works/pi). Keep multiple conversations in view, inspect project files and Git changes, and continue working from another device connected to the same Pi Desk service.
+
+Pi powers the agent. Pi Desk provides the interface, with a lightweight core and plugins for the capabilities you need.
+
+## Highlights
+
+- **Sessions side by side.** Pin sessions to compare messages and results without constantly switching views.
+- **Files and Git at hand.** Preview project files, inspect changes, and browse commit history alongside your conversations.
+- **Work across devices.** Use a browser or connect a desktop or mobile client to the same service to check progress and continue a conversation.
+- **Tasks and results in view.** Follow background commands and subagents in the task center, and preview deliverables with the corresponding plugins.
+- **Extend it your way.** Add tools, panels, applications, and custom message views through Pi Desk plugins and the public SDK.
+
+## Interface demo
+
+<p>
+  <a href="./docs/images/client-overview.webp">
+    <img src="./docs/images/client-overview.webp" alt="File preview" width="300" />
+  </a>
+  <a href="./docs/images/multi-window.webp">
+    <img src="./docs/images/multi-window.webp" alt="Side-by-side conversations" width="300" />
+  </a>
+</p>
+
+Visit [pidesk.dev](https://pidesk.dev) for product demos and [the documentation](https://pidesk.dev/docs/) for usage guides.
+
+## Getting started
+
+### Requirements
+
+- Node.js **22.19.0 or newer**.
+- npm (included with Node.js).
+- A compatible global installation of Pi.
+
+If you do not already have a compatible Pi installation:
 
 ```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```
+
+Configure your model provider and account in Pi before starting a conversation. See [Pi's setup instructions](https://pi.dev/docs/latest). You can open the client without a configured model, but model conversations require one.
+
+### Run with npm
+
+Run directly with npx:
+
+```bash
+npx @jetcrab/pi-desk
+```
+
+Or install globally for repeated use:
+
+```bash
+npm install -g @jetcrab/pi-desk
+pi-desk
+```
+
+Open **<http://localhost:6233>**.
+
+## Applications
+
+The web service runs Pi sessions. Browser, desktop, and mobile clients connect to the same service.
+
+| Application          | Source                              | Purpose                           |
+| -------------------- | ----------------------------------- | --------------------------------- |
+| Web service          | [`src/`](./src) and [`bin/`](./bin) | Browser client and Pi integration |
+| Windows              | [`apps/desktop/`](./apps/desktop)   | Tauri desktop shell               |
+| macOS (experimental) | [`apps/desktop/`](./apps/desktop)   | Tauri desktop shell               |
+| Android              | [`apps/android/`](./apps/android)   | Native Android client for Pi Desk |
+| iOS (experimental)   | [`apps/ios/`](./apps/ios)           | SwiftUI / WKWebView client        |
+| Tunnel               | [`apps/tunnel/`](./apps/tunnel)     | Rust TCP tunnel server and client |
+
+> macOS and iOS clients are experimental and are not included in stable releases. The author does not own a Mac or an iOS device, so these clients have not been tested on real hardware and may not work.
+
+## Plugins and SDK
+
+The repository contains a public SDK and nine plugin projects. Plugins are separate packages, so you can choose the capabilities you need rather than adding everything to the core.
+
+| Package                                                             | Purpose                                                        |
+| ------------------------------------------------------------------- | -------------------------------------------------------------- |
+| **[@jetcrab/pi-desk-sdk](./plugins/pi-desk-sdk)**                   | Host interfaces, plugin declarations, and Browser Host Runtime |
+| **[@jetcrab/pi-desk-bg-run](./plugins/pi-desk-bg-run)**             | Background commands, logs, and task-center integration         |
+| **[@jetcrab/pi-desk-subagent](./plugins/pi-desk-subagent)**         | Subagent execution and task-center integration                 |
+| **[@jetcrab/pi-desk-deliverables](./plugins/pi-desk-deliverables)** | Deliverable previews                                           |
+| **[@jetcrab/pi-desk-usage](./plugins/pi-desk-usage)**               | Model usage and cost analysis                                  |
+| **[@jetcrab/pi-desk-ctx](./plugins/pi-desk-ctx)**                   | Context management and historical tool-result lookup           |
+| **[@jetcrab/pi-desk-quota-viewer](./plugins/pi-desk-quota-viewer)** | Model-provider quota viewer                                    |
+| **[@jetcrab/pi-desk-tibo-monitor](./plugins/pi-desk-tibo-monitor)** | Tibo updates and notifications                                 |
+| **[@jetcrab/pi-desk-tool-reason](./plugins/pi-desk-tool-reason)**   | Reasons for tool calls                                         |
+| **[@jetcrab/pi-desk-remote-debug](./plugins/pi-desk-remote-debug)** | Remote debugging for development pages                         |
+
+See the [plugin overview](./plugins/README.md) for more about the plugins and SDK. Public npm packages use the `@jetcrab/` namespace and the npmjs registry.
+
+## Access and permissions
+
+Pi Desk is a **single-user tool** with filesystem, command, and plugin execution capabilities. It does not provide multi-tenant execution isolation.
+
+On first startup, if sign-in protection is not configured, anyone who can reach the service can access Pi Desk. Set a password in **Settings → Sign-in protection** before exposing it to other people, and use HTTPS for public access.
+
+Authentication data is stored in your own Pi Agent directory, not in the source repository.
+
+## Run from source
+
+Install pnpm, then run:
+
+```bash
+git clone https://github.com/JetCrab/pi-desk.git
+cd pi-desk
 pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
-# 已安装兼容 Pi 时跳过安装，不替换现有环境。
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.1
-node bin/pi-global-runtime.js --check
 pnpm dev
 ```
 
-访问 <http://localhost:6233>，健康检查为 `/api/health`。首次启动需要编译页面，耗时取决于开发环境和缓存。`pnpm dev` 会先构建 SDK Browser Host Runtime。
+Open <http://localhost:6233>. The first page load may take longer while the application compiles.
 
-模型和账号由使用者自行配置，仓库不包含维护者凭据。无需外层私人目录或私人 Registry；没有可用模型时可以进入工作台，但不能完成模型对话。
+## Acknowledgments
 
-## 目录
+Pi Desk is built on [Pi](https://github.com/earendil-works/pi), the extensible coding-agent harness by earendil-works. Thanks to the Pi maintainers and contributors for the agent runtime and libraries that make this client possible.
 
-```text
-bin/                  命令入口，按功能命名
-src/                  Web 主程序，按 client/server/common 分层
-apps/desktop/         Tauri Windows／macOS 桌面壳
-apps/android/         原生 Android 网页客户端
-apps/ios/             SwiftUI／WKWebView iOS 客户端
-apps/tunnel/          Rust TCP 隧道服务与客户端
-plugins/              公开插件与 pi-desk-sdk
-```
+## License
 
-插件列表和源码边界见 [plugins/README.md](./plugins/README.md)。各应用有自己的构建说明。Apple 客户端有独立云端打包流程；无开发者账号时，macOS 使用 ad-hoc 签名，iOS 只生成模拟器应用与未签名归档，不能据此宣称已完成 Apple 公证、真机验收或商店分发。
-
-## 登录与运行边界
-
-首次启动未配置登录保护时，任何能访问服务的人都能进入工作台。可在“设置 → 登录保护”启用账号密码，通过公网访问时使用 HTTPS。
-
-这是具有文件、命令和插件执行能力的单用户工具，不提供多租户执行隔离。认证数据保存在使用者自己的 Pi Agent 目录，不属于源码。
-
-## 命令入口
-
-`bin/pi-desk.js` 是服务启动命令，`bin/pi-global-runtime.js --check` 检查 Pi 环境，`bin/pi-desk-preflight.js` 对已构建的安装包进行隔离启动预检；实现位于 `src/server/`，不从调用者目录解析包根。
-
-桌面端和服务包需配套升级：当前桌面源码优先使用新的 Pi 检查入口，并兼容旧包的 `l4-pi-global-runtime.js`；固定调用旧文件名的桌面版本需要升级后再使用本版服务包。
-
-## 检查
-
-```bash
-pnpm build:plugin-host-runtime
-pnpm typecheck
-pnpm typecheck:tests
-pnpm lint
-pnpm check:layers
-pnpm format:check
-pnpm test:package
-node --test tests/l4-public-boundary.test.mjs
-```
-
-开发约束见 [AGENTS.md](./AGENTS.md)，当前公开接口以源码中的 Schema 和 SDK 类型声明为准。
-
-## 发布状态
-
-公开包名使用 `@jetcrab/`，目标 Registry 为 npmjs；安装包计划由 GitHub Releases 分发，隧道镜像计划由 GHCR 分发。目录和包名迁移不代表这些制品已经发布，当前使用上面的源码入口。
-
-`.github/workflows/` 提供手动触发的 npm、隧道镜像、Windows／Android 构建发布流程，以及独立的 Apple 客户端构建流程，默认只构建验证；正式发布须显式选择并配置对应授权。首次推送后仍需完成云端与制品验收，不把工作流文件存在当作已经发布。
+Pi Desk's own code is licensed under [Apache-2.0](./LICENSE). Third-party code retains its original licenses, copyright notices, and source attributions.

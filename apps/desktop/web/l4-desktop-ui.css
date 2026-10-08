@@ -189,23 +189,47 @@ textarea:disabled {
 .page-heading h1 {
   font-size: 1.125rem;
 }
-.control-content,
-form {
-  animation: arrive 180ms ease-out;
-}
 .control-content {
-  padding-top: 8px;
+  padding: clamp(24px, 7vh, 56px) 0 0;
+}
+.local-targets {
+  display: grid;
+  gap: 20px;
 }
 .local-target {
-  padding: 20px 0 24px;
-}
-.local-target + .local-target {
-  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 24px;
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: 0 4px 20px #00000006;
 }
 .target-heading {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+.device-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 64px;
+  height: 64px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--muted);
+}
+.device-icon .icon {
+  width: 28px;
+  height: 28px;
+}
+.target-address {
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+  margin-top: 2px;
 }
 .local-title {
   font-size: 1.25rem;
@@ -232,7 +256,105 @@ form {
   flex: none;
 }
 .launch-actions {
-  margin-top: 20px;
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  justify-content: flex-end;
+}
+.launch-actions .primary {
+  padding-inline: 12px;
+}
+.target-tools {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  margin-top: 24px;
+  padding-top: 16px;
+}
+.target-tools > button {
+  color: var(--muted-foreground);
+}
+.target-tools > button:hover,
+.target-tools > button[aria-expanded='true'] {
+  color: var(--foreground);
+}
+.target-tools > button > .icon:last-child {
+  width: 14px;
+  height: 14px;
+  transition: transform 200ms ease-out;
+}
+.target-tools > button[aria-expanded='true'] > .icon:last-child {
+  transform: rotate(90deg);
+}
+.connection-badge {
+  font-size: 0.75rem;
+}
+.connection-problem {
+  color: var(--destructive);
+}
+.desktop-expansion {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  transition:
+    grid-template-rows 200ms ease-out,
+    visibility 200ms;
+}
+.desktop-expansion[data-open='true'] {
+  grid-template-rows: 1fr;
+  visibility: visible;
+}
+.expansion-content {
+  min-height: 0;
+  overflow: hidden;
+}
+.target-panel {
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+  padding-top: 20px;
+  display: grid;
+  gap: 12px;
+}
+.panel-heading,
+.section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.panel-heading h3 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.access-address {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--muted);
+}
+.access-address > button {
+  flex: none;
+}
+.local-target[data-preparing='true'] > .desktop-expansion:last-child {
+  grid-row: 2;
+}
+.local-target[data-preparing='true'] > .target-tools {
+  grid-row: 3;
+}
+.local-target > .update-state,
+.local-target > .error-block,
+.local-target > .muted {
+  grid-column: 1 / -1;
 }
 .route-icon {
   display: grid;
@@ -243,17 +365,27 @@ form {
   color: var(--muted-foreground);
 }
 .remote-targets {
-  border-top: 1px solid var(--border);
-  padding-top: 16px;
-  margin-top: 8px;
+  margin-top: 32px;
+}
+.section-heading {
+  padding: 0 8px 12px;
 }
 .section-title {
-  margin-bottom: 8px;
   color: var(--muted-foreground);
 }
 .remote-target {
-  padding: 12px 0;
+  padding: 14px 8px;
   border-bottom: 1px solid var(--border);
+}
+.remote-target .route-icon {
+  border-radius: 8px;
+  background: var(--muted);
+}
+.remote-targets > .address-editor {
+  padding: 16px;
+  background: var(--muted);
+  border-radius: 8px;
+  animation: arrive 180ms ease-out;
 }
 .remote-target:last-child {
   border-bottom: 0;
@@ -272,6 +404,13 @@ form {
   cursor: pointer;
   border-radius: 8px;
   list-style: none;
+}
+.menu > summary.menu-trigger {
+  display: flex;
+  gap: 8px;
+  width: auto;
+  padding: 4px 8px;
+  font-weight: 500;
 }
 .menu > summary::-webkit-details-marker {
   display: none;
@@ -335,11 +474,6 @@ form {
 .disclosure[open] > summary .icon {
   transform: rotate(90deg);
 }
-.target-details {
-  border-top: 0;
-  margin-top: 8px;
-  padding-top: 0;
-}
 .details-body {
   display: grid;
   gap: 8px;
@@ -347,11 +481,6 @@ form {
 }
 .path-text {
   overflow-wrap: anywhere;
-}
-.tunnel-state {
-  display: grid;
-  gap: 8px;
-  padding-top: 8px;
 }
 .update-state {
   display: flex;
@@ -421,16 +550,37 @@ form {
   height: 24px;
 }
 .desktop-control {
-  width: min(100%, 920px);
+  width: min(100%, 960px);
+  min-height: 100dvh;
+}
+.desktop-control .app-header {
+  border-bottom: 1px solid var(--border);
+}
+.control-loading,
+.desktop-control .empty {
+  min-height: calc(100dvh - 180px);
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 20px;
+}
+.loading-caption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
 }
 .environment-panel {
-  margin-top: 20px;
-  max-width: 640px;
+  min-width: 0;
 }
-.setup-title {
-  margin: 0 0 8px;
-  font-size: 0.875rem;
-  font-weight: 500;
+.install-detail {
+  margin-top: 12px;
+}
+.environment-panel[data-options-only='true'] .install-options {
+  margin-top: 0;
+}
+.environment-panel[data-options-only='true'] .install-options > summary {
+  display: none;
 }
 .setup-status {
   display: flex;
@@ -478,6 +628,9 @@ form {
 }
 .setup-actions {
   margin-top: 16px;
+}
+.setup-actions:first-child {
+  margin-top: 0;
 }
 .install-options {
   border-top: 0;
@@ -828,11 +981,32 @@ input[type='checkbox']:focus-visible {
     min-height: 64px;
     padding: 16px 0;
   }
-  .target-heading {
-    gap: 8px;
+  .local-target {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 20px;
   }
-  .remote-target .route-icon {
-    display: none;
+  .target-heading {
+    gap: 12px;
+  }
+  .device-icon {
+    width: 52px;
+    height: 52px;
+  }
+  .launch-actions {
+    grid-column: 1;
+    grid-row: auto;
+    justify-content: flex-start;
+    margin-top: 20px;
+  }
+  .access-address {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .address-editor-row {
+    flex-wrap: wrap;
+  }
+  .address-editor-row .field {
+    flex-basis: 100%;
   }
 }
 @media (prefers-reduced-motion: reduce) {

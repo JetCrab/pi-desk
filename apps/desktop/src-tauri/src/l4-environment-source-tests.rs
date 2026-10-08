@@ -119,13 +119,47 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 
 #[test]
+fn saved_domestic_choice_uses_tencent_npm_without_changing_binary_mirrors() {
+    let directory = Directory::new("domestic-source-compatibility");
+    fs::write(
+        directory.0.join("environment.json"),
+        r#"{"node":"C:/selected/node.exe","downloadSource":"npmmirror"}"#,
+    )
+    .unwrap();
+    let state = directory.state();
+    let source = runtime().block_on(state.download_source(
+        "http://127.0.0.1:1/must-not-query",
+        &directory.0.join("desktop.log"),
+    ));
+    assert_eq!(source, DownloadSource::Domestic);
+    assert_eq!(
+        source.npm_registry(),
+        "https://mirrors.cloud.tencent.com/npm"
+    );
+    assert_eq!(source.node_base(), "https://npmmirror.com/mirrors/node/");
+    assert_eq!(
+        source.git_url("https://github.com/git-for-windows/git/releases/download/v2.51.0.windows.1/Git-2.51.0-64-bit.exe"),
+        "https://registry.npmmirror.com/-/binary/git-for-windows/v2.51.0.windows.1/Git-2.51.0-64-bit.exe"
+    );
+    assert_eq!(serde_json::to_string(&source).unwrap(), "\"npmmirror\"");
+    assert_eq!(
+        DownloadSource::Official.npm_registry(),
+        "https://registry.npmjs.org"
+    );
+    assert!(
+        !directory.0.join("desktop.log").exists(),
+        "已有选择不能重新查询 IP"
+    );
+}
+
+#[test]
 fn china_recommends_mirror_and_other_countries_recommend_official() {
     let directory = Directory::new("country-recommendation");
     let runtime = runtime();
     for (body, expected) in [
         (
             r#"{"success":true,"country_code":"CN"}"#,
-            DownloadSource::Npmmirror,
+            DownloadSource::Domestic,
         ),
         (
             r#"{"success":true,"country_code":"US"}"#,
@@ -186,7 +220,7 @@ fn recommendation_is_cached_but_only_accepted_source_is_persisted() {
         assert_eq!(
             runtime
                 .block_on(state.download_source(&server.url(), &directory.0.join("desktop.log"))),
-            DownloadSource::Npmmirror
+            DownloadSource::Domestic
         );
     }
     assert_eq!(server.requests.load(Ordering::Acquire), 1);

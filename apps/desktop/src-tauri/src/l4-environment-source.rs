@@ -11,28 +11,30 @@ const IP_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 pub(crate) enum DownloadSource {
     #[default]
     Official,
-    Npmmirror,
+    // 保留已有环境配置和 IPC 的选择值，国内源按组件使用对应镜像。
+    #[serde(rename = "npmmirror")]
+    Domestic,
 }
 
 impl DownloadSource {
     pub(crate) fn node_base(self) -> &'static str {
         match self {
             Self::Official => "https://nodejs.org/dist/",
-            Self::Npmmirror => "https://npmmirror.com/mirrors/node/",
+            Self::Domestic => "https://npmmirror.com/mirrors/node/",
         }
     }
 
     pub(crate) fn npm_registry(self) -> &'static str {
         match self {
             Self::Official => "https://registry.npmjs.org",
-            Self::Npmmirror => "https://registry.npmmirror.com",
+            Self::Domestic => "https://mirrors.cloud.tencent.com/npm",
         }
     }
 
     pub(crate) fn git_url(self, official_url: &str) -> String {
         match self {
             Self::Official => official_url.into(),
-            Self::Npmmirror => official_url.replace(
+            Self::Domestic => official_url.replace(
                 "https://github.com/git-for-windows/git/releases/download/",
                 "https://registry.npmmirror.com/-/binary/git-for-windows/",
             ),
@@ -80,7 +82,7 @@ pub(crate) async fn recommend(url: &str, log: &Path) -> DownloadSource {
             return Err("IP 查询未返回国家代码".to_string());
         }
         Ok(if country.country_code.as_deref() == Some("CN") {
-            DownloadSource::Npmmirror
+            DownloadSource::Domestic
         } else {
             DownloadSource::Official
         })

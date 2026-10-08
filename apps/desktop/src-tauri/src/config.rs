@@ -49,16 +49,87 @@ pub struct ServerConfig {
     pub package: Option<PackageConfig>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdatePolicy {
+    None,
+    #[default]
+    Check,
+    Update,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReleaseChannel {
+    #[default]
+    Stable,
+    Dev,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "PackageConfigInput")]
 pub struct PackageConfig {
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub registry: Option<String>,
-    #[serde(default, alias = "autoUpdate")]
-    pub auto_update_on_start: bool,
+    pub startup_update: UpdatePolicy,
+    pub periodic_update: UpdatePolicy,
+    pub channel: ReleaseChannel,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PackageConfigInput {
+    name: String,
+    registry: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    startup_update: Option<UpdatePolicy>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    periodic_update: Option<UpdatePolicy>,
     #[serde(default)]
-    pub periodic_update_check: bool,
+    channel: ReleaseChannel,
+    #[serde(
+        default,
+        alias = "autoUpdate",
+        deserialize_with = "deserialize_present"
+    )]
+    auto_update_on_start: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    periodic_update_check: Option<bool>,
+}
+
+// 只有字段缺失才采用默认值，显式 null 仍须通过枚举或布尔类型校验。
+fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+impl From<PackageConfigInput> for PackageConfig {
+    fn from(input: PackageConfigInput) -> Self {
+        let legacy_policy = |enabled| {
+            if enabled {
+                UpdatePolicy::Update
+            } else {
+                UpdatePolicy::None
+            }
+        };
+        Self {
+            name: input.name,
+            registry: input.registry,
+            startup_update: input
+                .startup_update
+                .or_else(|| input.auto_update_on_start.map(legacy_policy))
+                .unwrap_or(UpdatePolicy::Check),
+            periodic_update: input
+                .periodic_update
+                .or_else(|| input.periodic_update_check.map(legacy_policy))
+                .unwrap_or(UpdatePolicy::None),
+            channel: input.channel,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -100,8 +171,9 @@ pub fn default_server_config() -> ServerConfig {
         package: Some(PackageConfig {
             name: DEFAULT_PACKAGE.to_string(),
             registry: Some(DEFAULT_REGISTRY.to_string()),
-            auto_update_on_start: false,
-            periodic_update_check: false,
+            startup_update: UpdatePolicy::Check,
+            periodic_update: UpdatePolicy::None,
+            channel: ReleaseChannel::Stable,
         }),
     }
 }
@@ -223,15 +295,22 @@ fn normalize_package(config: PackageConfig) -> Result<PackageConfig, String> {
     let registry = match config.registry {
         Some(registry) if !registry.trim().is_empty() => {
             let value = normalize_web_url(&registry)?;
-            Some(value.trim_end_matches('/').to_string())
+            let value = value.trim_end_matches('/');
+            let value = if name == DEFAULT_PACKAGE && value == "https://registry.npmmirror.com" {
+                crate::environment_source::DownloadSource::Domestic.npm_registry()
+            } else {
+                value
+            };
+            Some(value.to_string())
         }
         _ => None,
     };
     Ok(PackageConfig {
         name,
         registry,
-        auto_update_on_start: config.auto_update_on_start,
-        periodic_update_check: config.periodic_update_check,
+        startup_update: config.startup_update,
+        periodic_update: config.periodic_update,
+        channel: config.channel,
     })
 }
 
@@ -432,15 +511,90 @@ fn temporary_path(path: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
+#[path = "config_update_tests.rs"]
+mod update_tests;
+
+#[cfg(test)]
 mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
         default_server_config, load, migrate_legacy, normalize, normalize_target_url, save,
-        DesktopConfig, LegacyDesktopConfig, PackageConfig, ServerConfig, TargetConfig,
-        TargetTunnelConfig, TunnelConnectionConfig,
+        DesktopConfig, LegacyDesktopConfig, PackageConfig, ReleaseChannel, ServerConfig,
+        TargetConfig, TargetTunnelConfig, TunnelConnectionConfig, UpdatePolicy,
     };
+
+    #[test]
+    fn loads_legacy_domestic_registry_as_tencent_only_for_pi_desk() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../temp/tests/desktop-source")
+            .join(format!(
+                "registry-migration-{}-{suffix}",
+                std::process::id()
+            ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.json");
+        for (name, registry, expected) in [
+            (
+                "@jetcrab/pi-desk",
+                "https://registry.npmmirror.com/",
+                "https://mirrors.cloud.tencent.com/npm",
+            ),
+            (
+                "@jetcrab/pi-desk",
+                "https://registry.npmjs.org",
+                "https://registry.npmjs.org",
+            ),
+            (
+                "@jetcrab/pi-desk",
+                "https://registry.example.com",
+                "https://registry.example.com",
+            ),
+            (
+                "example-service",
+                "https://registry.npmmirror.com",
+                "https://registry.npmmirror.com",
+            ),
+        ] {
+            let mut config = DesktopConfig::default();
+            let package = config.targets[0]
+                .server
+                .as_mut()
+                .unwrap()
+                .package
+                .as_mut()
+                .unwrap();
+            package.name = name.into();
+            package.registry = Some(registry.into());
+            fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+            let loaded = load(&path).unwrap();
+            assert_eq!(
+                loaded.config.targets[0]
+                    .server
+                    .as_ref()
+                    .unwrap()
+                    .package
+                    .as_ref()
+                    .unwrap()
+                    .registry
+                    .as_deref(),
+                Some(expected)
+            );
+            save(&path, &loaded.config).unwrap();
+            let saved: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(
+                saved["targets"][0]["server"]["package"]["registry"],
+                expected
+            );
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn normalizes_equivalent_urls_to_one_identity() {
@@ -550,8 +704,8 @@ mod tests {
             .as_ref()
             .and_then(|server| server.package.as_ref())
             .unwrap();
-        assert!(!package.auto_update_on_start);
-        assert!(!package.periodic_update_check);
+        assert_eq!(package.startup_update, UpdatePolicy::None);
+        assert_eq!(package.periodic_update, UpdatePolicy::None);
     }
 
     #[test]
@@ -647,8 +801,8 @@ mod tests {
     fn defaults_both_package_update_options_to_disabled() {
         let package = default_server_config().package.unwrap();
 
-        assert!(!package.auto_update_on_start);
-        assert!(!package.periodic_update_check);
+        assert_ne!(package.startup_update, UpdatePolicy::Update);
+        assert_eq!(package.periodic_update, UpdatePolicy::None);
     }
 
     #[test]
@@ -662,8 +816,9 @@ mod tests {
                     package: Some(PackageConfig {
                         name: "@jetcrab/pi-desk".to_string(),
                         registry: None,
-                        auto_update_on_start: false,
-                        periodic_update_check: true,
+                        startup_update: UpdatePolicy::None,
+                        periodic_update: UpdatePolicy::Update,
+                        channel: ReleaseChannel::Stable,
                     }),
                 }),
                 tunnel: None,
@@ -677,7 +832,7 @@ mod tests {
             .as_ref()
             .and_then(|server| server.package.as_ref())
             .unwrap();
-        assert!(!package.auto_update_on_start);
-        assert!(package.periodic_update_check);
+        assert_eq!(package.startup_update, UpdatePolicy::None);
+        assert_eq!(package.periodic_update, UpdatePolicy::Update);
     }
 }

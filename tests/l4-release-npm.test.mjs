@@ -2,7 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { selectPackages, assertPackedManifest, run } from '../.github/scripts/release-npm.mjs'
+import {
+  selectPackages,
+  assertPackedManifest,
+  assertDevelopmentTags,
+  run
+} from '../.github/scripts/release-npm.mjs'
 
 const publishConfig = { registry: 'https://registry.npmjs.org', access: 'public' }
 async function fixture(context) {
@@ -23,6 +28,25 @@ async function fixture(context) {
   }
   return root
 }
+
+test('没有稳定latest的新包拒绝开发发布，发布后dev必须准确指向当前版本', () => {
+  const name = '@jetcrab/pi-desk'
+  for (const tags of [
+    {},
+    { dev: '1.0.1-dev.1' },
+    { latest: '0.0.0-stage' },
+    { latest: '1.0.1-dev.1' }
+  ]) {
+    assert.throws(() => assertDevelopmentTags(tags, name), /尚无稳定 latest/)
+  }
+  assert.doesNotThrow(() => assertDevelopmentTags({ latest: '1.0.0' }, name))
+  assert.doesNotThrow(() =>
+    assertDevelopmentTags({ latest: '1.0.0', dev: '1.0.1-dev.1' }, name, '1.0.1-dev.1')
+  )
+  assert.throws(() =>
+    assertDevelopmentTags({ latest: '1.0.0', dev: '1.0.1-dev.1' }, name, '1.0.1-dev.2')
+  )
+})
 
 test('包管理命令保留参数与带空格路径而不被Shell二次转义', async (context) => {
   const root = await fixture(context)

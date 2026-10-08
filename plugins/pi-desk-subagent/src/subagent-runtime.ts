@@ -940,7 +940,9 @@ export class SubagentRuntime {
       throw new Error(`当前能力模式不允许 ${record.agentType} Agent`)
     const text = this.requireText(prompt, 'prompt')
     if (record.status !== 'running' || !record.session) {
-      throw new Error(`Agent ${record.taskId} 当前不是 running`)
+      throw new Error(
+        `子代理未运行或恰好结束正在推送消息中，若有需要可以重启子代理继续任务。\n\nAgent ID: ${record.taskId}`
+      )
     }
     if (!record.steerReady) {
       record.pendingSteers.push(text)

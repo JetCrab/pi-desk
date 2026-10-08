@@ -1,7 +1,91 @@
-use super::parallel;
+use super::{parallel, prepare_components};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+
+#[test]
+fn node_install_and_pi_finish_while_git_is_still_downloading() {
+    let (git_started, wait_git) = mpsc::channel();
+    let (pi_finished, wait_pi) = mpsc::channel();
+    let node_ready = AtomicBool::new(false);
+    let installed_node = &node_ready;
+    prepare_components(
+        &|| false,
+        move |_| {
+            wait_git.recv_timeout(Duration::from_secs(2)).unwrap();
+            installed_node.store(true, Ordering::Release);
+            Ok(())
+        },
+        move |_| {
+            git_started.send(()).unwrap();
+            wait_pi.recv_timeout(Duration::from_secs(2)).unwrap();
+            Ok(())
+        },
+        |_| {
+            assert!(
+                node_ready.load(Ordering::Acquire),
+                "Pi 必须等待 Node.js 安装完成"
+            );
+            pi_finished.send(()).unwrap();
+            Ok(())
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn git_installs_without_waiting_for_node_download() {
+    let (node_started, wait_node) = mpsc::channel();
+    let (git_installed, wait_git) = mpsc::channel();
+    prepare_components(
+        &|| false,
+        move |_| {
+            node_started.send(()).unwrap();
+            wait_git.recv_timeout(Duration::from_secs(2)).unwrap();
+            Ok(())
+        },
+        move |_| {
+            wait_node.recv_timeout(Duration::from_secs(2)).unwrap();
+            git_installed.send(()).unwrap();
+            Ok(())
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+}
+
+#[test]
+fn failed_or_cancelled_node_preparation_never_starts_npm() {
+    for failed in [true, false] {
+        let cancelled = AtomicBool::new(false);
+        let pi_started = AtomicBool::new(false);
+        let result = prepare_components(
+            &|| cancelled.load(Ordering::Acquire),
+            |_| {
+                if failed {
+                    Err("Node.js 安装失败".into())
+                } else {
+                    cancelled.store(true, Ordering::Release);
+                    Ok(())
+                }
+            },
+            |_| Ok(()),
+            |_| {
+                pi_started.store(true, Ordering::Release);
+                Ok(())
+            },
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            if failed {
+                "Node.js 安装失败"
+            } else {
+                "操作已取消"
+            }
+        );
+        assert!(!pi_started.load(Ordering::Acquire));
+    }
+}
 
 #[test]
 fn independent_preparation_tasks_run_without_waiting_for_each_other() {

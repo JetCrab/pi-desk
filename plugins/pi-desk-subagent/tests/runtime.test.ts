@@ -612,7 +612,9 @@ test('agent、steer、stop、list 和 resume 复用同一 child Session 身份',
       undefined,
       ctx
     ),
-    /当前不是 running/
+    {
+      message: `子代理未运行或恰好结束正在推送消息中，若有需要可以重启子代理继续任务。\n\nAgent ID: ${launch.taskId}`
+    }
   )
 
   const resumed = await resume.execute(

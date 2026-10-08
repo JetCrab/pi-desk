@@ -1,7 +1,7 @@
-use crate::config::{self, DesktopConfig, ServerConfig, TargetConfig};
+use crate::config::{self, DesktopConfig, ServerConfig, TargetConfig, UpdatePolicy};
 use crate::environment::{Component, EnvironmentSnapshot, EnvironmentState};
 use crate::environment_source::DownloadSource;
-use crate::packages::{self, is_newer};
+use crate::packages::{self, should_select_version};
 use crate::process::{self, ManagedProcess};
 use crate::tunnel::{self, TunnelWorkerConfig, TunnelWorkerEvent, TunnelWorkerHandle};
 use crate::{logging, service_port, windows};
@@ -477,6 +477,25 @@ pub fn apply_target(
                 {
                     runtime.update = PackageUpdateSnapshot::default();
                 }
+            } else if previous
+                .server
+                .as_ref()
+                .and_then(|server| server.package.as_ref())
+                .map(|package| package.channel)
+                != next
+                    .server
+                    .as_ref()
+                    .and_then(|server| server.package.as_ref())
+                    .map(|package| package.channel)
+            {
+                if let Some(runtime) = state
+                    .target_runtimes
+                    .lock()
+                    .map_err(|_| "运行状态不可用".to_string())?
+                    .get_mut(&next.url)
+                {
+                    runtime.update = PackageUpdateSnapshot::default();
+                }
             }
             if previous.tunnel.as_ref().map(|tunnel| tunnel.public_port)
                 != next.tunnel.as_ref().map(|tunnel| tunnel.public_port)
@@ -627,6 +646,38 @@ pub(crate) fn open_install_help(component: Component) -> Result<(), String> {
     webbrowser::open(url).map_err(|error| format!("打开官方安装页面失败：{error}"))
 }
 
+fn save_preparation_source(
+    state: &ShellState,
+    url: &str,
+    source: DownloadSource,
+) -> Result<(), String> {
+    configured_server(state, url)?;
+    let mut config = state.config()?;
+    if let Some(package) = config
+        .targets
+        .iter_mut()
+        .find(|target| target.url == url)
+        .and_then(|target| target.server.as_mut())
+        .and_then(|server| server.package.as_mut())
+        .filter(|package| package.name == "@jetcrab/pi-desk")
+    {
+        // 安装选项只替换内置公共源，保留用户为服务配置的自定义仓库。
+        if package.registry.as_deref().is_none_or(|registry| {
+            matches!(
+                registry.trim_end_matches('/'),
+                "https://registry.npmjs.org"
+                    | "https://registry.npmmirror.com"
+                    | "https://mirrors.cloud.tencent.com/npm"
+            )
+        }) {
+            package.registry = Some(source.npm_registry().into());
+            save_config(state, config)?;
+            write_shell_log(state, "environment-package-source", source.npm_registry());
+        }
+    }
+    state.environment.save_download_source(source)
+}
+
 fn begin_environment_operation(
     app: &AppHandle,
     operation: EnvironmentOperation,
@@ -662,8 +713,7 @@ fn begin_environment_operation(
         return Err("请先停止本机服务，再安装或更换运行环境；已运行的服务不会被自动中断".into());
     }
     if let EnvironmentOperation::Prepare(url, download_source) = &operation {
-        configured_server(&state, url)?;
-        state.environment.save_download_source(*download_source)?;
+        save_preparation_source(&state, url, *download_source)?;
     }
     let previous = state.environment.snapshot();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -1233,6 +1283,9 @@ fn execute_operation(
             )
         });
     let was_running = previous.is_some();
+    if was_running && matches!(operation, Operation::Start) {
+        return Ok(());
+    }
     let (old_version, old_directory, old_server) = previous.unwrap_or((None, None, server.clone()));
     let failed_update = if matches!(operation, Operation::AutoUpdate) {
         state
@@ -1261,12 +1314,20 @@ fn execute_operation(
         .unwrap_or_else(|_| "npm".into());
     let mut version = cached.clone();
     let mut directory = None;
+    let mut startup_available = None;
     if let Some(package) = &server.package {
+        let cached_directory = cached
+            .as_deref()
+            .and_then(|version| packages::installed_directory(&base, package, version));
+        if cached_directory.is_none() {
+            version = None;
+        }
         if matches!(
             operation,
             Operation::Check | Operation::Update | Operation::AutoUpdate
-        ) || cached.is_none()
-            || (matches!(operation, Operation::Start) && package.auto_update_on_start)
+        ) || cached_directory.is_none()
+            || (matches!(operation, Operation::Start)
+                && package.startup_update != UpdatePolicy::None)
         {
             set_update(state, url, "checking", None, None);
             match packages::query_version_with_environment(
@@ -1277,13 +1338,22 @@ fn execute_operation(
                 &environment,
             ) {
                 Ok(latest) => {
-                    if is_newer(Some(&latest), cached.as_deref()) {
-                        version = Some(latest);
+                    if cached_directory.is_none()
+                        || should_select_version(package, Some(&latest), cached.as_deref())
+                    {
+                        if matches!(operation, Operation::Start)
+                            && package.startup_update == UpdatePolicy::Check
+                            && cached_directory.is_some()
+                        {
+                            startup_available = Some(latest);
+                        } else {
+                            version = Some(latest);
+                        }
                     }
                 }
                 Err(error)
                     if matches!(operation, Operation::Start)
-                        && cached.is_some()
+                        && cached_directory.is_some()
                         && !cancelled() =>
                 {
                     write_shell_log(
@@ -1299,7 +1369,9 @@ fn execute_operation(
             .as_deref()
             .ok_or_else(|| "没有可安装的版本".to_string())?;
         if matches!(operation, Operation::Check) {
-            if is_newer(version.as_deref(), cached.as_deref()) {
+            if cached_directory.is_none()
+                || should_select_version(package, version.as_deref(), cached.as_deref())
+            {
                 set_update(state, url, "available", version, None);
             } else {
                 set_update(state, url, "idle", None, None);
@@ -1307,7 +1379,7 @@ fn execute_operation(
             return Ok(());
         }
         if matches!(operation, Operation::AutoUpdate) {
-            if !is_newer(version.as_deref(), cached.as_deref()) {
+            if !should_select_version(package, version.as_deref(), cached.as_deref()) {
                 set_update(state, url, "idle", None, None);
                 return Ok(());
             }
@@ -1319,53 +1391,57 @@ fn execute_operation(
         if cancelled() {
             return Err("操作已取消".into());
         }
-        set_update(state, url, "installing", version.clone(), None);
-        directory = Some(
-            match packages::install_with_environment(
-                &base,
-                package,
-                selected,
-                &state.log_path,
-                cancelled,
-                &npm,
-                &environment,
-            ) {
-                Ok(directory) => directory,
-                Err(error) => {
-                    if !was_running && matches!(operation, Operation::Start) && !cancelled() {
-                        if let Some((previous, previous_directory)) = cached
-                            .as_ref()
-                            .filter(|previous| previous.as_str() != selected)
-                            .and_then(|previous| {
-                                packages::installed_directory(&base, package, previous)
-                                    .map(|directory| (previous, directory))
-                            })
-                        {
-                            write_shell_log(
-                                state,
-                                "server-install-rollback",
-                                &format!("url={url} version={previous} error={error}"),
-                            );
-                            set_phase(state, url, ServerPhase::Starting("正在恢复原服务".into()));
-                            return match launch_service(
-                                state,
-                                url,
-                                server,
-                                Some(previous.clone()),
-                                Some(previous_directory),
-                                cancelled,
-                            ) {
-                                Ok(()) => Err(format!("新版本安装失败，已恢复原服务：{error}")),
-                                Err(rollback) => Err(format!(
-                                    "新版本安装失败：{error}；恢复原服务也失败：{rollback}"
-                                )),
-                            };
-                        }
+        let installation = match cached_directory {
+            Some(directory) if version == cached => Ok(directory),
+            _ => {
+                set_update(state, url, "installing", version.clone(), None);
+                packages::install_with_environment(
+                    &base,
+                    package,
+                    selected,
+                    &state.log_path,
+                    cancelled,
+                    &npm,
+                    &environment,
+                )
+            }
+        };
+        directory = Some(match installation {
+            Ok(directory) => directory,
+            Err(error) => {
+                if !was_running && matches!(operation, Operation::Start) && !cancelled() {
+                    if let Some((previous, previous_directory)) = cached
+                        .as_ref()
+                        .filter(|previous| previous.as_str() != selected)
+                        .and_then(|previous| {
+                            packages::installed_directory(&base, package, previous)
+                                .map(|directory| (previous, directory))
+                        })
+                    {
+                        write_shell_log(
+                            state,
+                            "server-install-rollback",
+                            &format!("url={url} version={previous} error={error}"),
+                        );
+                        set_phase(state, url, ServerPhase::Starting("正在恢复原服务".into()));
+                        return match launch_service(
+                            state,
+                            url,
+                            server,
+                            Some(previous.clone()),
+                            Some(previous_directory),
+                            cancelled,
+                        ) {
+                            Ok(()) => Err(format!("新版本安装失败，已恢复原服务：{error}")),
+                            Err(rollback) => Err(format!(
+                                "新版本安装失败：{error}；恢复原服务也失败：{rollback}"
+                            )),
+                        };
                     }
-                    return Err(error.to_string());
                 }
-            },
-        );
+                return Err(error.to_string());
+            }
+        });
     }
     if let Some(directory) = &directory {
         state
@@ -1468,7 +1544,18 @@ fn execute_operation(
                                 set_cached_version(state, url, version)?;
                             }
                         }
-                        return Err(format!("新服务启动失败，已恢复原服务：{error}"));
+                        let channel_changed = fallback_server
+                            .package
+                            .as_ref()
+                            .map(|package| package.channel)
+                            != server.package.as_ref().map(|package| package.channel);
+                        return Err(if channel_changed {
+                            format!(
+                                "新服务启动失败，已恢复原服务；仍在使用原通道，本次通道切换未完成：{error}"
+                            )
+                        } else {
+                            format!("新服务启动失败，已恢复原服务：{error}")
+                        });
                     }
                     Err(rollback) => {
                         let detail = format!("服务启动失败：{error}；恢复原服务也失败：{rollback}");
@@ -1483,6 +1570,10 @@ fn execute_operation(
         if let Some(version) = &version {
             set_cached_version(state, url, version.clone())?;
         }
+    }
+    if let Some(available) = startup_available {
+        set_update(state, url, "available", Some(available), None);
+        return Ok(());
     }
     set_update(state, url, "idle", None, None);
     if let (Some(package), Some(version)) = (&server.package, &version) {
@@ -1855,12 +1946,13 @@ pub fn start_update_monitor(app: &AppHandle) -> Result<(), String> {
                 reap_workers(&state);
                 if let Ok(config) = state.config() {
                     for target in config.targets {
-                        if target
+                        let policy = target
                             .server
                             .as_ref()
                             .and_then(|server| server.package.as_ref())
-                            .is_some_and(|package| package.periodic_update_check)
-                        {
+                            .map(|package| package.periodic_update)
+                            .unwrap_or(UpdatePolicy::None);
+                        if policy != UpdatePolicy::None {
                             let due = state
                                 .target_runtimes
                                 .lock()
@@ -1881,7 +1973,11 @@ pub fn start_update_monitor(app: &AppHandle) -> Result<(), String> {
                                 let _ = begin_operation(
                                     &worker_app,
                                     &target.url,
-                                    Operation::AutoUpdate,
+                                    if policy == UpdatePolicy::Check {
+                                        Operation::Check
+                                    } else {
+                                        Operation::AutoUpdate
+                                    },
                                 );
                             }
                         }
@@ -2212,6 +2308,122 @@ mod tests {
     }
 
     #[test]
+    fn preparation_source_is_saved_for_pi_desk_without_overwriting_custom_registries() {
+        use super::save_preparation_source;
+        use crate::environment_source::DownloadSource;
+
+        let directory = test_directory("preparation-package-source");
+        let config_path = directory.join("config.json");
+        let url = "http://127.0.0.1:30333";
+        for (name, registry, expected) in [
+            (
+                "@jetcrab/pi-desk",
+                None,
+                "https://mirrors.cloud.tencent.com/npm",
+            ),
+            (
+                "@jetcrab/pi-desk",
+                Some("https://registry.npmjs.org/"),
+                "https://mirrors.cloud.tencent.com/npm",
+            ),
+            (
+                "@jetcrab/pi-desk",
+                Some("https://registry.npmmirror.com"),
+                "https://mirrors.cloud.tencent.com/npm",
+            ),
+            (
+                "@jetcrab/pi-desk",
+                Some("https://mirrors.cloud.tencent.com/npm/"),
+                "https://mirrors.cloud.tencent.com/npm",
+            ),
+            (
+                "@jetcrab/pi-desk",
+                Some("https://registry.example.com"),
+                "https://registry.example.com",
+            ),
+            (
+                "example-service",
+                Some("https://registry.npmjs.org"),
+                "https://registry.npmjs.org",
+            ),
+        ] {
+            let mut config = DesktopConfig::default();
+            let package = config.targets[0]
+                .server
+                .as_mut()
+                .unwrap()
+                .package
+                .as_mut()
+                .unwrap();
+            package.name = name.into();
+            package.registry = registry.map(String::from);
+            let untouched = TargetConfig {
+                url: "http://127.0.0.1:30334".into(),
+                server: Some(default_server_config()),
+                tunnel: None,
+            };
+            config.targets.push(untouched);
+            crate::config::save(&config_path, &config).unwrap();
+            let state = ShellState::new(
+                config,
+                RuntimeInfo::default(),
+                config_path.clone(),
+                directory.join("runtime.json"),
+                directory.join("logs/desktop.log"),
+            );
+            save_preparation_source(&state, url, DownloadSource::Domestic).unwrap();
+            for saved in [
+                state.config().unwrap(),
+                serde_json::from_slice::<DesktopConfig>(&fs::read(&config_path).unwrap()).unwrap(),
+            ] {
+                assert_eq!(
+                    saved.targets[0]
+                        .server
+                        .as_ref()
+                        .unwrap()
+                        .package
+                        .as_ref()
+                        .unwrap()
+                        .registry
+                        .as_deref(),
+                    Some(expected)
+                );
+                assert_eq!(
+                    saved.targets[1]
+                        .server
+                        .as_ref()
+                        .unwrap()
+                        .package
+                        .as_ref()
+                        .unwrap()
+                        .registry
+                        .as_deref(),
+                    Some("https://registry.npmjs.org")
+                );
+            }
+            save_preparation_source(&state, url, DownloadSource::Official).unwrap();
+            let expected = if expected == "https://mirrors.cloud.tencent.com/npm" {
+                "https://registry.npmjs.org"
+            } else {
+                expected
+            };
+            assert_eq!(
+                state.config().unwrap().targets[0]
+                    .server
+                    .as_ref()
+                    .unwrap()
+                    .package
+                    .as_ref()
+                    .unwrap()
+                    .registry
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn migrates_legacy_runtime_to_the_first_server_target() {
         let config = DesktopConfig {
             targets: vec![
@@ -2402,7 +2614,8 @@ mod operation_tests {
         stop_active_child, Operation, RuntimeInfo, ShellState, TargetRuntimeInfo,
     };
     use crate::config::{
-        DesktopConfig, PackageConfig, ServerConfig, TargetConfig, TunnelConnectionConfig,
+        DesktopConfig, PackageConfig, ReleaseChannel, ServerConfig, TargetConfig,
+        TunnelConnectionConfig, UpdatePolicy,
     };
     use std::fs;
     use std::io::{Read, Write};
@@ -2557,8 +2770,9 @@ child.on('exit', code => {{
         let package = PackageConfig {
             name: PACKAGE_NAME.into(),
             registry: Some(registry.address.clone()),
-            auto_update_on_start: false,
-            periodic_update_check: false,
+            startup_update: UpdatePolicy::None,
+            periodic_update: UpdatePolicy::None,
+            channel: ReleaseChannel::Stable,
         };
         let server = ServerConfig {
             start_command: format!("node node_modules\\{PACKAGE_NAME}\\service.cjs -p {{port}}"),
@@ -2614,7 +2828,11 @@ child.on('message', () => process.exit(9));
             write_runtime_package(&candidate_directory, "2.0.0", candidate);
         }
         let mut server = server;
-        server.package.as_mut().unwrap().auto_update_on_start = !was_running;
+        server.package.as_mut().unwrap().startup_update = if was_running {
+            UpdatePolicy::None
+        } else {
+            UpdatePolicy::Update
+        };
         let operation = if was_running {
             Operation::Update
         } else {
@@ -2689,8 +2907,9 @@ child.on('message', () => process.exit(9));
         let package = PackageConfig {
             name: PACKAGE_NAME.into(),
             registry: Some(registry.address.clone()),
-            auto_update_on_start: false,
-            periodic_update_check: true,
+            startup_update: UpdatePolicy::None,
+            periodic_update: UpdatePolicy::Update,
+            channel: ReleaseChannel::Stable,
         };
         let server = ServerConfig {
             start_command: format!("node node_modules\\{PACKAGE_NAME}\\service.cjs -p {{port}}"),
@@ -2976,6 +3195,129 @@ http.createServer((req, res) => res.writeHead(503).end('not ready'))
     }
 
     #[test]
+    fn startup_policies_and_running_checks_preserve_service_until_update_requested() {
+        for policy in [
+            UpdatePolicy::None,
+            UpdatePolicy::Check,
+            UpdatePolicy::Update,
+        ] {
+            let directory = test_directory();
+            let _npm_environment = crate::test_support::NpmEnvironment::new(&directory);
+            let registry = VersionRegistry::new();
+            let port = available_port();
+            let url = format!("http://127.0.0.1:{port}/");
+            let package = PackageConfig {
+                name: PACKAGE_NAME.into(),
+                registry: Some(registry.address.clone()),
+                startup_update: policy,
+                periodic_update: UpdatePolicy::Check,
+                channel: ReleaseChannel::Stable,
+            };
+            let server = ServerConfig {
+                start_command: format!("node node_modules/{PACKAGE_NAME}/service.cjs {{port}}"),
+                ready_path: "/health".into(),
+                package: Some(package.clone()),
+            };
+            let mut info = RuntimeInfo::default();
+            info.targets.insert(
+                url.clone(),
+                TargetRuntimeInfo {
+                    last_version: Some("1.2.3".into()),
+                    auto_start: false,
+                },
+            );
+            let state = ShellState::new(
+                DesktopConfig {
+                    targets: vec![TargetConfig {
+                        url: url.clone(),
+                        server: Some(server.clone()),
+                        tunnel: None,
+                    }],
+                    tunnel: TunnelConnectionConfig::default(),
+                },
+                info,
+                directory.join("config.json"),
+                directory.join("runtime.json"),
+                directory.join("logs/desktop.log"),
+            );
+            struct StopOnDrop<'a>(&'a ShellState, &'a str);
+            impl Drop for StopOnDrop<'_> {
+                fn drop(&mut self) {
+                    let _ = stop_active_child(self.0, self.1);
+                }
+            }
+            let cleanup = StopOnDrop(&state, &url);
+            let base = package_directory(&state, &url).unwrap();
+            for version in ["1.2.3", "2.0.0"] {
+                let path = crate::packages::version_directory(&base, &package, version);
+                write_runtime_package(&path, version, "require('node:http').createServer((req,res)=>res.writeHead(200).end('ready')).listen(Number(process.argv.at(-1)),'127.0.0.1')");
+            }
+            execute_operation(&state, &url, &server, Operation::Start, &|| false).unwrap();
+            let expected = if policy == UpdatePolicy::Update {
+                "2.0.0"
+            } else {
+                "1.2.3"
+            };
+            let snapshot = control_state(&state).unwrap();
+            let running = snapshot.targets[0].server.as_ref().unwrap();
+            assert_eq!(running.version.as_deref(), Some(expected), "{policy:?}");
+            assert_eq!(
+                super::cached_version(&state, &url).unwrap().as_deref(),
+                Some(expected)
+            );
+            assert_eq!(
+                running.update.as_ref().unwrap().status,
+                if policy == UpdatePolicy::Check {
+                    "available"
+                } else {
+                    "idle"
+                }
+            );
+            let log = fs::read_to_string(&state.log_path).unwrap();
+            if policy != UpdatePolicy::Update {
+                assert!(!log.contains("status=installing"));
+            }
+            if policy == UpdatePolicy::None {
+                assert!(!log.contains("status=checking"));
+            }
+            let pid = state
+                .target_runtimes
+                .lock()
+                .unwrap()
+                .get(&url)
+                .unwrap()
+                .child
+                .as_ref()
+                .unwrap()
+                .child
+                .id();
+            execute_operation(&state, &url, &server, Operation::Check, &|| false).unwrap();
+            assert_eq!(
+                state
+                    .target_runtimes
+                    .lock()
+                    .unwrap()
+                    .get(&url)
+                    .unwrap()
+                    .child
+                    .as_ref()
+                    .unwrap()
+                    .child
+                    .id(),
+                pid
+            );
+            assert_eq!(
+                super::cached_version(&state, &url).unwrap().as_deref(),
+                Some(expected)
+            );
+            drop(cleanup);
+            drop(registry);
+            drop(TcpListener::bind(("127.0.0.1", port)).unwrap());
+            fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
     fn manual_update_check_queries_version_without_installing() {
         let directory = test_directory();
         let _npm_environment = crate::test_support::NpmEnvironment::new(&directory);
@@ -2985,8 +3327,9 @@ http.createServer((req, res) => res.writeHead(503).end('not ready'))
         let package = PackageConfig {
             name: PACKAGE_NAME.into(),
             registry: Some(registry.address.clone()),
-            auto_update_on_start: false,
-            periodic_update_check: false,
+            startup_update: UpdatePolicy::None,
+            periodic_update: UpdatePolicy::None,
+            channel: ReleaseChannel::Stable,
         };
         let server = ServerConfig {
             start_command: format!("node node_modules\\{PACKAGE_NAME}\\service.cjs -p {{port}}"),

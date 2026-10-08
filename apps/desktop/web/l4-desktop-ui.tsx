@@ -85,12 +85,30 @@ export function DesktopHeader({ children }: { children?: ReactNode }): React.JSX
   )
 }
 
+export function DesktopExpansion({
+  id,
+  open,
+  children
+}: {
+  id: string
+  open: boolean
+  children: ReactNode
+}): React.JSX.Element {
+  return (
+    <div id={id} className="desktop-expansion" data-open={open} inert={!open} aria-hidden={!open}>
+      <div className="expansion-content">{children}</div>
+    </div>
+  )
+}
+
 export function DesktopMenu({
   label,
-  children
+  children,
+  trigger
 }: {
   label: string
   children: ReactNode
+  trigger?: ReactNode
 }): React.JSX.Element {
   const ref = useRef<HTMLDetailsElement>(null)
   useEffect(() => {
@@ -112,8 +130,8 @@ export function DesktopMenu({
   }, [])
   return (
     <details ref={ref} className="menu">
-      <summary aria-label={label}>
-        <DesktopIcon name="more" />
+      <summary aria-label={label} className={trigger ? 'menu-trigger' : undefined}>
+        {trigger ?? <DesktopIcon name="more" />}
       </summary>
       <div
         className="menu-panel"

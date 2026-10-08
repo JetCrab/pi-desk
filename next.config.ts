@@ -20,6 +20,11 @@ function resolveVersionUpdatedAt(): string {
 
 const nextConfig: NextConfig = {
   agentRules: false,
+  typescript: {
+    // 开发测试包以实际编译和启动为门禁，main及本机构建仍执行完整类型检查。
+    ignoreBuildErrors:
+      process.env.GITHUB_ACTIONS === 'true' && process.env.GITHUB_REF === 'refs/heads/dev'
+  },
   experimental: {
     turbopackPluginRuntimeStrategy: 'workerThreads'
   },

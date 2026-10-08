@@ -33,7 +33,7 @@ function run(command, args, options = {}) {
     )
     child.once('error', rejectRun)
     child.once('close', (code) => {
-      if (code === 0 || options.allowFailure) {
+      if (code === 0) {
         resolveRun()
         return
       }
@@ -55,13 +55,6 @@ async function findInstaller() {
   const installer = installers.sort((left, right) => right.modifiedAt - left.modifiedAt)[0]
   if (!installer) throw new Error('未找到 NSIS 安装程序。')
   return installer.path
-}
-
-async function stopPreviousShell() {
-  if (process.platform !== 'win32') return
-  for (const executable of ['jetcrab-desktop.exe', 'pi-desk-desktop.exe']) {
-    await run('taskkill.exe', ['/IM', executable, '/T', '/F'], { allowFailure: true })
-  }
 }
 
 async function installAndStart(installer) {
@@ -94,9 +87,7 @@ async function main() {
   await copyFile(installer, releaseInstaller)
   console.info(`安装程序已生成：${releaseInstaller}`)
 
-  console.info('停止旧桌面壳及其托管进程。')
-  await stopPreviousShell()
-  console.info('静默安装并启动新桌面壳。')
+  console.info('请求旧桌面壳正常退出，静默覆盖安装并启动新版。')
   await installAndStart(releaseInstaller)
   console.info('Pi Desk 已启动。')
 }

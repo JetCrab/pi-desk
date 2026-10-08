@@ -27,7 +27,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-clients-${{ github.ref }}
+  group: build-clients-${{ github.ref }}-${{ inputs.platform }}
   cancel-in-progress: false
 
 jobs:
@@ -69,6 +69,8 @@ jobs:
     env:
       # 系统环境测试共享 Windows 用户会话；用例内部的并发行为仍正常验证。
       RUST_TEST_THREADS: '1'
+      BUILD_PROFILE: ${{ github.ref == 'refs/heads/dev' && 'debug' || 'release' }}
+      RUST_CACHE_STAGE: ${{ github.workspace }}/temp/cache/rust/windows-${{ github.ref == 'refs/heads/dev' && 'debug' || 'release' }}
       CARGO_TARGET_DIR: ${{ github.workspace }}/temp/build/desktop-ci/${{ github.run_id }}-${{ github.run_attempt }}
       PI_DESK_DESKTOP_WEB_DIST: ${{ github.workspace }}/temp/build/desktop-ci/${{ github.run_id }}-${{ github.run_attempt }}/web
       CLIENT_OUTPUT: ${{ github.workspace }}/temp/package/clients/windows/${{ github.run_id }}-${{ github.run_attempt }}
@@ -117,23 +119,46 @@ jobs:
         run: pnpm install --ignore-workspace --frozen-lockfile
       - name: 安装 Windows x86 Rust 目标
         run: rustup target add i686-pc-windows-msvc
-      - name: 云端前端准备与桌面 Rust 测试
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        env:
+          CARGO_TARGET_DIR: ${{ env.RUST_CACHE_STAGE }}
+        with:
+          key: windows-i686-${{ env.BUILD_PROFILE }}
+          cache-bin: 'false'
+          workspaces: apps/desktop/src-tauri -> ../../../temp/cache/rust/windows-${{ env.BUILD_PROFILE }}
+      - run: node .github/scripts/rust-cache.mjs restore
+      - name: 前端类型检查与资源准备
         working-directory: apps/desktop
         run: |
+          pnpm run typecheck:web
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm run build:web
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 正式发布桌面 Rust 回归
+        if: github.ref == 'refs/heads/main'
+        working-directory: apps/desktop
+        run: |
           $env:TAURI_CONFIG = Get-Content "$env:CARGO_TARGET_DIR/tauri-ci.json" -Raw
           cargo test --manifest-path src-tauri/Cargo.toml --target i686-pc-windows-msvc --release --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 构建 Windows x86 NSIS 安装包
         working-directory: apps/desktop
         run: |
-          pnpm exec tauri build --target i686-pc-windows-msvc --bundles nsis --config "$env:CARGO_TARGET_DIR/tauri-ci.json"
+          $buildArgs = @('exec', 'tauri', 'build', '--target', 'i686-pc-windows-msvc', '--bundles', 'nsis', '--config', "$env:CARGO_TARGET_DIR/tauri-ci.json")
+          if ($env:BUILD_PROFILE -eq 'debug') { $buildArgs += '--debug' }
+          & pnpm @buildArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 隔离验证覆盖安装与正常退出
+        if: github.ref == 'refs/heads/main'
+        working-directory: apps/desktop
+        run: |
+          node scripts/test-installer-overwrite.mjs "$env:CARGO_TARGET_DIR/i686-pc-windows-msvc/release/nsis/x86/installer.nsi" "$env:CARGO_TARGET_DIR/.tauri/NSIS/makensis.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - run: node .github/scripts/rust-cache.mjs save
       - name: 检查真实 PE 架构并归档
         shell: pwsh
         run: |
-          $release = Join-Path $env:CARGO_TARGET_DIR 'i686-pc-windows-msvc/release'
+          $release = Join-Path $env:CARGO_TARGET_DIR "i686-pc-windows-msvc/$env:BUILD_PROFILE"
           $bytes = [System.IO.File]::ReadAllBytes((Join-Path $release 'pi-desk-desktop.exe'))
           if ($bytes.Length -lt 64 -or [BitConverter]::ToUInt16($bytes, 0) -ne 0x5a4d) {
             throw '桌面程序不是有效 PE 文件'
@@ -166,7 +191,7 @@ jobs:
     timeout-minutes: 45
     env:
       ANDROID_BUILD_ROOT: ${{ github.workspace }}/temp/build/android-ci/${{ github.run_id }}-${{ github.run_attempt }}
-      GRADLE_USER_HOME: ${{ github.workspace }}/temp/build/android-ci/${{ github.run_id }}-${{ github.run_attempt }}/gradle-home
+      GRADLE_USER_HOME: ${{ github.workspace }}/temp/cache/gradle
       CLIENT_OUTPUT: ${{ github.workspace }}/temp/package/clients/android/${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
@@ -184,6 +209,13 @@ jobs:
         with:
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            temp/cache/gradle/caches/modules-2
+            temp/cache/gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('apps/android/**/*.gradle.kts', 'apps/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
       - name: 安装 Android SDK
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - name: 构建、验证并归档 Android APK
@@ -243,11 +275,13 @@ jobs:
           }
           GRADLE
           chmod +x apps/android/gradlew
+          test_tasks=()
+          if [[ "$GITHUB_REF" == refs/heads/main ]]; then test_tasks=(:app:testDebugUnitTest); fi
           (
             cd apps/android
             ./gradlew --no-daemon --project-cache-dir "$ANDROID_BUILD_ROOT/project-cache" \
               --init-script "$ANDROID_BUILD_ROOT/isolated-build.gradle" \
-              "${signing_args[@]}" :app:testDebugUnitTest :app:assembleRelease
+              "${signing_args[@]}" "${test_tasks[@]}" :app:assembleRelease
           )
           apk="$ANDROID_BUILD_ROOT/app/outputs/apk/release/app-release.apk"
           if [[ "$signing_count" == 0 ]]; then

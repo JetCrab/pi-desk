@@ -614,6 +614,19 @@ impl EnvironmentState {
     }
 
     pub(crate) fn check(&self, cancelled: &dyn Fn() -> bool, log: &Path) -> Result<(), String> {
+        self.check_components(
+            &[Component::Node, Component::Pi, Component::Bash],
+            cancelled,
+            log,
+        )
+    }
+
+    pub(crate) fn check_components(
+        &self,
+        components: &[Component],
+        cancelled: &dyn Fn() -> bool,
+        log: &Path,
+    ) -> Result<(), String> {
         if cancelled() {
             return Err("操作已取消".into());
         }
@@ -623,6 +636,7 @@ impl EnvironmentState {
             .clone()
             .unwrap_or_else(|| refreshed_path(log, cancelled, true));
         self.check_in_path(
+            components,
             search,
             injected.is_none(),
             configured_shell(&self.root),
@@ -633,6 +647,7 @@ impl EnvironmentState {
 
     fn check_in_path(
         &self,
+        components: &[Component],
         search: OsString,
         include_system: bool,
         configured_bash: Option<PathBuf>,
@@ -648,150 +663,158 @@ impl EnvironmentState {
         choices.node = choices.node.filter(|path| !self.is_private_path(path));
         choices.pi = choices.pi.filter(|path| !self.is_private_path(path));
         choices.bash = choices.bash.filter(|path| !self.is_private_path(path));
-        let node_candidates = candidates(
-            if cfg!(windows) { "node.exe" } else { "node" },
-            choices.node.clone(),
-            &search,
-            if !include_system || !cfg!(windows) {
-                &[]
-            } else if matches!(native_architecture(), Ok(WindowsArchitecture::X64)) {
-                &[
-                    "C:/Program Files/nodejs/node.exe",
-                    "C:/Program Files (x86)/nodejs/node.exe",
-                ]
-            } else {
-                &["C:/Program Files/nodejs/node.exe"]
-            },
-            include_system,
-        );
-        #[cfg(target_os = "macos")]
-        let node_candidates = {
-            let mut paths = node_candidates;
-            if include_system && choices.node.is_none() {
-                paths.insert(0, self.root.join("node/bin/node"));
-            }
-            paths
-        };
-        let node = self.probe_candidates(
-            Component::Node,
-            choices.node.is_some(),
-            node_candidates,
-            cancelled,
-            log,
-        );
-        self.replace_component(node);
-        let mut pi_candidates = Vec::new();
-        #[cfg(target_os = "macos")]
-        if include_system && choices.pi.is_none() {
-            pi_candidates.push(self.root.join("npm/lib/node_modules").join(PI_PACKAGE));
-        }
-        if let Some(path) = choices.pi.clone() {
-            pi_candidates.push(path);
-        } else {
-            if include_system {
-                if let Some(path) = std::env::var_os("PI_DESK_PI_PACKAGE_DIR") {
-                    let path = PathBuf::from(path);
-                    if !self.is_private_path(&path) {
-                        pi_candidates.push(path);
-                    }
+        if components.contains(&Component::Node) {
+            let node_candidates = candidates(
+                if cfg!(windows) { "node.exe" } else { "node" },
+                choices.node.clone(),
+                &search,
+                if !include_system || !cfg!(windows) {
+                    &[]
+                } else if matches!(native_architecture(), Ok(WindowsArchitecture::X64)) {
+                    &[
+                        "C:/Program Files/nodejs/node.exe",
+                        "C:/Program Files (x86)/nodejs/node.exe",
+                    ]
+                } else {
+                    &["C:/Program Files/nodejs/node.exe"]
+                },
+                include_system,
+            );
+            #[cfg(target_os = "macos")]
+            let node_candidates = {
+                let mut paths = node_candidates;
+                if include_system && choices.node.is_none() {
+                    paths.insert(0, self.root.join("node/bin/node"));
                 }
-            }
-            if let Some(node) = self.component_path(Component::Node) {
-                if let Some(parent) = node.parent() {
-                    pi_candidates.push(parent.join("node_modules").join(PI_PACKAGE));
-                    #[cfg(target_os = "macos")]
-                    pi_candidates.push(parent.join("../lib/node_modules").join(PI_PACKAGE));
-                }
-                if let Some(cli) = npm_cli(&node) {
-                    if let Ok(output) = self.run_node(
-                        &[&cli.to_string_lossy(), "root", "-g"],
-                        Some(&self.root),
-                        Duration::from_secs(10),
-                        cancelled,
-                        log,
-                    ) {
-                        pi_candidates.push(PathBuf::from(output).join(PI_PACKAGE));
-                    }
-                }
-            }
-            if include_system {
-                if let Some(appdata) = std::env::var_os("APPDATA") {
-                    pi_candidates.push(
-                        PathBuf::from(appdata)
-                            .join("npm/node_modules")
-                            .join(PI_PACKAGE),
-                    );
-                }
-            }
-            for directory in std::env::split_paths(&search) {
-                pi_candidates.push(directory.join("node_modules").join(PI_PACKAGE));
-                #[cfg(target_os = "macos")]
-                pi_candidates.push(directory.join("../lib/node_modules").join(PI_PACKAGE));
-            }
-        }
-        pi_candidates.retain(|path| !self.is_private_path(path));
-        let pi = self.probe_candidates(
-            Component::Pi,
-            choices.pi.is_some(),
-            pi_candidates,
-            cancelled,
-            log,
-        );
-        self.replace_component(pi);
-        let configured_private = configured_bash
-            .as_ref()
-            .filter(|path| self.is_private_path(path))
-            .cloned();
-        let explicit_bash = configured_bash.is_some() || choices.bash.is_some();
-        let mut bash_candidates = candidates(
-            if cfg!(windows) { "bash.exe" } else { "bash" },
-            configured_bash.clone().or(choices.bash.clone()),
-            &search,
-            if !include_system || !cfg!(windows) {
-                &[]
-            } else {
-                &[
-                    "C:/Program Files/Git/bin/bash.exe",
-                    "C:/Program Files (x86)/Git/bin/bash.exe",
-                    "C:/msys64/usr/bin/bash.exe",
-                ]
-            },
-            include_system,
-        );
-        if !explicit_bash && cfg!(windows) {
-            for directory in std::env::split_paths(&search) {
-                if directory.join("git.exe").is_file() {
-                    if let Some(root) = directory.parent() {
-                        bash_candidates.push(root.join("bin/bash.exe"));
-                    }
-                }
-            }
-        }
-        if !explicit_bash && include_system && cfg!(windows) {
-            for key in ["LOCALAPPDATA", "USERPROFILE"] {
-                if let Some(home) = std::env::var_os(key) {
-                    bash_candidates.push(PathBuf::from(home).join("Programs/Git/bin/bash.exe"));
-                }
-            }
-        }
-        let bash = if let Some(path) = configured_private {
-            ComponentSnapshot {
-                name: Component::Bash,
-                status: "invalid".into(),
-                version: None,
-                path: Some(path.to_string_lossy().into_owned()),
-                detail: Some("Pi 的 shellPath 指向旧桌面私有环境，请修正 Pi 设置后重新检测".into()),
-            }
-        } else {
-            self.probe_candidates(
-                Component::Bash,
-                explicit_bash,
-                bash_candidates,
+                paths
+            };
+            let node = self.probe_candidates(
+                Component::Node,
+                choices.node.is_some(),
+                node_candidates,
                 cancelled,
                 log,
-            )
-        };
-        self.replace_component(bash);
+            );
+            self.replace_component(node);
+        }
+        if components.contains(&Component::Pi) {
+            let mut pi_candidates = Vec::new();
+            #[cfg(target_os = "macos")]
+            if include_system && choices.pi.is_none() {
+                pi_candidates.push(self.root.join("npm/lib/node_modules").join(PI_PACKAGE));
+            }
+            if let Some(path) = choices.pi.clone() {
+                pi_candidates.push(path);
+            } else {
+                if include_system {
+                    if let Some(path) = std::env::var_os("PI_DESK_PI_PACKAGE_DIR") {
+                        let path = PathBuf::from(path);
+                        if !self.is_private_path(&path) {
+                            pi_candidates.push(path);
+                        }
+                    }
+                }
+                if let Some(node) = self.component_path(Component::Node) {
+                    if let Some(parent) = node.parent() {
+                        pi_candidates.push(parent.join("node_modules").join(PI_PACKAGE));
+                        #[cfg(target_os = "macos")]
+                        pi_candidates.push(parent.join("../lib/node_modules").join(PI_PACKAGE));
+                    }
+                    if let Some(cli) = npm_cli(&node) {
+                        if let Ok(output) = self.run_node(
+                            &[&cli.to_string_lossy(), "root", "-g"],
+                            Some(&self.root),
+                            Duration::from_secs(10),
+                            cancelled,
+                            log,
+                        ) {
+                            pi_candidates.push(PathBuf::from(output).join(PI_PACKAGE));
+                        }
+                    }
+                }
+                if include_system {
+                    if let Some(appdata) = std::env::var_os("APPDATA") {
+                        pi_candidates.push(
+                            PathBuf::from(appdata)
+                                .join("npm/node_modules")
+                                .join(PI_PACKAGE),
+                        );
+                    }
+                }
+                for directory in std::env::split_paths(&search) {
+                    pi_candidates.push(directory.join("node_modules").join(PI_PACKAGE));
+                    #[cfg(target_os = "macos")]
+                    pi_candidates.push(directory.join("../lib/node_modules").join(PI_PACKAGE));
+                }
+            }
+            pi_candidates.retain(|path| !self.is_private_path(path));
+            let pi = self.probe_candidates(
+                Component::Pi,
+                choices.pi.is_some(),
+                pi_candidates,
+                cancelled,
+                log,
+            );
+            self.replace_component(pi);
+        }
+        if components.contains(&Component::Bash) {
+            let configured_private = configured_bash
+                .as_ref()
+                .filter(|path| self.is_private_path(path))
+                .cloned();
+            let explicit_bash = configured_bash.is_some() || choices.bash.is_some();
+            let mut bash_candidates = candidates(
+                if cfg!(windows) { "bash.exe" } else { "bash" },
+                configured_bash.clone().or(choices.bash.clone()),
+                &search,
+                if !include_system || !cfg!(windows) {
+                    &[]
+                } else {
+                    &[
+                        "C:/Program Files/Git/bin/bash.exe",
+                        "C:/Program Files (x86)/Git/bin/bash.exe",
+                        "C:/msys64/usr/bin/bash.exe",
+                    ]
+                },
+                include_system,
+            );
+            if !explicit_bash && cfg!(windows) {
+                for directory in std::env::split_paths(&search) {
+                    if directory.join("git.exe").is_file() {
+                        if let Some(root) = directory.parent() {
+                            bash_candidates.push(root.join("bin/bash.exe"));
+                        }
+                    }
+                }
+            }
+            if !explicit_bash && include_system && cfg!(windows) {
+                for key in ["LOCALAPPDATA", "USERPROFILE"] {
+                    if let Some(home) = std::env::var_os(key) {
+                        bash_candidates.push(PathBuf::from(home).join("Programs/Git/bin/bash.exe"));
+                    }
+                }
+            }
+            let bash = if let Some(path) = configured_private {
+                ComponentSnapshot {
+                    name: Component::Bash,
+                    status: "invalid".into(),
+                    version: None,
+                    path: Some(path.to_string_lossy().into_owned()),
+                    detail: Some(
+                        "Pi 的 shellPath 指向旧桌面私有环境，请修正 Pi 设置后重新检测".into(),
+                    ),
+                }
+            } else {
+                self.probe_candidates(
+                    Component::Bash,
+                    explicit_bash,
+                    bash_candidates,
+                    cancelled,
+                    log,
+                )
+            };
+            self.replace_component(bash);
+        }
         if cancelled() {
             return Err("操作已取消".into());
         }

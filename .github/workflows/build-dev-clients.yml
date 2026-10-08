@@ -6,10 +6,11 @@ on:
     paths:
       - 'apps/desktop/**'
       - 'apps/android/**'
-      - 'apps/tunnel/**'
-      - 'src/common/**'
+      - 'apps/tunnel/common/**'
+      - 'apps/tunnel/Cargo.toml'
       - '.github/scripts/pack-client.mjs'
       - '.github/scripts/check-desktop-tunnel.mjs'
+      - '.github/scripts/rust-cache.mjs'
       - '.github/scripts/apple-signing.sh'
       - '.github/workflows/build-clients.yml'
       - '.github/workflows/release-apple.yml'
@@ -70,14 +71,19 @@ jobs:
             git diff --name-only --no-renames -z "$BEFORE_SHA" "$SOURCE_SHA" > "$changed_files"
             while IFS= read -r -d '' path; do
               case "$path" in
-                apps/desktop/*|apps/tunnel/*)
+                *.md|*/tests/*|*/test/*|*/__tests__/*|*/androidTest/*|*_tests.rs|*/test-*.mjs)
+                  continue
+                  ;;
+              esac
+              case "$path" in
+                apps/desktop/*|apps/tunnel/common/*|apps/tunnel/Cargo.toml|.github/scripts/rust-cache.mjs)
                   windows=true
                   macos=true
                   ;;
                 apps/android/*)
                   android=true
                   ;;
-                src/common/*|.github/scripts/pack-client.mjs|.github/workflows/build-dev-clients.yml)
+                .github/scripts/pack-client.mjs|.github/workflows/build-dev-clients.yml)
                   windows=true
                   macos=true
                   android=true

@@ -1,4 +1,4 @@
-use crate::config::{PackageConfig, ServerConfig};
+use crate::config::{PackageConfig, ReleaseChannel, ServerConfig, UpdatePolicy};
 use crate::environment::{self, Component, EnvironmentState};
 use crate::environment_arch::{native_architecture, WindowsArchitecture};
 use crate::environment_download::{client, download};
@@ -149,7 +149,7 @@ pub(crate) fn install_node(
             ))
         }
     }
-    state.check(cancelled, log)?;
+    state.check_components(&[Component::Node], cancelled, log)?;
     state
         .component_path(Component::Node)
         .ok_or_else(|| "Node.js 安装后仍不可用，请检查安装日志或选择已安装的 node.exe".into())
@@ -219,41 +219,37 @@ pub(crate) fn prepare(
     if needs_bash {
         state.set_component_step(Component::Bash, "正在下载 Git Bash 安装包");
     }
-    let (node, bash) = parallel(
+    prepare_components(
         cancelled,
         |cancelled| {
             if needs_node {
-                download_node(state, &client, &work.0, download_source, cancelled, log).map(Some)
-            } else {
-                Ok(None)
+                let node = download_node(state, &client, &work.0, download_source, cancelled, log)?;
+                let installed = install_node(state, &work.0.join(&node.file), cancelled, log)?;
+                let actual_version = state.probe(Component::Node, &installed, cancelled, log)?;
+                if actual_version != node.version {
+                    return Err(
+                        "Node.js 安装后检测到的版本与下载版本不一致，请检查已有 Node.js 安装或手动选择路径"
+                            .into(),
+                    );
+                }
             }
+            Ok(())
         },
         |cancelled| {
             if needs_bash {
-                download_bash(state, &client, &work.0, download_source, cancelled, log).map(Some)
-            } else {
-                Ok(None)
+                let installer =
+                    download_bash(state, &client, &work.0, download_source, cancelled, log)?;
+                install_bash(state, &installer, cancelled, log)?;
             }
+            Ok(())
+        },
+        |cancelled| {
+            if install_pi {
+                prepare_pi(state, &work.0, download_source, cancelled, log)?;
+            }
+            Ok(())
         },
     )?;
-    state.set_phase("installing", "正在安装运行环境", None);
-    if let Some(node) = node {
-        let installed = install_node(state, &work.0.join(&node.file), cancelled, log)?;
-        let actual_version = state.probe(Component::Node, &installed, cancelled, log)?;
-        if actual_version != node.version {
-            return Err(
-                "Node.js 安装后检测到的版本与下载版本不一致，请检查已有 Node.js 安装或手动选择路径"
-                    .into(),
-            );
-        }
-    }
-    if let Some(installer) = bash {
-        install_bash(state, &installer, cancelled, log)?;
-    }
-    if install_pi && state.component_path(Component::Pi).is_none() {
-        state.set_phase("installing", "正在安装 Pi", None);
-        prepare_pi(state, &work.0, download_source, cancelled, log)?;
-    }
     state.verify_global_commands(needs_pi, cancelled, log)?;
     logging::write(
         log,
@@ -399,6 +395,27 @@ pub(crate) fn prepare(
         "environment-prepared",
         "应用运行环境已就绪，未修改系统 PATH 或安装系统软件包",
     );
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn prepare_components(
+    cancelled: &(dyn Fn() -> bool + Sync),
+    node: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<(), String> + Send,
+    bash: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<(), String> + Send,
+    pi: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<(), String> + Send,
+) -> Result<(), String> {
+    parallel(
+        cancelled,
+        |stopped| {
+            node(stopped)?;
+            if stopped() {
+                return Err("操作已取消".into());
+            }
+            pi(stopped)
+        },
+        bash,
+    )?;
     Ok(())
 }
 
@@ -591,7 +608,7 @@ fn install_bash(
             install_log.display()
         ));
     }
-    state.check(cancelled, log)?;
+    state.check_components(&[Component::Bash], cancelled, log)?;
     if state.component_path(Component::Bash).is_none() {
         return Err("Git 安装后仍未找到可用的 Git Bash，请检查安装日志或选择 bash.exe".into());
     }
@@ -617,8 +634,9 @@ fn prepare_pi(
     let package = PackageConfig {
         name: environment::PI_PACKAGE.into(),
         registry: Some(download_source.npm_registry().into()),
-        auto_update_on_start: false,
-        periodic_update_check: false,
+        startup_update: UpdatePolicy::None,
+        periodic_update: UpdatePolicy::None,
+        channel: ReleaseChannel::Stable,
     };
     let version = packages::query_version_with_environment(
         &package,
@@ -639,6 +657,14 @@ fn prepare_pi(
         return Err("npm 全局目录指向旧桌面私有环境，请调整 npm prefix 后重试".into());
     }
     state.set_component_step(Component::Pi, &format!("正在安装 Pi {version}"));
+    logging::write(
+        log,
+        "environment-pi-install",
+        &format!(
+            "version={version} registry={}",
+            download_source.npm_registry()
+        ),
+    );
     state.run_node(
         &[
             &npm.to_string_lossy(),

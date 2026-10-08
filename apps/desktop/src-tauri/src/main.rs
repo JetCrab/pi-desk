@@ -28,13 +28,30 @@ use tauri::menu::{MenuBuilder, MenuEvent, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, State, Window};
 
+const EXIT_FOR_UPDATE_ARG: &str = "--exit-for-update";
+
 fn main() {
+    let exit_for_update = std::env::args().any(|argument| argument == EXIT_FOR_UPDATE_ARG);
     if let Some(code) = desktop_tunnel_cli::run_if_requested() {
         std::process::exit(code);
     }
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            let _ = runtime::open_control_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, arguments, _| {
+            if arguments
+                .iter()
+                .any(|argument| argument == EXIT_FOR_UPDATE_ARG)
+            {
+                if let Some(state) = app.try_state::<ShellState>() {
+                    logging::write(
+                        &state.log_path,
+                        "desktop-update-exit-request",
+                        "安装器请求正常退出桌面程序",
+                    );
+                }
+                app.exit(0);
+            } else {
+                let _ = runtime::open_control_window(app);
+            }
         }))
         .invoke_handler(tauri::generate_handler![
             get_control_state,
@@ -59,13 +76,25 @@ fn main() {
             start_tunnel_command,
             stop_tunnel_command
         ])
-        .setup(setup)
+        .setup(move |app| {
+            if exit_for_update {
+                // 没有已运行实例时只退出，不创建窗口或启动本机服务。
+                app.handle().exit(0);
+                Ok(())
+            } else {
+                setup(app)
+            }
+        })
         .on_menu_event(handle_menu_event)
         .build(tauri::generate_context!())
         .expect("无法构建 Pi Desk");
 
     app.run(|app_handle, event| match event {
-        RunEvent::ExitRequested { .. } => runtime::shutdown(app_handle),
+        RunEvent::ExitRequested { .. } => {
+            if app_handle.try_state::<ShellState>().is_some() {
+                runtime::shutdown(app_handle);
+            }
+        }
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => {
             let _ = runtime::open_control_window(app_handle);

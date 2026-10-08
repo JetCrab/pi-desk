@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{default_server_config, PackageConfig};
+use crate::config::{default_server_config, PackageConfig, ReleaseChannel, UpdatePolicy};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TestDirectory(PathBuf);
@@ -45,8 +45,9 @@ fn generic_server() -> ServerConfig {
         package: Some(PackageConfig {
             name: "example-service".into(),
             registry: None,
-            auto_update_on_start: false,
-            periodic_update_check: false,
+            startup_update: UpdatePolicy::None,
+            periodic_update: UpdatePolicy::None,
+            channel: ReleaseChannel::Stable,
         }),
     }
 }
@@ -232,6 +233,47 @@ fn preparation_steps_preserve_parallel_progress_and_clear_stale_status_on_exit()
 }
 
 #[test]
+fn checking_one_installer_preserves_other_components_and_download_progress() {
+    let directory = TestDirectory::new("parallel-component-check");
+    for checking in [Component::Node, Component::Bash] {
+        let state = directory.state();
+        state.set_phase("installing", "正在准备", None);
+        state.set_component_step(Component::Node, "正在安装 Node.js");
+        state.set_component_step(Component::Bash, "正在下载 Git Bash");
+        state.set_component_step(Component::Pi, "正在安装 Pi");
+        state.progress(&directory.0.join("git.exe"), 10, Some(100));
+        let before = state.snapshot();
+        state
+            .check_in_path(
+                &[checking],
+                OsString::new(),
+                false,
+                None,
+                &|| false,
+                &directory.0.join("desktop.log"),
+            )
+            .unwrap();
+        let after = state.snapshot();
+        for component in before
+            .components
+            .iter()
+            .filter(|item| item.name != checking)
+        {
+            let actual = after
+                .components
+                .iter()
+                .find(|item| item.name == component.name)
+                .unwrap();
+            assert_eq!(actual.status, component.status);
+            assert_eq!(actual.detail, component.detail);
+        }
+        assert_eq!(after.status, "installing");
+        assert_eq!(after.download.unwrap().received, 10);
+        assert_eq!(after.step, before.step);
+    }
+}
+
+#[test]
 fn explicit_selection_never_silently_falls_back_to_another_installation() {
     let directory = TestDirectory::new("explicit-choice");
     let selected = directory.0.join("selected/node.exe");
@@ -398,6 +440,7 @@ fn old_private_runtime_is_not_reused_or_deleted_by_detection() {
     let search = std::env::join_paths([node.parent().unwrap(), bash.parent().unwrap()]).unwrap();
     state
         .check_in_path(
+            &[Component::Node, Component::Pi, Component::Bash],
             search,
             false,
             None,
@@ -474,6 +517,7 @@ fn explicit_pi_shell_path_pointing_to_private_runtime_is_reported_instead_of_ign
     let path = state.root.join("git/bin/bash.exe");
     state
         .check_in_path(
+            &[Component::Node, Component::Pi, Component::Bash],
             OsString::new(),
             false,
             Some(path.clone()),

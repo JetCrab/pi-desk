@@ -1,6 +1,44 @@
-import { useState, type FormEvent } from 'react'
+import { useState, type CSSProperties, type FormEvent } from 'react'
 import { useDesktopSettings } from './hooks/l2-use-desktop-settings'
+import { type ReleaseChannel, type UpdatePolicy } from './l4-desktop-ipc'
 import { DesktopHeader, DesktopIcon } from './l4-desktop-ui'
+
+const updatePolicies = [
+  { value: 'none', label: '无' },
+  { value: 'update', label: '自动更新' },
+  { value: 'check', label: '检查更新' }
+] as const
+
+const updateGroups = [
+  { field: 'startupUpdate', label: '启动时', prefix: '启动' },
+  { field: 'periodicUpdate', label: '定时', prefix: '定时' }
+] as const
+
+const releaseChannels = [
+  { value: 'stable', label: '稳定版' },
+  { value: 'dev', label: '开发版' }
+] as const
+
+// 共享样式将非 checkbox 输入视作文本框，单选保留原生外观与紧凑尺寸。
+const radioStyle: CSSProperties = {
+  accentColor: 'var(--primary)',
+  width: 16,
+  height: 16,
+  minHeight: 16,
+  margin: 0,
+  padding: 0,
+  border: 0,
+  borderRadius: '50%',
+  flex: 'none',
+  cursor: 'pointer',
+  outlineOffset: 2
+}
+
+const optionsStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '4px 16px'
+}
 
 type Props = {
   mode: 'target' | 'tunnel'
@@ -27,6 +65,25 @@ export function SettingsPage({
     onDirty
   )
   const [advanced, setAdvanced] = useState(initialAdvanced)
+  const selectUpdatePolicy = (
+    field: 'startupUpdate' | 'periodicUpdate',
+    value: UpdatePolicy
+  ): void => {
+    if (!draft || draft[field] === value) return
+    if (
+      field === 'periodicUpdate' &&
+      value === 'update' &&
+      !window.confirm('定时自动更新会重启服务，导致运行中的任务被打断。请谨慎开启。确定继续吗？')
+    )
+      return
+    patch({ [field]: value })
+  }
+  const selectChannel = (value: ReleaseChannel): void => {
+    if (!draft || draft.channel === value) return
+    if (value === 'dev' && !window.confirm('开发版可能不稳定，不建议日常使用。确定选择开发版吗？'))
+      return
+    patch({ channel: value })
+  }
   const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
     const result = await save()
@@ -83,35 +140,49 @@ export function SettingsPage({
               </label>
               {draft.serverEnabled && draft.packageEnabled && (
                 <section className="settings-section">
-                  <h2>启动与更新</h2>
-                  <label className="setting-toggle">
-                    <span>
-                      <span>启动时自动更新</span>
-                      <span className="hint">关闭后仍可手动检查更新。</span>
-                    </span>
-                    <input
-                      className="switch"
-                      type="checkbox"
-                      role="switch"
-                      checked={draft.autoUpdateOnStart}
-                      disabled={disabled}
-                      onChange={(event) => patch({ autoUpdateOnStart: event.target.checked })}
-                    />
-                  </label>
-                  <label className="setting-toggle">
-                    <span>
-                      <span>运行时自动检查并更新</span>
-                      <span className="hint">每分钟检查，安装完成后自动重启服务。</span>
-                    </span>
-                    <input
-                      className="switch"
-                      type="checkbox"
-                      role="switch"
-                      checked={draft.periodicUpdateCheck}
-                      disabled={disabled}
-                      onChange={(event) => patch({ periodicUpdateCheck: event.target.checked })}
-                    />
-                  </label>
+                  <h2>服务更新</h2>
+                  {updateGroups.map((group) => (
+                    <fieldset key={group.field}>
+                      <legend>{group.label}</legend>
+                      <div className="field" style={optionsStyle}>
+                        {updatePolicies.map((option) => (
+                          <label className="toggle" key={option.value}>
+                            <input
+                              type="radio"
+                              name={group.field}
+                              value={option.value}
+                              style={radioStyle}
+                              checked={draft[group.field] === option.value}
+                              disabled={disabled}
+                              onChange={() => selectUpdatePolicy(group.field, option.value)}
+                            />
+                            {option.value === 'none'
+                              ? option.label
+                              : `${group.prefix}${option.label}`}
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                  ))}
+                  <fieldset>
+                    <legend>版本</legend>
+                    <div className="field" style={optionsStyle}>
+                      {releaseChannels.map((option) => (
+                        <label className="toggle" key={option.value}>
+                          <input
+                            type="radio"
+                            name="channel"
+                            value={option.value}
+                            style={radioStyle}
+                            checked={draft.channel === option.value}
+                            disabled={disabled}
+                            onChange={() => selectChannel(option.value)}
+                          />
+                          {option.label}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
                 </section>
               )}
               {localTarget && (

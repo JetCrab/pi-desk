@@ -20,6 +20,8 @@ export async function verifyNpmInstall({ root, sdkArchive, hostArchive, version,
   let runtime
   let success = false
   try {
+    const installStarted = performance.now()
+    console.info('[smoke:install] 开始隔离安装宿主与 Pi 运行时')
     await writeFile(join(directory, 'package.json'), '{"private":true}\n')
     run('npm', [
       'install',
@@ -52,6 +54,11 @@ export async function verifyNpmInstall({ root, sdkArchive, hostArchive, version,
       '--registry=https://registry.npmjs.org',
       `@earendil-works/pi-coding-agent@${manifest.devDependencies['@earendil-works/pi-coding-agent']}`
     ])
+    console.info(
+      `[smoke:install] 耗时 ${((performance.now() - installStarted) / 1000).toFixed(1)} 秒`
+    )
+    const startupStarted = performance.now()
+    console.info('[smoke:health] 开始启动正式安装包')
     await prepareIsolatedPiDirectory(agentDir)
     const reservation = createServer()
     reservation.listen(0, '127.0.0.1')
@@ -89,6 +96,9 @@ export async function verifyNpmInstall({ root, sdkArchive, hostArchive, version,
       } catch {}
       await delay(250)
     }
+    console.info(
+      `[smoke:health] 耗时 ${((performance.now() - startupStarted) / 1000).toFixed(1)} 秒`
+    )
     assert.ok(success, '最终npm安装包未在截止时间内就绪')
     console.info(`独立npm安装及健康检查通过：${manifest.name}@${version}`)
   } finally {

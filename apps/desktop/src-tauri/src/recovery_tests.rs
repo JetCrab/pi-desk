@@ -6,7 +6,8 @@ use super::{
     TargetRuntimeInfo,
 };
 use crate::config::{
-    DesktopConfig, PackageConfig, ServerConfig, TargetConfig, TunnelConnectionConfig,
+    DesktopConfig, PackageConfig, ReleaseChannel, ServerConfig, TargetConfig,
+    TunnelConnectionConfig, UpdatePolicy,
 };
 use crate::packages::{
     self,
@@ -54,8 +55,9 @@ impl Fixture {
         let package = PackageConfig {
             name: PACKAGE_NAME.into(),
             registry: Some(registry.address.clone()),
-            auto_update_on_start: false,
-            periodic_update_check: false,
+            startup_update: UpdatePolicy::None,
+            periodic_update: UpdatePolicy::None,
+            channel: ReleaseChannel::Stable,
         };
         let server = ServerConfig {
             start_command: "node_modules\\.bin\\fixture-service.cmd -p {port}".into(),

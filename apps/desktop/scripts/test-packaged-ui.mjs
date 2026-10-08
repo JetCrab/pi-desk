@@ -18,6 +18,7 @@ const executable = resolve(process.argv[2] ?? '')
 const frontend = resolve(process.argv[3] ?? '')
 const identifier = 'com.jetcrab.desktop.ui-smoke'
 const setupOnly = process.argv.includes('--setup-only')
+const layoutOnly = process.argv.includes('--layout-only')
 const sourceScenario =
   process.argv.find((value) => value.startsWith('--source-scenario='))?.split('=')[1] ?? 'china'
 assert.ok(
@@ -31,11 +32,13 @@ assert.ok(process.argv[2] && process.argv[3], '请传入隔离构建的 exe 和�
 const executableBytes = await readFile(executable)
 const peOffset = executableBytes.readUInt32LE(0x3c)
 assert.equal(executableBytes.toString('ascii', peOffset, peOffset + 4), 'PE\u0000\u0000')
-assert.equal(executableBytes.readUInt16LE(peOffset + 4), 0x014c, '必须验收真实的32位壳程序')
-assert.ok(
-  executableBytes.includes(Buffer.from(identifier)),
-  '测试程序必须使用独立 identifier，禁止接管真实桌面实例'
-)
+if (!layoutOnly) {
+  assert.equal(executableBytes.readUInt16LE(peOffset + 4), 0x014c, '必须验收真实的32位壳程序')
+  assert.ok(
+    executableBytes.includes(Buffer.from(identifier)),
+    '测试程序必须使用独立 identifier，禁止接管真实桌面实例'
+  )
+}
 assert.ok(
   frontend.startsWith(join(projectRoot, 'temp/build/desktop-web') + sep),
   '仅允许临时移走本项目的前端构建目录'
@@ -56,6 +59,25 @@ let countryRequests = 0
 let releaseCountry
 let pendingCountry
 const fixture = createServer((request, response) => {
+  if (layoutOnly && request.url?.startsWith('/desktop/')) {
+    const file = request.url === '/desktop/' ? 'index.html' : request.url.slice('/desktop/'.length)
+    const types = {
+      'index.html': 'text/html',
+      'l1-desktop-main.js': 'text/javascript',
+      'l4-desktop-ui.css': 'text/css'
+    }
+    if (!Object.hasOwn(types, file)) {
+      response.writeHead(404).end()
+      return
+    }
+    void readFile(join(frontend, file)).then(
+      (content) => {
+        response.writeHead(200, { 'Content-Type': `${types[file]}; charset=utf-8` }).end(content)
+      },
+      () => response.writeHead(500).end()
+    )
+    return
+  }
   if (request.url === '/ip-country') {
     countryRequests += 1
     const reply = () => {
@@ -175,6 +197,10 @@ async function connect(target) {
     })
   const page = {
     errors,
+    async load(url, source) {
+      await send('Page.addScriptToEvaluateOnNewDocument', { source })
+      await send('Page.navigate', { url })
+    },
     async theme(value) {
       await send('Emulation.setEmulatedMedia', {
         features: [{ name: 'prefers-color-scheme', value }]
@@ -243,7 +269,7 @@ async function connect(target) {
 }
 
 function click(text) {
-  return `(() => { const button = [...document.querySelectorAll('button')].find(item => item.textContent.trim() === ${JSON.stringify(text)}); if (!button || button.disabled) throw new Error('操作不可用：' + ${JSON.stringify(text)}); button.click(); return true; })()`
+  return `(() => { const button = [...document.querySelectorAll('button')].find(item => (item.textContent.trim() === ${JSON.stringify(text)} || item.getAttribute('aria-label') === ${JSON.stringify(text)}) && item.checkVisibility() && !item.closest('[inert]'));  if (!button || button.disabled) throw new Error('操作不可用：' + ${JSON.stringify(text)}); button.click(); return true; })()`
 }
 
 async function assertSetupFits(page, action) {
@@ -286,7 +312,7 @@ function field(label, value) {
     input.focus({ preventScroll: true });
     const rect = input.getBoundingClientRect();
     if (document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) !== input) throw new Error('字段被遮挡：' + ${JSON.stringify(label)});
-    if (input.type === 'checkbox') {
+    if (input.type === 'checkbox' || input.type === 'radio') {
       if (input.checked !== ${JSON.stringify(value)}) input.click();
     } else {
       const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -309,7 +335,358 @@ function targetAction(url, action) {
   })()`
 }
 
+function installLayoutFixture() {
+  const localUrl = 'http://127.0.0.1:30333/'
+  const serverConfig = {
+    startCommand: 'pi-desk --port {port}',
+    readyPath: '/api/health',
+    package: {
+      name: '@jetcrab/pi-desk',
+      registry: null,
+      startupUpdate: 'update',
+      periodicUpdate: 'update',
+      channel: 'stable'
+    }
+  }
+  window.desktopLayoutCommands = []
+  window.desktopLayoutState = {
+    targets: [
+      {
+        url: localUrl,
+        server: {
+          status: 'running',
+          detail: '',
+          version: '1.0.0',
+          autoStart: true,
+          needsSetup: false,
+          update: { status: 'idle', version: null, error: null }
+        },
+        tunnel: {
+          status: 'listening',
+          detail: '公网端口已连接',
+          publicAddr: 'connect.example.test:19443',
+          publicPort: 19443
+        }
+      },
+      { url: 'https://workstation.example.test/', server: null, tunnel: null }
+    ],
+    environment: {
+      status: 'ready',
+      step: '',
+      download: null,
+      error: null,
+      components: ['node', 'bash', 'pi'].map((name) => ({
+        name,
+        status: 'ready',
+        version: '1.0.0',
+        path: `C:/desktop-fixture/${name}`,
+        detail: null
+      }))
+    }
+  }
+  let firstRead = true
+  let callbackId = 0
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} }
+  window.__TAURI_INTERNALS__ = {
+    transformCallback() {
+      return ++callbackId
+    },
+    unregisterCallback() {},
+    async invoke(command, args = {}) {
+      window.desktopLayoutCommands.push({ command, args })
+      const state = window.desktopLayoutState
+      if (command === 'plugin:event|listen') return 1
+      if (command === 'plugin:event|unlisten') return
+      if (command === 'get_control_state') {
+        if (firstRead) {
+          firstRead = false
+          await new Promise((resolve) => {
+            window.desktopLayoutReady = resolve
+          })
+        }
+        return structuredClone(state)
+      }
+      if (command === 'get_environment_download_source') return 'official'
+      if (command === 'get_target_settings')
+        return {
+          target: args.url
+            ? {
+                url: args.url,
+                server: args.url === localUrl ? serverConfig : null,
+                tunnel: args.url === localUrl ? { enabled: true, publicPort: 19443 } : null
+              }
+            : null,
+          defaultServer: serverConfig
+        }
+      if (command === 'get_tunnel_connection')
+        return { controlServerUrl: 'https://connect.example.test/', controlKey: 'fixture-key' }
+      if (command === 'apply_target_command') {
+        const target = { url: args.value.url, server: null, tunnel: null }
+        const index = state.targets.findIndex((item) => item.url === args.originalUrl)
+        if (index < 0) state.targets.push(target)
+        else state.targets[index] = target
+        return
+      }
+      if (command === 'open_target_command') return
+      if (command === 'prepare_environment_command') {
+        state.environment.status = 'installing'
+        state.environment.step = '正在下载 Node.js'
+        state.environment.download = { received: 42_000_000, total: 80_000_000 }
+        return
+      }
+      if (command === 'cancel_environment_command') {
+        state.environment.status = 'required'
+        state.environment.download = null
+        return
+      }
+      if (command === 'check_environment_command') return
+      if (command === 'stop_tunnel_command' || command === 'start_tunnel_command') {
+        state.targets.find((item) => item.url === args.url).tunnel.status =
+          command === 'start_tunnel_command' ? 'listening' : 'stopped'
+        return
+      }
+      throw new Error(`布局测试未声明命令：${command}`)
+    }
+  }
+  window.confirm = () => true
+  Object.defineProperty(navigator, 'clipboard', {
+    value: {
+      async writeText(value) {
+        window.desktopLayoutCopied = value
+      }
+    }
+  })
+}
+
+async function validateLayout(page) {
+  const localUrl = 'http://127.0.0.1:30333/'
+  const hasText = (value) =>
+    page.evaluate(`document.body.innerText.includes(${JSON.stringify(value)})`)
+  const publish = async (expression) => {
+    await page.evaluate(
+      `(() => { ${expression}; document.dispatchEvent(new Event('visibilitychange')); })()`
+    )
+  }
+  const expanded = (label) =>
+    page.evaluate(`(() => {
+    const button = [...document.querySelectorAll('button')].find(item => item.getAttribute('aria-label') === ${JSON.stringify(label)} || item.textContent.trim() === ${JSON.stringify(label)});
+    return button?.getAttribute('aria-expanded') === 'true';
+  })()`)
+  await until(
+    () =>
+      page.evaluate(
+        `!!window.desktopLayoutReady && !!document.querySelector('[aria-label="正在准备 Pi Desk"]')`
+      ),
+    '完整页面加载状态'
+  )
+  await page.screenshot('control-loading.png')
+  await page.evaluate('window.desktopLayoutReady()')
+  await until(() => hasText('打开 Pi Desk'), '本机启动入口')
+  await assertSetupFits(page, '打开 Pi Desk')
+  for (const text of [
+    'Node.js',
+    'Git Bash',
+    '公网端口已连接',
+    'connect.example.test:19443',
+    '正在读取'
+  ]) {
+    assert.equal(await hasText(text), false, `正常首页不展开技术信息：${text}`)
+  }
+  assert.equal(
+    await page.evaluate(`!!document.querySelector('summary[aria-label="桌面设置"]')`),
+    true
+  )
+  await page.screenshot('control-ready.png')
+  await page.theme('dark')
+  await page.screenshot('control-ready-dark.png')
+  await page.viewport(720, 560)
+  await assertSetupFits(page, '打开 Pi Desk')
+  await page.screenshot('control-ready-compact.png')
+  await page.viewport(400, 640)
+  await assertSetupFits(page, '打开 Pi Desk')
+  await page.viewport(960, 720)
+  await page.theme('light')
+
+  await page.evaluate(click('在其他设备上使用'))
+  await until(() => expanded('在其他设备上使用'), '展开其他设备访问')
+  await page.evaluate(click('复制地址'))
+  assert.equal(
+    await page.evaluate('window.desktopLayoutCopied'),
+    'http://connect.example.test:19443/'
+  )
+  await page.screenshot('control-access.png')
+  await publish(
+    `window.desktopLayoutState.targets[0].url = 'http://127.0.0.1:30333/workspace?view=files#readme'`
+  )
+  await until(async () => !(await expanded('在其他设备上使用')), '切换连接后重新定位访问入口')
+  await page.evaluate(click('在其他设备上使用'))
+  await until(() => expanded('在其他设备上使用'), '展开带路径连接的访问地址')
+  await page.evaluate(click('复制地址'))
+  assert.equal(
+    await page.evaluate('window.desktopLayoutCopied'),
+    'http://connect.example.test:19443/workspace?view=files#readme',
+    '外部地址保留原页面路径和参数'
+  )
+  await publish(`window.desktopLayoutState.targets[0].url = ${JSON.stringify(localUrl)}`)
+  await until(async () => !(await expanded('在其他设备上使用')), '恢复本机连接')
+  await publish(
+    `window.desktopLayoutState.targets[0].server.status = 'failed'; window.desktopLayoutState.targets[0].server.detail = 'fixture-start-failed'`
+  )
+  await until(() => hasText('重试并打开'), '启动失败的恢复操作')
+  await page.evaluate(click('安装与版本'))
+  await until(() => hasText('Node.js'), '安装详情可访问')
+  assert.equal(
+    await page.evaluate(
+      `([...document.querySelectorAll('button')].filter(item => ['打开 Pi Desk', '重试并打开'].includes(item.textContent.trim()) && item.checkVisibility() && !item.closest('[inert]'))).length`
+    ),
+    1,
+    '查看版本不重复主操作'
+  )
+  await publish(
+    `window.desktopLayoutState.targets[0].server.status = 'running'; window.desktopLayoutState.targets[0].server.detail = ''`
+  )
+  await until(() => hasText('打开 Pi Desk'), '恢复运行状态')
+  await page.screenshot('control-install-options.png')
+  await page.evaluate(click('安装与版本'))
+
+  await publish(
+    `window.desktopLayoutState.targets[0].tunnel.status = 'failed'; window.desktopLayoutState.targets[0].tunnel.detail = 'fixture-tunnel-failed'`
+  )
+  await until(() => hasText('连接失败'), '访问入口呈现连接异常')
+  assert.equal(await hasText('fixture-tunnel-failed'), false)
+  assert.equal(await hasText('操作未完成'), false, '外部访问故障不干扰本机启动')
+  await page.evaluate(click('在其他设备上使用'))
+  await until(() => hasText('开启访问'), '连接失败后可重试')
+  await page.evaluate(click('开启访问'))
+  await until(() => hasText('关闭访问'), '重新开启访问')
+  await page.evaluate(click('关闭访问'))
+  await until(() => hasText('开启访问'), '关闭访问不停止本机服务')
+  await page.evaluate(click('在其他设备上使用'))
+
+  await publish(`window.desktopLayoutState.targets[0].server.update.status = 'checking'`)
+  await until(
+    () =>
+      page.evaluate(
+        `window.desktopLayoutCommands.filter(item => item.command === 'get_control_state').length > 1`
+      ),
+    '更新状态读取'
+  )
+  await page.evaluate(click('打开 Pi Desk'))
+  assert.equal(
+    await page.evaluate(
+      `window.desktopLayoutCommands.some(item => item.command === 'open_target_command' && item.args.url === ${JSON.stringify(localUrl)})`
+    ),
+    true,
+    '后台检查更新不阻塞打开'
+  )
+
+  await page.evaluate(click('添加连接'))
+  await page.evaluate(field('网页地址', 'https://new-computer.example.test/'))
+  await publish(`window.desktopLayoutState.environment.status = 'checking'`)
+  await until(() => hasText('正在准备…'), '读取新的准备状态')
+  assert.equal(
+    await page.evaluate(`document.querySelector('form[aria-label="添加地址"] input').value`),
+    'https://new-computer.example.test/',
+    '刷新不得清空地址草稿'
+  )
+  await publish(
+    `window.desktopLayoutState.environment.status = 'ready'; window.desktopLayoutState.targets[0].server.update.status = 'idle'`
+  )
+  await page.evaluate(click('添加并打开'))
+  await until(() => hasText('new-computer.example.test'), '新增连接显示在列表')
+  assert.equal(
+    await page.evaluate(
+      `window.desktopLayoutCommands.some(item => item.command === 'open_target_command' && item.args.url === 'https://new-computer.example.test/')`
+    ),
+    true
+  )
+
+  await page.evaluate(`document.querySelector('summary[aria-label="桌面设置"]').click()`)
+  await page.evaluate(click('这台电脑'))
+  await until(() => hasText('连接设置'), '从明确设置入口进入本机配置')
+  await page.evaluate(click('返回'))
+  await until(() => hasText('打开 Pi Desk'), '返回启动页')
+
+  await publish(`
+    window.desktopLayoutState.targets[0].server.needsSetup = true;
+    window.desktopLayoutState.targets[0].server.status = 'stopped';
+    window.desktopLayoutState.environment.status = 'required';
+    window.desktopLayoutState.environment.components.forEach(item => { item.status = 'missing'; item.version = null; item.path = null });
+  `)
+  await until(() => hasText('安装并打开'), '首次准备入口')
+  await assertSetupFits(page, '安装并打开')
+  assert.equal(await hasText('Node.js'), false, '首次准备不要求用户理解组件名称')
+  await page.screenshot('environment-required.png')
+  await page.evaluate(click('安装并打开'))
+  await until(() => hasText('取消安装'), '准备中的取消入口')
+  await assertSetupFits(page, '取消安装')
+  assert.equal(
+    await page.evaluate(`document.querySelector('progress[aria-label="下载进度"]').value`),
+    53
+  )
+  await page.screenshot('environment-preparing.png')
+  await page.viewport(720, 560)
+  await assertSetupFits(page, '取消安装')
+  await page.evaluate(click('取消安装'))
+  await until(() => hasText('安装并打开'), '取消后可重新准备')
+  await publish(
+    `window.desktopLayoutState.environment.status = 'failed'; window.desktopLayoutState.environment.error = 'fixture-download-failed'`
+  )
+  await until(() => hasText('重试安装'), '失败后的恢复入口')
+  assert.equal(await hasText('fixture-download-failed'), false, '错误技术详情默认收起')
+  await page.viewport(960, 720)
+  await page.screenshot('environment-error.png')
+  await publish(
+    `window.desktopLayoutState.targets = window.desktopLayoutState.targets.filter(item => !item.server)`
+  )
+  await until(async () => !(await hasText('这台电脑')), '仅远程连接的页面')
+  await page.evaluate(click('打开'))
+  assert.equal(
+    await page.evaluate(
+      `window.desktopLayoutCommands.some(item => item.command === 'open_target_command' && item.args.url === 'https://workstation.example.test/')`
+    ),
+    true
+  )
+  await publish(`window.desktopLayoutState.targets = []`)
+  await until(() => hasText('连接你的 Pi Desk'), '空连接列表的可用入口')
+  await page.evaluate(click('连接其他电脑'))
+  assert.equal(
+    await page.evaluate(`!!document.querySelector('form[aria-label="添加地址"] input')`),
+    true
+  )
+}
+
 validation: try {
+  if (layoutOnly) {
+    child = spawn(
+      executable,
+      [
+        '--headless=new',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-extensions',
+        `--user-data-dir=${join(root, 'browser')}`,
+        `--remote-debugging-port=${debugPort}`,
+        'about:blank'
+      ],
+      { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }
+    )
+    child.stdout.pipe(output, { end: false })
+    child.stderr.pipe(output, { end: false })
+    exit = once(child, 'exit')
+    const target = await until(
+      async () => (await targets()).find((item) => item.type === 'page'),
+      '隔离布局浏览器'
+    )
+    const control = await connect(target)
+    await control.viewport(960, 720)
+    await control.theme('light')
+    await control.load(`${targetUrl}desktop/`, `(${installLayoutFixture.toString()})()`)
+    await validateLayout(control)
+    assert.deepEqual(control.errors, [], '布局交互不应出现 JavaScript 异常')
+    passed = true
+    break validation
+  }
   await rename(frontend, heldFrontend)
   moved = true
   child = spawn(executable, [], {
@@ -512,7 +889,16 @@ validation: try {
   for (const text of ['正在检测', '未找到可用的', '运行环境目录', '返回地址列表']) {
     assert.equal(normalText.includes(text), false, `不应展示内部检查或页面跳转入口：${text}`)
   }
-  assert.ok(normalText.includes('正在下载 Node.js、Git Bash'))
+  assert.ok(normalText.includes('正在下载所需组件'))
+  assert.equal(normalText.includes('正在下载 Node.js、Git Bash'), false)
+  await control.evaluate(`(() => {
+    const summary = [...document.querySelectorAll('summary')].find(item => item.textContent.trim() === '安装详情');
+    summary.click();
+  })()`)
+  assert.equal(
+    await control.evaluate(`document.body.innerText.includes('正在下载 Node.js、Git Bash')`),
+    true
+  )
   assert.deepEqual(
     await control.evaluate(
       `[...document.querySelectorAll('ol[aria-label="安装步骤"] li')].map(item => item.innerText.replace(/\\s+/g, ' ').trim())`
@@ -656,7 +1042,7 @@ validation: try {
     clipboard.writeText = async text => { window.desktopCopiedInstallCommand = text; };
   })()`)
   for (const [source, registry] of [
-    ['npmmirror', 'https://registry.npmmirror.com'],
+    ['npmmirror', 'https://mirrors.cloud.tencent.com/npm'],
     ['official', 'https://registry.npmjs.org']
   ]) {
     await control.evaluate(sourceField(source))
@@ -750,7 +1136,7 @@ validation: try {
     true
   )
   await control.screenshot('control-ready.png')
-  await control.evaluate(click('添加地址'))
+  await control.evaluate(click('添加连接'))
   await until(
     () =>
       control.evaluate(
@@ -825,8 +1211,17 @@ validation: try {
   await control.evaluate(field('就绪路径', '/health-unavailable'))
   await control.evaluate(field('包名', '@desktop/new-service'))
   await control.evaluate(field('下载源', targetUrl))
-  await control.evaluate(field('启动时自动更新', true))
-  await control.evaluate(field('运行时自动检查并更新', true))
+  await control.evaluate(field('启动自动更新', true))
+  await control.evaluate(`window.updateWarning = null; window.previousConfirm = window.confirm;
+    window.confirm = (message) => { window.updateWarning = message; return true; }`)
+  try {
+    await control.evaluate(field('定时自动更新', true))
+    assert.match(await control.evaluate('window.updateWarning'), /运行中的任务被打断.*谨慎/)
+  } finally {
+    await control.evaluate(
+      'window.confirm = window.previousConfirm; delete window.previousConfirm; delete window.updateWarning'
+    )
+  }
   await control.screenshot('settings-generic.png')
   await control.evaluate(click('保存设置'))
   await until(() => control.evaluate('location.hash === "#/"'), '服务设置保存')
@@ -839,8 +1234,9 @@ validation: try {
     package: {
       name: '@desktop/new-service',
       registry: targetUrl.slice(0, -1),
-      autoUpdateOnStart: true,
-      periodicUpdateCheck: true
+      startupUpdate: 'update',
+      periodicUpdate: 'update',
+      channel: 'stable'
     }
   })
   const runtime = JSON.parse(await readFile(join(root, 'runtime.json'), 'utf8')).targets[managedUrl]
@@ -855,11 +1251,10 @@ validation: try {
       ),
     '服务设置回读'
   )
-  const fields =
-    await control.evaluate(`['包名', '启动时自动更新', '运行时自动检查并更新'].map(name => {
+  const fields = await control.evaluate(`['包名', '启动自动更新', '定时自动更新'].map(name => {
     const label = [...document.querySelectorAll('label')].find(item => item.textContent.trim().startsWith(name));
     const input = label?.querySelector('input');
-    return input?.type === 'checkbox' ? input.checked : input?.value;
+    return ['checkbox', 'radio'].includes(input?.type) ? input.checked : input?.value;
   })`)
   assert.deepEqual(fields, ['@desktop/new-service', true, true])
   await control.evaluate(click('取消'))
@@ -966,7 +1361,7 @@ validation: try {
       .catch(() => null)
     await writeFile(join(root, 'failure-state.json'), JSON.stringify(state, null, 2))
   }
-  console.error(`原生页面验收失败，现场：${root}`)
+  console.error(`${layoutOnly ? '前端布局' : '原生页面'}验收失败，现场：${root}`)
   throw error
 } finally {
   for (const connection of connections) connection.close()
@@ -1005,33 +1400,42 @@ validation: try {
 await writeFile(
   join(root, 'result.json'),
   JSON.stringify(
-    {
-      passed,
-      frontendDirectoryAbsent: true,
-      controlAndBrowserVerified: !setupOnly,
-      settingsSavedAndReloaded: !setupOnly,
-      missingEnvironmentBlockedNpm: !setupOnly,
-      manualSetupAndRemoteAccessVerified: !setupOnly,
-      preparationFitsDefaultAndMinimumViewport: true,
-      preparationCurrentStatusAndKeyboardVerified: true,
-      preparationStepsOrderedAndHomeStable: true,
-      inlineAddressSavedAndReloaded: true,
-      preparationErrorOnlyDetailsAndCancelVerified: true,
-      controlViewport: { width: 960, height: 720 },
-      minimumViewport: { width: 720, height: 560 },
-      preparationUiUsesIsolatedFixture: true,
-      sourceScenario,
-      countryRecommendationVerified: true,
-      sourceSelectableBeforeStartAndFixedAfterStart: true,
-      selectedSourceSavedThroughNativeCommand: true,
-      manualInstallCommandMatchesSource: true,
-      activeRuntimeProtected: !setupOnly,
-      shellArchitecture: 'ia32',
-      childArchitecture: process.arch,
-      portsReleased: true
-    },
+    layoutOnly
+      ? {
+          passed,
+          scope: 'desktop-web-layout',
+          mockedNativeIpc: true,
+          controlViewport: { width: 960, height: 720 },
+          minimumViewport: { width: 720, height: 560 },
+          portsReleased: true
+        }
+      : {
+          passed,
+          frontendDirectoryAbsent: true,
+          controlAndBrowserVerified: !setupOnly,
+          settingsSavedAndReloaded: !setupOnly,
+          missingEnvironmentBlockedNpm: !setupOnly,
+          manualSetupAndRemoteAccessVerified: !setupOnly,
+          preparationFitsDefaultAndMinimumViewport: true,
+          preparationCurrentStatusAndKeyboardVerified: true,
+          preparationStepsOrderedAndHomeStable: true,
+          inlineAddressSavedAndReloaded: true,
+          preparationErrorOnlyDetailsAndCancelVerified: true,
+          controlViewport: { width: 960, height: 720 },
+          minimumViewport: { width: 720, height: 560 },
+          preparationUiUsesIsolatedFixture: true,
+          sourceScenario,
+          countryRecommendationVerified: true,
+          sourceSelectableBeforeStartAndFixedAfterStart: true,
+          selectedSourceSavedThroughNativeCommand: true,
+          manualInstallCommandMatchesSource: true,
+          activeRuntimeProtected: !setupOnly,
+          shellArchitecture: 'ia32',
+          childArchitecture: process.arch,
+          portsReleased: true
+        },
     null,
     2
   )
 )
-console.info(`原生页面验收通过，进程与端口已释放：${root}`)
+console.info(`${layoutOnly ? '前端布局' : '原生页面'}验收通过，进程与端口已释放：${root}`)
