@@ -4,6 +4,7 @@ import { appendFile, copyFile, mkdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { prepareDevelopmentVersions } from './prepare-stable-release.mjs'
+import { selectPackages } from './release-npm.mjs'
 
 export function developmentBaseline(root, before) {
   assert.match(before, /^[a-f0-9]{40}$/)
@@ -21,6 +22,35 @@ export function developmentBaseline(root, before) {
   return entry ? before : '0'.repeat(40)
 }
 
+export async function manualDevelopmentTargets(root, target) {
+  const entries = await selectPackages(root, 'all')
+  const selected = new Set(
+    (await selectPackages(root, target || 'all')).map((entry) => entry.manifest.name)
+  )
+  let added
+  do {
+    added = false
+    for (const entry of entries.filter((entry) => selected.has(entry.manifest.name))) {
+      for (const group of [
+        'dependencies',
+        'optionalDependencies',
+        'peerDependencies',
+        'devDependencies'
+      ]) {
+        for (const name of Object.keys(entry.manifest[group] ?? {})) {
+          if (!selected.has(name) && entries.some((entry) => entry.manifest.name === name)) {
+            selected.add(name)
+            added = true
+          }
+        }
+      }
+    }
+  } while (added)
+  return entries
+    .filter((entry) => selected.has(entry.manifest.name))
+    .map((entry) => entry.manifest.name.slice('@jetcrab/'.length))
+}
+
 async function main() {
   assert.equal(process.env.GITHUB_ACTIONS, 'true')
   assert.equal(process.env.GITHUB_REF, 'refs/heads/dev')
@@ -34,10 +64,16 @@ async function main() {
     stdio: ['ignore', 'pipe', 'pipe']
   }).trim()
   const result = await prepareDevelopmentVersions(root, {
-    before: developmentBaseline(root, process.env.RELEASE_BEFORE),
+    before:
+      process.env.GITHUB_EVENT_NAME === 'workflow_dispatch'
+        ? '0'.repeat(40)
+        : developmentBaseline(root, process.env.RELEASE_BEFORE),
     number,
     stableBase
   })
+  if (process.env.GITHUB_EVENT_NAME === 'workflow_dispatch') {
+    result.selected = await manualDevelopmentTargets(root, process.env.RELEASE_PACKAGE)
+  }
   if (result.selected.length) {
     execFileSync(
       'pnpm',

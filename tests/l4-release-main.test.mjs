@@ -17,7 +17,10 @@ import {
 import { sha256 } from '../.github/scripts/release-github.mjs'
 import { validateRecord, changeSections } from '../.github/scripts/release-record.mjs'
 import { packageClient } from '../.github/scripts/pack-client.mjs'
-import { developmentBaseline } from '../.github/scripts/prepare-dev-release.mjs'
+import {
+  developmentBaseline,
+  manualDevelopmentTargets
+} from '../.github/scripts/prepare-dev-release.mjs'
 
 async function fixture(t) {
   const parent = resolve('temp/tests/release-main/batch-regression')
@@ -160,6 +163,27 @@ test('新开发发布入口仅首次按完整快照准备，后续保留推送�
   const activated = repo.commit()
   assert.equal(developmentBaseline(repo.root, activated), activated)
   assert.throws(() => developmentBaseline(repo.root, 'f'.repeat(40)))
+})
+
+test('指定开发包复验自动包含其SDK依赖，不选择无关包', async (t) => {
+  const repo = await fixture(t)
+  await repo.pkg('pi-desk', '1.0.1-dev.1', {
+    dependencies: { '@jetcrab/pi-desk-sdk': 'workspace:^' }
+  })
+  await repo.pkg('pi-desk-usage', '1.0.0')
+  assert.deepEqual(await manualDevelopmentTargets(repo.root, 'pi-desk'), ['pi-desk-sdk', 'pi-desk'])
+  assert.deepEqual(await manualDevelopmentTargets(repo.root, 'pi-desk-sdk'), ['pi-desk-sdk'])
+  await assert.rejects(manualDevelopmentTargets(repo.root, 'missing-package'))
+})
+
+test('macOS归档参数在无证书时也不展开空数组', async () => {
+  const workflow = await readFile(
+    new URL('../.github/workflows/release-apple.yml', import.meta.url),
+    'utf8'
+  )
+  assert.match(workflow, /pack_args=\(macos "\$\{dmgs\[0\]\}" "\$CLIENT_OUTPUT"\)/)
+  assert.match(workflow, /pack_args\+=\(--developer-id\)/)
+  assert.match(workflow, /trap 'status=\$\?; trap - EXIT;.*exit "\$status"'/)
 })
 
 test('dev普通源码推送自动生成测试版本，纯文档推送不发npm包', async (t) => {

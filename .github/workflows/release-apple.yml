@@ -130,7 +130,7 @@ jobs:
           mountpoint="$RUNNER_TEMP/pi-desk-dmg-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           mkdir -p "$mountpoint"
           hdiutil attach "${dmgs[0]}" -readonly -nobrowse -mountpoint "$mountpoint"
-          trap 'hdiutil detach "$mountpoint" > /dev/null' EXIT
+          trap 'status=$?; trap - EXIT; hdiutil detach "$mountpoint" > /dev/null || status=1; exit "$status"' EXIT
           app="$mountpoint/Pi Desk.app"
           test -f "$app/Contents/Info.plist"
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
@@ -140,12 +140,12 @@ jobs:
           version=$(node -p 'require("./apps/desktop/package.json").version')
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
           suffix=adhoc
-          pack_args=()
+          pack_args=(macos "${dmgs[0]}" "$CLIENT_OUTPUT")
           if [[ "$SIGNED" == true ]]; then
             suffix=developer-id
-            pack_args=(--developer-id)
+            pack_args+=(--developer-id)
           fi
-          node .github/scripts/pack-client.mjs macos "${dmgs[0]}" "$CLIENT_OUTPUT" "${pack_args[@]}"
+          node .github/scripts/pack-client.mjs "${pack_args[@]}"
           (cd "$CLIENT_OUTPUT" && shasum -a 256 ./*.dmg > SHA256SUMS.txt)
           {
             echo '## macOS 构建结果'

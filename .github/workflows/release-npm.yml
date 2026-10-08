@@ -106,13 +106,13 @@ jobs:
           assert.ok(Array.isArray(packages) && packages.every(name => /^pi-desk(?:-[a-z0-9-]+)?$/.test(name)))
           appendFileSync(process.env.GITHUB_OUTPUT, `packages=${JSON.stringify(packages)}\n`)
           JS
-          elif [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/dev ]; then
+          elif [ "$GITHUB_REF" = refs/heads/dev ]; then
             node .github/scripts/prepare-dev-release.mjs
           else
             node .github/scripts/release-versions.mjs npm
           fi
       - uses: actions/upload-artifact@v4
-        if: github.event_name == 'push' && github.ref == 'refs/heads/dev' && steps.selection.outputs.packages != '[]'
+        if: github.ref == 'refs/heads/dev' && steps.selection.outputs.packages != '[]'
         with:
           name: dev-manifests-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.DEV_MANIFEST_DIR }}/
@@ -147,10 +147,25 @@ jobs:
           node-version: 22.22.2
           cache: pnpm
       - uses: actions/download-artifact@v4
-        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        if: github.ref == 'refs/heads/dev'
         with:
           name: dev-manifests-${{ github.run_id }}-${{ github.run_attempt }}
           path: .
+      - name: 核对并固定 Windows Git Bash
+        run: |
+          $original = (Get-Command bash.exe -ErrorAction SilentlyContinue).Source
+          Write-Host "原 Bash 路径：$original"
+          $gitRoot = Split-Path (Split-Path (Get-Command git.exe).Source)
+          $gitBin = Join-Path $gitRoot 'bin'
+          $bash = Join-Path $gitBin 'bash.exe'
+          if (-not (Test-Path $bash)) { throw 'Git for Windows 未提供 Bash' }
+          $gitBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $env:PATH = "$gitBin;$env:PATH"
+          Write-Host "测试 Bash 路径：$((Get-Command bash.exe).Source)"
+          & $bash --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $bash -c 'node -p process.platform'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 安装公开依赖
         run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
       - name: 构建、测试和校验实际 tarball
@@ -184,7 +199,7 @@ jobs:
         with:
           node-version: 22.22.2
       - uses: actions/download-artifact@v4
-        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        if: github.ref == 'refs/heads/dev'
         with:
           name: dev-manifests-${{ github.run_id }}-${{ github.run_attempt }}
           path: .
