@@ -45,6 +45,38 @@ test('Git证据只能读取指定提交普通文件，拒绝工作树、私有�
   assert.match((await reader.readFile({ revision: 'head', path: 'source.js' })).text, /fixture/)
 })
 
+test('大量长路径按字节批量分页，完整盘点且减少模型往返', async (t) => {
+  const repo = await fixture(t)
+  const folder = `entries-${'module-'.repeat(12)}`
+  await mkdir(join(repo.root, folder))
+  const expected = ['source.js']
+  for (let index = 0; index < 245; index++) {
+    const path = `${folder}/feature-${String(index).padStart(4, '0')}.ts`
+    expected.push(path)
+    await writeFile(join(repo.root, path), 'export const ready = true\n')
+  }
+  repo.git('add', '--', folder)
+  repo.git('commit', '-m', 'large source index')
+  const reader = await createGitEvidence({
+    ...repo,
+    source: { base: null, head: repo.git('rev-parse', 'HEAD') }
+  })
+  let offset = 0
+  let pages = 0
+  const actual = []
+  do {
+    const page = await reader.listChanges({ offset })
+    assert.ok(Buffer.byteLength(JSON.stringify(page.files)) <= 12 * 1024)
+    assert.ok(page.files.length > 0 && page.files.length <= 200)
+    assert.equal(page.offset, offset)
+    actual.push(...page.files.map((file) => file.path))
+    offset = page.nextOffset
+    pages++
+  } while (offset !== null)
+  assert.deepEqual(actual.sort(), expected.sort())
+  assert.ok(pages > 1 && pages <= 6, '长路径目录应在少量批次内完整返回')
+})
+
 test('大diff必须逐页读完，作者与审核者的读取证据独立', async (t) => {
   const repo = await fixture(
     t,

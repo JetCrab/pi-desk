@@ -401,17 +401,24 @@ export async function runReleaseAgent({ root, plan, output, config }) {
     const tests = plan.tests ?? null
     if (Buffer.byteLength(JSON.stringify(tests)) > 16 * 1024) fail('TEST_STATUS_SIZE')
     const common = { root, config, source, tests, signal: controller.signal, audit }
+    console.log('发布审查：作者开始读取固定提交并整理变更。')
     const author = await runRole({
       ...common,
       role: 'author',
       directory: join(directory, 'author')
     })
+    console.log(
+      `发布审查：作者完成（${audit.author.turns} 轮、${audit.author.calls} 次工具调用），开始独立审核。`
+    )
     const reviewer = await runRole({
       ...common,
       role: 'reviewer',
       directory: join(directory, 'reviewer'),
       draft: author.changes
     })
+    console.log(
+      `发布审查：审核者完成（${audit.reviewer.turns} 轮、${audit.reviewer.calls} 次工具调用），保存已核验记录。`
+    )
     await saveEvidence()
     await writeFile(output, JSON.stringify(validateChanges(reviewer.changes), null, 2) + '\n')
     return reviewer.changes

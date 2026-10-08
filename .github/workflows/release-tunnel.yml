@@ -1,5 +1,5 @@
 name: Release tunnel
-run-name: ${{ (inputs.source_sha || inputs.publish) && '发布隧道镜像' || '构建隧道镜像' }}
+run-name: ${{ inputs.phase || ((inputs.source_sha || inputs.publish) && '发布隧道镜像' || '构建隧道镜像') }}
 
 on:
   workflow_call:
@@ -8,6 +8,10 @@ on:
         description: 固定构建源码提交（完整 SHA）
         type: string
         required: true
+      phase:
+        description: build 仅构建，publish 推送已验证制品，all 完整执行
+        type: string
+        default: all
   workflow_dispatch:
     inputs:
       publish:
@@ -24,7 +28,7 @@ defaults:
     shell: bash
 
 concurrency:
-  group: release-tunnel
+  group: release-tunnel-${{ inputs.phase || 'all' }}
   cancel-in-progress: false
 
 env:
@@ -39,12 +43,17 @@ jobs:
         env:
           WORKFLOW_REF: ${{ github.ref }}
           SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+          RELEASE_PHASE: ${{ inputs.phase || 'all' }}
         run: |
           set -euo pipefail
           if [[ "$WORKFLOW_REF" != refs/heads/main ]]; then
             echo '::error::隧道构建和发布仅允许从 main 分支运行'
             exit 1
           fi
+          case "$RELEASE_PHASE" in
+            build|publish|all) ;;
+            *) echo '::error::隧道阶段无效'; exit 1 ;;
+          esac
           if [[ ! "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo '::error::源码 SHA 必须为完整的 40 位十六进制提交 SHA'
             exit 1
@@ -56,6 +65,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       changed: ${{ steps.selection.outputs.changed }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,6 +75,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.2
+      - name: 读取服务端版本
+        id: version
+        run: |
+          python3 - <<'PY'
+          import os, re, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('apps/tunnel/server/Cargo.toml').read_text())['package']['version']
+          assert re.fullmatch(r'\d+\.\d+\.\d+', version), '隧道必须使用正式语义版本'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\n')
+          PY
       - name: 检测服务版本变化
         id: selection
         env:
@@ -79,12 +100,11 @@ jobs:
 
   build:
     needs: plan
-    if: needs.plan.outputs.changed == 'true'
+    if: needs.plan.outputs.changed == 'true' && inputs.phase != 'publish'
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     env:
+      IMAGE_VERSION: ${{ needs.plan.outputs.version }}
       CARGO_TARGET_DIR: ${{ github.workspace }}/temp/build/tunnel-ci/${{ github.run_id }}-${{ github.run_attempt }}
       CONTAINER_NAME: pi-desk-tunnel-ci-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -93,20 +113,6 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
-
-      - name: 读取服务端版本
-        id: version
-        run: |
-          python3 - <<'PY'
-          import os
-          import tomllib
-          from pathlib import Path
-
-          manifest = tomllib.loads(Path("apps/tunnel/server/Cargo.toml").read_text())
-          version = manifest["package"]["version"]
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"version={version}\n")
-          PY
 
       - name: Rust workspace 测试
         working-directory: apps/tunnel
@@ -127,13 +133,11 @@ jobs:
           platforms: linux/amd64
           load: true
           push: false
-          tags: ${{ env.IMAGE_REPOSITORY }}:${{ steps.version.outputs.version }}
+          tags: ${{ env.IMAGE_REPOSITORY }}:${{ needs.plan.outputs.version }}
           labels: |
             org.opencontainers.image.revision=${{ inputs.source_sha || github.sha }}
 
       - name: 容器 HTTP 健康探针
-        env:
-          IMAGE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           export PI_DESK_TUNNEL_SERVER_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
           export PI_DESK_TUNNEL_PRIVATE_KEY="$(python3 -c 'import base64, secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())')"
@@ -167,8 +171,6 @@ jobs:
           PY
 
       - name: 保存已验证镜像
-        env:
-          IMAGE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p "$PACKAGE_DIR"
           docker save "$IMAGE_REPOSITORY:$IMAGE_VERSION" \
@@ -178,7 +180,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tunnel-image-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.PACKAGE_DIR }}/pi-desk-tunnel-${{ steps.version.outputs.version }}-linux-amd64.tar.gz
+          path: ${{ env.PACKAGE_DIR }}/pi-desk-tunnel-${{ needs.plan.outputs.version }}-linux-amd64.tar.gz
           if-no-files-found: error
           retention-days: 7
 
@@ -197,15 +199,21 @@ jobs:
           fi
 
   publish:
-    if: ${{ (inputs.source_sha || inputs.publish) && needs.build.result == 'success' }}
-    needs: build
+    if: >-
+      always() && !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.changed == 'true' &&
+      ((inputs.source_sha && inputs.phase == 'publish') ||
+       (inputs.phase != 'build' && (inputs.source_sha || inputs.publish) && needs.build.result == 'success'))
+    needs: [plan, build]
+    concurrency:
+      group: release-tunnel-version-push
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       packages: write
     env:
-      IMAGE_VERSION: ${{ needs.build.outputs.version }}
+      IMAGE_VERSION: ${{ needs.plan.outputs.version }}
       SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
       REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
     steps:

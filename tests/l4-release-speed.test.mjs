@@ -53,6 +53,52 @@ test('Rust缓存复制保留编译依赖但不覆盖本次配置或安装包', a
   await assert.rejects(access(join(target, 'web')))
 })
 
+test('正式审查只等待固定提交，发布仍等待审查和所有构建', async () => {
+  const workflow = await readFile(
+    new URL('../.github/workflows/release-main.yml', import.meta.url),
+    'utf8'
+  )
+  const notes = workflow.slice(workflow.indexOf('\n  notes:'), workflow.indexOf('\n  npm-build:'))
+  assert.match(notes, /needs: prepare\n/)
+  assert.doesNotMatch(notes, /BUILD_RESULTS|plan\.tests|needs:\s*\[/)
+  const assemble = workflow.slice(
+    workflow.indexOf('\n  assemble:'),
+    workflow.indexOf('\n  npm-publish:')
+  )
+  assert.match(
+    assemble,
+    /needs: \[prepare, checks, notes, npm-build, windows, macos, android, tunnel-build\]/
+  )
+  assert.match(assemble, /!contains\(needs\.\*\.result, 'failure'\)/)
+  assert.match(assemble, /!contains\(needs\.\*\.result, 'cancelled'\)/)
+})
+
+test('隧道并行构建后复用已验证镜像，推送仍等待正式汇合', async () => {
+  const workflow = await readFile(
+    new URL('../.github/workflows/release-main.yml', import.meta.url),
+    'utf8'
+  )
+  const build = workflow.slice(
+    workflow.indexOf('\n  tunnel-build:'),
+    workflow.indexOf('\n  assemble:')
+  )
+  assert.match(build, /needs: prepare\n/)
+  assert.match(build, /outputs\.tunnel == 'true'/)
+  assert.match(build, /phase: build/)
+  const publish = workflow.slice(workflow.indexOf('\n  tunnel:'), workflow.indexOf('\n  publish:'))
+  assert.match(publish, /needs: \[prepare, assemble\]/)
+  assert.match(publish, /phase: publish/)
+  const tunnel = await readFile(
+    new URL('../.github/workflows/release-tunnel.yml', import.meta.url),
+    'utf8'
+  )
+  assert.match(tunnel, /apps\/tunnel\/server\/Cargo\.toml/)
+  assert.match(tunnel, /inputs.phase != 'publish'/)
+  assert.match(tunnel, /inputs.phase != 'build'/)
+  assert.match(tunnel, /group: release-tunnel-version-push/)
+  assert.match(tunnel, /加载同一镜像并核对源码/)
+})
+
 test('客户端dev保留产物和核心运行检查，完整回归只在main', async () => {
   const windows = await readFile(
     new URL('../.github/workflows/build-clients.yml', import.meta.url),
@@ -74,5 +120,8 @@ test('客户端dev保留产物和核心运行检查，完整回归只在main', a
     'utf8'
   )
   assert.match(main, /uses: \.\/.github\/workflows\/check.yml/)
-  assert.match(main, /needs: \[prepare, checks, notes, npm-build, windows, macos, android\]/)
+  assert.match(
+    main,
+    /needs: \[prepare, checks, notes, npm-build, windows, macos, android, tunnel-build\]/
+  )
 })

@@ -198,11 +198,22 @@ export async function createGitEvidence({ root, source, signal }) {
     requiredPaths: requiredPaths.length ? requiredPaths : [...changedPaths],
     async listChanges({ offset = 0 } = {}) {
       offsetValue(offset, changes.length)
-      const end = Math.min(offset + 20, changes.length)
-      const files = changes.slice(offset, end).map((item) => ({
-        ...item,
-        required: source.base !== null || requiredPaths.includes(item.path) || !requiredPaths.length
-      }))
+      let end = offset
+      let bytes = 2
+      const files = []
+      while (end < changes.length && files.length < 200) {
+        const item = changes[end]
+        const file = {
+          ...item,
+          required:
+            source.base !== null || requiredPaths.includes(item.path) || !requiredPaths.length
+        }
+        const size = Buffer.byteLength(JSON.stringify(file)) + 1
+        if (bytes + size > pageBytes && files.length) break
+        files.push(file)
+        bytes += size
+        end += 1
+      }
       return {
         offset,
         end,

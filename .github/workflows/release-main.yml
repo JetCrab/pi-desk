@@ -68,11 +68,8 @@ jobs:
       source_sha: ${{ needs.prepare.outputs.sha }}
 
   notes:
-    needs: [prepare, checks, npm-build, windows, macos, android]
-    if: >-
-      always() && !cancelled() && needs.prepare.result == 'success' &&
-      needs.prepare.outputs.published != 'true' && needs.prepare.outputs.notes_ready != 'true' &&
-      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    needs: prepare
+    if: needs.prepare.outputs.published != 'true' && needs.prepare.outputs.notes_ready != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -90,18 +87,6 @@ jobs:
         with:
           name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.RELEASE_ROOT }}
-      - name: 写入实际构建结果
-        env:
-          BUILD_RESULTS: ${{ toJSON(needs) }}
-        run: |
-          node --input-type=module <<'JS'
-          import { readFileSync, writeFileSync } from 'node:fs'
-          const file = `${process.env.RELEASE_ROOT}/plan.json`
-          const plan = JSON.parse(readFileSync(file, 'utf8'))
-          const results = JSON.parse(process.env.BUILD_RESULTS)
-          plan.tests = Object.fromEntries(['checks', 'npm-build', 'windows', 'macos', 'android'].map(name => [name, results[name].result]))
-          writeFileSync(file, JSON.stringify(plan))
-          JS
       - name: 安装隔离审查 Agent
         working-directory: .github/release-agent
         run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
@@ -168,8 +153,19 @@ jobs:
       ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
+  tunnel-build:
+    needs: prepare
+    if: needs.prepare.outputs.published != 'true' && needs.prepare.outputs.tunnel == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release-tunnel.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.sha }}
+      phase: build
+
   assemble:
-    needs: [prepare, checks, notes, npm-build, windows, macos, android]
+    needs: [prepare, checks, notes, npm-build, windows, macos, android, tunnel-build]
     if: >-
       always() && !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.published != 'true' &&
       !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
@@ -240,6 +236,7 @@ jobs:
     uses: ./.github/workflows/release-tunnel.yml
     with:
       source_sha: ${{ needs.prepare.outputs.sha }}
+      phase: publish
 
   publish:
     needs: [prepare, assemble, npm-publish, tunnel]
