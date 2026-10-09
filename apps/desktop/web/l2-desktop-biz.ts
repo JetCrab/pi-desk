@@ -4,6 +4,7 @@ import {
   type DownloadSource,
   type EnvironmentComponent,
   type ReleaseChannel,
+  type StartupPreferences,
   type TargetConfig,
   type UpdatePolicy
 } from './l4-desktop-ipc'
@@ -37,6 +38,10 @@ const commands: Record<DesktopAction, string> = {
 
 export async function runDesktopAction(action: DesktopAction, url?: string): Promise<void> {
   await desktopCommand(commands[action], url ? { url } : undefined)
+}
+
+export async function saveStartupPreference(preferences: StartupPreferences): Promise<void> {
+  await desktopCommand('set_startup_preference_command', preferences)
 }
 
 export async function prepareEnvironment(

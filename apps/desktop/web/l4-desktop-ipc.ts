@@ -47,8 +47,17 @@ export type EnvironmentSnapshot = {
 }
 
 export type ControlState = {
+  hideOnStartup: boolean | null
+  hideOnOpen: boolean
+  showOnClose: boolean
   targets: TargetSnapshot[]
   environment: EnvironmentSnapshot
+}
+
+export type StartupPreferences = {
+  hideOnStartup?: boolean
+  hideOnOpen?: boolean
+  showOnClose?: boolean
 }
 
 export type UpdatePolicy = 'none' | 'check' | 'update'

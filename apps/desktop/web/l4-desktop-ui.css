@@ -198,9 +198,8 @@ textarea:disabled {
 }
 .local-target {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 24px;
-  padding: 28px;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 24px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--card);
@@ -216,15 +215,21 @@ textarea:disabled {
   display: grid;
   place-items: center;
   flex: none;
-  width: 64px;
-  height: 64px;
+  width: 48px;
+  height: 48px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--muted);
 }
 .device-icon .icon {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
+}
+.target-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
 }
 .target-address {
   font-size: 0.75rem;
@@ -256,10 +261,9 @@ textarea:disabled {
   flex: none;
 }
 .launch-actions {
-  grid-column: 2;
-  grid-row: 1;
-  align-self: center;
-  justify-content: flex-end;
+  grid-column: 1 / -1;
+  justify-content: flex-start;
+  margin-top: 20px;
 }
 .launch-actions .primary {
   padding-inline: 12px;
@@ -269,11 +273,11 @@ textarea:disabled {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   border-top: 1px solid var(--border);
-  margin-top: 24px;
-  padding-top: 16px;
+  margin-top: 20px;
+  padding-top: 12px;
 }
 .target-tools > button {
   color: var(--muted-foreground);
@@ -345,14 +349,8 @@ textarea:disabled {
 .access-address > button {
   flex: none;
 }
-.local-target[data-preparing='true'] > .target-heading {
+.local-target > .target-heading {
   grid-column: 1 / -1;
-}
-.local-target[data-preparing='true'] > .desktop-expansion:last-child {
-  grid-row: 2;
-}
-.local-target[data-preparing='true'] > .target-tools {
-  grid-row: 3;
 }
 .local-target > .update-state,
 .local-target > .error-block,
@@ -855,8 +853,60 @@ progress:indeterminate::-webkit-progress-bar {
     background-position: 0% 0;
   }
 }
+.desktop-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 12px 48px #0003;
+}
+.desktop-dialog::backdrop {
+  background: #0006;
+}
+.desktop-dialog h2 {
+  font-size: 1.125rem;
+  line-height: 1.4;
+}
+.desktop-dialog > p {
+  margin-top: 12px;
+}
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+}
+.access-target-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+.access-target-list button {
+  justify-content: flex-start;
+  padding: 12px;
+  text-align: left;
+}
+.access-target-list button span {
+  flex: 1;
+  min-width: 0;
+}
 .desktop-settings {
   max-width: 688px;
+}
+.startup-settings {
+  padding-bottom: 16px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-target-heading {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 20px;
 }
 form,
 .fields {

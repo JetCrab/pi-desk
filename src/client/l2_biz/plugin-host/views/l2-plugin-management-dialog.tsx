@@ -53,9 +53,11 @@ export function L2PluginManagementDialog({
           </L4AppDialogTitle>
           <L4AppDialogDescription>
             {confirmation
-              ? confirmation.kind === 'del'
+              ? confirmation.kind === 'del' ||
+                (confirmation.kind === 'batch' && confirmation.input.action === 'del')
                 ? t('removeDescription')
-                : confirmation.kind === 'add'
+                : confirmation.kind === 'add' ||
+                    (confirmation.kind === 'batch' && confirmation.input.action === 'add')
                   ? t('thirdPartyDescription')
                   : confirmation.kind === 'reload'
                     ? t(
@@ -70,7 +72,18 @@ export function L2PluginManagementDialog({
         <L4AppDialogBody className="min-h-0">
           <div className="min-w-0 p-4 pt-0">
             {confirmation ? (
-              confirmation.kind === 'add' ? (
+              confirmation.kind === 'batch' ? (
+                <ul className="space-y-2 text-sm">
+                  {(confirmation.input.action === 'add'
+                    ? confirmation.input.items.map((item) => item.source)
+                    : confirmation.input.sources
+                  ).map((source) => (
+                    <li key={source} className="font-medium [overflow-wrap:anywhere]">
+                      {source}
+                    </li>
+                  ))}
+                </ul>
+              ) : confirmation.kind === 'add' ? (
                 <dl className="space-y-3 text-sm">
                   <div>
                     <dt className="text-muted-foreground">{t('packageName')}</dt>
@@ -86,6 +99,12 @@ export function L2PluginManagementDialog({
                         t('fromSource')}
                     </dd>
                   </div>
+                  {confirmation.input.tag ? (
+                    <div>
+                      <dt className="text-muted-foreground">{t('installChannel')}</dt>
+                      <dd>{confirmation.input.tag}</dd>
+                    </div>
+                  ) : null}
                   <div>
                     <dt className="text-muted-foreground">{t('publisher')}</dt>
                     <dd className="[overflow-wrap:anywhere]">
@@ -118,7 +137,12 @@ export function L2PluginManagementDialog({
             </Button>
             <Button
               size="sm"
-              variant={confirmation.kind === 'del' ? 'destructive' : 'default'}
+              variant={
+                confirmation.kind === 'del' ||
+                (confirmation.kind === 'batch' && confirmation.input.action === 'del')
+                  ? 'destructive'
+                  : 'default'
+              }
               onClick={() => onConfirm(confirmation)}
             >
               {action}

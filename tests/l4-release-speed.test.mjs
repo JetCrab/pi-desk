@@ -22,7 +22,7 @@ test('dev只检查相关组件，README不触发构建类检查，main保留完�
   assert.equal(website.web, false)
   assert.equal(website.agent, false)
   const plugin = selectCiChecks(['plugins/pi-desk-subagent/src/index.ts'], false)
-  assert.equal(plugin.web, true)
+  assert.equal(plugin.web, false)
   assert.equal(plugin.website, false)
   assert.ok(Object.values(selectCiChecks([], true)).every(Boolean))
 })
@@ -175,7 +175,8 @@ test('隧道并行构建后复用已验证镜像，推送仍等待正式汇合',
   assert.match(build, /outputs\.tunnel == 'true'/)
   assert.match(build, /phase: build/)
   const publish = workflow.slice(workflow.indexOf('\n  tunnel:'), workflow.indexOf('\n  publish:'))
-  assert.match(publish, /needs: \[prepare, assemble\]/)
+  assert.match(publish, /needs: \[prepare, assemble, docker-build\]/)
+  assert.match(publish, /!contains\(needs\.\*\.result, 'failure'\)/)
   assert.match(publish, /phase: publish/)
   const tunnel = await readFile(
     new URL('../.github/workflows/release-tunnel.yml', import.meta.url),
@@ -193,9 +194,9 @@ test('同一运行的制品名称跨重试稳定，构建数据仍按attempt隔�
     'release-main',
     'release-npm',
     'build-clients',
-    'release-clients',
     'release-apple',
-    'release-tunnel'
+    'release-tunnel',
+    'release-docker'
   ]) {
     const workflow = await readFile(
       new URL(`../.github/workflows/${name}.yml`, import.meta.url),
@@ -218,20 +219,14 @@ test('同一运行的制品名称跨重试稳定，构建数据仍按attempt隔�
   }
 })
 
-test('dev共享进程清理变更触发Windows客户端构建', async () => {
-  const workflow = await readFile(
-    new URL('../.github/workflows/build-dev-clients.yml', import.meta.url),
-    'utf8'
-  )
-  const dependency = 'src/server/l4_foundation/process/l4-process-tree.js'
-  assert.ok(workflow.split('\npermissions:')[0].includes(`- '${dependency}'`))
-  assert.match(
-    workflow,
-    /\.github\/scripts\/check-desktop-tunnel\.mjs\|src\/server\/l4_foundation\/process\/l4-process-tree\.js\)\n\s+windows=true\n\s+;;/
+test('dev共享进程清理变更进入统一入口的宿主检查而非无关客户端编译', () => {
+  assert.equal(
+    selectCiChecks(['src/server/l4_foundation/process/l4-process-tree.js'], false).pidesk,
+    true
   )
 })
 
-test('客户端dev保留产物和核心运行检查，完整回归只在main', async () => {
+test('客户端dev执行受影响回归，覆盖安装仍仅在main', async () => {
   const windows = await readFile(
     new URL('../.github/workflows/build-clients.yml', import.meta.url),
     'utf8'
@@ -246,15 +241,16 @@ test('客户端dev保留产物和核心运行检查，完整回归只在main', a
   assert.match(macos, /BUILD_PROFILE: release\n/)
   assert.match(macos, /RUST_CACHE_STAGE:.*macos-release/)
   assert.doesNotMatch(macos, /--debug/)
-  assert.match(windows, /name: 正式发布桌面 Rust 回归\n\s+if: github.ref == 'refs\/heads\/main'/)
+  assert.match(windows, /name: 受影响桌面 Rust 回归/)
   assert.match(
     windows,
     /name: 隔离验证覆盖安装与正常退出\n\s+if: github.ref == 'refs\/heads\/main'/
   )
   assert.match(windows, /check-desktop-tunnel\.mjs/)
+  assert.match(windows, /build_tasks=\(:app:testDebugUnitTest\)/)
   assert.match(
     windows,
-    /if \[\[ "\$GITHUB_REF" == refs\/heads\/main \]\]; then test_tasks=\(:app:testDebugUnitTest\)/
+    /if \[\[ "\$CHECK_ONLY" != true \]\]; then build_tasks\+=\(:app:assembleRelease\)/
   )
   const main = await readFile(
     new URL('../.github/workflows/release-main.yml', import.meta.url),

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronDownIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
@@ -24,6 +24,7 @@ import { L2PluginDownloadSourceSelector } from './views/l2-plugin-download-sourc
 import { L2PluginInstalledList } from './views/l2-plugin-installed-list'
 import { L2PluginCatalogSearch } from './views/l2-plugin-catalog-search'
 import { L2PluginCatalogDetailView } from './views/l2-plugin-catalog-detail'
+import { L2PluginManagementChannel } from './views/l2-plugin-management-channel'
 import { L2PluginDirectInstall } from './views/l2-plugin-direct-install'
 import { L2PluginManagementDialog } from './views/l2-plugin-management-dialog'
 import { L2PluginReadme } from './views/l2-plugin-readme'
@@ -47,10 +48,37 @@ export function L2PluginManagement({
   const { locale } = useL4Region()
   const [tab, setTab] = useState<'installed' | 'search'>('installed')
   const [filter, setFilter] = useState('')
-  const management = useL2PluginManagement({ biz, onSnapshot, onRestartScheduled })
+  const [channel, setChannel] = useState('')
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
+  useEffect(() => {
+    if (!snapshot) return
+    const valid = new Set(snapshot.plugins.map((plugin) => pluginRequestKey(plugin.source)))
+    if (![...selected].some((key) => !valid.has(key))) return
+    queueMicrotask(() =>
+      setSelected((current) => new Set([...current].filter((key) => valid.has(key))))
+    )
+  }, [snapshot, selected])
+  const [catalogTag, setCatalogTag] = useState('')
+  const [catalogVersionExplicit, setCatalogVersionExplicit] = useState(false)
+  const management = useL2PluginManagement({ biz, snapshot, onSnapshot, onRestartScheduled })
+  const selectedSources =
+    snapshot?.plugins
+      .filter((plugin) => selected.has(pluginRequestKey(plugin.source)))
+      .map((plugin) => plugin.source) ?? []
+  const selectedNpmSources = selectedSources.filter((source) => source.startsWith('npm:'))
+  const selectSources = (keys: string[], checked: boolean): void => {
+    setSelected((current) => {
+      const next = new Set(current)
+      keys.forEach((key) => {
+        if (checked) next.add(key)
+        else next.delete(key)
+      })
+      return next
+    })
+  }
   const catalog = useL2PluginCatalog(biz, tab === 'search')
   const download = useL2PluginDownloadSource(biz)
-  const direct = useL2PluginDirectInstall(biz)
+  const direct = useL2PluginDirectInstall(biz, snapshot?.plugins)
   const disabled = basicMode || management.requests.has('reload')
   const browserErrors = new Map(
     management.pluginHost.getFailedEntries().map((item) => [item.pluginName, item.error.message])
@@ -80,20 +108,50 @@ export function L2PluginManagement({
     management.requests.has(catalogKey) ||
     Boolean(catalogPlugin?.operation && catalogPlugin.operation.phase !== 'failed')
   const directPending =
-    management.requests.has(directKey) ||
-    Boolean(directPlugin?.operation && directPlugin.operation.phase !== 'failed')
+    direct.sources.length > 0 &&
+    direct.sources.every((source) => {
+      const key = pluginRequestKey(source)
+      const plugin = snapshot?.plugins.find((item) => pluginRequestKey(item.source) === key)
+      return (
+        management.requests.has(key) ||
+        Boolean(plugin?.operation && plugin.operation.phase !== 'failed')
+      )
+    })
+  const directErrors = direct.sources
+    .map((source) => {
+      const key = pluginRequestKey(source)
+      const plugin = snapshot?.plugins.find((item) => pluginRequestKey(item.source) === key)
+      const error =
+        management.errors[key] ??
+        (plugin?.operation?.phase === 'failed' ? plugin.operation.message : null)
+      return error ? `${source}: ${error}` : null
+    })
+    .filter(Boolean)
+    .join('\n')
+  const catalogTarget = (item: L2PluginCatalogItem): L2PluginCatalogItem => {
+    const installed = snapshot?.plugins.find(
+      (plugin) => pluginNpmSpec(plugin.source)?.name === item.name
+    )
+    const tag = catalogTag || installed?.updateTag
+    return tag ? { ...item, version: tag } : item
+  }
   const openCatalog = (item: L2PluginCatalogItem): void => {
     management.closeDetail()
-    catalog.openDetail(item)
+    setCatalogVersionExplicit(false)
+    catalog.openDetail(catalogTarget(item))
   }
   const openInstalled = (source: string): void => {
     catalog.closeDetail()
     management.openDetail(source)
   }
   const installCatalogItem = (item: L2PluginCatalogItem): void => {
-    void catalog.prepareInstall(item, (detail) =>
+    void catalog.prepareInstall(catalogTarget(item), (detail) =>
       management.requestInstall(
-        { source: `npm:${detail.name}@${detail.version}`, registry: detail.registry },
+        {
+          source: `npm:${detail.name}`,
+          registry: detail.registry,
+          ...(catalogTag ? { tag: catalogTag } : {})
+        },
         detail
       )
     )
@@ -247,13 +305,17 @@ export function L2PluginManagement({
             <L2PluginDirectInstall
               source={direct.source}
               isNpm={Boolean(direct.spec)}
+              multiple={direct.sources.length > 1}
+              tag={direct.tag}
+              selectedVersion={direct.selectedVersion}
+              onTag={direct.setTag}
               detail={direct.detail}
               loading={direct.loading}
               pending={directPending}
               disabled={disabled}
               error={
                 direct.error ??
-                management.errors[directKey] ??
+                (directErrors || null) ??
                 (directPlugin?.operation?.phase === 'failed'
                   ? directPlugin.operation.message
                   : null)
@@ -270,7 +332,11 @@ export function L2PluginManagement({
               onRegistry={direct.setRegistry}
               onRead={() => void direct.loadDetail()}
               onVersion={(version) => void direct.loadDetail(version)}
-              onInstall={() => void direct.install(management.requestInstall)}
+              onInstall={() =>
+                void direct.install(management.requestInstall, (items) =>
+                  management.setConfirmation({ kind: 'batch', input: { action: 'add', items } })
+                )
+              }
               onClose={() => direct.setOpen(false)}
             />
           ) : null}
@@ -278,6 +344,23 @@ export function L2PluginManagement({
             snapshot={snapshot}
             loading={management.loading}
             filter={filter}
+            channel={channel}
+            selected={selected}
+            onChannel={setChannel}
+            onSelect={selectSources}
+            onCheckSelected={() => void management.refresh(selectedNpmSources)}
+            onUpdateSelected={() =>
+              void management.executeBatch({ action: 'update', sources: selectedSources })
+            }
+            onRemoveSelected={() =>
+              management.setConfirmation({
+                kind: 'batch',
+                input: { action: 'del', sources: selectedSources }
+              })
+            }
+            onTagSelected={(tag) =>
+              void management.executeBatch({ action: 'tag', sources: selectedNpmSources, tag })
+            }
             disabled={disabled}
             requests={management.requests}
             errors={management.errors}
@@ -286,7 +369,7 @@ export function L2PluginManagement({
             onDetail={openInstalled}
             onAction={management.handleControlAction}
             onDirectInstall={() => direct.setOpen(true)}
-            onRefresh={() => void management.refresh()}
+            onRefresh={() => void management.refresh(undefined, channel || undefined)}
           />
         </div>
       </div>
@@ -376,38 +459,71 @@ export function L2PluginManagement({
               </Button>
             </div>
           ) : catalog.detail ? (
-            <L2PluginCatalogDetailView
-              detail={catalog.detail}
-              disabled={disabled}
-              pending={catalogPending}
-              installed={Boolean(
-                catalogPlugin &&
-                !(
-                  catalogPlugin.operation?.action === 'add' &&
-                  catalogPlugin.operation.phase === 'failed'
-                )
-              )}
-              installedVersion={catalogPlugin?.version ?? null}
-              updateAvailable={Boolean(catalogPlugin?.updateAvailable)}
-              error={
-                catalog.installErrors[catalog.detail.name] ??
-                management.errors[catalogKey] ??
-                (catalogPlugin?.operation?.phase === 'failed'
-                  ? catalogPlugin.operation.message
-                  : null)
-              }
-              operationMessage={operationMessage(catalogPlugin?.operation?.phase)}
-              downloadMode={catalog.downloadMode}
-              downloadRegistry={catalog.downloadRegistry}
-              onDownloadMode={catalog.setDownloadMode}
-              onDownloadRegistry={catalog.setDownloadRegistry}
-              onVersion={(version) => void catalog.loadDetail(catalog.selection!, version)}
-              onInstall={() => catalog.installDetail(management.requestInstall)}
-              onUpdate={() => {
-                if (catalogPlugin)
-                  void management.execute({ kind: 'update', source: catalogPlugin.source })
-              }}
-            />
+            <div className="min-w-0 space-y-4">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span>{t('installChannel')}</span>
+                <L2PluginManagementChannel
+                  value={catalogTag}
+                  label={t('installChannel')}
+                  placeholder={t('defaultChannel')}
+                  disabled={catalogPending}
+                  onChange={(tag) => {
+                    setCatalogTag(tag)
+                    setCatalogVersionExplicit(false)
+                    void catalog.loadDetail(
+                      catalog.selection!,
+                      tag || catalogPlugin?.updateTag || 'latest'
+                    )
+                  }}
+                />
+              </div>
+              <L2PluginCatalogDetailView
+                detail={catalog.detail}
+                disabled={disabled}
+                pending={catalogPending}
+                installed={Boolean(
+                  catalogPlugin &&
+                  !(
+                    catalogPlugin.operation?.action === 'add' &&
+                    catalogPlugin.operation.phase === 'failed'
+                  )
+                )}
+                installedVersion={catalogPlugin?.version ?? null}
+                updateAvailable={Boolean(catalogPlugin?.updateAvailable)}
+                error={
+                  catalog.installErrors[catalog.detail.name] ??
+                  management.errors[catalogKey] ??
+                  (catalogPlugin?.operation?.phase === 'failed'
+                    ? catalogPlugin.operation.message
+                    : null)
+                }
+                operationMessage={operationMessage(catalogPlugin?.operation?.phase)}
+                downloadMode={catalog.downloadMode}
+                downloadRegistry={catalog.downloadRegistry}
+                onDownloadMode={catalog.setDownloadMode}
+                onDownloadRegistry={catalog.setDownloadRegistry}
+                onVersion={(version) => {
+                  setCatalogVersionExplicit(true)
+                  void catalog.loadDetail(catalog.selection!, version)
+                }}
+                onInstall={() =>
+                  catalog.installDetail((input, detail) =>
+                    management.requestInstall(
+                      {
+                        ...input,
+                        source: catalogVersionExplicit ? input.source : `npm:${detail.name}`,
+                        ...(catalogTag ? { tag: catalogTag } : {})
+                      },
+                      detail
+                    )
+                  )
+                }
+                onUpdate={() => {
+                  if (catalogPlugin)
+                    void management.execute({ kind: 'update', source: catalogPlugin.source })
+                }}
+              />
+            </div>
           ) : null
         ) : management.detailSource ? (
           <p className="text-sm text-muted-foreground">{t('pluginRemoved')}</p>

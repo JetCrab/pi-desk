@@ -19,7 +19,9 @@ const paths = {
   loader: 'M12 2a10 10 0 1 1-10 10',
   stop: 'M5 5h14v14H5z',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
-  close: 'm6 6 12 12M6 18 18 6'
+  close: 'm6 6 12 12M6 18 18 6',
+  edit: 'm16 3 5 5M4 20l4-1L21 6a2.1 2.1 0 0 0-3-3L5 16l-1 4Z',
+  trash: 'M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7'
 } as const
 
 export function DesktopIcon({

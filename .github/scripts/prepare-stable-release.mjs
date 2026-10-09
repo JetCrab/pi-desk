@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { versionParts } from './npm-channel.mjs'
+import { lockDependencyContent } from './release-dependencies.mjs'
 
 const packageName = /^@jetcrab\/pi-desk(?:-[a-z0-9-]+)?$/
 const dependencyGroups = [
@@ -154,7 +155,10 @@ function productionManifest(manifest) {
   return result
 }
 
-async function npmEntries(root, baseline) {
+async function npmEntries(root, baseline, { docker = false } = {}) {
+  const lockChanged = baseline.changed.has('pnpm-lock.yaml')
+  const currentLock = lockChanged ? await readOptional(root, 'pnpm-lock.yaml') : null
+  const previousLock = lockChanged ? baseline.read('pnpm-lock.yaml') : null
   const plugins = await readdir(join(root, 'plugins'), { withFileTypes: true })
   const files = [
     'package.json',
@@ -198,17 +202,29 @@ async function npmEntries(root, baseline) {
       }
     }
     const directory = dirname(file)
-    const affected = [...baseline.changed].some((path) => {
-      if (excluded.test(path)) return false
-      if (path === file)
-        return (
-          !previous ||
-          !isDeepStrictEqual(productionManifest(manifest), productionManifest(previous))
-        )
-      return directory === '.'
-        ? /^(?:src|bin)\//.test(path) || rootConfig.test(path)
-        : path.startsWith(`${directory}/`)
-    })
+    const dependencyChanged =
+      lockChanged &&
+      !isDeepStrictEqual(
+        lockDependencyContent(previousLock, directory),
+        lockDependencyContent(currentLock, directory)
+      )
+    const affected =
+      dependencyChanged ||
+      [...baseline.changed].some((path) => {
+        if (excluded.test(path)) return false
+        if (path === file)
+          return (
+            !previous ||
+            !isDeepStrictEqual(productionManifest(manifest), productionManifest(previous))
+          )
+        return directory === '.'
+          ? /^(?:src|bin)\//.test(path) ||
+              rootConfig.test(path) ||
+              (docker &&
+                ((/^apps\/docker\//.test(path) && path !== 'apps/docker/compose.yaml') ||
+                  path === '.github/scripts/release-docker.mjs'))
+          : path.startsWith(`${directory}/`)
+      })
     entries.push({ file, original, manifest, previous, affected, currentVersion: manifest.version })
   }
   return entries
@@ -505,7 +521,7 @@ async function applyChanges(root, changes) {
 export async function prepareStableVersions(root, { base = null } = {}) {
   root = resolve(root)
   const baseline = snapshot(root, base)
-  const entries = await npmEntries(root, baseline)
+  const entries = await npmEntries(root, baseline, { docker: true })
   const { changes } = planNpm(entries, { baseline: base })
   changes.push(...(await planNative(root, baseline)))
   // 所有版本、依赖和原生同步均已验证，再统一写入。

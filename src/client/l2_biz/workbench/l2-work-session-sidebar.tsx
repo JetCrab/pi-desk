@@ -304,7 +304,8 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
   selected,
   pinned,
   deleting,
-  actionsDisabled,
+  disabled,
+  ordering,
   now,
   onSelect,
   onTogglePin,
@@ -315,12 +316,14 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
   selected: boolean
   pinned: boolean
   deleting: boolean
-  actionsDisabled: boolean
+  disabled: boolean
+  ordering: boolean
   now: number | null
   onSelect: (workId: string) => void
   onTogglePin: (workId: string) => void
   onDelete: (workId: string) => void
 }): React.JSX.Element {
+  const actionsDisabled = disabled || ordering
   const {
     attributes,
     listeners,
@@ -425,7 +428,8 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
         title={`${statusLabel} · ${t('dragOrder')}`}
         className={cn(
           identity.className,
-          'flex size-7 touch-none cursor-grab items-center justify-center outline-none transition-[color,filter] hover:brightness-125 active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50'
+          'flex size-7 touch-none cursor-grab items-center justify-center outline-none transition-[color,filter] hover:brightness-125 active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none',
+          disabled && 'opacity-50'
         )}
       >
         <span className="size-4">
@@ -777,7 +781,8 @@ function L2WorkSessionSidebarComponent({
         selected={workSession.workId === focusedWorkId}
         pinned={pinnedWorkIdSet.has(workSession.workId)}
         deleting={deletingWorkId === workSession.workId}
-        actionsDisabled={disabled || ordering}
+        disabled={disabled}
+        ordering={ordering}
         now={now}
         onSelect={onSelect}
         onTogglePin={onTogglePin}

@@ -1,6 +1,13 @@
 'use client'
 
-import { ArrowLeftIcon, DatabaseIcon, PlusIcon, StarIcon, Trash2Icon } from 'lucide-react'
+import {
+  ArrowLeftIcon,
+  DatabaseIcon,
+  LogInIcon,
+  PlusIcon,
+  StarIcon,
+  Trash2Icon
+} from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
@@ -383,6 +390,7 @@ export function L2ModelProviderSettings({
               {t('accountCustomApi')}
             </Button>
             <Button type="button" variant="outline" size="sm" onClick={() => auth.show()}>
+              <LogInIcon />
               {t('accountLogin')}
             </Button>
           </div>

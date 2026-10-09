@@ -35,8 +35,7 @@ test(
       management = new L2PluginManagement(
         {
           refreshPluginMessages: () => undefined,
-          runPluginRestart: (operation) => operation(),
-          runPluginChange: (operation) => operation()
+          runPluginRestart: (operation) => operation()
         },
         root,
         agentDir

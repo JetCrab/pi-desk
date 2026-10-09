@@ -1,5 +1,4 @@
 name: Build Apple clients
-run-name: 构建 Apple 客户端 · ${{ inputs.platform }}
 
 on:
   workflow_call:
@@ -23,13 +22,6 @@ on:
         required: false
       IOS_PROVISION_PROFILE_BASE64:
         required: false
-  workflow_dispatch:
-    inputs:
-      platform:
-        description: 构建平台
-        type: choice
-        options: [all, macos, ios]
-        default: all
 
 permissions:
   contents: read

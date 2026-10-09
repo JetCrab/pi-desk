@@ -17,6 +17,8 @@ const {
   removeL4PiPluginPreference,
   setL4PiPluginDownloadSource,
   setL4PiPluginEnabled,
+  readL4PiPluginUpdateTag,
+  setL4PiPluginUpdateTag,
   setL4PiPluginRegistry
 } = await jiti.import<typeof import('../src/server/l4_foundation/pi/l4-pi-plugin-preferences')>(
   '../src/server/l4_foundation/pi/l4-pi-plugin-preferences.ts'
@@ -35,7 +37,8 @@ test('禁用跟随包身份而不是版本，切换公共下载源保留私有�
   assert.deepEqual(readL4PiPluginPreferences(root), {
     downloadSource: { mode: 'auto' },
     disabled: [],
-    registries: {}
+    registries: {},
+    updateTags: {}
   })
   setL4PiPluginEnabled('npm:@fixture/plugin@1.0.0', false, root)
   setL4PiPluginRegistry('npm:@fixture/plugin@1.0.0', 'https://registry.example.test', root)
@@ -50,7 +53,29 @@ test('禁用跟随包身份而不是版本，切换公共下载源保留私有�
   removeL4PiPluginPreference('npm:@fixture/plugin@2.0.0', root)
   assert.deepEqual(readL4PiPluginPreferences(root).registries, {})
   const saved = JSON.parse(await readFile(join(root, 'pi-desk-plugins.json'), 'utf8'))
-  assert.deepEqual(Object.keys(saved).sort(), ['disabled', 'downloadSource', 'registries'])
+  assert.deepEqual(Object.keys(saved).sort(), [
+    'disabled',
+    'downloadSource',
+    'registries',
+    'updateTags'
+  ])
+})
+
+test('更新渠道按包身份保存，指定版本不改变渠道，卸载清理偏好', async (context) => {
+  const root = resolve('temp/run/plugin-management', `update-channel-${randomUUID()}`)
+  await mkdir(root, { recursive: true })
+  context.after(() => rm(root, { recursive: true, force: true }))
+  assert.equal(readL4PiPluginUpdateTag('npm:@fixture/new-plugin', root), 'latest')
+  assert.equal(readL4PiPluginUpdateTag('npm:@fixture/plugin@dev', root), 'dev')
+  assert.equal(readL4PiPluginUpdateTag('npm:@fixture/plugin@1.0.1-dev.1', root), 'latest')
+  setL4PiPluginUpdateTag('npm:@fixture/plugin@1.0.1-dev.1', 'dev', root)
+  assert.equal(readL4PiPluginUpdateTag('npm:@fixture/plugin@1.0.1-dev.2', root), 'dev')
+  assert.equal(readL4PiPluginUpdateTag('npm:@fixture/other', root), 'latest')
+  assert.deepEqual(readL4PiPluginPreferences(root).updateTags, { 'npm:@fixture/plugin': 'dev' })
+  setL4PiPluginUpdateTag('npm:@fixture/plugin', 'latest', root)
+  assert.equal(readL4PiPluginUpdateTag('npm:@fixture/plugin@dev', root), 'latest')
+  removeL4PiPluginPreference('npm:@fixture/plugin@1.0.1-dev.2', root)
+  assert.deepEqual(readL4PiPluginPreferences(root).updateTags, {})
 })
 
 test('旧简介与语言覆盖共存，缺少翻译回退标准description', () => {

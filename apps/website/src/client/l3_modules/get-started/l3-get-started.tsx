@@ -1,6 +1,7 @@
 import { Tabs } from '@base-ui/react/tabs'
 import { ArrowDownToLine, Monitor, QrCode, Smartphone } from 'lucide-react'
 import Image from 'next/image'
+import Link from 'next/link'
 import type { ReactElement } from 'react'
 import { Button, buttonVariants } from '@client/l4_foundation/ui/shadcn/button'
 import {
@@ -119,6 +120,14 @@ export function GetStarted({
             <li className="flex items-center gap-2">
               <span>iOS</span>
               <span className="text-xs">筹备中</span>
+            </li>
+            <li>
+              <Link
+                href="/docs/docker/"
+                className="inline-flex min-h-8 items-center underline underline-offset-4 hover:text-foreground"
+              >
+                Docker 部署指南
+              </Link>
             </li>
           </ul>
         </Tabs.Panel>

@@ -6,7 +6,10 @@ import {
   type L2PluginCatalogDetail,
   type L2PluginDownloadSource
 } from '@common/l2_biz/plugin/l2-plugin-catalog-contract'
-import type { L2PluginManagementInstallRequest } from '@common/l2_biz/plugin/l2-plugin-management-contract'
+import type {
+  L2PluginManagementInstallRequest,
+  L2PluginManagementItem
+} from '@common/l2_biz/plugin/l2-plugin-management-contract'
 import type { L2PluginManagementBiz } from '../l2-plugin-management-biz'
 import { pluginNpmSpec } from '../l2-use-plugin-management'
 
@@ -14,6 +17,10 @@ interface PluginDirectInstallState {
   open: boolean
   setOpen: (value: boolean) => void
   source: string
+  sources: string[]
+  tag: string
+  selectedVersion: string
+  setTag: (value: string) => void
   changeSource: (value: string) => void
   spec: ReturnType<typeof pluginNpmSpec>
   detail: L2PluginCatalogDetail | null
@@ -25,14 +32,20 @@ interface PluginDirectInstallState {
   setRegistry: (value: string) => void
   loadDetail: (version?: string) => Promise<L2PluginCatalogDetail | null>
   install: (
-    onReady: (input: L2PluginManagementInstallRequest, detail?: L2PluginCatalogDetail) => void
+    onReady: (input: L2PluginManagementInstallRequest, detail?: L2PluginCatalogDetail) => void,
+    onBatch: (items: L2PluginManagementInstallRequest[]) => void
   ) => Promise<void>
 }
 
-export function useL2PluginDirectInstall(biz: L2PluginManagementBiz): PluginDirectInstallState {
+export function useL2PluginDirectInstall(
+  biz: L2PluginManagementBiz,
+  installed: readonly L2PluginManagementItem[] = []
+): PluginDirectInstallState {
   const { t } = useTranslation('pluginManagement')
   const [open, setOpen] = useState(false)
   const [source, setSource] = useState('')
+  const [tag, setTagValue] = useState('')
+  const [explicitVersion, setExplicitVersion] = useState<string | null>(null)
   const [detail, setDetail] = useState<L2PluginCatalogDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -42,7 +55,11 @@ export function useL2PluginDirectInstall(biz: L2PluginManagementBiz): PluginDire
   const [registry, setRegistryValue] = useState('')
   const epoch = useRef(0)
   const mounted = useRef(true)
-  const spec = pluginNpmSpec(source.trim())
+  const sources = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const spec = sources.length === 1 ? pluginNpmSpec(sources[0]!) : null
   useEffect(() => {
     mounted.current = true
     return () => {
@@ -58,10 +75,18 @@ export function useL2PluginDirectInstall(biz: L2PluginManagementBiz): PluginDire
   }
   const changeSource = (value: string): void => {
     invalidateDetail()
+    setExplicitVersion(null)
     setSource(value)
   }
   const loadDetail = async (version?: string): Promise<L2PluginCatalogDetail | null> => {
     if (!spec) return null
+    if (version !== undefined) setExplicitVersion(version || null)
+    const savedTag = installed.find(
+      (item) => pluginNpmSpec(item.source)?.name === spec.name
+    )?.updateTag
+    const defaultSelector = spec.version ?? (tag || savedTag || 'latest')
+    const targetVersion =
+      version === '' ? defaultSelector : (version ?? explicitVersion ?? defaultSelector)
     let lookupRegistry: string | undefined
     if (override === 'custom') {
       const parsed = L2PluginRegistrySchema.safeParse(registry)
@@ -82,7 +107,7 @@ export function useL2PluginDirectInstall(biz: L2PluginManagementBiz): PluginDire
     try {
       const next = await biz.getCatalog({
         ...spec,
-        ...(version ? { version } : {}),
+        ...(targetVersion ? { version: targetVersion } : {}),
         ...(lookupRegistry ? { registry: lookupRegistry } : {})
       })
       if (!mounted.current || request !== epoch.current) return null
@@ -97,14 +122,11 @@ export function useL2PluginDirectInstall(biz: L2PluginManagementBiz): PluginDire
     }
   }
   const install = async (
-    onReady: (input: L2PluginManagementInstallRequest, detail?: L2PluginCatalogDetail) => void
+    onReady: (input: L2PluginManagementInstallRequest, detail?: L2PluginCatalogDetail) => void,
+    onBatch: (items: L2PluginManagementInstallRequest[]) => void
   ): Promise<void> => {
-    if (!source.trim() || loading) return
+    if (!sources.length || loading) return
     setError(null)
-    if (!spec) {
-      onReady({ source: source.trim() })
-      return
-    }
     const parsed =
       override === 'default'
         ? null
@@ -115,7 +137,34 @@ export function useL2PluginDirectInstall(biz: L2PluginManagementBiz): PluginDire
       setError(t('invalidRegistry'))
       return
     }
-    const packageRequest = detail ? Promise.resolve(detail) : loadDetail()
+    const options = {
+      ...(tag ? { tag } : {}),
+      ...(parsed?.success ? { downloadSource: parsed.data } : {})
+    }
+    if (sources.length > 1) {
+      const specs = sources.map(pluginNpmSpec)
+      if (sources.length > 32 || specs.some((item) => !item)) {
+        setError(t(sources.length > 32 ? 'batchLimit' : 'batchNpmOnly'))
+        return
+      }
+      const items = new Map<string, L2PluginManagementInstallRequest>()
+      specs.forEach((item) => {
+        if (item)
+          items.set(item.name, {
+            source: `npm:${item.name}${item.version ? `@${item.version}` : ''}`,
+            ...options
+          })
+      })
+      onBatch([...items.values()])
+      return
+    }
+    if (!spec) {
+      onReady({ source: sources[0]! })
+      return
+    }
+    const packageRequest = detail
+      ? Promise.resolve(detail)
+      : loadDetail(explicitVersion ?? undefined)
     const request = epoch.current
     const packageDetail = await packageRequest
     if (!packageDetail || !mounted.current || request !== epoch.current) return
@@ -125,9 +174,9 @@ export function useL2PluginDirectInstall(biz: L2PluginManagementBiz): PluginDire
     }
     onReady(
       {
-        source: `npm:${packageDetail.name}@${packageDetail.version}`,
+        source: `npm:${packageDetail.name}${explicitVersion || spec.version ? `@${explicitVersion ?? spec.version}` : ''}`,
         registry: packageDetail.registry,
-        ...(parsed?.success ? { downloadSource: parsed.data } : {})
+        ...options
       },
       packageDetail
     )
@@ -136,6 +185,14 @@ export function useL2PluginDirectInstall(biz: L2PluginManagementBiz): PluginDire
     open,
     setOpen,
     source,
+    sources,
+    tag,
+    selectedVersion: explicitVersion ?? '',
+    setTag: (value: string): void => {
+      invalidateDetail()
+      setExplicitVersion(null)
+      setTagValue(value)
+    },
     changeSource,
     spec,
     detail,

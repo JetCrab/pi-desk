@@ -1,7 +1,8 @@
-import { useState, type CSSProperties, type FormEvent } from 'react'
+import { useEffect, useState, type CSSProperties, type FormEvent } from 'react'
 import { useDesktopSettings } from './hooks/l2-use-desktop-settings'
-import { type ReleaseChannel, type UpdatePolicy } from './l4-desktop-ipc'
+import { type ControlState, type ReleaseChannel, type UpdatePolicy } from './l4-desktop-ipc'
 import { DesktopHeader, DesktopIcon } from './l4-desktop-ui'
+import { ConfigurationPreferences } from './views/l2-startup-preference'
 
 const updatePolicies = [
   { value: 'none', label: '无' },
@@ -50,17 +51,115 @@ type Props = {
 }
 
 export function SettingsPage({
+  state,
+  readError,
+  refresh,
+  global = false,
+  onSelectTarget,
+  ...props
+}: Props & {
+  state: ControlState | null
+  readError: string
+  refresh: () => void
+  global?: boolean
+  onSelectTarget: (url: string) => void
+}): React.JSX.Element {
+  const [targetSaving, setTargetSaving] = useState(false)
+  const local = state?.targets.filter((target) => target.server) ?? []
+  const selected = props.originalUrl
+    ? local.find((target) => target.url === props.originalUrl)
+    : local[0]
+  const targetUrl = global ? (selected?.url ?? null) : props.originalUrl
+  const showTarget = !global || Boolean(selected)
+
+  return (
+    <main className="desktop-settings">
+      <DesktopHeader />
+      <div className="page-heading">
+        <button
+          className="icon-button"
+          type="button"
+          aria-label="返回"
+          disabled={targetSaving}
+          onClick={props.onBack}
+        >
+          <DesktopIcon name="back" />
+        </button>
+        <h1>{global ? '设置' : props.localTarget ? '本机设置' : '连接已有 Pi Desk'}</h1>
+      </div>
+      {readError && (
+        <div className="page-error" role="alert">
+          <p>暂时无法读取状态：{readError}</p>
+          <button type="button" onClick={refresh}>
+            重新读取
+          </button>
+        </div>
+      )}
+      {(global || props.localTarget) && (
+        <ConfigurationPreferences state={state} refresh={refresh} />
+      )}
+      {global && selected && (
+        <div className="settings-target-heading">
+          <h2>本机设置</h2>
+          {local.length > 1 ? (
+            <label className="field">
+              本机地址
+              <select
+                value={selected.url}
+                disabled={targetSaving}
+                onChange={(event) => onSelectTarget(event.target.value)}
+              >
+                {local.map((target) => (
+                  <option key={target.url} value={target.url}>
+                    {target.url}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <p className="muted path-text">{selected.url}</p>
+          )}
+        </div>
+      )}
+      {global && !state && !readError && (
+        <p className="loading" role="status">
+          正在读取设置…
+        </p>
+      )}
+      {global && state && props.originalUrl && !selected && (
+        <p className="page-error" role="alert">
+          这个本机地址已被移除，请返回后重新选择。
+        </p>
+      )}
+      {showTarget && (
+        <TargetSettingsForm
+          key={targetUrl ?? 'new'}
+          {...props}
+          originalUrl={targetUrl}
+          localTarget={global || props.localTarget}
+          onSavingChange={setTargetSaving}
+        />
+      )}
+    </main>
+  )
+}
+
+function TargetSettingsForm({
   originalUrl,
   localTarget,
   initialAdvanced = false,
   onDirty,
   onSaved,
-  onBack
-}: Props): React.JSX.Element {
+  onBack,
+  onSavingChange
+}: Props & { onSavingChange: (saving: boolean) => void }): React.JSX.Element {
   const { draft, loadError, saveError, saving, patch, reload, save } = useDesktopSettings(
     originalUrl,
     onDirty
   )
+  useEffect(() => {
+    onSavingChange(saving)
+  }, [saving, onSavingChange])
   const [advanced, setAdvanced] = useState(initialAdvanced)
   const selectUpdatePolicy = (
     field: 'startupUpdate' | 'periodicUpdate',
@@ -88,20 +187,7 @@ export function SettingsPage({
   }
   const disabled = saving || Boolean(loadError)
   return (
-    <main className="desktop-settings">
-      <DesktopHeader />
-      <div className="page-heading">
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="返回"
-          disabled={saving}
-          onClick={onBack}
-        >
-          <DesktopIcon name="back" />
-        </button>
-        <h1>{originalUrl ? '本机设置' : '连接已有 Pi Desk'}</h1>
-      </div>
+    <>
       {loadError && (
         <div className="page-error" role="alert">
           <p>设置读取失败：{loadError}</p>
@@ -283,6 +369,6 @@ export function SettingsPage({
           </div>
         </form>
       )}
-    </main>
+    </>
   )
 }

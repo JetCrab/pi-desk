@@ -1,6 +1,13 @@
 import { z } from 'zod'
 import type { L4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
 
+export const L4PluginUpdateTagSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[a-zA-Z][a-zA-Z0-9._-]*$/)
+
 export const L4PluginRegistrySchema = z
   .string()
   .trim()

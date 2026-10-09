@@ -6,12 +6,24 @@ import type {
   L2PluginDownloadSource
 } from '@common/l2_biz/plugin/l2-plugin-catalog-contract'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
-import { Input } from '@client/l4_foundation/ui/shadcn/input'
+import { Textarea } from '@client/l4_foundation/ui/shadcn/textarea'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@client/l4_foundation/ui/shadcn/select'
+import { L2PluginManagementChannel } from './l2-plugin-management-channel'
 import { L2PluginDownloadSourceSelector } from './l2-plugin-download-source'
 
 interface DirectInstallProps {
   source: string
   isNpm: boolean
+  multiple: boolean
+  tag: string
+  selectedVersion: string
+  onTag: (tag: string) => void
   detail: L2PluginCatalogDetail | null
   loading: boolean
   pending: boolean
@@ -45,37 +57,62 @@ export function L2PluginDirectInstall(props: DirectInstallProps): React.JSX.Elem
       <label htmlFor="plugin-direct-source" className="block text-sm font-medium">
         {t('source')}
       </label>
-      <Input
+      <Textarea
         id="plugin-direct-source"
         value={props.source}
-        placeholder={t('sourcePlaceholder')}
+        placeholder={t('batchSourcePlaceholder')}
+        rows={3}
         onChange={(event) => props.onSource(event.target.value)}
       />
-      {props.isNpm ? (
+      {props.isNpm || props.multiple ? (
         <>
-          <Button size="sm" variant="outline" disabled={props.loading} onClick={props.onRead}>
-            {t(props.loading ? 'loadingPackage' : 'readPackage')}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span>{t('installChannel')}</span>
+            <L2PluginManagementChannel
+              value={props.tag}
+              label={t('installChannel')}
+              placeholder={t('defaultChannel')}
+              onChange={props.onTag}
+            />
+          </div>
+          {props.isNpm ? (
+            <Button size="sm" variant="outline" disabled={props.loading} onClick={props.onRead}>
+              {t(props.loading ? 'loadingPackage' : 'readPackage')}
+            </Button>
+          ) : null}
           {props.detail ? (
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
                 {props.detail.name}
               </span>
-              <label className="flex min-w-0 flex-wrap items-center gap-2">
-                {t('version')}
-                <select
-                  value={props.detail.version}
-                  disabled={props.loading}
-                  onChange={(event) => props.onVersion(event.target.value)}
-                  className="min-h-8 min-w-0 max-w-full rounded-lg border border-input bg-background px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
+              <Select
+                value={props.selectedVersion}
+                disabled={props.loading}
+                items={[
+                  { value: '', label: t('automaticVersion') },
+                  ...[...new Set([props.detail.version, ...props.detail.versions])].map(
+                    (version) => ({ value: version, label: version })
+                  )
+                ]}
+                onValueChange={(version) => {
+                  if (version !== null) props.onVersion(version)
+                }}
+              >
+                <SelectTrigger aria-label={t('version')} className="max-w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent positionerClassName="z-[160]">
+                  <SelectItem value="">{t('automaticVersion')}</SelectItem>
                   {[...new Set([props.detail.version, ...props.detail.versions])].map((version) => (
-                    <option key={version} value={version}>
+                    <SelectItem key={version} value={version}>
                       {version}
-                    </option>
+                    </SelectItem>
                   ))}
-                </select>
-              </label>
+                </SelectContent>
+              </Select>
+              <span className="text-xs text-muted-foreground">
+                {t('targetVersion', { version: props.detail.version })}
+              </span>
             </div>
           ) : null}
           <L2PluginDownloadSourceSelector
@@ -89,7 +126,10 @@ export function L2PluginDirectInstall(props: DirectInstallProps): React.JSX.Elem
         </>
       ) : null}
       {props.error ? (
-        <p role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
+        <p
+          role="alert"
+          className="text-sm whitespace-pre-wrap text-destructive [overflow-wrap:anywhere]"
+        >
           {props.error}
         </p>
       ) : null}
@@ -103,7 +143,7 @@ export function L2PluginDirectInstall(props: DirectInstallProps): React.JSX.Elem
         disabled={props.disabled || props.loading || props.pending || !props.source.trim()}
         onClick={props.onInstall}
       >
-        {t(props.pending ? 'installing' : 'install')}
+        {t(props.pending ? 'installing' : props.multiple ? 'batchInstall' : 'install')}
       </Button>
     </section>
   )

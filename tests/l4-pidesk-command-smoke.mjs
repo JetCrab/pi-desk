@@ -17,7 +17,7 @@ import {
   reservePort,
   spawnEdge,
   stopBrowserTree,
-  waitForHttp
+  waitForBrowserReady
 } from './l4-browser-cdp-runtime.mjs'
 
 const execute = promisify(execFile)
@@ -493,7 +493,15 @@ async function verifyBrowserModules({ root, baseUrl, entry, version }) {
   )
   let client
   try {
-    await waitForHttp(`http://127.0.0.1:${cdpPort}/json/version`, 20_000, '验收浏览器')
+    try {
+      const diagnostics = await waitForBrowserReady(browser, cdpPort)
+      await writeFile(join(root, 'browser-startup.log'), `${diagnostics}\n`)
+    } catch (error) {
+      await writeFile(join(root, 'browser-startup.log'), `${error.stack ?? error}\n`).catch(
+        (logError) => console.error('保存浏览器启动日志失败：', logError)
+      )
+      throw error
+    }
     client = await createCdpPage(cdpPort)
     await navigate(client, baseUrl)
     const result = await evaluate(

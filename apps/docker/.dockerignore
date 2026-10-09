@@ -1,0 +1,9 @@
+**
+!Dockerfile
+!prune-image.mjs
+!host/
+!host/package.json
+!host/host.tgz
+!host/sdk.tgz
+!pi/
+!pi/package.json

@@ -13,7 +13,7 @@ const publish = workflow.match(/\n  publish:\n\s+if: >-\n([\s\S]*?)\n\s+needs:/)
 function canPublish({
   packages = ['pi-desk'],
   linux = 'success',
-  phase = '',
+  phase = 'all',
   source = '',
   cancelled = false
 } = {}) {
@@ -25,7 +25,7 @@ function canPublish({
     needs: {
       plan: { result: 'success', outputs: { packages: JSON.stringify(packages) } },
       build: { result: 'success' },
-      'installed-commands-linux': { result: linux }
+      'installed-commands': { result: linux }
     },
     inputs: { phase, source_sha: source, publish: false },
     github: { event_name: 'push' },
@@ -36,13 +36,14 @@ function canPublish({
   })
 }
 
-test('宿主发布等待 Linux 同批制品验收，失败、跳过和取消均阻断', () => {
+test('宿主发布等待双平台同批制品验收，失败、跳过和取消均阻断', () => {
   assert.equal(canPublish(), true)
   for (const linux of ['failure', 'cancelled', 'skipped'])
     assert.equal(canPublish({ linux }), false)
   assert.equal(canPublish({ cancelled: true }), false)
-  assert.match(workflow, /installed-commands-linux:\n\s+needs: \[plan, build\]/)
-  assert.match(workflow, /needs: \[plan, build, installed-commands-linux\]/)
+  assert.match(workflow, /installed-commands:\n\s+needs: \[plan, build\]/)
+  assert.match(workflow, /os: \[ubuntu-latest, windows-latest\]/)
+  assert.match(workflow, /needs: \[plan, build, installed-commands\]/)
 })
 
 test('纯插件批次可跳过宿主检查，正式构建与已验证制品复用保持原语义', () => {
@@ -61,7 +62,7 @@ test('宿主制品准备直接执行核心回归，不受 dev 的轻量模式跳
   )
   const host = source.slice(
     source.indexOf('if (entry.directory === projectRoot) {'),
-    source.indexOf('for (const entry of entries) await pack')
+    source.indexOf('const host = entries.find')
   )
   const core = host.indexOf("['test:pidesk']")
   assert.ok(core >= 0 && core < host.indexOf('if (full)'), '核心命令回归必须位于完整检查条件之外')

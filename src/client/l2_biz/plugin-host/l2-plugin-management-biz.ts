@@ -4,6 +4,11 @@ import type { ZodType } from 'zod'
 import { requestL4Api } from '@client/l4_foundation/lib/l4-api-request'
 import {
   L2PluginManagementApplyRequestSchema,
+  L2PluginManagementBatchRequestSchema,
+  L2PluginManagementBatchResponseSchema,
+  type L2PluginManagementBatchRequest,
+  type L2PluginManagementBatchResponse,
+  type L2PluginManagementListRequest,
   L2PluginManagementReloadRequestSchema,
   L2PluginManagementChangedContract,
   L2PluginManagementDetailSchema,
@@ -36,7 +41,8 @@ import type { L4AppSocketClient } from '@client/l4_foundation/realtime/app-socke
 
 export interface L2PluginManagementBiz {
   subscribeChanges(listener: () => void): () => void
-  list(checkUpdates?: boolean): Promise<L2PluginManagementSnapshot>
+  list(input?: boolean | L2PluginManagementListRequest): Promise<L2PluginManagementSnapshot>
+  batch(input: L2PluginManagementBatchRequest): Promise<L2PluginManagementBatchResponse>
   get(source: string): Promise<L2PluginManagementDetail>
   add(input: L2PluginManagementInstallRequest): Promise<L2PluginManagementSnapshot>
   setEnabled(source: string, enabled: boolean): Promise<L2PluginManagementSnapshot>
@@ -66,12 +72,21 @@ export function createL2PluginManagementBiz(
   return {
     subscribeChanges: (listener) =>
       appSocket.subscribe(L2PluginManagementChangedContract, listener),
-    list: (checkUpdates = false) =>
+    list: (input = false) =>
       request(
         clientId,
         '/api/plugins/list',
-        L2PluginManagementListRequestSchema.parse(checkUpdates ? { checkUpdates: true } : {}),
+        L2PluginManagementListRequestSchema.parse(
+          typeof input === 'boolean' ? (input ? { checkUpdates: true } : {}) : input
+        ),
         L2PluginManagementSnapshotSchema
+      ),
+    batch: (input) =>
+      request(
+        clientId,
+        '/api/plugins/batch',
+        L2PluginManagementBatchRequestSchema.parse(input),
+        L2PluginManagementBatchResponseSchema
       ),
     get: (source) =>
       request(

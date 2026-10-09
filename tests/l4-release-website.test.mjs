@@ -180,7 +180,7 @@ test('主发布把模型和部署凭据分开，不开放PR特权入口', async 
     'utf8'
   )
   const dev = await readFile(
-    new URL('../.github/workflows/build-dev-clients.yml', import.meta.url),
+    new URL('../.github/workflows/release-dev.yml', import.meta.url),
     'utf8'
   )
   assert.match(main, /branches: \[main\]/)
@@ -189,5 +189,9 @@ test('主发布把模型和部署凭据分开，不开放PR特权入口', async 
   assert.match(modelStep, /RELEASE_MODEL_API_KEY/)
   assert.doesNotMatch(modelStep, /GH_TOKEN|WEBSITE_SSH|ANDROID_.*PASSWORD/)
   assert.match(dev, /contents: read/)
-  assert.doesNotMatch(dev, /contents: write|secrets:|upload_server: true|distribute: true/)
+  assert.doesNotMatch(
+    dev,
+    /contents: write|WEBSITE_SSH|RELEASE_MODEL_API_KEY|upload_server: true|distribute: true/
+  )
+  assert.match(dev, /NPM_TOKEN: \$\{\{ secrets.NPM_TOKEN \}\}/)
 })

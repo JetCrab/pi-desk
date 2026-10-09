@@ -97,10 +97,6 @@ export function useL2ModelAuth(
     opening.current += 1
     release()
     setOpen(false)
-    setState(null)
-    setError(null)
-    setSubmittingPrompt(null)
-    setFinishing(false)
   }
 
   async function finish(): Promise<void> {
@@ -165,6 +161,11 @@ export function useL2ModelAuth(
 
   function show(provider?: string): void {
     close()
+    // 退场时保留当前内容，避免关闭动画中切回渠道列表。
+    setState(null)
+    setError(null)
+    setSubmittingPrompt(null)
+    setFinishing(false)
     setOpen(true)
     if (!connectionReadyRef.current) {
       setLoading(false)

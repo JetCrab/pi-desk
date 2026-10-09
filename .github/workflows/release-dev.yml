@@ -1,0 +1,211 @@
+name: Release dev
+run-name: 开发验证与构建 · ${{ github.sha }}
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 手动构建目标
+        type: choice
+        options: [all, npm, windows, macos, android, ios, tunnel]
+        default: all
+      publish:
+        description: 将验证通过的 npm 开发包发布到 dev 标签
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+# 每个提交独立登记，避免 GitHub 并发组替换第三个待运行批次。
+concurrency:
+  group: release-dev-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_BEFORE: ${{ github.event.before || '0000000000000000000000000000000000000000' }}
+  DEV_MANIFEST_DIR: ${{ github.workspace }}/temp/build/dev-manifests/${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - name: 等待前批次结束，不取消连续提交
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-queue.mjs
+
+  plan:
+    needs: queue
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      packages: ${{ steps.npm.outputs.packages }}
+      windows: ${{ steps.clients.outputs.windows }}
+      macos: ${{ steps.clients.outputs.macos }}
+      android: ${{ steps.clients.outputs.android }}
+      ios: ${{ steps.clients.outputs.ios }}
+      tunnel: ${{ steps.clients.outputs.tunnel }}
+      desktop_checks: ${{ steps.clients.outputs.desktop_checks }}
+      android_checks: ${{ steps.clients.outputs.android_checks }}
+      tunnel_checks: ${{ steps.clients.outputs.tunnel_checks }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+      - name: 核对推送比较基线
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_BEFORE" != 0000000000000000000000000000000000000000 ]] && ! git cat-file -e "$RELEASE_BEFORE^{commit}"; then
+            authorization=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+            git -c http.extraheader="AUTHORIZATION: basic $authorization" fetch --no-tags origin "$RELEASE_BEFORE"
+          fi
+      - name: 区分原生生产输入和检查范围
+        id: clients
+        env:
+          REQUESTED_TARGET: ${{ inputs.target }}
+        run: node .github/scripts/select-dev-targets.mjs
+      - name: 仅为实际变化的 npm 单元准备开发版本
+        id: npm
+        env:
+          RELEASE_PACKAGE: all
+          REQUESTED_TARGET: ${{ inputs.target }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$REQUESTED_TARGET" != all && "$REQUESTED_TARGET" != npm ]]; then
+            echo 'packages=[]' >> "$GITHUB_OUTPUT"
+          else
+            node .github/scripts/prepare-dev-release.mjs
+          fi
+      - uses: actions/upload-artifact@v4
+        if: steps.npm.outputs.packages != '[]'
+        with:
+          name: dev-manifests-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.DEV_MANIFEST_DIR }}/
+          retention-days: 7
+          if-no-files-found: error
+
+  checks:
+    needs: plan
+    uses: ./.github/workflows/check.yml
+    with:
+      source_sha: ${{ github.sha }}
+      base_sha: ${{ github.event.before || '0000000000000000000000000000000000000000' }}
+      built_packages: ${{ needs.plan.outputs.packages }}
+
+  npm-build:
+    needs: plan
+    if: needs.plan.outputs.packages != '[]'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/release-npm.yml
+    with:
+      source_sha: ${{ github.sha }}
+      packages: ${{ needs.plan.outputs.packages }}
+      phase: build
+
+  windows:
+    needs: plan
+    if: needs.plan.outputs.windows == 'true' || needs.plan.outputs.desktop_checks == 'true'
+    uses: ./.github/workflows/build-clients.yml
+    with:
+      source_sha: ${{ github.sha }}
+      platform: windows
+      distribute: false
+      check_only: ${{ needs.plan.outputs.windows != 'true' }}
+
+  macos:
+    needs: plan
+    if: needs.plan.outputs.macos == 'true'
+    uses: ./.github/workflows/release-apple.yml
+    with:
+      source_sha: ${{ github.sha }}
+      platform: macos
+
+  android:
+    needs: plan
+    if: needs.plan.outputs.android == 'true' || needs.plan.outputs.android_checks == 'true'
+    uses: ./.github/workflows/build-clients.yml
+    with:
+      source_sha: ${{ github.sha }}
+      platform: android
+      distribute: false
+      check_only: ${{ needs.plan.outputs.android != 'true' }}
+
+  ios:
+    needs: plan
+    if: needs.plan.outputs.ios == 'true'
+    uses: ./.github/workflows/release-apple.yml
+    with:
+      source_sha: ${{ github.sha }}
+      platform: ios
+
+  tunnel:
+    needs: plan
+    if: needs.plan.outputs.tunnel == 'true' || needs.plan.outputs.tunnel_checks == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release-tunnel.yml
+    with:
+      source_sha: ${{ github.sha }}
+      phase: build
+      check_only: ${{ needs.plan.outputs.tunnel != 'true' }}
+
+  npm-publish:
+    needs: [plan, checks, npm-build]
+    if: >-
+      always() && !cancelled() && needs.plan.result == 'success' &&
+      needs.plan.outputs.packages != '[]' && needs.checks.result == 'success' &&
+      needs.npm-build.result == 'success' && (github.event_name == 'push' || inputs.publish)
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/release-npm.yml
+    with:
+      source_sha: ${{ github.sha }}
+      packages: ${{ needs.plan.outputs.packages }}
+      phase: publish
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  result:
+    needs: [plan, checks, npm-build, windows, macos, android, ios, tunnel, npm-publish]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - name: 汇总本批实际执行结果
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs'
+          const results = JSON.parse(process.env.RESULTS)
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            `## 开发批次 ${process.env.GITHUB_SHA}\n\n` +
+            Object.entries(results).map(([name, task]) => `- ${name}: ${task.result}`).join('\n') + '\n')
+          if (Object.values(results).some(task => ['failure', 'cancelled'].includes(task.result))) process.exitCode = 1
+          NODE

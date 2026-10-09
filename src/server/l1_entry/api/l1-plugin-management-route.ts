@@ -7,6 +7,7 @@ import {
   L2PluginManagementSourceRequestSchema,
   L2PluginManagementInstallRequestSchema,
   L2PluginManagementEnabledRequestSchema,
+  L2PluginManagementBatchRequestSchema,
   type L2PluginManagementSnapshot
 } from '@common/l2_biz/plugin/l2-plugin-management-contract'
 import {
@@ -136,9 +137,7 @@ export async function listL1Plugins(request: Request): Promise<Response> {
     return createL4ApiErrorResponse(400, '请求参数无效', { key: 'errors:invalidInput' })
 
   try {
-    return createL4ApiSuccessResponse(
-      await getL2PluginManagement().list(input.data.checkUpdates === true)
-    )
+    return createL4ApiSuccessResponse(await getL2PluginManagement().list(input.data))
   } catch (error) {
     return pluginOperationError(error, '查询插件')
   }
@@ -159,6 +158,19 @@ export async function addL1Plugin(request: Request): Promise<Response> {
     return createL4ApiSuccessResponse(await getL2PluginManagement().add(source, options))
   } catch (error) {
     return pluginOperationError(error, '安装插件')
+  }
+}
+
+export async function batchL1Plugins(request: Request): Promise<Response> {
+  if (!readL4ClientId(request))
+    return createL4ApiErrorResponse(400, '客户端标识无效', { key: 'errors:invalidClient' })
+  const input = L2PluginManagementBatchRequestSchema.safeParse(await readPayload(request))
+  if (!input.success)
+    return createL4ApiErrorResponse(400, '批量参数无效', { key: 'errors:invalidInput' })
+  try {
+    return createL4ApiSuccessResponse(await getL2PluginManagement().batch(input.data))
+  } catch (error) {
+    return pluginOperationError(error, '批量维护插件')
   }
 }
 

@@ -1,18 +1,13 @@
-import { useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { useDesktopAction } from './hooks/l2-use-desktop-action'
 import { useAddressEditor } from './hooks/l2-use-address-editor'
 import { useEnvironmentSetup } from './hooks/l2-use-environment-setup'
 import { copyDesktopText, runDesktopAction, type DesktopAction } from './l2-desktop-biz'
 import type { ControlState, TargetSnapshot } from './l4-desktop-ipc'
-import {
-  DesktopError,
-  DesktopExpansion,
-  DesktopHeader,
-  DesktopIcon,
-  DesktopMenu
-} from './l4-desktop-ui'
+import { DesktopError, DesktopExpansion, DesktopHeader, DesktopIcon } from './l4-desktop-ui'
 import { EnvironmentView } from './views/l2-environment-view'
 import { AddressEditor } from './views/l2-address-editor'
+import { StartupPreferenceDialog } from './views/l2-startup-preference'
 
 type PageProps = {
   state: ControlState | null
@@ -54,6 +49,7 @@ function TargetRow({
 }): React.JSX.Element {
   const action = useDesktopAction(refresh)
   const packageAction = useDesktopAction(refresh)
+  const checkAction = useDesktopAction(refresh)
   const cancellation = useDesktopAction(refresh)
   const [copied, setCopied] = useState(false)
   const [copyHint, setCopyHint] = useState('')
@@ -66,18 +62,19 @@ function TargetRow({
       : `这台电脑 · ${parsed.port || '80'}`
     : parsed.host
   const working = server?.status === 'starting'
-  const updating =
-    packageAction.busy ||
-    ['checking', 'installing', 'switching'].includes(server?.update?.status ?? '')
+  const installing =
+    packageAction.busy || ['installing', 'switching'].includes(server?.update?.status ?? '')
+  const updating = installing || checkAction.busy || server?.update?.status === 'checking'
   const launchLocked =
     action.busy ||
     working ||
     Boolean(server && (checking || environmentBusy)) ||
-    (server?.status !== 'running' && updating)
+    Boolean(server && installing)
   const locked = launchLocked || updating
   const failure =
     action.error ||
     packageAction.error ||
+    checkAction.error ||
     cancellation.error ||
     (server?.status === 'failed' ? server.detail : '') ||
     server?.update?.error ||
@@ -97,7 +94,7 @@ function TargetRow({
               : '已准备好'
   const run = (command: DesktopAction): void => {
     const commandAction =
-      command === 'check-update' || command === 'update' ? packageAction : action
+      command === 'check-update' ? checkAction : command === 'update' ? packageAction : action
     void commandAction.run(() => runDesktopAction(command, url))
   }
   const copyError = async (): Promise<void> => {
@@ -141,10 +138,13 @@ function TargetRow({
           <div className="grow">
             <h2 className={server ? 'local-title' : 'target-title'}>{title}</h2>
             {server ? (
-              <p className={`status-line${server.status === 'running' ? ' good' : ''}`}>
-                <span className="dot" />
-                {status}
-              </p>
+              <>
+                <p className={`status-line${server.status === 'running' ? ' good' : ''}`}>
+                  <span className="dot" />
+                  {status}
+                </p>
+                {localCount > 1 && <p className="target-address muted">{url}</p>}
+              </>
             ) : (
               <p className="target-address muted">{url}</p>
             )}
@@ -160,69 +160,62 @@ function TargetRow({
               <DesktopIcon name="arrow" />
             </button>
           )}
-          <DesktopMenu label={`${title}的更多操作`}>
-            {server ? (
-              <>
-                <button
-                  type="button"
-                  disabled={locked}
-                  onClick={() => navigate(`#/settings/target?url=${encodeURIComponent(url)}`)}
-                >
-                  <DesktopIcon name="settings" />
-                  本机设置
-                </button>
-                {server.status === 'running' && (
-                  <button type="button" disabled={locked} onClick={restart}>
-                    <DesktopIcon name="refresh" />
-                    重新启动
-                  </button>
-                )}
-                {(server.status === 'running' || server.status === 'starting') && (
-                  <button type="button" disabled={action.busy || packageAction.busy} onClick={stop}>
-                    <DesktopIcon name="stop" />
-                    停止服务
-                  </button>
-                )}
-              </>
-            ) : (
-              <button type="button" disabled={locked} onClick={() => onEdit(url)}>
-                编辑地址
-              </button>
-            )}
-            <hr />
-            <button className="danger" type="button" disabled={locked} onClick={remove}>
-              移除地址
+          <div className="target-row-actions">
+            <button
+              className="icon-button"
+              type="button"
+              title={server ? `编辑${title}的设置` : `编辑地址 ${url}`}
+              aria-label={server ? `编辑${title}的设置` : `编辑地址 ${url}`}
+              disabled={locked}
+              onClick={() =>
+                server ? navigate(`#/settings/target?url=${encodeURIComponent(url)}`) : onEdit(url)
+              }
+            >
+              <DesktopIcon name="edit" />
             </button>
-          </DesktopMenu>
+            <button
+              className="icon-button danger"
+              type="button"
+              title={`删除地址 ${url}`}
+              aria-label={`删除地址 ${url}`}
+              disabled={locked}
+              onClick={remove}
+            >
+              <DesktopIcon name="trash" />
+            </button>
+          </div>
         </div>
       )}
-      {server && !preparing && (
+      {server && (
         <div className="actions launch-actions">
           <button
             className="primary forward"
             type="button"
-            disabled={launchLocked}
+            disabled={launchLocked || preparing}
             onClick={() => (server.needsSetup ? onSetup(url) : run('open'))}
           >
-            {checking ? (
-              '请稍候…'
-            ) : working ? (
-              <>
-                <DesktopIcon name="loader" spinning />
-                正在启动…
-              </>
-            ) : (
-              <>
-                {server.needsSetup
-                  ? '安装并打开'
-                  : server.status === 'failed'
-                    ? '重试并打开'
-                    : '打开 Pi Desk'}
-                <DesktopIcon name="arrow" />
-              </>
-            )}
+            <DesktopIcon name={working ? 'loader' : 'arrow'} spinning={working} />
+            打开 Pi Desk
           </button>
-          {working && server.update?.status !== 'switching' && (
+          <button type="button" disabled={locked || server.status !== 'running'} onClick={restart}>
+            <DesktopIcon name="refresh" />
+            重启
+          </button>
+          <button
+            type="button"
+            disabled={
+              action.busy ||
+              cancellation.busy ||
+              packageAction.busy ||
+              server.update?.status === 'switching' ||
+              !['running', 'starting'].includes(server.status)
+            }
+            onClick={stop}
+          >
+            <DesktopIcon name="stop" />
+            停止
+          </button>
+          {working && !preparing && server.update?.status !== 'switching' && (
             <button
               className="quiet"
               type="button"
@@ -281,24 +274,26 @@ function TargetRow({
           )}
         </>
       )}
-      {(server || tunnel) && (
+      {((server && (!preparing || localCount > 1)) || (!server && tunnel)) && (
         <div className="target-tools">
-          <button
-            className="quiet forward"
-            type="button"
-            aria-label="在其他设备上使用"
-            onClick={() => navigate(`#/access?url=${encodeURIComponent(url)}`)}
-          >
-            <DesktopIcon name="globe" />
-            在其他设备上使用
-            {tunnel?.status === 'listening' && (
-              <span className="connection-badge good">已开启</span>
-            )}
-            {tunnel?.status === 'failed' && (
-              <span className="connection-badge connection-problem">连接失败</span>
-            )}
-            <DesktopIcon name="arrow" />
-          </button>
+          {(!server || localCount > 1) && (
+            <button
+              className="quiet forward"
+              type="button"
+              aria-label={`${title}的远程访问`}
+              onClick={() => navigate(`#/access?url=${encodeURIComponent(url)}`)}
+            >
+              <DesktopIcon name="globe" />
+              远程访问
+              {tunnel?.status === 'listening' && (
+                <span className="connection-badge good">已开启</span>
+              )}
+              {tunnel?.status === 'failed' && (
+                <span className="connection-badge connection-problem">连接失败</span>
+              )}
+              <DesktopIcon name="arrow" />
+            </button>
+          )}
           {server && !preparing && (
             <button
               className="quiet"
@@ -387,10 +382,22 @@ export function ControlPage({
   onDirty
 }: PageProps): React.JSX.Element {
   const [editingUrl, setEditingUrl] = useState<string | null | undefined>(undefined)
+  const [choosingAccess, setChoosingAccess] = useState(false)
+  const accessDialog = useRef<HTMLDialogElement>(null)
   const setup = useEnvironmentSetup(state, refresh)
   const added = useDesktopAction(refresh)
   const local = state?.targets.filter((target) => target.server) ?? []
   const remote = state?.targets.filter((target) => !target.server) ?? []
+
+  useEffect(() => {
+    if (choosingAccess) accessDialog.current?.showModal()
+    else accessDialog.current?.close()
+  }, [choosingAccess])
+
+  const openAccess = (): void => {
+    if (local.length === 1) navigate(`#/access?url=${encodeURIComponent(local[0].url)}`)
+    else if (local.length > 1) setChoosingAccess(true)
+  }
   const editAddress = (url: string | null): void => {
     if (editingUrl !== undefined && !window.confirm('放弃当前地址的编辑？')) return
     onDirty(false)
@@ -416,7 +423,55 @@ export function ControlPage({
     ) : null
   return (
     <main className="desktop-control">
-      <DesktopHeader />
+      <DesktopHeader>
+        <button type="button" aria-label="远程访问" disabled={!local.length} onClick={openAccess}>
+          <DesktopIcon name="globe" />
+          远程访问
+          {local.length === 1 && local[0].tunnel?.status === 'listening' && (
+            <span className="connection-badge good">已开启</span>
+          )}
+          {local.length === 1 && local[0].tunnel?.status === 'failed' && (
+            <span className="connection-badge connection-problem">连接失败</span>
+          )}
+        </button>
+        <button type="button" onClick={() => navigate('#/settings')}>
+          <DesktopIcon name="settings" />
+          设置
+        </button>
+      </DesktopHeader>
+      {state?.hideOnStartup === null && <StartupPreferenceDialog refresh={refresh} />}
+      <dialog
+        ref={accessDialog}
+        className="desktop-dialog"
+        aria-labelledby="access-target-title"
+        onClose={() => setChoosingAccess(false)}
+      >
+        <div className="panel-heading">
+          <h2 id="access-target-title">选择远程访问的本机地址</h2>
+          <button
+            className="icon-button"
+            type="button"
+            title="关闭"
+            aria-label="关闭"
+            onClick={() => accessDialog.current?.close()}
+          >
+            <DesktopIcon name="close" />
+          </button>
+        </div>
+        <div className="access-target-list">
+          {local.map((target) => (
+            <button
+              key={target.url}
+              type="button"
+              onClick={() => navigate(`#/access?url=${encodeURIComponent(target.url)}`)}
+            >
+              <DesktopIcon name="monitor" />
+              <span className="path-text">{target.url}</span>
+              <DesktopIcon name="arrow" />
+            </button>
+          ))}
+        </div>
+      </dialog>
       {readError && (
         <div className="page-error" role="alert">
           <p>暂时无法读取状态：{readError}</p>

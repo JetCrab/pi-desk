@@ -74,6 +74,47 @@ async function fixture(t) {
   return { root, git, save, pkg, commit, head: commit() }
 }
 
+test('开发锁文件的传递依赖变化只准备实际使用它的发布单元', async (context) => {
+  const repo = await fixture(context)
+  await repo.pkg('pi-desk', '1.0.0', { dependencies: { 'host-lib': '^1.0.0' } })
+  await repo.pkg('pi-desk-usage', '1.0.0', { dependencies: { 'plugin-lib': '^1.0.0' } })
+  const lock = `lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      host-lib:
+        specifier: ^1.0.0
+        version: 1.0.0
+  plugins/pi-desk-usage:
+    dependencies:
+      plugin-lib:
+        specifier: ^1.0.0
+        version: 1.0.0
+packages:
+  host-lib@1.0.0:
+    resolution: {integrity: host}
+  plugin-lib@1.0.0:
+    resolution: {integrity: plugin}
+  nested@1.0.0:
+    resolution: {integrity: nested}
+snapshots:
+  host-lib@1.0.0: {}
+  plugin-lib@1.0.0:
+    dependencies:
+      nested: 1.0.0
+  nested@1.0.0: {}
+`
+  await repo.save('pnpm-lock.yaml', lock)
+  const before = repo.commit()
+  await repo.save('pnpm-lock.yaml', lock.replace('integrity: nested', 'integrity: new-nested'))
+  repo.commit()
+  const result = await prepareDevelopmentVersions(repo.root, {
+    before,
+    readVersions: async () => []
+  })
+  assert.deepEqual(result.selected, ['pi-desk-usage'])
+})
+
 function completed(record) {
   return {
     ...record,
@@ -452,6 +493,33 @@ test('首次发布选择全部，后续按成功批次比较并复用未变化�
   assert.equal(next.tunnel, false)
 })
 
+test('Docker运行配方只驱动正式主包升版，不生成开发制品', async (t) => {
+  const repo = await fixture(t)
+  await repo.save('apps/docker/Dockerfile', 'FROM node:22-bookworm-slim\n')
+  const before = repo.commit()
+  const previous = completed(createReleasePlan(repo.root, { head: before }).record)
+  await repo.save('apps/docker/Dockerfile', 'FROM node:22-bookworm-slim\nENV PORT=6233\n')
+  repo.commit()
+  const development = await prepareDevelopmentVersions(repo.root, {
+    before,
+    readVersions: async () => {
+      throw Error('Docker配方不应生成开发包')
+    }
+  })
+  assert.deepEqual(development.selected, [])
+  await prepareStableVersions(repo.root, { base: before })
+  const plan = createReleasePlan(repo.root, { head: repo.commit(), previous })
+  assert.deepEqual(plan.npm, ['pi-desk'])
+  assert.equal(
+    plan.record.packages.find((item) => item.name === '@jetcrab/pi-desk').version,
+    '1.0.1'
+  )
+  const released = completed(plan.record)
+  await repo.save('apps/website/content/docs/docker.md', 'Docker使用说明')
+  const docs = createReleasePlan(repo.root, { head: repo.commit(), previous: released })
+  assert.deepEqual(docs.npm, [])
+})
+
 test('客户端代码变更未升版和历史回退均被阻止', async (t) => {
   const repo = await fixture(t)
   const previous = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
@@ -541,6 +609,7 @@ test('正式准备回写固定版本提交，重跑不新增提交或推进失�
     refreshLock: () => writeFile(join(repo.root, 'pnpm-lock.yaml'), 'lock fixture')
   })
   assert.notEqual(first.outputs.sha, source)
+  assert.equal(first.outputs.docker, true)
   assert.equal(repo.git('rev-parse', 'origin/main'), first.outputs.sha)
   assert.equal(first.plan.record.source.base, null)
   assert.equal(
@@ -575,6 +644,8 @@ test('正式记录持久保存后才移除内部附件，公开失败仍可重�
   await github.putAsset(release, 'release.json', Buffer.from(JSON.stringify(record)))
   await github.putAsset(release, 'release.md', Buffer.from('old presentation'))
   await github.putAsset(release, 'plan.json', Buffer.from('{}'))
+  await github.putAsset(release, 'docker-image.json', Buffer.from('{}'))
+  await github.putAsset(release, 'pi-desk-docker.tar.gz', Buffer.from('verified image'))
   for (const client of record.clients)
     await github.putAsset(release, client.file, Buffer.from(client.platform))
   const request = github.request
@@ -617,7 +688,7 @@ test('只重部署最新官网，不创建新Release或重发产品', async (t) 
   assert.equal(result.plan.record.source.head, repo.head)
   assert.equal(result.outputs.npm, '[]')
   assert.equal(result.outputs.published, true)
-  for (const platform of ['windows', 'macos', 'android', 'tunnel'])
+  for (const platform of ['windows', 'macos', 'android', 'tunnel', 'docker'])
     assert.equal(result.outputs[platform], false)
   assert.ok(github.calls.slice(before).every((call) => !call.method))
   await assert.rejects(

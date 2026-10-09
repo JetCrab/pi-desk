@@ -1,7 +1,5 @@
 import 'server-only'
 
-import { setTimeout as delay } from 'node:timers/promises'
-
 import {
   L2ChatModelContextGetRequestSchema,
   L2ChatModelContextGetResponseSchema,
@@ -114,7 +112,6 @@ interface L2WorkSessionChatRecord {
   directBashActive: boolean
   compactionStart: Promise<boolean> | null
   commandTail: Promise<void>
-  pendingCommands: number
   unsubscribeWorker: () => void
 }
 
@@ -168,8 +165,6 @@ export class L2WorkSessionChatRuntime {
   private readonly listeners = new Set<L2WorkSessionChatRuntimeListener>()
   private readonly recordListeners = new Set<L2WorkSessionChatRecordListener>()
   private readonly pluginPushListeners = new Set<L2WorkSessionPluginPushListener>()
-  private pluginChangeActive = false
-  private pluginChangeFrozen = false
 
   async initialize(workSessions: readonly WorkSession[]): Promise<void> {
     const records = workSessions.map((workSession) => this.buildRecord(workSession))
@@ -207,7 +202,6 @@ export class L2WorkSessionChatRuntime {
   async pauseWorkSession(workId: string): Promise<void> {
     const record = this.recordsByWorkId.get(workId)
     if (!record) return
-    if (this.pluginChangeFrozen) throw new L2ChatLifecycleBlockedError(workId)
     record.acceptingCommands = false
     getL4PiWorkSessionRuntime(record.source.sessionId).nativeUi.cancelAll()
     await record.commandTail
@@ -219,7 +213,6 @@ export class L2WorkSessionChatRuntime {
   }
 
   async pauseForProcessRestart(): Promise<() => void> {
-    if (this.pluginChangeFrozen) throw new Error('插件维护正在应用变更')
     const records = [...this.recordsByWorkId.values()]
     const initialBlock = records
       .map((record) => ({ record, reason: this.pluginReloadBlockReason(record) }))
@@ -249,110 +242,6 @@ export class L2WorkSessionChatRuntime {
         }
       }
     }
-  }
-
-  async runPluginChange<T>(
-    operation: () => Promise<T>,
-    signal: AbortSignal,
-    onWaiting: (reason: string) => void
-  ): Promise<T> {
-    if (this.pluginChangeActive) throw new Error('已有插件维护正在进行')
-    this.pluginChangeActive = true
-    const blockReason = (): string | null => {
-      for (const record of this.recordsByWorkId.values()) {
-        const reason = !record.acceptingCommands
-          ? '工作会话生命周期正在处理'
-          : record.pendingCommands > 0 || record.compactionStart
-            ? '会话命令仍在执行'
-            : this.pluginReloadBlockReason(record)
-        if (reason) return `工作会话 ${record.source.workId}：${reason}`
-      }
-      return null
-    }
-    try {
-      while (true) {
-        signal.throwIfAborted()
-        const reason = blockReason()
-        if (reason) {
-          onWaiting(reason)
-          await delay(250, undefined, { signal })
-          continue
-        }
-        // 独立维护标记不修改 acceptingCommands，不能解除替换/关闭持有的锁。
-        this.pluginChangeFrozen = true
-        const finalReason = blockReason()
-        if (!finalReason) break
-        this.pluginChangeFrozen = false
-        onWaiting(finalReason)
-        await delay(250, undefined, { signal })
-      }
-      signal.throwIfAborted()
-      const records = [...this.recordsByWorkId.values()]
-      let failed = false
-      let firstError: unknown
-      let result!: T
-      try {
-        result = await operation()
-      } catch (error) {
-        failed = true
-        firstError = error
-      }
-      for (const record of records) {
-        if (!this.isCurrentRecord(record)) continue
-        if (record.state.runtime.extensionMode !== 'normal') continue
-        let refreshStarted = false
-        try {
-          const runtime = getL4PiWorkSessionRuntime(record.source.sessionId)
-          if (!runtime.isWorkerInitialized) continue
-          refreshStarted = true
-          await runtime.reload('normal')
-        } catch (error) {
-          if (!failed) firstError = error
-          failed = true
-          console.error('[Pi Desk][WorkSessionChatRuntime] 插件维护后会话资源重载失败', {
-            workId: record.source.workId,
-            message: error instanceof Error ? error.message : String(error)
-          })
-        } finally {
-          if (refreshStarted && this.isCurrentRecord(record)) {
-            try {
-              await this.syncRecordRuntime(record)
-              if (this.isCurrentRecord(record)) {
-                this.reprojectRecord(record, record.state.runtime.presentationMode)
-              }
-              if (
-                record.state.runtime.extensionMode !== 'normal' ||
-                record.state.runtime.initializationError
-              ) {
-                throw new Error(
-                  record.state.runtime.initializationError ?? '插件重载后会话已降级为基础模式'
-                )
-              }
-            } catch (error) {
-              if (!failed) firstError = error
-              failed = true
-              console.error('[Pi Desk][WorkSessionChatRuntime] 插件维护后会话快照同步失败', {
-                workId: record.source.workId,
-                message: error instanceof Error ? error.message : String(error)
-              })
-            }
-          }
-        }
-      }
-      if (failed) throw firstError
-      signal.throwIfAborted()
-      return result
-    } finally {
-      this.pluginChangeFrozen = false
-      this.pluginChangeActive = false
-    }
-  }
-
-  private isCurrentRecord(record: L2WorkSessionChatRecord): boolean {
-    return (
-      this.recordsByWorkId.get(record.source.workId) === record &&
-      this.matches(record.source, this.sourceFor(record.workSession))
-    )
   }
 
   metadataFor(workSession: WorkSession): L2WorkSessionChatMetadata {
@@ -570,11 +459,11 @@ export class L2WorkSessionChatRuntime {
     const send = (): Promise<L2ChatSendResponse> =>
       record.workSession.send({ mode: input.mode, text: input.text, images: input.images })
     if (!record.compactionStart) return this.enqueueCommand(record, send)
-    if (!record.acceptingCommands || this.pluginChangeFrozen) {
+    if (!record.acceptingCommands) {
       return Promise.reject(new L2ChatLifecycleBlockedError(record.source.workId))
     }
     return record.compactionStart.then((started) => {
-      if (!record.acceptingCommands || this.pluginChangeFrozen) {
+      if (!record.acceptingCommands) {
         throw new L2ChatLifecycleBlockedError(record.source.workId)
       }
       return started ? send() : this.enqueueCommand(record, send)
@@ -583,9 +472,6 @@ export class L2WorkSessionChatRuntime {
 
   interrupt(source: L2ChatSource): Promise<void> {
     const record = this.currentRecord(source)
-    if (this.pluginChangeFrozen) {
-      return Promise.reject(new L2ChatLifecycleBlockedError(record.source.workId))
-    }
     // 等待回答的命令占有串行链；停止必须先解除该等待。
     if (getL4PiWorkSessionRuntime(source.sessionId).nativeUi.hasPending) {
       return record.workSession.interrupt()
@@ -627,9 +513,6 @@ export class L2WorkSessionChatRuntime {
 
   reload(source: L2ChatSource, mode?: L2ChatMode): Promise<void> {
     const record = this.currentRecord(source)
-    if (this.pluginChangeFrozen) {
-      return Promise.reject(new L2ChatLifecycleBlockedError(record.source.workId))
-    }
     getL4PiWorkSessionRuntime(source.sessionId).nativeUi.cancelAll()
     return this.enqueueCommand(record, async () => {
       try {
@@ -718,9 +601,6 @@ export class L2WorkSessionChatRuntime {
 
   abortDirectBash(source: L2ChatSource): Promise<void> {
     const record = this.currentRecord(source)
-    if (this.pluginChangeFrozen) {
-      return Promise.reject(new L2ChatLifecycleBlockedError(record.source.workId))
-    }
     return getL4PiWorkSessionRuntime(record.source.sessionId).abortDirectBash()
   }
 
@@ -789,7 +669,6 @@ export class L2WorkSessionChatRuntime {
       directBashActive: false,
       compactionStart: null,
       commandTail: Promise.resolve(),
-      pendingCommands: 0,
       unsubscribeWorker: () => undefined
     }
     record.unsubscribeWorker = runtime.subscribeChat((event) =>
@@ -1000,13 +879,10 @@ export class L2WorkSessionChatRuntime {
     record: L2WorkSessionChatRecord,
     command: () => Promise<T>
   ): Promise<T> {
-    if (!record.acceptingCommands || this.pluginChangeFrozen) {
+    if (!record.acceptingCommands) {
       return Promise.reject(new L2ChatLifecycleBlockedError(record.source.workId))
     }
-    record.pendingCommands += 1
-    const operation = record.commandTail.then(command, command).finally(() => {
-      record.pendingCommands -= 1
-    })
+    const operation = record.commandTail.then(command, command)
     record.commandTail = operation.then(
       () => undefined,
       () => undefined

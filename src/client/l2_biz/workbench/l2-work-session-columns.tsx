@@ -623,7 +623,6 @@ export function L2WorkSessionColumns({
 
   const primary = columnItems[0]?.workSession ?? null
   const sessionCount = columnItems.reduce((count, item) => count + (item.workSession ? 1 : 0), 0)
-  const showFocus = sessionCount > 1
   const activeWorkId = focusedWorkId ?? primary?.workId ?? null
   const replacementDisabled = loading || replacingWithEmptyWorkId !== null
   const expandCollapsedColumn = useCallback(
@@ -660,7 +659,7 @@ export function L2WorkSessionColumns({
               key={`${workSession.workId}:${workSession.sessionId}:${workSession.branchId}`}
               workSession={workSession}
               fixed={item.fixed}
-              focused={showFocus && workSession.workId === activeWorkId}
+              focused={sessionCount === 1 || workSession.workId === activeWorkId}
               contentActive={workSession.workId === activeWorkId}
               composerActive={workSession.workId === activeWorkId}
               sidebarOpen={sidebarOpen}
@@ -758,7 +757,7 @@ export function L2WorkSessionColumns({
                   key={`${workSession.workId}:${workSession.sessionId}:${workSession.branchId}`}
                   workSession={workSession}
                   fixed={item.fixed}
-                  focused={showFocus && workSession.workId === activeWorkId}
+                  focused={sessionCount === 1 || workSession.workId === activeWorkId}
                   contentActive
                   composerActive={workSession.workId === activeWorkId}
                   sidebarOpen={sidebarOpen}

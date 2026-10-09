@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { promisify } from 'node:util'
 import { once } from 'node:events'
 import { createWriteStream } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -22,6 +23,7 @@ const frontend = resolve(process.argv[3] ?? '')
 const identifier = 'com.jetcrab.desktop.ui-smoke'
 const setupOnly = process.argv.includes('--setup-only')
 const layoutOnly = process.argv.includes('--layout-only')
+const startupOnly = process.argv.includes('--startup-only')
 const sourceScenario =
   process.argv.find((value) => value.startsWith('--source-scenario='))?.split('=')[1] ?? 'china'
 assert.ok(
@@ -61,6 +63,10 @@ async function listen(server) {
 let countryRequests = 0
 let releaseCountry
 let pendingCountry
+let updateVersion = '1.0.0'
+let updateFailure = false
+let holdUpdate = false
+let pendingUpdate
 const fixture = createServer((request, response) => {
   if (layoutOnly && request.url?.startsWith('/desktop/')) {
     const file = request.url === '/desktop/' ? 'index.html' : request.url.slice('/desktop/'.length)
@@ -79,6 +85,21 @@ const fixture = createServer((request, response) => {
       },
       () => response.writeHead(500).end()
     )
+    return
+  }
+  if (request.url?.startsWith('/desktop-startup-fixture')) {
+    const reply = () => {
+      response.writeHead(updateFailure ? 401 : 200, { 'Content-Type': 'application/json' })
+      response.end(
+        JSON.stringify({
+          name: 'desktop-startup-fixture',
+          'dist-tags': { latest: updateVersion },
+          versions: { [updateVersion]: { name: 'desktop-startup-fixture', version: updateVersion } }
+        })
+      )
+    }
+    if (holdUpdate) pendingUpdate = reply
+    else reply()
     return
   }
   if (request.url === '/ip-country') {
@@ -323,7 +344,8 @@ function targetAction(url, action) {
     const target = [...document.querySelectorAll('article')].find(item => item.dataset.testid === ${JSON.stringify(url)});
     const summary = target?.querySelector('summary[aria-label]');
     if (summary && !summary.parentElement.open) summary.click();
-    const button = [...(target?.querySelectorAll('button') ?? [])].find(item => item.textContent.trim() === ${JSON.stringify(action)});
+    const label = ${JSON.stringify(action)} === '编辑地址' ? '编辑地址 ' + ${JSON.stringify(url)} : ${JSON.stringify(action)} === '本机设置' ? '编辑' + target.getAttribute('aria-label') + '的设置' : ${JSON.stringify(action)};
+    const button = [...(target?.querySelectorAll('button') ?? [])].find(item => item.textContent.trim() === label || item.getAttribute('aria-label') === label);
     if (!button || button.disabled) throw new Error('网址操作不可用：' + ${JSON.stringify(action)});
     button.click();
     return true;
@@ -345,6 +367,9 @@ function installLayoutFixture(desktopVersion) {
   }
   window.desktopLayoutCommands = []
   window.desktopLayoutState = {
+    hideOnStartup: null,
+    hideOnOpen: true,
+    showOnClose: true,
     targets: [
       {
         url: localUrl,
@@ -402,6 +427,11 @@ function installLayoutFixture(desktopVersion) {
           })
         }
         return structuredClone(state)
+      }
+      if (command === 'set_startup_preference_command') {
+        if (window.desktopLayoutPreferenceError) throw new Error('无法保存显示习惯')
+        Object.assign(state, args)
+        return
       }
       if (command === 'get_environment_download_source') return 'official'
       if (command === 'get_target_settings')
@@ -502,7 +532,43 @@ async function validateLayout(page) {
   )
   await page.screenshot('control-loading.png')
   await page.evaluate('window.desktopLayoutReady()')
+  await until(() => page.evaluate(`!!document.querySelector('dialog[open]')`), '首次启动询问可见')
+  await page.screenshot('startup-preference.png')
+  await page.theme('dark')
+  await page.screenshot('startup-preference-dark.png')
+  await page.theme('light')
+  await page.evaluate(`window.desktopLayoutPreferenceError = true`)
+  await page.evaluate(click('下次隐藏'))
+  await until(() => hasText('无法保存显示习惯'), '保存失败保留首次询问')
+  await page.evaluate(`window.desktopLayoutPreferenceError = false`)
+  await page.evaluate(
+    `document.querySelector('dialog[open]').dispatchEvent(new Event('cancel', {cancelable:true}))`
+  )
+  await until(
+    () =>
+      page.evaluate(
+        `!document.querySelector('dialog[open]') && window.desktopLayoutState.hideOnStartup === false`
+      ),
+    '取消询问保存每次显示'
+  )
   await until(() => hasText('打开 Pi Desk'), '本机启动入口')
+  for (const name of [
+    '打开 Pi Desk',
+    '重启',
+    '停止',
+    '设置',
+    '远程访问',
+    '编辑这台电脑的设置',
+    '删除地址 https://workstation.example.test/'
+  ]) {
+    assert.equal(
+      await page.evaluate(
+        `(() => { const button = [...document.querySelectorAll('button')].find(item => item.textContent.trim() === ${JSON.stringify(name)} || item.getAttribute('aria-label') === ${JSON.stringify(name)}); return !!button?.checkVisibility(); })()`
+      ),
+      true,
+      `${name} 直接可见`
+    )
+  }
   await assertSetupFits(page, '打开 Pi Desk')
   for (const text of [
     'Node.js',
@@ -547,8 +613,8 @@ async function validateLayout(page) {
   `)
   await until(() => hasText('打开 Pi Desk'), '服务就绪后返回正常首页')
 
-  await page.evaluate(click('在其他设备上使用'))
-  await until(() => hasText('连接这台电脑'), '进入其他设备访问页面')
+  await page.evaluate(click('远程访问'))
+  await until(() => hasText('连接这台电脑'), '进入远程访问页面')
   await page.evaluate(click('复制地址'))
   assert.equal(
     await page.evaluate('window.desktopLayoutCopied'),
@@ -561,7 +627,7 @@ async function validateLayout(page) {
     `window.desktopLayoutState.targets[0].url = 'http://127.0.0.1:30333/workspace?view=files#readme'`
   )
   await until(() => hasText('打开 Pi Desk'), '切换连接后重新定位访问入口')
-  await page.evaluate(click('在其他设备上使用'))
+  await page.evaluate(click('远程访问'))
   await until(() => hasText('连接这台电脑'), '进入带路径连接的访问页面')
   await page.evaluate(click('复制地址'))
   assert.equal(
@@ -575,7 +641,7 @@ async function validateLayout(page) {
   await publish(
     `window.desktopLayoutState.targets[0].server.status = 'failed'; window.desktopLayoutState.targets[0].server.detail = 'fixture-start-failed'`
   )
-  await until(() => hasText('重试并打开'), '启动失败的恢复操作')
+  await until(() => hasText('未能启动'), '启动失败仍保留打开操作')
   await page.evaluate(click('安装与版本'))
   await until(() => hasText('Node.js'), '安装详情可访问')
   assert.equal(
@@ -598,7 +664,7 @@ async function validateLayout(page) {
   await until(() => hasText('连接失败'), '访问入口呈现连接异常')
   assert.equal(await hasText('fixture-tunnel-failed'), false)
   assert.equal(await hasText('操作未完成'), false, '外部访问故障不干扰本机启动')
-  await page.evaluate(click('在其他设备上使用'))
+  await page.evaluate(click('远程访问'))
   await until(() => hasText('重新连接'), '连接失败后可重试')
   assert.equal(await hasText('fixture-tunnel-failed'), true, '连接失败原因直接展示')
   await page.evaluate(click('重新连接'))
@@ -672,8 +738,27 @@ async function validateLayout(page) {
     true
   )
 
-  await page.evaluate(`document.querySelector('summary[aria-label="这台电脑的更多操作"]').click()`)
-  await page.evaluate(click('本机设置'))
+  await page.evaluate(click('设置'))
+  await until(() => hasText('启动时自动隐藏配置页'), '全局显示习惯可见')
+  await page.evaluate(field('启动时自动隐藏配置页', true))
+  await until(
+    () => page.evaluate(`window.desktopLayoutState.hideOnStartup === true`),
+    '显示习惯立即保存'
+  )
+  await page.screenshot('startup-settings.png')
+  await page.theme('dark')
+  await page.screenshot('startup-settings-dark.png')
+  await page.viewport(720, 560)
+  await page.evaluate(`document.documentElement.style.fontSize = '20px'`)
+  assert.equal(
+    await page.evaluate(`document.documentElement.scrollWidth <= innerWidth`),
+    true,
+    '设置页大字不横向溢出'
+  )
+  await page.screenshot('startup-settings-compact.png')
+  await page.evaluate(`document.documentElement.style.fontSize = ''`)
+  await page.viewport(960, 720)
+  await page.theme('light')
   await until(() => hasText('服务更新'), '从单一设置入口进入本机配置')
   assert.equal(await hasText('通过公网端口访问'), false, '访问配置不再混入本机设置')
   await page.evaluate(click('返回'))
@@ -751,6 +836,311 @@ async function validateLayout(page) {
   )
 }
 
+async function prepareStartupFixture() {
+  const reservation = createServer()
+  healthyPort = await listen(reservation)
+  await new Promise((done) => reservation.close(done))
+  const url = `http://127.0.0.1:${healthyPort}/`
+  const packageRoot = join(
+    root,
+    `packages/${healthyPort}/versions/desktop-startup-fixture/1.0.0/node_modules/desktop-startup-fixture`
+  )
+  await mkdir(packageRoot, { recursive: true })
+  await writeFile(
+    join(packageRoot, 'package.json'),
+    JSON.stringify({ name: 'desktop-startup-fixture', version: '1.0.0' })
+  )
+  await writeFile(
+    join(packageRoot, 'service.cjs'),
+    `require('node:http').createServer((req,res)=>res.writeHead(200,{'Content-Type':'text/html;charset=utf-8'}).end('<h1>本机聊天窗口</h1>')).listen(Number(process.argv[2]),'127.0.0.1')`
+  )
+  await writeFile(
+    join(root, 'config.json'),
+    JSON.stringify({
+      targets: [
+        {
+          url,
+          server: {
+            startCommand: `"${process.execPath}" node_modules/desktop-startup-fixture/service.cjs {port}`,
+            readyPath: '/',
+            package: {
+              name: 'desktop-startup-fixture',
+              registry: targetUrl,
+              startupUpdate: 'check',
+              periodicUpdate: 'none',
+              channel: 'stable'
+            }
+          }
+        },
+        { url: targetUrl }
+      ]
+    })
+  )
+  await writeFile(
+    join(root, 'runtime.json'),
+    JSON.stringify({ targets: { [url]: { lastVersion: '1.0.0', autoStart: true } } })
+  )
+  holdUpdate = true
+}
+
+async function closeWorkspaceWindow() {
+  // 只向本轮 EXE 所属的聊天窗口发送正常关闭消息，不关闭真实桌面实例。
+  const script = `Add-Type @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public class DesktopWindowTest {
+  public delegate bool Callback(IntPtr h, IntPtr p);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(Callback c, IntPtr p);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  public static void Close(uint pid) {
+    EnumWindows((h,p) => { uint owner; GetWindowThreadProcessId(h,out owner); var title = new StringBuilder(512); GetWindowText(h,title,512);
+      if(owner == pid && IsWindowVisible(h) && title.ToString().StartsWith("Pi Desk ·")) PostMessage(h,0x10,IntPtr.Zero,IntPtr.Zero);
+      return true;
+    }, IntPtr.Zero);
+  }
+}
+'@
+[DesktopWindowTest]::Close(${child.pid})`
+  await promisify(execFile)(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      Buffer.from(script, 'utf16le').toString('base64')
+    ],
+    { timeout: 15000, windowsHide: true }
+  )
+}
+
+async function validateStartupFlow(control) {
+  const url = `http://127.0.0.1:${healthyPort}/`
+  const invoke = (command, args = {}) =>
+    control.evaluate(
+      `window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)}, ${JSON.stringify(args)})`
+    )
+  const visible = () => invoke('plugin:window|is_visible', { label: 'control' })
+  await until(() => control.evaluate(`!!document.querySelector('dialog[open]')`), '首次启动询问')
+  await control.screenshot('startup-preference.png')
+  await control.evaluate(click('下次隐藏'))
+  await until(
+    async () => (await invoke('get_control_state')).hideOnStartup === true,
+    '选择写入原生偏好'
+  )
+  assert.equal(await visible(), true, '首次选择不立即隐藏配置页')
+  await until(
+    async () =>
+      (await invoke('get_control_state')).targets[0].server.status === 'running' &&
+      Boolean(pendingUpdate),
+    '网络查询等待期间服务已就绪'
+  )
+  await until(
+    () =>
+      control.evaluate(
+        `([...document.querySelectorAll('button')].find(item => item.textContent.trim() === '打开 Pi Desk'))?.disabled === false`
+      ),
+    '就绪后打开按钮可用'
+  )
+  await control.evaluate(click('打开 Pi Desk'))
+  await until(
+    async () => (await targets()).some((item) => item.url === url),
+    '查询尚未返回即可进入本机聊天'
+  )
+  assert.equal(await visible(), false, '打开本机聊天后隐藏配置页')
+  holdUpdate = false
+  pendingUpdate()
+  pendingUpdate = undefined
+  await until(
+    async () => (await invoke('get_control_state')).targets[0].server.update.status === 'idle',
+    '无更新完成'
+  )
+  assert.equal(await visible(), false, '无更新不展示配置页')
+  await closeWorkspaceWindow()
+  await until(visible, '关闭本机聊天默认恢复配置页')
+  await control.evaluate(targetAction(targetUrl, '打开'))
+  await until(
+    async () => (await targets()).some((item) => item.url === targetUrl),
+    '远程聊天已打开'
+  )
+  assert.equal(await visible(), false, '打开远程聊天后隐藏配置页')
+  await closeWorkspaceWindow()
+  await until(visible, '关闭远程聊天恢复配置页')
+  await control.evaluate(click('设置'))
+  await until(() => control.evaluate(`!!document.querySelector('[role="switch"]')`), '显示习惯设置')
+  await control.screenshot('startup-settings.png')
+  await control.evaluate(field('打开聊天后隐藏配置页', false))
+  await until(async () => !(await invoke('get_control_state')).hideOnOpen, '打开偏好保存')
+  await control.evaluate(field('关闭聊天后显示配置页', false))
+  await until(async () => !(await invoke('get_control_state')).showOnClose, '关闭偏好保存')
+  await control.evaluate(click('返回'))
+  await invoke('open_target_command', { url: targetUrl })
+  assert.equal(await visible(), true, '关闭自动隐藏开关后保留配置页')
+  await invoke('set_startup_preference_command', { hideOnOpen: true })
+  await invoke('open_target_command', { url: targetUrl })
+  await closeWorkspaceWindow()
+  assert.equal(await visible(), false, '关闭自动返回开关后仍留在托盘')
+
+  await invoke('stop_server_command', { url })
+  await until(
+    async () => (await invoke('get_control_state')).targets[0].server.status === 'stopped',
+    '本机服务停止'
+  )
+  holdUpdate = true
+  await invoke('check_package_update_command', { url })
+  await until(() => Boolean(pendingUpdate), '停止状态检查正在等待网络')
+  pendingUpdate = undefined
+  await invoke('open_target_command', { url })
+  await until(
+    async () =>
+      (await invoke('get_control_state')).targets[0].server.status === 'running' &&
+      Boolean(pendingUpdate),
+    '检查未返回也优先启动本机服务'
+  )
+  holdUpdate = false
+  pendingUpdate()
+  pendingUpdate = undefined
+  await until(
+    async () => (await invoke('get_control_state')).targets[0].server.update.status === 'idle',
+    '优先启动后的检查完成'
+  )
+
+  updateVersion = '2.0.0'
+  await invoke('check_package_update_command', { url })
+  await until(
+    async () =>
+      (await invoke('get_control_state')).targets[0].server.update.status === 'available' &&
+      (await visible()),
+    '发现更新唤出配置页'
+  )
+  await until(
+    () => control.evaluate(`document.body.innerText.includes('有可用更新')`),
+    '更新操作可见'
+  )
+  await control.screenshot('startup-update-available.png')
+  await invoke('open_target_command', { url: targetUrl })
+  await invoke('check_package_update_command', { url })
+  await until(
+    async () => (await invoke('get_control_state')).targets[0].server.update.status === 'available',
+    '同版本再次检查完成'
+  )
+  assert.equal(await visible(), false, '同一版本不重复唤出')
+  updateFailure = true
+  await invoke('check_package_update_command', { url })
+  await until(
+    async () => (await invoke('get_control_state')).targets[0].server.update.status === 'failed',
+    '查询失败已记录'
+  )
+  assert.equal(await visible(), false, '查询失败不打断聊天')
+  updateFailure = false
+  updateVersion = '1.0.0'
+  await invoke('set_startup_preference_command', { showOnClose: true })
+  const saved = JSON.parse(await readFile(join(root, 'runtime.json'), 'utf8'))
+  assert.equal(saved.lastOpenedUrl, targetUrl)
+  assert.equal(saved.hideOnStartup, true)
+
+  await restartNativeProcess()
+  await until(
+    async () => (await targets()).some((item) => item.url === targetUrl),
+    '重新启动直接恢复上次远程聊天'
+  )
+  assert.equal(
+    (await targets()).some((item) => item.url.startsWith('http://tauri.localhost')),
+    false,
+    '无更新启动不创建配置窗口'
+  )
+  await closeWorkspaceWindow()
+  const restored = await until(
+    async () => (await targets()).find((item) => item.url.startsWith('http://tauri.localhost')),
+    '关闭聊天恢复配置页'
+  )
+  const restoredControl = await connect(restored)
+  await until(
+    () => restoredControl.evaluate(`document.body.innerText.includes('打开 Pi Desk')`),
+    '恢复配置页可用'
+  )
+  assert.equal(
+    await restoredControl.evaluate(`!!document.querySelector('dialog[open]')`),
+    false,
+    '首次选择不重复询问'
+  )
+  await restoredControl.evaluate(
+    `window.__TAURI_INTERNALS__.invoke('open_target_command', {url:${JSON.stringify(url)}})`
+  )
+  await until(
+    async () =>
+      JSON.parse(await readFile(join(root, 'runtime.json'), 'utf8')).lastOpenedUrl === url,
+    '本地地址成为上次使用地址'
+  )
+  assert.deepEqual(restoredControl.errors, [])
+  await restartNativeProcess()
+  await until(
+    async () => (await targets()).some((item) => item.url === url),
+    '冷启动直接进入本地聊天'
+  )
+  assert.equal(
+    (await targets()).some((item) => item.url.startsWith('http://tauri.localhost')),
+    false,
+    '本地冷启动不闪现配置页'
+  )
+  await closeWorkspaceWindow()
+  const localControlTarget = await until(
+    async () => (await targets()).find((item) => item.url.startsWith('http://tauri.localhost')),
+    '本地冷启动关闭后恢复配置页'
+  )
+  const localControl = await connect(localControlTarget)
+  await until(
+    () => localControl.evaluate(`document.body.innerText.includes('打开 Pi Desk')`),
+    '本地配置页恢复完成'
+  )
+  assert.deepEqual(localControl.errors, [])
+}
+
+async function restartNativeProcess() {
+  const stop = spawn(executable, ['--exit-for-update'], { stdio: 'ignore', windowsHide: true })
+  await once(stop, 'exit')
+  await Promise.race([
+    exit,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('隔离桌面退出超时')), 15000))
+  ])
+  await assertPortReleased(healthyPort)
+  child = undefined
+  await until(
+    () =>
+      assertPortReleased(debugPort).then(
+        () => true,
+        () => false
+      ),
+    '退出后调试端口释放',
+    5000
+  )
+  startNativeProcess()
+}
+
+function startNativeProcess() {
+  child = spawn(executable, [], {
+    cwd: root,
+    env: {
+      ...process.env,
+      ...isolatedPiEnvironment(agent),
+      HOME: process.env.USERPROFILE,
+      PI_DESK_DESKTOP_DATA_DIR: root,
+      PI_DESK_DESKTOP_DISCOVERY_PATH: startupOnly ? dirname(process.execPath) : '',
+      PI_DESK_DESKTOP_IP_LOOKUP_URL: `${targetUrl}ip-country`,
+      WEBVIEW2_USER_DATA_FOLDER: join(root, 'webview'),
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${debugPort}`
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true
+  })
+  child.stdout.pipe(output, { end: false })
+  child.stderr.pipe(output, { end: false })
+  exit = once(child, 'exit')
+}
+
 validation: try {
   if (layoutOnly) {
     child = spawn(
@@ -788,26 +1178,10 @@ validation: try {
     passed = true
     break validation
   }
+  if (startupOnly) await prepareStartupFixture()
   await rename(frontend, heldFrontend)
   moved = true
-  child = spawn(executable, [], {
-    cwd: root,
-    env: {
-      ...process.env,
-      ...isolatedPiEnvironment(agent),
-      HOME: process.env.USERPROFILE,
-      PI_DESK_DESKTOP_DATA_DIR: root,
-      PI_DESK_DESKTOP_DISCOVERY_PATH: '',
-      PI_DESK_DESKTOP_IP_LOOKUP_URL: `${targetUrl}ip-country`,
-      WEBVIEW2_USER_DATA_FOLDER: join(root, 'webview'),
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${debugPort}`
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true
-  })
-  child.stdout.pipe(output, { end: false })
-  child.stderr.pipe(output, { end: false })
-  exit = once(child, 'exit')
+  startNativeProcess()
   const controlTarget = await until(
     async () =>
       (await targets()).find(
@@ -816,6 +1190,17 @@ validation: try {
     '内嵌页面地址'
   )
   const control = await connect(controlTarget)
+  if (startupOnly) {
+    await validateStartupFlow(control)
+    passed = true
+    break validation
+  }
+  await until(() => control.evaluate(`!!document.querySelector('dialog[open]')`), '首次启动选择')
+  await control.evaluate(click('每次显示'))
+  // 原有安装验收持续操作配置页，不覆盖本轮新增的窗口切换场景。
+  await control.evaluate(
+    `window.__TAURI_INTERNALS__.invoke('set_startup_preference_command', {hideOnOpen:false})`
+  )
   await control.theme('light')
   await until(
     () =>
@@ -1560,31 +1945,41 @@ await writeFile(
           minimumViewport: { width: 720, height: 560 },
           portsReleased: true
         }
-      : {
-          passed,
-          frontendDirectoryAbsent: true,
-          controlAndBrowserVerified: !setupOnly,
-          settingsSavedAndReloaded: !setupOnly,
-          missingEnvironmentBlockedNpm: !setupOnly,
-          manualSetupAndRemoteAccessVerified: !setupOnly,
-          preparationFitsDefaultAndMinimumViewport: true,
-          preparationCurrentStatusVisible: true,
-          perComponentProgressAndHomeStable: true,
-          inlineAddressSavedAndReloaded: true,
-          preparationErrorVisibleAndCancelVerified: true,
-          controlViewport: { width: 960, height: 720 },
-          minimumViewport: { width: 720, height: 560 },
-          preparationUiUsesIsolatedFixture: true,
-          sourceScenario,
-          countryRecommendationVerified: true,
-          sourceSelectableBeforeStartAndFixedAfterStart: true,
-          selectedSourceSavedThroughNativeCommand: true,
-          manualInstallCommandMatchesSource: true,
-          activeRuntimeProtected: !setupOnly,
-          shellArchitecture: 'ia32',
-          childArchitecture: process.arch,
-          portsReleased: true
-        },
+      : startupOnly
+        ? {
+            passed,
+            scope: 'desktop-startup-window-flow',
+            portsReleased: true,
+            startupCheckNonBlocking: true,
+            preferencesPersisted: true,
+            remoteAndLocalWindowSwitching: true,
+            updateWakeAndQuietFailure: true
+          }
+        : {
+            passed,
+            frontendDirectoryAbsent: true,
+            controlAndBrowserVerified: !setupOnly,
+            settingsSavedAndReloaded: !setupOnly,
+            missingEnvironmentBlockedNpm: !setupOnly,
+            manualSetupAndRemoteAccessVerified: !setupOnly,
+            preparationFitsDefaultAndMinimumViewport: true,
+            preparationCurrentStatusVisible: true,
+            perComponentProgressAndHomeStable: true,
+            inlineAddressSavedAndReloaded: true,
+            preparationErrorVisibleAndCancelVerified: true,
+            controlViewport: { width: 960, height: 720 },
+            minimumViewport: { width: 720, height: 560 },
+            preparationUiUsesIsolatedFixture: true,
+            sourceScenario,
+            countryRecommendationVerified: true,
+            sourceSelectableBeforeStartAndFixedAfterStart: true,
+            selectedSourceSavedThroughNativeCommand: true,
+            manualInstallCommandMatchesSource: true,
+            activeRuntimeProtected: !setupOnly,
+            shellArchitecture: 'ia32',
+            childArchitecture: process.arch,
+            portsReleased: true
+          },
     null,
     2
   )

@@ -61,11 +61,12 @@ fn main() {
                         ),
                     );
                 }
-                let _ = runtime::open_control_window(app);
+                let _ = runtime::activate_desktop(app);
             }
         }))
         .invoke_handler(tauri::generate_handler![
             get_control_state,
+            set_startup_preference_command,
             get_environment_download_source,
             get_target_settings,
             apply_target_command,
@@ -108,7 +109,7 @@ fn main() {
         }
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => {
-            let _ = runtime::open_control_window(app_handle);
+            let _ = runtime::activate_desktop(app_handle);
         }
         _ => {}
     });
@@ -158,7 +159,9 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
     #[cfg(target_os = "macos")]
     app.set_menu(tauri::menu::Menu::default(app.handle())?)?;
     build_tray(app)?;
-    runtime::open_control_window(app.handle())?;
+    if !runtime::hides_on_startup(&app.state::<ShellState>())? {
+        runtime::open_control_window(app.handle())?;
+    }
     runtime::check_environment(app.handle(), true)?;
     runtime::start_tunnels_if_enabled(app.handle())?;
     runtime::start_update_monitor(app.handle())?;
@@ -232,6 +235,25 @@ fn get_control_state(
 ) -> Result<runtime::ControlState, String> {
     ensure_control(&window)?;
     runtime::control_state(state.inner())
+}
+
+#[tauri::command]
+async fn set_startup_preference_command(
+    app: AppHandle,
+    window: Window,
+    hide_on_startup: Option<bool>,
+    hide_on_open: Option<bool>,
+    show_on_close: Option<bool>,
+) -> Result<(), String> {
+    run_command(app, window, "set-startup-preference", move |app| {
+        runtime::set_startup_preference(
+            &app.state::<ShellState>(),
+            hide_on_startup,
+            hide_on_open,
+            show_on_close,
+        )
+    })
+    .await
 }
 
 #[tauri::command]

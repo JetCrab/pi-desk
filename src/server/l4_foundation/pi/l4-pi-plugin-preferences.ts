@@ -6,6 +6,7 @@ import { z } from 'zod'
 import {
   L4PluginDownloadSourceSchema,
   L4PluginRegistrySchema,
+  L4PluginUpdateTagSchema,
   l4PluginSourceIdentity,
   type L4PluginDownloadSource
 } from '@common/l4_foundation/plugin/l4-plugin-package'
@@ -16,7 +17,8 @@ const PreferencesSchema = z
   .object({
     downloadSource: L4PluginDownloadSourceSchema.default({ mode: 'auto' }),
     disabled: z.array(z.string()).max(2000).default([]),
-    registries: z.record(z.string(), L4PluginRegistrySchema).default({})
+    registries: z.record(z.string(), L4PluginRegistrySchema).default({}),
+    updateTags: z.record(z.string(), L4PluginUpdateTagSchema).default({})
   })
   .strict()
 type Preferences = z.infer<typeof PreferencesSchema>
@@ -83,14 +85,40 @@ export function setL4PiPluginRegistry(
   })
 }
 
+export function readL4PiPluginUpdateTag(source: string, agentDir = getAgentDir()): string {
+  const saved = readL4PiPluginPreferences(agentDir).updateTags[l4PluginSourceIdentity(source)]
+  if (saved) return saved
+  const selector = /^npm:(?:@[^/]+\/)?[^@]+@([^@]+)$/.exec(source)?.[1]
+  return selector &&
+    !/^v?\d+\./.test(selector) &&
+    L4PluginUpdateTagSchema.safeParse(selector).success
+    ? selector
+    : 'latest'
+}
+
+export function setL4PiPluginUpdateTag(
+  source: string,
+  tag: string,
+  agentDir = getAgentDir()
+): void {
+  const identity = l4PluginSourceIdentity(source)
+  updatePreferences(agentDir, (current) => ({
+    ...current,
+    updateTags: { ...current.updateTags, [identity]: tag }
+  }))
+}
+
 export function removeL4PiPluginPreference(source: string, agentDir = getAgentDir()): void {
   const identity = l4PluginSourceIdentity(source)
   updatePreferences(agentDir, (current) => {
     const registries = { ...current.registries }
+    const updateTags = { ...current.updateTags }
     delete registries[identity]
+    delete updateTags[identity]
     return {
       ...current,
       registries,
+      updateTags,
       disabled: current.disabled.filter((item) => item !== identity)
     }
   })

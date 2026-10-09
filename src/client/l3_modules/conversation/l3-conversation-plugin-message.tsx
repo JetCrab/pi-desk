@@ -167,6 +167,7 @@ function MessageErrorView({
   phase,
   error,
   handle,
+  fallback,
   onRetry
 }: {
   message: L3ConversationDisplayMessage
@@ -175,6 +176,7 @@ function MessageErrorView({
   phase: string
   error: Error
   handle: BrowserMessageHandle
+  fallback?: ReactNode
   onRetry?: () => void | Promise<void>
 }): React.JSX.Element {
   const { t } = useTranslation('conversation')
@@ -213,109 +215,130 @@ function MessageErrorView({
   ])
 
   return (
-    <div
-      role="alert"
-      data-message-id={message.identity}
-      className="rounded-lg border border-destructive/35 bg-muted/30 p-3 text-sm"
-    >
-      <div className="flex items-start gap-2">
-        <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
-        <div className="min-w-0 flex-1">
-          <p className="font-medium text-destructive">{t('viewFailed')}</p>
-          {message.viewKey === 'pi-desk/message-declaration-error' &&
-          typeof message.snapshot.summary.text === 'string' &&
-          message.snapshot.summary.text.length > 0 ? (
-            <p className="mt-2 whitespace-pre-wrap break-words text-foreground">
-              {message.snapshot.summary.text}
-            </p>
-          ) : null}
-          <L4ErrorDetails error={error}>
-            <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
-              {pluginName ?? 'Host'} · {contributionName ?? t('reservedView')} · {message.viewKey} ·{' '}
-              {phase}
-            </p>
-            <details className="text-sm">
-              <summary className="cursor-pointer text-muted-foreground">
-                {t('publicSnapshot')}
-              </summary>
-              <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-background p-3 font-mono text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
-                {JSON.stringify(handle.getSnapshot(), null, 2)}
-              </pre>
-            </details>
-            {!message.temporary && message.snapshot.fixed.hasDetail && detail === undefined ? (
+    <div className="space-y-2" data-message-id={message.identity}>
+      {fallback}
+      <div role="alert" className="rounded-lg border border-destructive/35 bg-muted/30 p-3 text-sm">
+        <div className="flex items-start gap-2">
+          <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
+          <div className="min-w-0 flex-1">
+            <p className="font-medium text-destructive">{t('viewFailed')}</p>
+            {message.viewKey === 'pi-desk/message-declaration-error' &&
+            typeof message.snapshot.summary.text === 'string' &&
+            message.snapshot.summary.text.length > 0 ? (
+              <p className="mt-2 whitespace-pre-wrap break-words text-foreground">
+                {message.snapshot.summary.text}
+              </p>
+            ) : null}
+            <L4ErrorDetails error={error}>
+              <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                {pluginName ?? 'Host'} · {contributionName ?? t('reservedView')} · {message.viewKey}{' '}
+                · {phase}
+              </p>
+              <details className="text-sm">
+                <summary className="cursor-pointer text-muted-foreground">
+                  {t('publicSnapshot')}
+                </summary>
+                <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-background p-3 font-mono text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
+                  {JSON.stringify(handle.getSnapshot(), null, 2)}
+                </pre>
+              </details>
+              {!message.temporary && message.snapshot.fixed.hasDetail && detail === undefined ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={loading}
+                  onClick={() => {
+                    setLoading(true)
+                    setDetailError(null)
+                    void handle
+                      .loadDetail()
+                      .then(setDetail, (cause: unknown) => {
+                        setDetailError(cause instanceof Error ? cause.message : t('detailFailed'))
+                      })
+                      .finally(() => setLoading(false))
+                  }}
+                >
+                  {loading ? <LoaderCircleIcon className="animate-spin" /> : null}
+                  {t('loadDetail')}
+                </Button>
+              ) : null}
+              {detailError ? (
+                <p className="text-sm text-destructive [overflow-wrap:anywhere]">{detailError}</p>
+              ) : null}
+              {detail ? (
+                <pre className="max-h-48 overflow-auto rounded-md bg-background p-3 font-mono text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
+                  {JSON.stringify(detail, null, 2)}
+                </pre>
+              ) : null}
+            </L4ErrorDetails>
+            {presentation.recover ? (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={loading}
+                className="mt-2 mr-2"
+                disabled={recovering}
                 onClick={() => {
-                  setLoading(true)
-                  setDetailError(null)
-                  void handle
-                    .loadDetail()
-                    .then(setDetail, (cause: unknown) => {
-                      setDetailError(cause instanceof Error ? cause.message : t('detailFailed'))
-                    })
-                    .finally(() => setLoading(false))
+                  setRecovering(true)
+                  void presentation.recover!()
+                    .catch((cause: unknown) =>
+                      setDetailError(cause instanceof Error ? cause.message : String(cause))
+                    )
+                    .finally(() => setRecovering(false))
                 }}
               >
-                {loading ? <LoaderCircleIcon className="animate-spin" /> : null}
-                {t('loadDetail')}
+                {recovering ? <LoaderCircleIcon className="animate-spin" /> : null}
+                {t('useBasicPresentation')}
               </Button>
             ) : null}
-            {detailError ? (
-              <p className="text-sm text-destructive [overflow-wrap:anywhere]">{detailError}</p>
+            {onRetry ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-2"
+                disabled={retrying}
+                onClick={() => {
+                  setRetrying(true)
+                  setDetailError(null)
+                  void Promise.resolve()
+                    .then(onRetry)
+                    .catch((cause: unknown) =>
+                      setDetailError(cause instanceof Error ? cause.message : String(cause))
+                    )
+                    .finally(() => setRetrying(false))
+                }}
+              >
+                {retrying ? <LoaderCircleIcon className="animate-spin" /> : <RefreshCwIcon />}
+                {t('retry')}
+              </Button>
             ) : null}
-            {detail ? (
-              <pre className="max-h-48 overflow-auto rounded-md bg-background p-3 font-mono text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">
-                {JSON.stringify(detail, null, 2)}
-              </pre>
-            ) : null}
-          </L4ErrorDetails>
-          {presentation.recover ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mt-2 mr-2"
-              disabled={recovering}
-              onClick={() => {
-                setRecovering(true)
-                void presentation.recover!()
-                  .catch((cause: unknown) =>
-                    setDetailError(cause instanceof Error ? cause.message : String(cause))
-                  )
-                  .finally(() => setRecovering(false))
-              }}
-            >
-              {recovering ? <LoaderCircleIcon className="animate-spin" /> : null}
-              {t('useBasicPresentation')}
-            </Button>
-          ) : null}
-          {onRetry ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mt-2"
-              disabled={retrying}
-              onClick={() => {
-                setRetrying(true)
-                setDetailError(null)
-                void Promise.resolve()
-                  .then(onRetry)
-                  .catch((cause: unknown) =>
-                    setDetailError(cause instanceof Error ? cause.message : String(cause))
-                  )
-                  .finally(() => setRetrying(false))
-              }}
-            >
-              {retrying ? <LoaderCircleIcon className="animate-spin" /> : <RefreshCwIcon />}
-              {t('retry')}
-            </Button>
-          ) : null}
+          </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function MessagePendingView({
+  message
+}: {
+  message: L3ConversationDisplayMessage
+}): React.JSX.Element {
+  const { t } = useTranslation('conversation')
+  return (
+    <div className="rounded-lg border bg-muted/30 p-3 text-sm" aria-busy="true">
+      <div className="flex items-center gap-2 text-muted-foreground" role="status">
+        <LoaderCircleIcon className="size-4 animate-spin" />
+        {t('viewLoading')}
+      </div>
+      <details className="mt-2">
+        <summary className="cursor-pointer text-muted-foreground">{t('messageContent')}</summary>
+        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere]">
+          {JSON.stringify(message.snapshot.summary, null, 2)}
+        </pre>
+      </details>
     </div>
   )
 }
@@ -338,7 +361,7 @@ export function L3ConversationMessageView({
   const activeMountRef = useRef<object | null>(null)
   const [mountState, setMountState] = useState<
     | { status: 'loading' }
-    | { status: 'ready' }
+    | { status: 'ready'; generation: object }
     | { status: 'error'; error: Error; phase: string; generation: object | null }
   >({ status: 'loading' })
   const [handle] = useState(() => new L3ConversationBrowserMessageHandle(message, loadDetail))
@@ -476,7 +499,7 @@ export function L3ConversationMessageView({
           setMountState((current) =>
             current.status === 'error' && current.generation === mountGeneration
               ? current
-              : { status: 'ready' }
+              : { status: 'ready', generation: mountGeneration }
           )
         }
       },
@@ -531,7 +554,7 @@ export function L3ConversationMessageView({
   }
   if (!entriesInitialized) {
     if (builtinView) return <>{defaultView}</>
-    return <div className="min-h-12" aria-busy="true" />
+    return <MessagePendingView message={message} />
   }
   if (resolution?.status === 'conflict') {
     return (
@@ -542,14 +565,13 @@ export function L3ConversationMessageView({
         phase="priority-conflict"
         error={new Error(t('viewConflict'))}
         handle={handle}
+        fallback={builtinView ? defaultView : undefined}
       />
     )
   }
   if (!resolution) {
-    if (waitingForView) {
-      return <div className="min-h-12" aria-busy="true" />
-    }
     if (builtinView) return <>{defaultView}</>
+    if (waitingForView) return <MessagePendingView message={message} />
     return (
       <MessageErrorView
         message={message}
@@ -576,6 +598,7 @@ export function L3ConversationMessageView({
         phase={mountState.phase}
         error={mountState.error}
         handle={handle}
+        fallback={builtinView ? defaultView : undefined}
         onRetry={() => {
           const state = runtime.getContributionLoadState(
             resolution.pluginName,
@@ -609,14 +632,13 @@ export function L3ConversationMessageView({
     )
   }
 
+  const mounted = mountState.status === 'ready' && mountState.generation === mountGeneration
   return (
-    <div
-      className="relative min-h-12"
-      data-message-id={message.identity}
-      aria-busy={mountState.status === 'loading'}
-    >
+    <div className="relative" data-message-id={message.identity} aria-busy={!mounted}>
+      {!mounted ? builtinView ? defaultView : <MessagePendingView message={message} /> : null}
       <div
         ref={containerRef}
+        className={!mounted ? 'pointer-events-none invisible absolute inset-x-0 top-0' : undefined}
         data-pi-desk-plugin={resolution.pluginName}
         data-pi-desk-kind="message-view"
         data-pi-desk-contribution={resolution.descriptor.contributionName}

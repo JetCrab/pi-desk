@@ -1,20 +1,6 @@
 name: Release npm
-run-name: ${{ github.ref_name }} · npm · ${{ inputs.phase || inputs.package || '自动选择' }}
 
 on:
-  push:
-    branches: [dev]
-    paths:
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - src/**
-      - bin/**
-      - plugins/**
-      - next.config.ts
-      - tsconfig*.json
-      - .github/scripts/prepare*-release.mjs
-      - .github/workflows/release-npm.yml
   workflow_call:
     inputs:
       source_sha:
@@ -29,44 +15,17 @@ on:
     secrets:
       NPM_TOKEN:
         required: false
-  workflow_dispatch:
-    inputs:
-      package:
-        description: 选择公开包，all 按 SDK 优先顺序处理
-        type: choice
-        default: all
-        options:
-          [
-            all,
-            pi-desk,
-            pi-desk-sdk,
-            pi-desk-bg-run,
-            pi-desk-ctx,
-            pi-desk-deliverables,
-            pi-desk-quota-viewer,
-            pi-desk-remote-debug,
-            pi-desk-subagent,
-            pi-desk-tibo-monitor,
-            pi-desk-tool-reason,
-            pi-desk-usage
-          ]
-      publish:
-        description: 将验证通过的包发布到官方 npm
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-npm-${{ github.ref_name }}-${{ inputs.phase || 'all' }}
+  group: release-npm-${{ github.ref_name }}-${{ inputs.phase }}
   cancel-in-progress: false
 
 env:
-  RELEASE_PACKAGE: ${{ inputs.package }}
   NPM_ARTIFACT_DIR: ${{ github.workspace }}/temp/package/npm-release/${{ github.run_id }}-${{ github.run_attempt }}
   NEXT_TELEMETRY_DISABLED: '1'
-  DEV_MANIFEST_DIR: ${{ github.workspace }}/temp/build/dev-manifests/${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   plan:
@@ -75,55 +34,32 @@ jobs:
     outputs:
       packages: ${{ steps.selection.outputs.packages }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.source_sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.2
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.15.0
-          run_install: false
-      - name: 选择发布包
+      - name: 核对固定源码、包列表和执行阶段
         id: selection
         env:
-          RELEASE_BEFORE: ${{ github.event.before }}
           CALL_PACKAGES: ${{ inputs.packages }}
           CALL_PHASE: ${{ inputs.phase }}
           CALL_SHA: ${{ inputs.source_sha }}
         run: |
-          if [ -n "$CALL_SHA" ]; then
-            node --input-type=module <<'JS'
+          node --input-type=module <<'JS'
           import assert from 'node:assert/strict'
           import { appendFileSync } from 'node:fs'
-          assert.equal(process.env.GITHUB_REF, 'refs/heads/main')
+          assert.ok(['refs/heads/main', 'refs/heads/dev'].includes(process.env.GITHUB_REF))
           assert.match(process.env.CALL_SHA, /^[a-f0-9]{40}$/)
           assert.ok(['build', 'publish', 'all'].includes(process.env.CALL_PHASE))
           const packages = JSON.parse(process.env.CALL_PACKAGES)
           assert.ok(Array.isArray(packages) && packages.every(name => /^pi-desk(?:-[a-z0-9-]+)?$/.test(name)))
+          assert.equal(new Set(packages).size, packages.length)
           appendFileSync(process.env.GITHUB_OUTPUT, `packages=${JSON.stringify(packages)}\n`)
           JS
-          elif [ "$GITHUB_REF" = refs/heads/dev ]; then
-            node .github/scripts/prepare-dev-release.mjs
-          else
-            node .github/scripts/release-versions.mjs npm
-          fi
-      - uses: actions/upload-artifact@v4
-        if: github.ref == 'refs/heads/dev' && steps.selection.outputs.packages != '[]'
-        with:
-          name: dev-manifests-${{ github.run_id }}
-          overwrite: true
-          path: ${{ env.DEV_MANIFEST_DIR }}/
-          retention-days: 7
-          if-no-files-found: error
 
   build:
     needs: plan
     if: needs.plan.outputs.packages != '[]' && inputs.phase != 'publish'
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       RELEASE_PACKAGES_JSON: ${{ needs.plan.outputs.packages }}
@@ -131,18 +67,14 @@ jobs:
       PI_CODING_AGENT_DIR: ${{ github.workspace }}/temp/pi/npm-ci/${{ github.run_id }}-${{ github.run_attempt }}/agent
       PI_CODING_AGENT_SESSION_DIR: ${{ github.workspace }}/temp/pi/npm-ci/${{ github.run_id }}-${{ github.run_attempt }}/agent/sessions
     steps:
-      - name: 仅允许 main 或 dev 分支
-        env:
-          WORKFLOW_REF: ${{ github.ref }}
-        run: |
-          if ($env:WORKFLOW_REF -notin @('refs/heads/main', 'refs/heads/dev')) { throw '请从 main 或 dev 分支构建或发布' }
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ inputs.source_sha }}
           persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 10.15.0
+          run_install: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.2
@@ -152,21 +84,6 @@ jobs:
         with:
           name: dev-manifests-${{ github.run_id }}
           path: .
-      - name: 核对并固定 Windows Git Bash
-        run: |
-          $original = (Get-Command bash.exe -ErrorAction SilentlyContinue).Source
-          Write-Host "原 Bash 路径：$original"
-          $gitRoot = Split-Path (Split-Path (Get-Command git.exe).Source)
-          $gitBin = Join-Path $gitRoot 'bin'
-          $bash = Join-Path $gitBin 'bash.exe'
-          if (-not (Test-Path $bash)) { throw 'Git for Windows 未提供 Bash' }
-          $gitBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          $env:PATH = "$gitBin;$env:PATH"
-          Write-Host "测试 Bash 路径：$((Get-Command bash.exe).Source)"
-          & $bash --version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $bash -c 'node -p process.platform'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 安装公开依赖
         run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
       - name: 复用 dev npm 包缓存
@@ -175,8 +92,7 @@ jobs:
         with:
           path: temp/cache/npm-release/_cacache
           key: ${{ runner.os }}-npm-dev-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-dev-
+          restore-keys: ${{ runner.os }}-npm-dev-
       - name: 复用 dev Next 构建缓存
         if: github.ref == 'refs/heads/dev' && contains(fromJSON(needs.plan.outputs.packages), 'pi-desk')
         uses: actions/cache@v4
@@ -186,13 +102,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-next-npm-dev-${{ hashFiles('pnpm-lock.yaml') }}-
             ${{ runner.os }}-next-npm-dev-
-      - name: 构建、验证和校验实际 tarball
-        run: |
-          if ($env:GITHUB_REF -eq 'refs/heads/dev') {
-            $env:NPM_CONFIG_CACHE = Join-Path $env:GITHUB_WORKSPACE 'temp/cache/npm-release'
-          }
-          node .github/scripts/release-npm.mjs prepare
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 并行构建、检查并打包独立 npm 单元
+        env:
+          NPM_CONFIG_CACHE: ${{ github.workspace }}/temp/cache/npm-release
+        run: node .github/scripts/release-npm.mjs prepare
       - uses: actions/upload-artifact@v4
         with:
           name: npm-packages-${{ github.run_id }}
@@ -208,11 +121,11 @@ jobs:
           path: ${{ env.NPM_ARTIFACT_DIR }}/command-smoke/*.tgz
           if-no-files-found: error
           retention-days: 7
-      - name: 保留 Windows npm 验证失败现场
+      - name: 保留 npm 构建失败现场
         uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: npm-release-failure-windows-${{ github.run_id }}
+          name: npm-build-failure-${{ github.run_id }}
           overwrite: true
           path: |
             temp/run/npm-release/
@@ -220,19 +133,24 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  installed-commands-linux:
+  installed-commands:
     needs: [plan, build]
     if: inputs.phase != 'publish' && contains(fromJSON(needs.plan.outputs.packages), 'pi-desk')
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ inputs.source_sha }}
           persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 10.15.0
+          run_install: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.2
@@ -242,19 +160,41 @@ jobs:
         with:
           name: dev-manifests-${{ github.run_id }}
           path: .
+      - name: 核对并固定 Windows Git Bash
+        if: runner.os == 'Windows'
+        run: |
+          $gitRoot = Split-Path (Split-Path (Get-Command git.exe).Source)
+          $gitBin = Join-Path $gitRoot 'bin'
+          if (-not (Test-Path (Join-Path $gitBin 'bash.exe'))) { throw 'Git for Windows 未提供 Bash' }
+          $gitBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $env:PATH = "$gitBin;$env:PATH"
+          & (Join-Path $gitBin 'bash.exe') -c 'node -p process.platform'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 安装公开依赖
         run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
       - uses: actions/download-artifact@v4
         with:
           name: npm-command-smoke-${{ github.run_id }}
           path: ${{ env.NPM_ARTIFACT_DIR }}/command-smoke
-      - name: 验收同一批实际 tarball 的 Linux 安装态命令
+      - name: Windows 核心回归复用同批 SDK 产物
+        if: runner.os == 'Windows' && github.ref == 'refs/heads/dev'
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { basename, dirname, resolve } from 'node:path'
+          import { run } from './.github/scripts/release-npm.mjs'
+          const sdk = resolve(process.env.NPM_ARTIFACT_DIR, 'command-smoke/sdk.tgz')
+          run('tar.exe', ['-xzf', basename(sdk), '--strip-components=1', '-C', resolve('plugins/pi-desk-sdk')], { cwd: dirname(sdk) })
+          NODE
+          pnpm test:pidesk
+      - name: 验收同一批实际 tarball 的安装态命令
+        shell: bash
         run: node .github/scripts/verify-npm-install.mjs "$NPM_ARTIFACT_DIR/command-smoke/sdk.tgz" "$NPM_ARTIFACT_DIR/command-smoke/host.tgz"
-      - name: 保留 Linux npm 验证失败现场
-        uses: actions/upload-artifact@v4
+      - name: 保留安装态验收失败现场
         if: failure()
+        uses: actions/upload-artifact@v4
         with:
-          name: npm-release-failure-linux-${{ github.run_id }}
+          name: npm-install-failure-${{ matrix.os }}-${{ github.run_id }}
           overwrite: true
           path: |
             temp/run/npm-release/
@@ -266,11 +206,11 @@ jobs:
     if: >-
       always() && !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.packages != '[]' &&
       ((inputs.source_sha && inputs.phase == 'publish') ||
-       (inputs.phase != 'build' && (github.event_name == 'push' || inputs.publish || inputs.source_sha) && needs.build.result == 'success' &&
-        (!contains(fromJSON(needs.plan.outputs.packages), 'pi-desk') || needs.installed-commands-linux.result == 'success')))
-    needs: [plan, build, installed-commands-linux]
+       (inputs.phase == 'all' && needs.build.result == 'success' &&
+        (!contains(fromJSON(needs.plan.outputs.packages), 'pi-desk') || needs.installed-commands.result == 'success')))
+    needs: [plan, build, installed-commands]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       RELEASE_PACKAGES_JSON: ${{ needs.plan.outputs.packages }}
     permissions:
@@ -279,7 +219,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ inputs.source_sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -298,5 +238,5 @@ jobs:
       - name: 发布同一批已验证制品
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          RELEASE_RESUME: ${{ (inputs.source_sha || (github.ref == 'refs/heads/dev' && github.run_attempt > 1)) && 'true' || 'false' }}
+          RELEASE_RESUME: ${{ (github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/dev' && github.run_attempt > 1)) && 'true' || 'false' }}
         run: node .github/scripts/release-npm.mjs publish

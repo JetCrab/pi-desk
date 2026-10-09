@@ -176,6 +176,10 @@ pub fn open_browser(app: &AppHandle, value: &str) -> Result<(), String> {
         if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
             let _ = hidden.hide();
+            if let Err(error) = crate::runtime::workspace_window_closed(&app_for_close) {
+                let state = app_for_close.state::<ShellState>();
+                logging::write(&state.log_path, "workspace-close-failed", &error);
+            }
         }
         if matches!(event, WindowEvent::Destroyed) {
             let state = app_for_close.state::<ShellState>();

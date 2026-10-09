@@ -12,6 +12,12 @@
 
 **Android 版**：填写电脑上已启动的 Pi Desk 访问地址。手机只负责访问，不运行服务；连接方法见[远程访问](/docs/devices/)。
 
+## 通过 Docker 启动
+
+在 Linux amd64 主机上，可使用 `ghcr.io/jetcrab/pi-desk` 正式镜像运行 Pi Desk 服务，无需在宿主机安装 Node.js 或 Pi。首次部署前请确认 GHCR 中已有正式版本标签。
+
+完整的 Compose 配置、数据目录、访问方式和升级备份步骤见 [Docker 部署与使用](/docs/docker/)。
+
 ## 通过 Node.js 安装
 
 1. 从 [Node.js 官网](https://nodejs.org/zh-cn/download)安装 22.19.0 或更新版本。Windows 还需安装 [Git for Windows](https://git-scm.com/download/win)。
@@ -43,6 +49,8 @@ npx --registry=https://mirrors.cloud.tencent.com/npm @jetcrab/pi-desk@latest # �
 首次提示下载 Pi Desk 时确认即可；这不会替你安装 Pi。浏览器访问地址和停止方式与上面的命令行安装相同。
 
 ## 更新 Pi 和 Pi Desk
+
+Docker 部署通过拉取新镜像更新 Pi 和 Pi Desk，见 [Docker 升级步骤](/docs/docker/#升级)；不使用下面的全局 npm 更新命令。
 
 Pi、Pi Desk 和插件分别更新。更新前先结束正在运行的任务，停止 Pi Desk 服务；命令行方式按 `Ctrl+C`，桌面端在控制中心停止服务。
 

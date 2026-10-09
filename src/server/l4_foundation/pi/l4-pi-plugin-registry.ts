@@ -98,7 +98,7 @@ function chooseVersion(metadata: Record<string, unknown>, selector: string): str
   return selected
 }
 
-async function installRegistry(
+export async function readL4PluginInstallRegistry(
   name: string,
   options: { downloadSource?: L4PluginDownloadSource; registry?: string; agentDir?: string }
 ): Promise<{ registry: string; fallback: boolean }> {
@@ -134,6 +134,7 @@ export async function resolveL4PluginInstall(
     registry?: string
     agentDir?: string
     signal?: AbortSignal
+    cache?: boolean
   } = {}
 ): Promise<{ source: string; registry?: string }> {
   if (!source.startsWith('npm:')) return { source }
@@ -144,12 +145,12 @@ export async function resolveL4PluginInstall(
   const selector = match[2] ?? 'latest'
   if (selector.length > 128 || !/^[a-zA-Z0-9._+-]+$/.test(selector))
     throw new L4PluginRegistryError('npm 插件版本或标签无效', 400)
-  const selected = await installRegistry(name, options)
+  const selected = await readL4PluginInstallRegistry(name, options)
   let registry = selected.registry
   let target = selector
   let version: string
   try {
-    const metadata = await fetchRegistryJson(packageUrl(registry, name), options.signal)
+    const metadata = await readInstallMetadata(packageUrl(registry, name), options)
     const taggedVersion = registryObject(metadata['dist-tags'])[selector]
     if (typeof taggedVersion === 'string') target = taggedVersion
     version = chooseVersion(metadata, target)
@@ -167,11 +168,30 @@ export async function resolveL4PluginInstall(
       reason: error.reason
     })
     registry = L4_PLUGIN_OFFICIAL_REGISTRY
-    const metadata = await fetchRegistryJson(packageUrl(registry, name), options.signal)
+    const metadata = await readInstallMetadata(packageUrl(registry, name), options)
     version = chooseVersion(metadata, target)
     validManifest(registryObject(metadata.versions)[version], name, version)
   }
   return { source: `npm:${name}@${version}`, registry }
+}
+
+async function readInstallMetadata(
+  url: URL,
+  options: { signal?: AbortSignal; cache?: boolean }
+): Promise<Record<string, unknown>> {
+  if (options.cache !== false) return fetchRegistryJson(url, options.signal)
+  const body = await fetchRegistryBytes(url, {
+    limit: 8 * 1024 * 1024,
+    signal: options.signal,
+    cache: false
+  })
+  try {
+    const parsed: unknown = JSON.parse(body.toString('utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid')
+    return parsed as Record<string, unknown>
+  } catch {
+    throw new L4PluginRegistryError('插件源返回的元数据格式无效')
+  }
 }
 
 function validManifest(value: unknown, name: string, version?: string): Record<string, unknown> {

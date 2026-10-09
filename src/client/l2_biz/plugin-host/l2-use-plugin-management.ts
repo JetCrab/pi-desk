@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
+  L2PluginManagementBatchRequest,
+  L2PluginManagementListRequest,
   L2PluginManagementDetail,
   L2PluginManagementItem,
   L2PluginManagementInstallRequest,
@@ -16,6 +18,7 @@ import type { L2PluginManagementBiz } from './l2-plugin-management-biz'
 
 export type PluginManagementAction =
   | { kind: 'add'; input: L2PluginManagementInstallRequest; package?: L2PluginCatalogItem }
+  | { kind: 'batch'; input: L2PluginManagementBatchRequest }
   | { kind: 'update'; source: string }
   | { kind: 'del'; source: string }
   | { kind: 'enable'; source: string }
@@ -24,6 +27,7 @@ export type PluginManagementAction =
 
 interface PluginManagementOptions {
   biz: L2PluginManagementBiz
+  snapshot: L2PluginManagementSnapshot | null
   onSnapshot: (snapshot: L2PluginManagementSnapshot) => void
   onRestartScheduled: () => void
 }
@@ -45,11 +49,19 @@ export function pluginDisplayName(plugin: L2PluginManagementItem): string {
 }
 
 export function pluginRequestKey(source: string): string {
-  return `source:${source.startsWith('npm:') ? (pluginNpmSpec(source)?.name ?? source) : source}`
+  return `source:${pluginNpmSpec(source)?.name ?? source}`
 }
 
 export function pluginManagementActionLabel(action: PluginManagementAction): string {
   switch (action.kind) {
+    case 'batch':
+      return action.input.action === 'add'
+        ? 'batchInstall'
+        : action.input.action === 'update'
+          ? 'updateSelected'
+          : action.input.action === 'del'
+            ? 'removeSelected'
+            : 'setChannel'
     case 'add':
       return 'actionAdd'
     case 'update':
@@ -76,7 +88,8 @@ interface PluginManagementState {
   detailLoading: boolean
   detailError: string | null
   pluginHost: ReturnType<typeof useL4PluginHost>
-  refresh: () => Promise<void>
+  refresh: (sources?: string[], tag?: string) => Promise<void>
+  executeBatch: (input: L2PluginManagementBatchRequest) => Promise<void>
   execute: (action: PluginManagementAction) => Promise<void>
   requestInstall: (input: L2PluginManagementInstallRequest, item?: L2PluginCatalogItem) => void
   applyChanges: (sources?: string[]) => Promise<void>
@@ -92,6 +105,7 @@ interface PluginManagementState {
 
 export function useL2PluginManagement({
   biz,
+  snapshot,
   onSnapshot,
   onRestartScheduled
 }: PluginManagementOptions): PluginManagementState {
@@ -125,19 +139,59 @@ export function useL2PluginManagement({
       return next
     })
   }
-  const readSnapshot = async (checkUpdates = false): Promise<void> => {
+  const busySource = (source: string): boolean => {
+    const key = pluginRequestKey(source)
+    return (
+      inFlight.current.has(key) ||
+      Boolean(
+        snapshot?.plugins.some(
+          (plugin) =>
+            pluginRequestKey(plugin.source) === key &&
+            plugin.operation &&
+            plugin.operation.phase !== 'failed'
+        )
+      )
+    )
+  }
+  const readSnapshot = async (
+    input: boolean | L2PluginManagementListRequest = false
+  ): Promise<void> => {
     const request = ++listRequest.current
-    const next = await biz.list(checkUpdates)
+    const next = await biz.list(input)
     if (mounted.current && request === listRequest.current) onSnapshot(next)
   }
-  const refresh = async (): Promise<void> => {
+  const refresh = async (sources?: string[], tag?: string): Promise<void> => {
+    if (inFlight.current.has('check')) return
+    const targets =
+      sources ??
+      snapshot?.plugins
+        .filter((plugin) => plugin.kind === 'package' && (!tag || plugin.updateTag === tag))
+        .map((plugin) => plugin.source) ??
+      []
+    const busy = targets.filter(busySource)
+    const available = targets.filter((source) => !busySource(source))
+    busy.forEach((source) => setError(pluginRequestKey(source), t('sourceBusy')))
+    if (!available.length) return
+    if (busy.length && available.length > 32) {
+      setError('list', t('batchLimit'))
+      return
+    }
+    const keys = available.map(pluginRequestKey)
+    setRequest('check', true)
+    keys.forEach((key) => setRequest(key, true))
     setLoading(true)
     setError('list', null)
     try {
-      await readSnapshot(true)
+      await readSnapshot({
+        checkUpdates: true,
+        ...(sources || busy.length ? { sources: available } : {}),
+        ...(tag ? { tag } : {})
+      })
     } catch (cause) {
       setError('list', cause instanceof Error ? cause.message : t('updateCheckFailed'))
     } finally {
+      setRequest('check', false)
+      keys.forEach((key) => setRequest(key, false))
       if (mounted.current) setLoading(false)
     }
   }
@@ -169,7 +223,46 @@ export function useL2PluginManagement({
     }
   }, [biz, onSnapshot, t])
 
+  const executeBatch = async (input: L2PluginManagementBatchRequest): Promise<void> => {
+    const sources = input.action === 'add' ? input.items.map((item) => item.source) : input.sources
+    const available = sources.filter((source) => !busySource(source))
+    sources
+      .filter(busySource)
+      .forEach((source) => setError(pluginRequestKey(source), t('sourceBusy')))
+    if (!available.length) return
+    const keys = available.map(pluginRequestKey)
+    keys.forEach((key) => {
+      setRequest(key, true)
+      setError(key, null)
+    })
+    setConfirmation(null)
+    try {
+      const request =
+        input.action === 'add'
+          ? { ...input, items: input.items.filter((item) => available.includes(item.source)) }
+          : { ...input, sources: available }
+      const response = await biz.batch(request)
+      if (!mounted.current) return
+      listRequest.current += 1
+      onSnapshot(response.snapshot)
+      response.results.forEach((result) => setError(pluginRequestKey(result.source), result.error))
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : t('batchFailed')
+      keys.forEach((key) => setError(key, message))
+    } finally {
+      keys.forEach((key) => setRequest(key, false))
+    }
+  }
   const execute = async (action: PluginManagementAction): Promise<void> => {
+    if (action.kind === 'batch') {
+      await executeBatch(action.input)
+      return
+    }
+    if (
+      action.kind !== 'reload' &&
+      busySource(action.kind === 'add' ? action.input.source : action.source)
+    )
+      return
     const key =
       action.kind === 'reload'
         ? 'reload'
@@ -317,6 +410,7 @@ export function useL2PluginManagement({
     detailError,
     pluginHost,
     refresh,
+    executeBatch,
     execute,
     requestInstall,
     applyChanges,

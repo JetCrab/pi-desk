@@ -9,6 +9,7 @@ import { runDesktopAction } from './l2-desktop-biz'
 type Route =
   | { mode: 'control' }
   | { mode: 'target'; url: string | null; advanced: boolean }
+  | { mode: 'settings'; url: string | null }
   | { mode: 'access'; url: string }
 
 function routeFromHash(hash: string): Route {
@@ -22,6 +23,10 @@ function routeFromHash(hash: string): Route {
       const params = new URLSearchParams(query)
       return { mode: 'target', url: params.get('url'), advanced: params.get('advanced') === '1' }
     }
+  }
+  const [path, query] = hash.slice(1).split('?', 2)
+  if (path === '/settings') {
+    return { mode: 'settings', url: new URLSearchParams(query).get('url') }
   }
   return { mode: 'control' }
 }
@@ -99,10 +104,15 @@ export function DesktopApp(): React.JSX.Element {
     />
   ) : (
     <SettingsPage
-      key={route.url ?? ''}
+      key={`${route.mode}:${route.url ?? ''}`}
+      state={state}
+      readError={readError}
+      refresh={refresh}
+      global={route.mode === 'settings'}
+      onSelectTarget={(url) => navigate(`#/settings?url=${encodeURIComponent(url)}`)}
       originalUrl={route.url}
       localTarget={Boolean(state?.targets.find((target) => target.url === route.url)?.server)}
-      initialAdvanced={route.advanced}
+      initialAdvanced={route.mode === 'target' && route.advanced}
       onDirty={(value) => {
         dirty.current = value
       }}

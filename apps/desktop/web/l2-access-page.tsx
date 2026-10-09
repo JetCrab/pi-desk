@@ -60,9 +60,9 @@ export function AccessPage({
         >
           <DesktopIcon name="back" />
         </button>
-        <h1>在其他设备上使用</h1>
+        <h1>远程访问</h1>
       </div>
-      <section className="access-overview" aria-label="访问状态">
+      <section className="access-overview" aria-label="远程访问状态">
         <div className="panel-heading">
           <h2>连接这台电脑</h2>
           <span className={listening ? 'status-line good' : 'status-line'} role="status">
@@ -131,7 +131,7 @@ export function AccessPage({
         </p>
       )}
       {editing && access.draft && !access.loadError && (
-        <form onSubmit={(event) => void submit(event)} aria-label="其他设备访问配置">
+        <form onSubmit={(event) => void submit(event)} aria-label="远程访问配置">
           <h2>你的中转服务</h2>
           <label className="field">
             中转服务地址

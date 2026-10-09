@@ -72,6 +72,9 @@ pub struct TargetSnapshot {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControlState {
+    pub hide_on_startup: Option<bool>,
+    pub hide_on_open: bool,
+    pub show_on_close: bool,
     pub targets: Vec<TargetSnapshot>,
     pub environment: EnvironmentSnapshot,
 }
@@ -129,6 +132,7 @@ struct TargetRuntime {
     tunnel_worker: Option<TunnelWorkerHandle>,
     tunnel_phase: TunnelPhase,
     last_check: Option<Instant>,
+    notified_version: Option<String>,
 }
 
 fn default_auto_start() -> bool {
@@ -153,11 +157,31 @@ impl Default for TargetRuntimeInfo {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RuntimeInfo {
     #[serde(default)]
     targets: BTreeMap<String, TargetRuntimeInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hide_on_startup: Option<bool>,
+    #[serde(default = "default_auto_start")]
+    hide_on_open: bool,
+    #[serde(default = "default_auto_start")]
+    show_on_close: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_opened_url: Option<String>,
+}
+
+impl Default for RuntimeInfo {
+    fn default() -> Self {
+        Self {
+            targets: BTreeMap::new(),
+            hide_on_startup: None,
+            hide_on_open: true,
+            show_on_close: true,
+            last_opened_url: None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -253,6 +277,13 @@ fn parse_runtime_info(content: &str, config: &DesktopConfig) -> Option<RuntimeIn
     if value.get("targets").is_some() {
         let mut info: RuntimeInfo = serde_json::from_value(value).ok()?;
         info.targets.retain(|url, _| config.target(url).is_some());
+        if info
+            .last_opened_url
+            .as_ref()
+            .is_some_and(|url| config.target(url).is_none())
+        {
+            info.last_opened_url = None;
+        }
         return Some(info);
     }
     let legacy: LegacyRuntimeInfo = serde_json::from_value(value).ok()?;
@@ -476,6 +507,7 @@ pub fn apply_target(
                     .get_mut(&next.url)
                 {
                     runtime.update = PackageUpdateSnapshot::default();
+                    runtime.notified_version = None;
                 }
             } else if previous
                 .server
@@ -495,6 +527,7 @@ pub fn apply_target(
                     .get_mut(&next.url)
                 {
                     runtime.update = PackageUpdateSnapshot::default();
+                    runtime.notified_version = None;
                 }
             }
             if previous.tunnel.as_ref().map(|tunnel| tunnel.public_port)
@@ -541,6 +574,9 @@ fn remove_target_runtime(app: &AppHandle, url: &str) -> Result<(), String> {
     windows::remove(app, url);
     mutate_runtime_info(&state, |info| {
         info.targets.remove(url);
+        if info.last_opened_url.as_deref() == Some(url) {
+            info.last_opened_url = None;
+        }
     })
 }
 
@@ -568,6 +604,97 @@ pub fn open_control_window(app: &AppHandle) -> Result<(), String> {
     windows::open_control(app)
 }
 
+pub fn set_startup_preference(
+    state: &ShellState,
+    hide_on_startup: Option<bool>,
+    hide_on_open: Option<bool>,
+    show_on_close: Option<bool>,
+) -> Result<(), String> {
+    mutate_runtime_info(state, |info| {
+        if let Some(value) = hide_on_startup {
+            info.hide_on_startup = Some(value);
+        }
+        if let Some(value) = hide_on_open {
+            info.hide_on_open = value;
+        }
+        if let Some(value) = show_on_close {
+            info.show_on_close = value;
+        }
+    })
+}
+
+pub fn hides_on_startup(state: &ShellState) -> Result<bool, String> {
+    state
+        .runtime_info
+        .lock()
+        .map(|info| info.hide_on_startup == Some(true))
+        .map_err(|_| "启动设置不可用".into())
+}
+
+// 托盘始终打开配置页；启动快捷方式才按偏好恢复工作窗口。
+pub fn activate_desktop(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<ShellState>();
+    if !hides_on_startup(&state)? {
+        return open_control_window(app);
+    }
+    if state.environment.snapshot().status == "checking" {
+        return Ok(());
+    }
+    let config = state.config()?;
+    let url = {
+        let info = state.runtime_info.lock().map_err(|_| "运行记录不可用")?;
+        info.last_opened_url
+            .as_deref()
+            .and_then(|url| config.target(url))
+            .or_else(|| config.targets.first())
+            .map(|target| target.url.clone())
+    };
+    let Some(url) = url else {
+        return open_control_window(app);
+    };
+    if let Err(error) = open_target(app, &url) {
+        write_shell_log(
+            &state,
+            "desktop-open-failed",
+            &format!("url={url} error={error}"),
+        );
+        return open_control_window(app);
+    }
+    Ok(())
+}
+
+fn open_workspace_window(app: &AppHandle, url: &str) -> Result<(), String> {
+    windows::open_browser(app, url)?;
+    let state = app.state::<ShellState>();
+    mutate_runtime_info(&state, |info| info.last_opened_url = Some(url.to_string()))?;
+    let hide = state
+        .runtime_info
+        .lock()
+        .map_err(|_| "窗口设置不可用")?
+        .hide_on_open;
+    if hide {
+        if let Some(window) = app.get_webview_window("control") {
+            window
+                .hide()
+                .map_err(|error| format!("隐藏配置页失败：{error}"))?;
+        }
+    }
+    Ok(())
+}
+
+pub fn workspace_window_closed(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<ShellState>();
+    let show = state
+        .runtime_info
+        .lock()
+        .map_err(|_| "窗口设置不可用")?
+        .show_on_close;
+    if show && !state.closing.load(Ordering::Acquire) {
+        open_control_window(app)?;
+    }
+    Ok(())
+}
+
 pub fn open_target(app: &AppHandle, url: &str) -> Result<(), String> {
     let state = app.state::<ShellState>();
     let url = config::normalize_target_url(url)?;
@@ -576,18 +703,28 @@ pub fn open_target(app: &AppHandle, url: &str) -> Result<(), String> {
         set_auto_start(&state, &url, true)?;
         begin_operation_with_open(app, &url, Operation::Start, true)
     } else {
-        windows::open_browser(app, &url)
+        open_workspace_window(app, &url)
     }
 }
 
 enum EnvironmentOperation {
-    Check { auto_start: bool },
+    Check {
+        auto_start: bool,
+        open_on_ready: bool,
+    },
     Prepare(String, DownloadSource),
     Select(Component, bool),
 }
 
 pub(crate) fn check_environment(app: &AppHandle, auto_start: bool) -> Result<(), String> {
-    begin_environment_operation(app, EnvironmentOperation::Check { auto_start })
+    let open_on_ready = auto_start && hides_on_startup(&app.state::<ShellState>())?;
+    begin_environment_operation(
+        app,
+        EnvironmentOperation::Check {
+            auto_start,
+            open_on_ready,
+        },
+    )
 }
 
 pub(crate) fn prepare_environment(
@@ -830,14 +967,17 @@ fn run_environment_operation(
         _ => None,
     };
     let mut auto_start = false;
+    let mut open_on_ready = false;
     let mut selection_cancelled = false;
     let mut started_service = false;
     let result = (|| -> Result<(), String> {
         match operation {
             EnvironmentOperation::Check {
                 auto_start: enabled,
+                open_on_ready: open,
             } => {
                 auto_start = enabled;
+                open_on_ready = open;
                 checked_environment(&state, &cancelled)?;
             }
             EnvironmentOperation::Select(component, archive) => {
@@ -902,7 +1042,7 @@ fn run_environment_operation(
                     .filter_map(|target| target.server)
                     .collect::<Vec<_>>();
                 state.environment.finish_check(&servers);
-                windows::open_browser(app, &url)?;
+                open_workspace_window(app, &url)?;
             }
         }
         Ok(())
@@ -954,6 +1094,11 @@ fn run_environment_operation(
     if auto_start && !cancelled() {
         if let Err(error) = start_servers_if_enabled(app) {
             write_shell_log(&state, "environment-auto-start-failed", &error);
+        }
+        if open_on_ready {
+            if let Err(error) = activate_desktop(app) {
+                write_shell_log(&state, "desktop-activate-failed", &error);
+            }
         }
     }
 }
@@ -1113,6 +1258,15 @@ fn begin_operation_with_open(
                 runtime.open_after_start = true;
                 return Ok(());
             }
+            if open_after_start && runtime.child.is_none() && runtime.update.status == "checking" {
+                runtime.open_after_start = true;
+                runtime
+                    .operation
+                    .as_ref()
+                    .unwrap()
+                    .store(true, Ordering::Release);
+                return Ok(());
+            }
             return Err("该服务有操作正在进行".into());
         }
         runtime.operation = Some(cancel.clone());
@@ -1188,6 +1342,12 @@ fn run_operation(
     let state = app.state::<ShellState>();
     let started = Instant::now();
     let cancelled = || cancel.load(Ordering::Acquire) || state.closing.load(Ordering::Acquire);
+    let startup_check = matches!(operation, Operation::Start)
+        && server
+            .package
+            .as_ref()
+            .is_some_and(|package| package.startup_update == UpdatePolicy::Check)
+        && cached_version(&state, url).ok().flatten().is_some();
     let result = execute_operation(&state, url, server, operation, &cancelled);
     record_operation_failure(&state, url, server, operation, &result, &cancelled);
     let stop_requested = {
@@ -1215,7 +1375,7 @@ fn run_operation(
             runtime.stop_requested = false;
         }
     }
-    let open = state
+    let (open, resume_start) = state
         .target_runtimes
         .lock()
         .map(|mut runtimes| {
@@ -1224,13 +1384,57 @@ fn run_operation(
                 && runtime.child.is_some()
                 && result.is_ok()
                 && !cancelled();
+            let resume_start = runtime.open_after_start
+                && matches!(operation, Operation::Check)
+                && !stop_requested
+                && !state.closing.load(Ordering::Acquire);
             runtime.open_after_start = false;
-            open
+            (open, resume_start)
         })
-        .unwrap_or(false);
+        .unwrap_or((false, false));
+    if resume_start {
+        if let Err(error) = begin_operation_with_open(app, url, Operation::Start, true) {
+            write_shell_log(&state, "resume-start-failed", &error);
+            let _ = open_control_window(app);
+        }
+    }
     if open {
-        if let Err(error) = windows::open_browser(app, url) {
+        if let Err(error) = open_workspace_window(app, url) {
             write_shell_log(&state, "browser-open-failed", &error);
+            let _ = open_control_window(app);
+        }
+    }
+    if !cancelled() {
+        if result.is_err() && matches!(operation, Operation::Start | Operation::Restart) {
+            let _ = open_control_window(app);
+        }
+        if result.is_ok() && matches!(operation, Operation::Check) {
+            let show_update = {
+                let mut runtimes = state.target_runtimes.lock().unwrap();
+                let runtime = runtimes.entry(url.to_string()).or_default();
+                let available = if runtime.update.status == "available" {
+                    runtime.update.version.clone()
+                } else {
+                    None
+                };
+                let changed = available.is_some() && available != runtime.notified_version;
+                runtime.notified_version = available;
+                changed
+            };
+            if show_update {
+                if let Err(error) = open_control_window(app) {
+                    write_shell_log(&state, "update-window-failed", &error);
+                }
+            }
+        }
+        if result.is_ok() && startup_check && has_child(&state, url) {
+            if let Err(error) = begin_operation(app, url, Operation::Check) {
+                write_shell_log(
+                    &state,
+                    "startup-check-skipped",
+                    &format!("url={url} error={error}"),
+                );
+            }
         }
     }
     write_shell_log(
@@ -1283,7 +1487,6 @@ fn record_operation_failure(
 struct PackageSelection {
     version: String,
     cached_directory: Option<PathBuf>,
-    startup_available: Option<String>,
 }
 
 struct PreparedPackage {
@@ -1303,12 +1506,11 @@ fn select_package(
     let cached_directory =
         cached.and_then(|version| packages::installed_directory(&base, package, version));
     let mut version = cached_directory.as_ref().and(cached).map(str::to_string);
-    let mut startup_available = None;
     if matches!(
         operation,
         Operation::Check | Operation::Update | Operation::AutoUpdate
     ) || cached_directory.is_none()
-        || (matches!(operation, Operation::Start) && package.startup_update != UpdatePolicy::None)
+        || (matches!(operation, Operation::Start) && package.startup_update == UpdatePolicy::Update)
     {
         set_update(state, url, "checking", None, None);
         match packages::query_version_with_environment(
@@ -1325,14 +1527,7 @@ fn select_package(
                 if cached_directory.is_none()
                     || should_select_version(package, Some(&latest), cached)
                 {
-                    if matches!(operation, Operation::Start)
-                        && package.startup_update == UpdatePolicy::Check
-                        && cached_directory.is_some()
-                    {
-                        startup_available = Some(latest);
-                    } else {
-                        version = Some(latest);
-                    }
+                    version = Some(latest);
                 }
             }
             Err(error)
@@ -1352,7 +1547,6 @@ fn select_package(
     Ok(PackageSelection {
         version: version.ok_or_else(|| "没有可安装的版本".to_string())?,
         cached_directory,
-        startup_available,
     })
 }
 
@@ -1515,7 +1709,6 @@ fn execute_operation_with_prepared(
     let base = package_directory(state, url)?;
     let mut version = cached.clone();
     let mut directory = None;
-    let mut startup_available = None;
     if let Some(package) = &server.package {
         let (selection, prepared_directory) = match prepared {
             Some(prepared) => (prepared.selection, Some(prepared.directory)),
@@ -1525,7 +1718,6 @@ fn execute_operation_with_prepared(
             ),
         };
         version = Some(selection.version.clone());
-        startup_available = selection.startup_available.clone();
         let cached_directory = &selection.cached_directory;
         let selected = selection.version.as_str();
         if matches!(operation, Operation::Check) {
@@ -1726,10 +1918,6 @@ fn execute_operation_with_prepared(
         if let Some(version) = &version {
             set_cached_version(state, url, version.clone())?;
         }
-    }
-    if let Some(available) = startup_available {
-        set_update(state, url, "available", Some(available), None);
-        return Ok(());
     }
     set_update(state, url, "idle", None, None);
     if let (Some(package), Some(version)) = (&server.package, &version) {
@@ -2069,6 +2257,9 @@ pub fn control_state(state: &ShellState) -> Result<ControlState, String> {
         })
         .collect();
     Ok(ControlState {
+        hide_on_startup: info.hide_on_startup,
+        hide_on_open: info.hide_on_open,
+        show_on_close: info.show_on_close,
         targets,
         environment: state.environment.snapshot(),
     })
@@ -2605,6 +2796,38 @@ mod tests {
 
         assert_eq!(target.last_version.as_deref(), Some("0.1.66"));
         assert!(!target.auto_start);
+    }
+
+    #[test]
+    fn desktop_window_preferences_roundtrip_and_preserve_legacy_defaults() {
+        let directory = test_directory("window-preferences");
+        let config = crate::config::DesktopConfig::default();
+        let legacy =
+            parse_runtime_info(r#"{"lastVersion":"1.2.3","autoStart":false}"#, &config).unwrap();
+        assert_eq!(legacy.hide_on_startup, None);
+        assert!(legacy.hide_on_open && legacy.show_on_close);
+        let state = ShellState::new(
+            config.clone(),
+            legacy,
+            directory.join("config.json"),
+            directory.join("runtime.json"),
+            directory.join("desktop.log"),
+        );
+        super::set_startup_preference(&state, Some(true), Some(false), None).unwrap();
+        super::set_startup_preference(&state, None, None, Some(false)).unwrap();
+        let saved = super::load_runtime_info(&state.runtime_path, &config);
+        assert_eq!(saved.hide_on_startup, Some(true));
+        assert!(!saved.hide_on_open && !saved.show_on_close);
+        assert!(!saved.targets.values().next().unwrap().auto_start);
+        let stale = parse_runtime_info(
+            r#"{"targets":{},"hideOnStartup":false,"lastOpenedUrl":"https://removed.example/"}"#,
+            &config,
+        )
+        .unwrap();
+        assert_eq!(stale.hide_on_startup, Some(false));
+        assert_eq!(stale.last_opened_url, None);
+        assert!(stale.hide_on_open && stale.show_on_close);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -3506,20 +3729,16 @@ http.createServer((req, res) => res.writeHead(503).end('not ready'))
                 super::cached_version(&state, &url).unwrap().as_deref(),
                 Some(expected)
             );
-            assert_eq!(
-                running.update.as_ref().unwrap().status,
-                if policy == UpdatePolicy::Check {
-                    "available"
-                } else {
-                    "idle"
-                }
-            );
+            assert_eq!(running.update.as_ref().unwrap().status, "idle");
             let log = fs::read_to_string(&state.log_path).unwrap();
             if policy != UpdatePolicy::Update {
                 assert!(!log.contains("status=installing"));
             }
-            if policy == UpdatePolicy::None {
-                assert!(!log.contains("status=checking"));
+            if policy != UpdatePolicy::Update {
+                assert!(
+                    !log.contains("status=checking"),
+                    "启动检查不能在服务就绪前查询网络"
+                );
             }
             let pid = state
                 .target_runtimes
