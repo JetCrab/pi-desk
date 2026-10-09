@@ -18,6 +18,7 @@ import {
   publishBatch,
   stageNpm,
   prepareBatch,
+  prepareResumeBatch,
   prepareWebsiteBatch
 } from '../.github/scripts/release-main.mjs'
 import { sha256 } from '../.github/scripts/release-github.mjs'
@@ -630,6 +631,39 @@ test('正式记录持久保存后才移除内部附件，公开失败仍可重�
   await publishBatch({ github, release, repository: 'fixture/project' })
   assert.ok(github.calls.some((call) => call.method === 'PATCH' && call.body.name === 'v1.0.0'))
   await assert.rejects(saveReleaseRecord(github, { ...record, date: 2 }), /拒绝覆盖/)
+})
+
+test('修复调度后续跑原草稿，源码和版本不变且不接受已公开记录', async (t) => {
+  const repo = await fixture(t)
+  const plan = createReleasePlan(repo.root, { head: repo.head })
+  const release = draft(plan.record)
+  const github = githubFixture([release])
+  await github.putAsset(release, 'plan.json', Buffer.from(JSON.stringify(plan)))
+  await repo.save('.github/workflows/release-main.yml', 'fixed scheduling')
+  const current = repo.commit()
+  const result = await prepareResumeBatch(repo.root, {
+    github,
+    tag: plan.record.tag,
+    source: current,
+    output: join(repo.root, 'temp/resume')
+  })
+  assert.equal(result.outputs.sha, repo.head)
+  assert.equal(result.outputs.tag, plan.record.tag)
+  assert.deepEqual(result.plan, plan)
+  assert.equal(
+    github.calls.filter((call) => call.path === '/releases' && call.method === 'POST').length,
+    0
+  )
+  release.draft = false
+  await assert.rejects(
+    prepareResumeBatch(repo.root, {
+      github,
+      tag: plan.record.tag,
+      source: current,
+      output: join(repo.root, 'temp/resume')
+    }),
+    /尚未公开/
+  )
 })
 
 test('只重部署最新官网，不创建新Release或重发产品', async (t) => {

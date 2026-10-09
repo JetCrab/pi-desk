@@ -192,6 +192,18 @@ test('Docker复用工作流的两个调用入口均授予构建与发布所需�
   }
 })
 
+test('无隧道更新的批次仍构建镜像，正式公开要求镜像任务真实成功', async () => {
+  const { parse } = await import('yaml')
+  const workflow = parse(
+    await readFile(new URL('../.github/workflows/release-main.yml', import.meta.url), 'utf8')
+  )
+  assert.match(workflow.jobs['docker-build'].if, /always\(\)/)
+  assert.match(workflow.jobs['docker-build'].if, /needs\.assemble\.result == 'success'/)
+  assert.match(workflow.jobs.docker.if, /always\(\)/)
+  assert.match(workflow.jobs.docker.if, /needs\.docker-build\.result == 'success'/)
+  assert.match(workflow.jobs.publish.if, /needs\.docker\.result == 'success'/)
+})
+
 test('Docker仅由main调用且所有公开发布等待镜像验收', async () => {
   const main = await readFile(
     new URL('../.github/workflows/release-main.yml', import.meta.url),

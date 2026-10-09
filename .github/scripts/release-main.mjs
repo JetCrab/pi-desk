@@ -104,6 +104,21 @@ export async function prepareBatch(root, { github, source, output }) {
   return { plan, release, outputs: values }
 }
 
+export async function prepareResumeBatch(root, { github, tag, source, output }) {
+  assert.match(tag, releaseTagPattern)
+  assert.match(source, /^[a-f0-9]{40}$/)
+  const release = (await github.releases()).find((item) => item.tag_name === tag)
+  assert.ok(release?.draft && !release.prerelease, '只能续跑尚未公开的正式草稿')
+  const plan = JSON.parse(await github.asset(release, 'plan.json'))
+  validateRecord(plan.record)
+  assert.equal(plan.record.tag, tag)
+  assert.equal(release.target_commitish, plan.record.source.head, '草稿源码与固定计划不一致')
+  git(root, 'merge-base', '--is-ancestor', plan.record.source.head, source)
+  const result = await prepareBatch(root, { github, source: plan.record.source.head, output })
+  assert.equal(result.outputs.tag, tag, '续跑不能重新分配批次')
+  return result
+}
+
 export async function prepareWebsiteBatch({ github, tag, source, output }) {
   assert.match(tag, releaseTagPattern)
   assert.match(source, /^[a-f0-9]{40}$/)
@@ -268,14 +283,25 @@ async function main() {
       false,
       '官网使用 GitHub Release 下载；首次启用前须确认仓库公开，流程不会自行改变可见性'
     )
-    const result = process.env.WEBSITE_RELEASE_TAG
-      ? await prepareWebsiteBatch({
+    assert.ok(
+      !(process.env.WEBSITE_RELEASE_TAG && process.env.RESUME_RELEASE_TAG),
+      '官网重部署与草稿续跑不能同时选择'
+    )
+    const result = process.env.RESUME_RELEASE_TAG
+      ? await prepareResumeBatch(root, {
           github,
-          tag: process.env.WEBSITE_RELEASE_TAG,
+          tag: process.env.RESUME_RELEASE_TAG,
           source: process.env.GITHUB_SHA,
           output
         })
-      : await prepareBatch(root, { github, source: process.env.GITHUB_SHA, output })
+      : process.env.WEBSITE_RELEASE_TAG
+        ? await prepareWebsiteBatch({
+            github,
+            tag: process.env.WEBSITE_RELEASE_TAG,
+            source: process.env.GITHUB_SHA,
+            output
+          })
+        : await prepareBatch(root, { github, source: process.env.GITHUB_SHA, output })
     for (const [key, value] of Object.entries(result.outputs))
       await appendFile(process.env.GITHUB_OUTPUT, `${key}=${value}\n`)
     return

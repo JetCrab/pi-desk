@@ -6,6 +6,11 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      resume_tag:
+        description: '续跑已有未公开草稿，保持原源码、版本和制品；留空正常发布'
+        required: false
+        type: string
+        default: ''
       website_tag:
         description: '仅重新同步并部署最新已公开正式 Release 的 tag；留空执行正常发布'
         required: false
@@ -61,6 +66,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           WEBSITE_RELEASE_TAG: ${{ inputs.website_tag }}
+          RESUME_RELEASE_TAG: ${{ inputs.resume_tag }}
         run: node .github/scripts/release-main.mjs prepare
       - uses: actions/upload-artifact@v4
         with:
@@ -235,7 +241,7 @@ jobs:
 
   docker-build:
     needs: [prepare, assemble]
-    if: needs.prepare.outputs.docker == 'true'
+    if: always() && !cancelled() && needs.assemble.result == 'success' && needs.prepare.outputs.docker == 'true'
     permissions:
       contents: write
       packages: write
@@ -279,7 +285,7 @@ jobs:
 
   docker:
     needs: [prepare, docker-build]
-    if: needs.prepare.outputs.docker == 'true'
+    if: always() && !cancelled() && needs.docker-build.result == 'success' && needs.prepare.outputs.docker == 'true'
     permissions:
       contents: write
       packages: write
@@ -293,7 +299,10 @@ jobs:
     needs: [prepare, assemble, npm-publish, tunnel, docker]
     if: >-
       always() && !cancelled() && needs.assemble.result == 'success' &&
-      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
+      (needs.prepare.outputs.docker != 'true' || needs.docker.result == 'success') &&
+      (needs.prepare.outputs.tunnel != 'true' || needs.tunnel.result == 'success') &&
+      (needs.prepare.outputs.npm == '[]' || needs.npm-publish.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
