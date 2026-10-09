@@ -899,36 +899,39 @@ test(
       logger,
       fetch: async () => new Response('{}')
     })
-    const first = await runtime.saveSettings(
-      jsonObject({
-        sources: [
-          {
-            adapter: 'fixture',
-            name: '权限来源',
-            enabled: false,
-            values: { endpoint: 'x', token: 'y' }
-          }
-        ]
-      })
-    )
-    assert.equal((await stat(configPath)).mode & 0o777, 0o600)
-    await chmod(configPath, 0o400)
-    await runtime.saveSettings(
-      jsonObject({
-        sources: [
-          {
-            sourceId: first.sources[0]?.sourceId,
-            adapter: 'fixture',
-            name: '权限来源',
-            enabled: false,
-            values: { endpoint: 'updated', token: '' }
-          }
-        ]
-      })
-    )
-    assert.equal((await stat(configPath)).mode & 0o777, 0o400)
-    await runtime.dispose()
-    await rm(root, { recursive: true, force: true })
+    try {
+      const first = await runtime.saveSettings(
+        jsonObject({
+          sources: [
+            {
+              adapter: 'fixture',
+              name: '权限来源',
+              enabled: false,
+              values: { endpoint: 'x', token: 'y' }
+            }
+          ]
+        })
+      )
+      assert.equal((await stat(configPath)).mode & 0o777, 0o600)
+      await chmod(configPath, 0o400)
+      await runtime.saveSettings(
+        jsonObject({
+          sources: [
+            {
+              sourceId: first.sources[0]?.sourceId,
+              adapter: 'fixture',
+              name: '权限来源',
+              enabled: false,
+              values: { endpoint: 'updated', token: 'y' }
+            }
+          ]
+        })
+      )
+      assert.equal((await stat(configPath)).mode & 0o777, 0o400)
+    } finally {
+      await runtime.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
   }
 )
 

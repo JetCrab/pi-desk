@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
+import { format } from 'node:util'
 import { waitForDevBatch } from '../.github/scripts/release-queue.mjs'
+
+// 避免 Node 22 把轮询日志与测试报告帧混读。
+beforeEach((context) => {
+  context.mock.method(console, 'info', (...args) => context.diagnostic(format(...args)))
+})
 
 test('后提交批次等待前批次结束，不等待更晚的提交', async (context) => {
   context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })

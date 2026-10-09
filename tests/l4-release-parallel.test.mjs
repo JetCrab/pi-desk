@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
+import { format } from 'node:util'
 import {
   runAsync,
   runPackageTasks,
   waitForRegistryPackage
 } from '../.github/scripts/release-npm.mjs'
+
+// 避免 Node 22 把轮询日志与测试报告帧混读。
+beforeEach((context) => {
+  context.mock.method(console, 'info', (...args) => context.diagnostic(format(...args)))
+})
 
 function entry(name, dependencies = {}) {
   return { manifest: { name: `@jetcrab/${name}`, dependencies } }

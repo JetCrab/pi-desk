@@ -6,10 +6,11 @@ import { fileURLToPath } from 'node:url'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
-test('Package 只声明原生 Extension，并保留许可证和来源说明', async () => {
+test('Package 保持原生 Extension，支持本地化说明并保留归属', async () => {
   const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
   assert.deepEqual(manifest.pi.extensions, ['./dist/index.js'])
-  assert.equal(manifest.piDesk, undefined)
+  assert.equal(manifest.piDesk.entry, undefined)
+  assert.ok(manifest.piDesk.i18n['zh-CN'].description.trim().length > 0)
   assert.equal(manifest.license, 'ISC')
   assert.equal(manifest.files.includes('LICENSE'), true)
   assert.equal(manifest.files.includes('SOURCE.md'), true)
