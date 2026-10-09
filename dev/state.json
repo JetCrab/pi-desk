@@ -1,5 +1,5 @@
 {
-  "checks": "51b84f112e05fc10f2a949183dc6b8a97910e139",
+  "checks": "b9efb5092b50406b496ac1191d13031a9abea4b9",
   "units": {
     "windows": {
       "version": "1.1.3",
@@ -27,9 +27,9 @@
       "runId": "37920264833"
     },
     "pi-desk": {
-      "version": "1.1.0",
-      "source": "ad30f8779c92c53b44daa92e39087331582cfbb4",
-      "runId": "37932614557"
+      "version": "1.1.1",
+      "source": "b9efb5092b50406b496ac1191d13031a9abea4b9",
+      "runId": "37956528121"
     },
     "pi-desk-bg-run": {
       "version": "1.1.0",
@@ -77,9 +77,9 @@
       "runId": "37932614557"
     },
     "pi-desk-usage": {
-      "version": "1.1.0",
-      "source": "ad30f8779c92c53b44daa92e39087331582cfbb4",
-      "runId": "37932614557"
+      "version": "1.1.1",
+      "source": "b9efb5092b50406b496ac1191d13031a9abea4b9",
+      "runId": "37956528121"
     },
     "linux": {
       "version": "1.1.3",
