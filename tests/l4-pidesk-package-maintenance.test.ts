@@ -12,7 +12,7 @@ import { createJiti } from 'jiti'
 const execFileAsync = promisify(execFile)
 const require = createRequire(import.meta.url)
 
-test('真实官方 CLI 首次安装、同版本重装、latest、降级和卸载', { timeout: 150_000 }, async () => {
+test('真实官方 CLI 首次安装、同版本重装、latest、降级和卸载', { timeout: 150_000 }, async (t) => {
   const runId = `official-reinstall-${randomUUID()}`
   const root = resolve('temp/run/pidesk-maintenance', runId)
   const artifacts = resolve('temp/package/pidesk-maintenance', runId)
@@ -90,6 +90,7 @@ test('真实官方 CLI 首次安装、同版本重装、latest、降级和卸载
     await writeFile(npmrc, '')
     await writeFile(settingsPath, JSON.stringify({ packages: [] }))
     const environment = {
+      PI_DESK_PI_PACKAGE_DIR: resolve('node_modules/@earendil-works/pi-coding-agent'),
       PI_CODING_AGENT_DIR: agentDir,
       PI_CODING_AGENT_SESSION_DIR: join(agentDir, 'sessions'),
       PI_OFFLINE: '1',
@@ -115,7 +116,15 @@ test('真实官方 CLI 首次安装、同版本重装、latest、降级和卸载
       source: string,
       action: 'reinstall' | 'remove' = 'reinstall'
     ): Promise<void> => {
-      await run({ maintenance: { action, source }, agentDir, cwd: root })
+      const started = performance.now()
+      t.diagnostic(`开始维护：${action} ${source}`)
+      try {
+        await run({ maintenance: { action, source }, agentDir, cwd: root })
+      } finally {
+        t.diagnostic(
+          `维护收尾：${action} ${source}，耗时 ${Math.round(performance.now() - started)}ms`
+        )
+      }
     }
     const version = async (): Promise<string> =>
       JSON.parse(await readFile(join(installed, 'package.json'), 'utf8')).version as string
