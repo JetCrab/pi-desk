@@ -57,6 +57,32 @@ function isSessionJsonlFile(name: string): boolean {
   return name.endsWith('.jsonl') && !name.includes('.jsonl.')
 }
 
+export async function listSessionCandidates(
+  root: string,
+  cwd: string,
+  sessionId: string
+): Promise<UsageFileDescriptor[]> {
+  const directoryName = `--${resolve(cwd)
+    .replace(/^[/\\]/, '')
+    .replace(/[/\\:]/g, '-')}--`
+  const suffix = `_${sessionId}.jsonl`.toLowerCase()
+  const files: UsageFileDescriptor[] = []
+  for (const directory of [join(root, directoryName), root]) {
+    let entries
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith(suffix)) continue
+      const file = await descriptor(join(directory, entry.name), false)
+      if (file) files.push(file)
+    }
+  }
+  return files
+}
+
 async function nestedSessionFiles(directory: string): Promise<UsageFileDescriptor[]> {
   let entries
   try {

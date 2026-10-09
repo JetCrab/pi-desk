@@ -40,7 +40,10 @@ test('多子代理分析批量读取，共享缓存并刷新变化或缺失的�
   await mkdir(root, { recursive: true })
   context.after(() => rm(root, { recursive: true, force: true }))
   const sessionsRoot = join(root, 'sessions')
-  const projectSessions = join(sessionsRoot, '--project--')
+  const projectSessions = join(
+    sessionsRoot,
+    `--${root.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`
+  )
   const sessionId = 'batch-session'
   const mainFile = join(projectSessions, `2026-08-01_${sessionId}.jsonl`)
   const childFiles = Array.from({ length: 8 }, (_, index) =>
@@ -146,7 +149,10 @@ test('多子代理分析批量读取，共享缓存并刷新变化或缺失的�
 test('冷加载 Fork 分析仍排除继承的主会话和子代理记录', async (context) => {
   const root = join(runRoot, `fork-loading-${process.pid}-${Date.now()}`)
   const sessionsRoot = join(root, 'sessions')
-  const projectSessions = join(sessionsRoot, '--project--')
+  const projectSessions = join(
+    sessionsRoot,
+    `--${root.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`
+  )
   await mkdir(projectSessions, { recursive: true })
   context.after(() => rm(root, { recursive: true, force: true }))
   const parentFile = join(projectSessions, '2026-08-01_parent-session.jsonl')

@@ -234,19 +234,19 @@ test('macOS归档参数在无证书时也不展开空数组', async () => {
   assert.match(workflow, /trap 'status=\$\?; trap - EXIT;.*exit "\$status"'/)
 })
 
-test('dev仅给已提交的新版本附加开发编号，纯文档推送不发npm包', async (t) => {
+test('dev仅给已提交的新版本附加固定后缀，纯文档推送不发npm包', async (t) => {
   const repo = await fixture(t)
   await repo.save('src/main.ts', 'export const value = 1')
   await repo.pkg('pi-desk', '1.0.1')
   const head = repo.commit()
   const result = await prepareDevelopmentVersions(repo.root, {
     before: repo.head,
-    readVersions: async () => ['1.0.1-dev.9001']
+    readVersions: async () => ['1.0.0']
   })
   assert.deepEqual(result.selected, ['pi-desk'])
   assert.equal(
     JSON.parse(await readFile(join(repo.root, 'package.json'), 'utf8')).version,
-    '1.0.1-dev.9002'
+    '1.0.1-dev'
   )
   repo.git('checkout', head, '--', 'package.json')
   await repo.save('README.md', '仅文档')
@@ -283,20 +283,7 @@ test('dev基础版本落后正式版本时明确拒绝，不在CI静默加号', 
   assert.equal(JSON.parse(await readFile(join(repo.root, 'package.json'), 'utf8')).version, '1.0.0')
 })
 
-test('开发编号按同一基础版本的已发布最大值递增，旧高编号不回退', () => {
-  const versions = ['0.0.0-stage', '1.0.0', '1.0.1-rc.9', '1.0.1-dev.9001', '1.0.1-dev.2']
-  assert.equal(nextDevelopmentVersion('1.0.1-dev.1', versions), '1.0.1-dev.9002')
-  assert.equal(nextDevelopmentVersion('1.0.2-dev.1', versions), '1.0.2-dev.1')
-  assert.equal(nextDevelopmentVersion('1.0.1-dev.1', ['1.0.1-dev.1']), '1.0.1-dev.2')
-  assert.throws(() => nextDevelopmentVersion('1.0.0-dev.1', versions), /必须高于已成功正式版本/)
-  assert.throws(() => nextDevelopmentVersion('1.0.0-dev.1', ['1.0.1-dev.1']), /低于已发布版本/)
-  assert.throws(
-    () => nextDevelopmentVersion('1.0.1-dev.1', ['1.0.1-dev.9007199254740991']),
-    /安全整数/
-  )
-})
-
-test('SDK和消费者分别分配开发编号，并一次同步真实依赖范围', async (t) => {
+test('SDK和消费者使用固定开发后缀，并同步真实依赖范围', async (t) => {
   const repo = await fixture(t)
   await repo.pkg('pi-desk', '1.0.0', { dependencies: { '@jetcrab/pi-desk-sdk': '>=1.0.0 <2.0.0' } })
   await repo.pkg('pi-desk-usage', '1.0.0')
@@ -310,23 +297,23 @@ test('SDK和消费者分别分配开发编号，并一次同步真实依赖范�
     before,
     readVersions: async (name) => {
       queries.push(name)
-      if (name === '@jetcrab/pi-desk-sdk') return ['1.0.1-dev.7']
+      if (name === '@jetcrab/pi-desk-sdk') return ['1.0.0', '1.0.0-dev.7']
       assert.equal(name, '@jetcrab/pi-desk')
-      return ['1.0.1-dev.9001']
+      return ['1.0.0', '1.0.0-dev.9001']
     }
   })
   assert.deepEqual(result.selected, ['pi-desk-sdk', 'pi-desk'])
   assert.deepEqual(queries.sort(), ['@jetcrab/pi-desk', '@jetcrab/pi-desk-sdk'])
   assert.equal(
     result.packages.find((item) => item.name === '@jetcrab/pi-desk-sdk').version,
-    '1.0.1-dev.8'
+    '1.0.1-dev'
   )
   assert.equal(
     result.packages.find((item) => item.name === '@jetcrab/pi-desk').version,
-    '1.0.1-dev.9002'
+    '1.0.1-dev'
   )
   const main = JSON.parse(await readFile(join(repo.root, 'package.json'), 'utf8'))
-  assert.equal(main.dependencies['@jetcrab/pi-desk-sdk'], '>=1.0.1-dev.8 <2.0.0')
+  assert.equal(main.dependencies['@jetcrab/pi-desk-sdk'], '>=1.0.1-dev <2.0.0')
   assert.equal(
     result.packages.find((item) => item.name === '@jetcrab/pi-desk-usage').version,
     '1.0.0'
@@ -366,7 +353,8 @@ test('官方Registry版本查询带去缓存参数，不以dev标签代替完整
       })
     )
   })
-  assert.equal(nextDevelopmentVersion('1.0.1-dev.1', versions), '1.0.1-dev.8')
+  assert.deepEqual(versions, ['1.0.1-dev.1', '1.0.1-dev.7'])
+  assert.equal(nextDevelopmentVersion('1.0.2', versions), '1.0.2-dev')
   assert.deepEqual(
     await readPublishedVersions('@jetcrab/pi-desk', async () => new Response('', { status: 404 })),
     []
@@ -388,15 +376,13 @@ test('官方Registry版本查询带去缓存参数，不以dev标签代替完整
   )
 })
 
-test('开发发布只在重试时启用已发布制品的摘要复用', async () => {
+test('开发发布按原始制品恢复，不依赖同一次Actions重试编号', async () => {
   const workflow = await readFile(
     new URL('../.github/workflows/release-npm.yml', import.meta.url),
     'utf8'
   )
-  assert.match(
-    workflow,
-    /RELEASE_RESUME:.*github.ref == 'refs\/heads\/dev'.*github.run_attempt > 1/
-  )
+  assert.match(workflow, /release-dev-reuse\.mjs restore/)
+  assert.doesNotMatch(workflow, /RELEASE_RESUME:/)
   assert.doesNotMatch(workflow, /name: dev-manifests-.*github.run_attempt/)
 })
 

@@ -94,7 +94,7 @@ export function readVersions(root, ref = 'HEAD') {
   for (const [id, version] of Object.entries(versions)) {
     versionParts(version)
     // 历史官网清单曾使用开发后缀；只归一化比较值，当前清单由 validateVersions 检查。
-    versions[id] = version.replace(/-dev\.\d+$/, '')
+    versions[id] = version.replace(/-dev(?:\.\d+)?$/, '')
   }
   return versions
 }

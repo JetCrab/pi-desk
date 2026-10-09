@@ -25,6 +25,7 @@ import {
   type FileEntry
 } from '@earendil-works/pi-coding-agent'
 import { z } from 'zod'
+import { findL4PiSessionFile } from './l4-pi-session-discovery'
 
 const SCAN_CONCURRENCY = 10
 const MATCH_PREVIEW_MAX_LENGTH = 120
@@ -649,13 +650,12 @@ function sameFileDescriptor(
 
 async function refreshCatalog(
   cwd: string,
-  previous: L4PiSessionHistoryCatalog | undefined,
-  forceRefresh: boolean
+  previous: L4PiSessionHistoryCatalog | undefined
 ): Promise<L4PiSessionHistoryCatalogRefresh> {
   const descriptors = await listSessionFiles(cwd)
   const entries = await mapWithConcurrency(descriptors, SCAN_CONCURRENCY, async (descriptor) => {
     const cached = previous?.files.get(descriptor.path)
-    if (!forceRefresh && cached && sameFileDescriptor(cached.descriptor, descriptor)) {
+    if (cached && sameFileDescriptor(cached.descriptor, descriptor)) {
       return { entry: { descriptor, record: cached.record }, changed: false }
     }
 
@@ -690,7 +690,6 @@ async function refreshCatalog(
       lastAccessedAt: now
     },
     changed:
-      forceRefresh ||
       previous === undefined ||
       previous.files.size !== files.size ||
       entries.some((entry) => entry.changed)
@@ -785,7 +784,7 @@ async function getCatalog(
   }
 
   const load = (async (): Promise<L4PiSessionHistoryCatalog> => {
-    const refresh = await refreshCatalog(cwd, catalog, forceRefresh)
+    const refresh = await refreshCatalog(cwd, catalog)
     const refreshed = refresh.catalog
     if (currentEpoch(cwd) === epoch) storeCatalog(refreshed, refresh.changed)
     console.info('[Pi Desk][PiSessionHistoryCatalog] 已更新历史会话内存投影', {
@@ -912,14 +911,44 @@ export async function listL4PiSessionHistory(
   })
 }
 
+async function getSessionRecord(
+  cwdInput: string,
+  sessionId: string
+): Promise<L4PiSessionHistoryRecord | null> {
+  const cwd = resolve(cwdInput)
+  pruneCatalogs(Date.now())
+  const catalog = historyCatalogState().catalogs.get(cwd) ?? readPersistedHistoryCatalog(cwd)
+  const previous = catalog?.sessions.find((session) => session.sessionId === sessionId)
+  const path = await findL4PiSessionFile(cwd, sessionId, previous?.path)
+  if (!path) return null
+  const metadata = await stat(path).catch(() => null)
+  if (!metadata?.isFile()) return null
+  const descriptor = { path, size: metadata.size, modifiedAt: metadata.mtime.getTime() }
+  const cached = catalog?.files.get(path)
+  if (catalog && cached && sameFileDescriptor(cached.descriptor, descriptor)) {
+    catalog.lastAccessedAt = Date.now()
+    storeCatalog(catalog, false)
+    return cached.record
+  }
+  const record = await scanSessionFile(descriptor, cwd)
+  const next = catalog ?? toHistoryCatalog({ cwd, files: [] })
+  next.files.set(path, { descriptor, record })
+  next.sessions = sessionRecords(next.files)
+  next.textBytes = sessionTextBytes(next.sessions)
+  // 单文件刷新不代表整个目录已校验；后续列表查询仍需补齐目录索引。
+  next.dirty = true
+  next.lastAccessedAt = Date.now()
+  storeCatalog(next, false)
+  return record
+}
+
 export async function listL4PiSessionUserMessages(input: {
   cwd: string
   sessionId: string
   query: string
   page: { index: number; size: number }
 }): Promise<L4PiSessionUserMessagePage | null> {
-  const catalog = await getCatalog(input.cwd)
-  const session = catalog.sessions.find((item) => item.sessionId === input.sessionId)
+  const session = await getSessionRecord(input.cwd, input.sessionId)
   if (!session) return null
 
   const normalizedQuery = normalizeSearch(input.query)

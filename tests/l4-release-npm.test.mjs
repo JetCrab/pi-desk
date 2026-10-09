@@ -1,14 +1,17 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import test, { beforeEach } from 'node:test'
 import { format } from 'node:util'
 import {
   selectPackages,
   assertPackedManifest,
   assertDevelopmentTags,
-  waitForDevelopmentTags,
+  waitForNpmTags,
   pruneHostBuild,
+  publish,
   run
 } from '../.github/scripts/release-npm.mjs'
 
@@ -87,6 +90,64 @@ test('没有稳定latest的新包拒绝开发发布，发布后dev必须准确�
   )
 })
 
+test('部分发布后新运行只接纳完全相同的原包，不覆盖已有版本', async (t) => {
+  const root = await fixture(t)
+  const source = join(root, 'input')
+  const output = join(root, 'archives')
+  await mkdir(join(source, 'package/dist'), { recursive: true })
+  await mkdir(output)
+  const manifest = {
+    name: '@jetcrab/pi-desk-usage',
+    version: '1.2.3-dev',
+    publishConfig,
+    piDesk: { entry: './dist/index.js' }
+  }
+  await writeFile(join(source, 'package/package.json'), JSON.stringify(manifest))
+  await writeFile(join(source, 'package/LICENSE'), 'fixture')
+  await writeFile(join(source, 'package/dist/index.js'), 'export default {}')
+  const archive = join(output, 'jetcrab-pi-desk-usage-1.2.3-dev.tgz')
+  const pack = () =>
+    execFileSync(
+      process.platform === 'win32' ? 'tar.exe' : 'tar',
+      ['-czf', relative(source, archive).replaceAll('\\', '/'), 'package'],
+      { cwd: source, stdio: 'pipe' }
+    )
+  pack()
+  const bytes = await readFile(archive)
+  const integrity = 'sha512-' + createHash('sha512').update(bytes).digest('base64')
+  t.mock.method(globalThis, 'fetch', async (url) =>
+    String(url).includes('dist-tags')
+      ? Response.json({ latest: '1.2.2', dev: manifest.version })
+      : String(url).endsWith('.tgz')
+        ? new Response(null, { status: 200 })
+        : Response.json({
+            name: manifest.name,
+            version: manifest.version,
+            dist: { integrity, tarball: 'https://registry.npmjs.org/fixture.tgz' }
+          })
+  )
+  const environment = {
+    GITHUB_REF: 'refs/heads/dev',
+    GITHUB_REPOSITORY: 'JetCrab/pi-desk',
+    RUNNER_TEMP: root
+  }
+  const previous = Object.fromEntries(
+    Object.keys(environment).map((key) => [key, process.env[key]])
+  )
+  try {
+    Object.assign(process.env, environment)
+    await publish([{ directory: source, manifest }], output)
+    await writeFile(join(source, 'package/dist/index.js'), 'export default { changed: true }')
+    pack()
+    await assert.rejects(publish([{ directory: source, manifest }], output), /已存在不同内容/)
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
 test('npm开发标签延迟同步时等待同一已上传版本而不是重复发布', async (context) => {
   context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
   let reads = 0
@@ -97,10 +158,27 @@ test('npm开发标签延迟同步时等待同一已上传版本而不是重复�
       dev: reads === 1 ? '1.0.1-dev.9001' : '1.0.1-dev.9002'
     })
   })
-  const waiting = waitForDevelopmentTags('@jetcrab/pi-desk', '1.0.1-dev.9002')
+  const waiting = waitForNpmTags('@jetcrab/pi-desk', '1.0.1-dev.9002', 'dev')
   await new Promise(setImmediate)
   assert.equal(reads, 1)
   context.mock.timers.tick(5_000)
+  await waiting
+  assert.equal(reads, 2)
+})
+
+test('正式版本必须等待 latest 实际指向新版本，不能仅凭上传成功', async (context) => {
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
+  let reads = 0
+  context.mock.method(globalThis, 'fetch', async () =>
+    Response.json({ latest: ++reads === 1 ? '1.0.0' : '1.1.0' })
+  )
+  let completed = false
+  const waiting = waitForNpmTags('@jetcrab/pi-desk', '1.1.0', 'latest').then(() => {
+    completed = true
+  })
+  await new Promise(setImmediate)
+  assert.equal(completed, false)
+  context.mock.timers.tick(5000)
   await waiting
   assert.equal(reads, 2)
 })
@@ -111,7 +189,7 @@ test('npm开发标签已同步时立即通过校验', async (context) => {
     reads += 1
     return Response.json({ latest: '1.0.0', dev: '1.0.1-dev.9002' })
   })
-  await waitForDevelopmentTags('@jetcrab/pi-desk', '1.0.1-dev.9002')
+  await waitForNpmTags('@jetcrab/pi-desk', '1.0.1-dev.9002', 'dev')
   assert.equal(reads, 1)
 })
 
@@ -121,7 +199,7 @@ test('npm开发标签长期不一致时有界失败而不是放宽版本校验',
     Response.json({ latest: '1.0.0', dev: '1.0.1-dev.9001' })
   )
   const rejected = assert.rejects(
-    waitForDevelopmentTags('@jetcrab/pi-desk', '1.0.1-dev.9002'),
+    waitForNpmTags('@jetcrab/pi-desk', '1.0.1-dev.9002', 'dev'),
     /标签未指向|同步.*超时|等待.*超时/
   )
   await new Promise(setImmediate)
@@ -134,14 +212,14 @@ test('npm稳定标签异常不能当作开发标签同步延迟', async (context
     Response.json({ latest: '1.0.1-dev.9002', dev: '1.0.1-dev.9001' })
   )
   await assert.rejects(
-    waitForDevelopmentTags('@jetcrab/pi-desk', '1.0.1-dev.9002'),
+    waitForNpmTags('@jetcrab/pi-desk', '1.0.1-dev.9002', 'dev'),
     /尚无稳定 latest/
   )
 })
 
 test('npm标签查询错误不被当作正常的同步延迟', async (context) => {
   context.mock.method(globalThis, 'fetch', async () => new Response('', { status: 401 }))
-  await assert.rejects(waitForDevelopmentTags('@jetcrab/pi-desk', '1.0.1-dev.9002'), /HTTP 401/)
+  await assert.rejects(waitForNpmTags('@jetcrab/pi-desk', '1.0.1-dev.9002', 'dev'), /HTTP 401/)
 })
 
 test('包管理命令保留参数与带空格路径而不被Shell二次转义', async (context) => {

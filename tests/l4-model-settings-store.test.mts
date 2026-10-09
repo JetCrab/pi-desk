@@ -449,6 +449,15 @@ test('账号模型：移除保护常用组合和已知项目默认，失败不�
       /项目.*默认/
     )
     assert.equal(await readFile(path, 'utf8'), before)
+    const ignoreStore = await jiti.import<
+      typeof import('../src/server/l4_foundation/pi/l4-pi-directory-ignore-store')
+    >('../src/server/l4_foundation/pi/l4-pi-directory-ignore-store.ts')
+    ignoreStore.replaceL4PiDirectoryIgnore(cwd, true)
+    await assert.rejects(
+      store.replaceL4ModelSettings({ accountModels: [], presets: settings.presets }),
+      /项目.*默认/
+    )
+    assert.equal(await readFile(path, 'utf8'), before, '忽略项目的引用保护也不能改写配置')
     await store.replaceL4ProjectModelDefault(cwd, null)
     await store.replaceL4ModelSettings({ accountModels: [], presets: settings.presets })
     assert.equal(
