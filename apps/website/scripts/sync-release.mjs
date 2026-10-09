@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 
+/** @returns {Promise<string | null>} */
 async function readExisting(file) {
   try {
     return await readFile(file, 'utf8')
@@ -13,12 +14,14 @@ async function readExisting(file) {
   }
 }
 
+/** @returns {string} */
 function downloadUrl(repository, tag, file) {
   assert.ok(typeof file === 'string' && file && !/[\\/]/u.test(file), '下载文件名无效')
   assert.ok(file !== '.' && file !== '..', '下载文件名无效')
   return `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(file)}`
 }
 
+/** @returns {Promise<{ changelogPath: string, recordPath: string, siteReleasePath: string }>} */
 export async function syncRelease({ websiteRoot, record, repository, markdown }) {
   assert.match(repository, /^[\w.-]+\/[\w.-]+$/u, 'GitHub 仓库名称无效')
   assert.ok(
@@ -67,14 +70,12 @@ export async function syncRelease({ websiteRoot, record, repository, markdown })
   if (release.installCommand) {
     release.installCommand = release.installCommand.replace(/ --registry=\S+/gu, '')
   }
+  delete release.desktop
+  delete release.androidUrl
+  release.downloads = {}
   for (const client of record.clients) {
-    if (client.platform === 'windows') {
-      release.desktop = {
-        ...release.desktop,
-        url: downloadUrl(repository, record.tag, client.file)
-      }
-    } else if (client.platform === 'android') {
-      release.androidUrl = downloadUrl(repository, record.tag, client.file)
+    if (['windows', 'macos', 'linux', 'android'].includes(client.platform)) {
+      release.downloads[client.platform] = downloadUrl(repository, record.tag, client.file)
     }
   }
 

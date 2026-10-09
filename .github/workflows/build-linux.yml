@@ -1,0 +1,117 @@
+name: Build Linux desktop
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      check_only:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      RUST_TEST_THREADS: '1'
+      RUST_CACHE_STAGE: ${{ github.workspace }}/temp/cache/rust/linux-release
+      CARGO_TARGET_DIR: ${{ github.workspace }}/temp/build/linux-desktop/${{ github.run_id }}-${{ github.run_attempt }}
+      PI_DESK_DESKTOP_WEB_DIST: ${{ github.workspace }}/temp/build/linux-desktop/${{ github.run_id }}-${{ github.run_attempt }}/web
+      CLIENT_OUTPUT: ${{ github.workspace }}/temp/package/clients/linux/${{ github.run_id }}-${{ github.run_attempt }}
+      CLIENT_SMOKE_ROOT: ${{ github.workspace }}/temp/run/linux-desktop/${{ github.run_id }}-${{ github.run_attempt }}
+      PI_CODING_AGENT_DIR: ${{ github.workspace }}/temp/pi/linux-desktop/${{ github.run_id }}-${{ github.run_attempt }}/agent
+      PI_CODING_AGENT_SESSION_DIR: ${{ github.workspace }}/temp/pi/linux-desktop/${{ github.run_id }}-${{ github.run_attempt }}/agent/sessions
+    steps:
+      - name: 核对固定源码与构建分支
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/heads/dev ]]
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+      - name: 安装 Linux 编译与无显示器验收依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev patchelf file xvfb xauth xdotool imagemagick dbus-x11 fonts-noto-cjk
+      - name: 安装独立桌面依赖
+        working-directory: apps/desktop
+        run: pnpm install --ignore-workspace --frozen-lockfile
+      - run: rustup target add x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        env:
+          CARGO_TARGET_DIR: ${{ env.RUST_CACHE_STAGE }}
+        with:
+          key: linux-x86_64-release
+          cache-bin: 'false'
+          workspaces: apps/desktop/src-tauri -> ../../../temp/cache/rust/linux-release
+      - run: node .github/scripts/rust-cache.mjs restore
+      - name: 准备前端与相对路径配置
+        working-directory: apps/desktop
+        run: |
+          pnpm typecheck:web
+          pnpm build:web
+          node --input-type=module <<'NODE'
+          import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+          import { resolve, relative } from 'node:path'
+          const version = JSON.parse(readFileSync('package.json')).version
+          const tauri = JSON.parse(readFileSync('src-tauri/tauri.conf.json')).version
+          const cargo = readFileSync('src-tauri/Cargo.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m)?.[1]
+          if (!/^\d+\.\d+\.\d+$/.test(version) || version !== tauri || version !== cargo) throw Error('Linux 桌面版本不一致')
+          mkdirSync(process.env.CARGO_TARGET_DIR, { recursive: true })
+          const frontendDist = relative(resolve('src-tauri'), process.env.PI_DESK_DESKTOP_WEB_DIST)
+          writeFileSync(resolve(process.env.CARGO_TARGET_DIR, 'tauri-ci.json'), JSON.stringify({ build: { frontendDist } }))
+          NODE
+      - name: Linux 原生回归
+        working-directory: apps/desktop
+        run: |
+          export TAURI_CONFIG="$(node -e 'const fs=require("fs");const a=JSON.parse(fs.readFileSync("src-tauri/tauri.linux.conf.json"));const b=JSON.parse(fs.readFileSync(process.env.CARGO_TARGET_DIR+"/tauri-ci.json"));console.log(JSON.stringify({...a,...b}))')"
+          cargo test --manifest-path src-tauri/Cargo.toml --target x86_64-unknown-linux-gnu --release --locked
+      - name: 构建 Linux x86_64 AppImage
+        if: ${{ !inputs.check_only }}
+        working-directory: apps/desktop
+        env:
+          NO_STRIP: '1'
+        run: pnpm exec tauri build --target x86_64-unknown-linux-gnu --bundles appimage --config src-tauri/tauri.linux.conf.json --config "$CARGO_TARGET_DIR/tauri-ci.json"
+      - name: 验收真实 AppImage 与正常退出
+        if: ${{ !inputs.check_only }}
+        run: |
+          set -euo pipefail
+          mapfile -t installers < <(find "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/bundle/appimage" -maxdepth 1 -name '*.AppImage' -type f)
+          [[ ${#installers[@]} == 1 ]]
+          readelf -h "$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/pi-desk-desktop" | grep -q 'Advanced Micro Devices X86-64'
+          chmod +x "${installers[0]}"
+          dbus-run-session -- xvfb-run -a node .github/scripts/test-linux-client.mjs "${installers[0]}"
+          node .github/scripts/pack-client.mjs linux "${installers[0]}" "$CLIENT_OUTPUT"
+      - run: node .github/scripts/rust-cache.mjs save
+      - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.check_only }}
+        with:
+          name: client-linux-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.CLIENT_OUTPUT }}/
+          retention-days: 7
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-desktop-check-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.CLIENT_SMOKE_ROOT }}/
+          retention-days: 7
+          if-no-files-found: ignore

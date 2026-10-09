@@ -10,8 +10,8 @@ export const metadata: Metadata = {
 }
 
 export default async function Page(): Promise<ReactElement> {
-  const androidQrCode = siteRelease.androidUrl
-    ? await createQrCodeDataUrl(siteRelease.androidUrl)
+  const androidQrCode = siteRelease.downloads.android
+    ? await createQrCodeDataUrl(siteRelease.downloads.android)
     : null
   return (
     <>

@@ -9,7 +9,7 @@ on:
       target:
         description: 手动构建目标
         type: choice
-        options: [all, npm, windows, macos, android, ios, tunnel]
+        options: [all, npm, windows, macos, linux, android, ios, tunnel]
         default: all
       publish:
         description: 将验证通过的 npm 开发包发布到 dev 标签
@@ -57,6 +57,7 @@ jobs:
       check_base: ${{ steps.plan.outputs.check_base }}
       windows: ${{ steps.plan.outputs.windows }}
       macos: ${{ steps.plan.outputs.macos }}
+      linux: ${{ steps.plan.outputs.linux }}
       android: ${{ steps.plan.outputs.android }}
       ios: ${{ steps.plan.outputs.ios }}
       tunnel: ${{ steps.plan.outputs.tunnel }}
@@ -130,6 +131,14 @@ jobs:
       source_sha: ${{ github.sha }}
       platform: macos
 
+  linux:
+    needs: plan
+    if: needs.plan.outputs.linux == 'true' || needs.plan.outputs.desktop_checks == 'true'
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      source_sha: ${{ github.sha }}
+      check_only: ${{ needs.plan.outputs.linux != 'true' }}
+
   android:
     needs: plan
     if: needs.plan.outputs.android == 'true' || needs.plan.outputs.android_checks == 'true'
@@ -179,7 +188,7 @@ jobs:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   result:
-    needs: [plan, checks, npm-build, windows, macos, android, ios, tunnel, npm-publish]
+    needs: [plan, checks, npm-build, windows, macos, linux, android, ios, tunnel, npm-publish]
     if: always()
     runs-on: ubuntu-latest
     permissions:

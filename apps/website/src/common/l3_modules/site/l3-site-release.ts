@@ -3,8 +3,7 @@ export type SiteRelease = {
   sourceUrl: string | null
   license: { name: string; url: string } | null
   installCommand: string | null
-  desktop: { url: string } | null
-  androidUrl: string | null
+  downloads: Partial<Record<'windows' | 'macos' | 'linux' | 'android', string>>
 }
 
 export const startCommand = 'pi-desk'

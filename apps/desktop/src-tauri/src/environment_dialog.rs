@@ -5,9 +5,12 @@ pub(crate) fn pick_file(
     extensions: &[&str],
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Option<PathBuf> {
-    let dialog = rfd::FileDialog::new()
-        .set_title(title)
-        .add_filter("运行环境", extensions);
+    let dialog = rfd::FileDialog::new().set_title(title);
+    let dialog = if extensions.is_empty() {
+        dialog
+    } else {
+        dialog.add_filter("运行环境", extensions)
+    };
     #[cfg(windows)]
     {
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -54,7 +57,7 @@ pub(crate) fn pick_file(
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 pub(crate) fn pick_directory(
     title: &str,
     cancelled: &(dyn Fn() -> bool + Sync),

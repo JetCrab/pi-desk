@@ -175,14 +175,14 @@ fn build_tray(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
     let icon = app.default_window_icon().cloned();
     let mut tray = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        .show_menu_on_left_click(cfg!(target_os = "macos"))
-        .tooltip(if cfg!(target_os = "macos") {
+        .show_menu_on_left_click(cfg!(unix))
+        .tooltip(if cfg!(unix) {
             "Pi Desk"
         } else {
             "Pi Desk（右键打开菜单）"
         })
         .on_tray_icon_event(|tray, event| {
-            if !cfg!(target_os = "macos")
+            if cfg!(windows)
                 && matches!(
                     event,
                     TrayIconEvent::Click {

@@ -223,12 +223,12 @@ impl ShellState {
             .and_then(Path::parent)
             .unwrap_or(Path::new("."))
             .join("browser-data-v2");
-        #[cfg(target_os = "macos")]
+        #[cfg(unix)]
         let environment_root = config_path
             .parent()
             .unwrap_or(Path::new("."))
             .join("environment");
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(unix))]
         let environment_root = log_path
             .parent()
             .and_then(Path::parent)
@@ -778,6 +778,7 @@ pub(crate) fn open_install_help(component: Component) -> Result<(), String> {
         Component::Node => "https://nodejs.org/en/download",
         Component::Pi => "https://github.com/earendil-works/pi/blob/main/docs/quickstart.md",
         Component::Bash if cfg!(target_os = "macos") => "https://git-scm.com/download/mac",
+        Component::Bash if cfg!(target_os = "linux") => "https://git-scm.com/download/linux",
         Component::Bash => "https://git-scm.com/download/win",
     };
     webbrowser::open(url).map_err(|error| format!("打开官方安装页面失败：{error}"))
@@ -3140,7 +3141,7 @@ child.on('exit', code => {{
             channel: ReleaseChannel::Stable,
         };
         let mut server = ServerConfig {
-            start_command: format!("node node_modules\\{PACKAGE_NAME}\\service.cjs -p {{port}}"),
+            start_command: format!("node node_modules/{PACKAGE_NAME}/service.cjs -p {{port}}"),
             ready_path: "/health".into(),
             package: Some(package.clone()),
         };
@@ -3239,7 +3240,7 @@ child.on('exit', code => {{
             channel: ReleaseChannel::Stable,
         };
         let server = ServerConfig {
-            start_command: format!("node node_modules\\{PACKAGE_NAME}\\service.cjs -p {{port}}"),
+            start_command: format!("node node_modules/{PACKAGE_NAME}/service.cjs -p {{port}}"),
             ready_path: "/health".into(),
             package: Some(package.clone()),
         };
@@ -3376,7 +3377,7 @@ child.on('message', () => process.exit(9));
             channel: ReleaseChannel::Stable,
         };
         let server = ServerConfig {
-            start_command: format!("node node_modules\\{PACKAGE_NAME}\\service.cjs -p {{port}}"),
+            start_command: format!("node node_modules/{PACKAGE_NAME}/service.cjs -p {{port}}"),
             ready_path: "/health".into(),
             package: Some(package.clone()),
         };
@@ -3792,7 +3793,7 @@ http.createServer((req, res) => res.writeHead(503).end('not ready'))
             channel: ReleaseChannel::Stable,
         };
         let server = ServerConfig {
-            start_command: format!("node node_modules\\{PACKAGE_NAME}\\service.cjs -p {{port}}"),
+            start_command: format!("node node_modules/{PACKAGE_NAME}/service.cjs -p {{port}}"),
             ready_path: "/health".into(),
             package: Some(package),
         };

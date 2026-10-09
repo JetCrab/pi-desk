@@ -25,6 +25,12 @@ export function GetStarted({
   release: SiteRelease
   androidQrCode: string | null
 }): ReactElement {
+  const desktopClients = [
+    { platform: 'windows', label: 'Windows' },
+    { platform: 'macos', label: 'macOS' },
+    { platform: 'linux', label: 'Linux x86_64 AppImage' }
+  ] as const
+
   return (
     <Tabs.Root
       defaultValue="download"
@@ -48,24 +54,33 @@ export function GetStarted({
       <div className="min-h-[108px]">
         <Tabs.Panel value="download" className="mx-auto max-w-[400px] text-left">
           <ul className="divide-y divide-border">
-            <li className="flex min-h-14 flex-wrap items-center gap-x-3 gap-y-2 py-3">
-              <span className="flex flex-1 items-center gap-3 font-medium">
-                <Monitor size={18} className="shrink-0 text-muted-foreground" aria-hidden="true" />
-                Windows
-              </span>
-              {release.desktop ? (
-                <a
-                  href={release.desktop.url}
-                  aria-label="下载 Windows 版"
-                  className={buttonVariants({ variant: 'secondary', className: 'shrink-0' })}
-                >
-                  <ArrowDownToLine size={16} aria-hidden="true" />
-                  下载
-                </a>
-              ) : (
-                <span className="text-xs text-muted-foreground">筹备中</span>
-              )}
-            </li>
+            {desktopClients.map(({ platform, label }): ReactElement => (
+              <li
+                key={platform}
+                className="flex min-h-14 flex-wrap items-center gap-x-3 gap-y-2 py-3"
+              >
+                <span className="flex flex-1 items-center gap-3 font-medium">
+                  <Monitor
+                    size={18}
+                    className="shrink-0 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  {label}
+                </span>
+                {release.downloads[platform] ? (
+                  <a
+                    href={release.downloads[platform]}
+                    aria-label={`下载 ${label} 版`}
+                    className={buttonVariants({ variant: 'secondary', className: 'shrink-0' })}
+                  >
+                    <ArrowDownToLine size={16} aria-hidden="true" />
+                    下载
+                  </a>
+                ) : (
+                  <span className="text-xs text-muted-foreground">尚未发布</span>
+                )}
+              </li>
+            ))}
             <li className="flex min-h-14 flex-wrap items-center gap-x-3 gap-y-2 py-3">
               <span className="flex flex-1 items-center gap-3 font-medium">
                 <Smartphone
@@ -75,7 +90,7 @@ export function GetStarted({
                 />
                 Android
               </span>
-              {release.androidUrl ? (
+              {release.downloads.android ? (
                 <div className="ml-auto flex items-center gap-2">
                   {androidQrCode && (
                     <Popover>
@@ -99,7 +114,7 @@ export function GetStarted({
                     </Popover>
                   )}
                   <a
-                    href={release.androidUrl}
+                    href={release.downloads.android}
                     aria-label="下载 Android APK"
                     className={buttonVariants({ variant: 'secondary', className: 'shrink-0' })}
                   >
@@ -108,15 +123,11 @@ export function GetStarted({
                   </a>
                 </div>
               ) : (
-                <span className="text-xs text-muted-foreground">筹备中</span>
+                <span className="text-xs text-muted-foreground">尚未发布</span>
               )}
             </li>
           </ul>
           <ul className="mt-2 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border pt-4 text-sm text-muted-foreground">
-            <li className="flex items-center gap-2">
-              <span>macOS</span>
-              <span className="text-xs">筹备中</span>
-            </li>
             <li className="flex items-center gap-2">
               <span>iOS</span>
               <span className="text-xs">筹备中</span>

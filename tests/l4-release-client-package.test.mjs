@@ -7,6 +7,7 @@ import { packageClient } from '../.github/scripts/pack-client.mjs'
 
 for (const [platform, unsigned, filename] of [
   ['windows', false, 'pi-desk-windows-1.2.3-x86-setup.exe'],
+  ['linux', false, 'pi-desk-linux-1.2.3-x86_64.AppImage'],
   ['android', false, 'pi-desk-android-1.2.3.apk'],
   ['android', true, 'pi-desk-android-1.2.3-unsigned.apk']
 ]) {

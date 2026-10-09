@@ -5,7 +5,12 @@ import { pathToFileURL } from 'node:url'
 import { validateVersions } from './commit-versions.mjs'
 import { createReleasePlan, git, latestSuccessfulRelease } from './release-plan.mjs'
 import { createGitHubClient, sha256 } from './release-github.mjs'
-import { clientFilename, releaseTagPattern, validateRecord } from './release-record.mjs'
+import {
+  clientFilename,
+  clientPlatforms,
+  releaseTagPattern,
+  validateRecord
+} from './release-record.mjs'
 import { loadReleaseRecord, saveReleaseRecord } from './release-metadata.mjs'
 import { renderReleaseNotes, validateChanges } from './release-notes.mjs'
 
@@ -93,6 +98,7 @@ export async function prepareBatch(root, { github, source, output }) {
     windows:
       !clientsReady && plan.clients.some((item) => item.platform === 'windows' && item.build),
     macos: !clientsReady && plan.clients.some((item) => item.platform === 'macos' && item.build),
+    linux: !clientsReady && plan.clients.some((item) => item.platform === 'linux' && item.build),
     android: !clientsReady && plan.clients.some((item) => item.platform === 'android' && item.build)
   }
   return { plan, release, outputs: values }
@@ -122,6 +128,7 @@ export async function prepareWebsiteBatch({ github, tag, source, output }) {
       docker: false,
       windows: false,
       macos: false,
+      linux: false,
       android: false
     }
   }
@@ -161,7 +168,7 @@ export async function assembleBatch({ github, release, plan, directory }) {
       const root = join(directory, folder)
       const manifest = JSON.parse(await readFile(join(root, 'release.json'), 'utf8'))
       assert.equal(manifest.version, item.version)
-      const names = (await readdir(root)).filter((name) => /\.(exe|dmg|apk)$/.test(name))
+      const names = (await readdir(root)).filter((name) => /\.(exe|dmg|apk|AppImage)$/.test(name))
       assert.equal(names.length, 1, '每个平台必须只有一个安装包')
       file = clientFilename(item.platform)
       hash = manifest.sha256
@@ -190,7 +197,12 @@ export async function assembleBatch({ github, release, plan, directory }) {
     clients.push(client)
   }
   const record = validateRecord({ ...plan.record, clients, changes })
-  assert.equal(record.clients.length, 3, '正式 Release 必须附带三个平台的当前安装包')
+  assert.ok(
+    clientPlatforms.every((platform) =>
+      record.clients.some((client) => client.platform === platform)
+    ),
+    '正式 Release 必须附带所有平台的当前安装包'
+  )
   await github.putAsset(release, 'release.json', jsonBytes(record))
   return record
 }
@@ -198,7 +210,12 @@ export async function assembleBatch({ github, release, plan, directory }) {
 export async function publishBatch({ github, release, repository }) {
   const record = await batchRecord(github, release)
   if (!release.draft) return record
-  assert.equal(record.clients.length, 3, '正式 Release 必须包含全部客户端制品')
+  assert.ok(
+    clientPlatforms.every((platform) =>
+      record.clients.some((client) => client.platform === platform)
+    ),
+    '正式 Release 必须包含全部客户端制品'
+  )
   const existing = await github.request(`/git/ref/tags/${record.tag}`, { allow404: true })
   if (existing) {
     const commit = await github.request(`/commits/${record.tag}`)

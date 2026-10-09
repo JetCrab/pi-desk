@@ -40,6 +40,7 @@ jobs:
       notes_ready: ${{ steps.plan.outputs.notes_ready }}
       windows: ${{ steps.plan.outputs.windows }}
       macos: ${{ steps.plan.outputs.macos }}
+      linux: ${{ steps.plan.outputs.linux }}
       android: ${{ steps.plan.outputs.android }}
       tunnel: ${{ steps.plan.outputs.tunnel }}
       docker: ${{ steps.plan.outputs.docker }}
@@ -151,6 +152,13 @@ jobs:
       MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
       MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
 
+  linux:
+    needs: prepare
+    if: needs.prepare.outputs.published != 'true' && needs.prepare.outputs.linux == 'true'
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.sha }}
+
   android:
     needs: prepare
     if: needs.prepare.outputs.published != 'true' && needs.prepare.outputs.android == 'true'
@@ -176,7 +184,7 @@ jobs:
       phase: build
 
   assemble:
-    needs: [prepare, checks, notes, npm-build, windows, macos, android, tunnel-build]
+    needs: [prepare, checks, notes, npm-build, windows, macos, linux, android, tunnel-build]
     if: >-
       always() && !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.published != 'true' &&
       !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
@@ -197,7 +205,7 @@ jobs:
           name: release-plan-${{ github.run_id }}
           path: ${{ env.RELEASE_ROOT }}
       - uses: actions/download-artifact@v4
-        if: needs.prepare.outputs.windows == 'true' || needs.prepare.outputs.macos == 'true' || needs.prepare.outputs.android == 'true'
+        if: needs.prepare.outputs.windows == 'true' || needs.prepare.outputs.macos == 'true' || needs.prepare.outputs.linux == 'true' || needs.prepare.outputs.android == 'true'
         with:
           pattern: client-*
           path: ${{ env.RELEASE_ROOT }}/clients
