@@ -190,6 +190,25 @@ test('隧道并行构建后复用已验证镜像，推送仍等待正式汇合',
   assert.match(tunnel, /加载同一镜像并核对源码/)
 })
 
+test('正式批次去重源码命令验收，但保留同批安装态两平台与Windows核心回归', async () => {
+  const read = async (name) =>
+    parse(await readFile(new URL(`../.github/workflows/${name}.yml`, import.meta.url), 'utf8'))
+  const main = await read('release-main')
+  const checks = await read('check')
+  const npm = await read('release-npm')
+  assert.equal(main.jobs.checks.with.built_packages, '${{ needs.prepare.outputs.npm }}')
+  assert.match(checks.jobs.pidesk.if, /!contains\(fromJSON\(inputs.built_packages/)
+  assert.deepEqual(npm.jobs['installed-commands'].strategy.matrix.os, [
+    'ubuntu-latest',
+    'windows-latest'
+  ])
+  const windows = npm.jobs['installed-commands'].steps.find(
+    (step) => step.name === 'Windows 核心回归复用同批 SDK 产物'
+  )
+  assert.equal(windows.if, "runner.os == 'Windows'")
+  assert.match(windows.run, /pnpm test:pidesk/)
+})
+
 test('同一运行的制品名称跨重试稳定，构建数据仍按attempt隔离', async () => {
   for (const name of [
     'release-main',

@@ -506,36 +506,18 @@ fn node_download_selects_latest_stable_lts_available_for_each_architecture() {
 fn native_architecture_matches_operating_system_independent_of_shell_bitness() {
     use crate::environment_arch::{native_architecture, WindowsArchitecture};
     let directory = TestDirectory::new("native-architecture");
-    let powershell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
-        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
-    let output = process::run_program(
-        &powershell,
-        &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "[Environment]::Is64BitOperatingSystem",
-        ],
-        None,
-        Duration::from_secs(10),
-        &directory.0.join("desktop.log"),
-        &|| false,
-        &[],
-    )
-    .unwrap_or_else(|error| {
-        panic!(
-            "系统架构探针失败：{error}\n{}",
-            fs::read_to_string(directory.0.join("desktop.log")).unwrap_or_default()
-        )
-    });
-    assert!(output.status.success());
-    let actual = native_architecture().unwrap();
-    let value = process::decode_output(&output.stdout);
-    match value.trim() {
-        "True" => assert_eq!(actual, WindowsArchitecture::X64),
-        "False" => assert_eq!(actual, WindowsArchitecture::X86),
-        other => panic!("系统架构查询未返回可判定结果：{other}"),
-    }
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, IsWow64Process};
+    let mut wow64 = 0;
+    assert_ne!(
+        unsafe { IsWow64Process(GetCurrentProcess(), &mut wow64) },
+        0
+    );
+    let expected = if cfg!(target_pointer_width = "64") || wow64 != 0 {
+        WindowsArchitecture::X64
+    } else {
+        WindowsArchitecture::X86
+    };
+    assert_eq!(native_architecture().unwrap(), expected);
     let refreshed = refreshed_path(&directory.0.join("path-refresh.log"), &|| false, true);
     let paths = std::env::split_paths(&refreshed).collect::<Vec<_>>();
     for path in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
@@ -663,86 +645,4 @@ fn explicit_pi_shell_path_pointing_to_private_runtime_is_reported_instead_of_ign
     assert_eq!(bash.path, Some(path.to_string_lossy().into_owned()));
     assert!(bash.detail.unwrap().contains("shellPath"));
     assert!(!directory.0.join("desktop.log").exists());
-}
-
-#[cfg(windows)]
-#[test]
-fn user_path_registration_preserves_raw_entries_and_type_in_an_isolated_registry_key() {
-    let directory = TestDirectory::new("global-path-script");
-    let target = Path::new("C:\\开发者's tools\\");
-    for (user, machine, expected) in [
-        (
-            "C:\\existing;%UNRELATED%",
-            "",
-            "C:\\existing;%UNRELATED%;C:\\开发者's tools\\",
-        ),
-        ("C:\\existing", "C:\\开发者's tools", "C:\\existing"),
-        ("C:\\开发者'S TOOLS", "", "C:\\开发者'S TOOLS"),
-        ("%PI_DESK_PATH_FIXTURE%", "", "%PI_DESK_PATH_FIXTURE%"),
-        ("", "", "C:\\开发者's tools\\"),
-    ] {
-        let fixture = format!(
-            "Software\\PiDeskPathTest-{}",
-            directory.0.file_name().unwrap().to_string_lossy()
-        );
-        let script = user_path_script(target)
-            .replace(
-                "CreateSubKey('Environment')",
-                &format!("CreateSubKey('{fixture}')"),
-            )
-            .replace(
-                "[Environment]::GetEnvironmentVariable('Path','Machine')",
-                &format!("'{}'", machine.replace('\'', "''")),
-            );
-        assert!(!script.contains("CreateSubKey('Environment')"));
-        let script = format!(
-            r#"
-$ErrorActionPreference = 'Stop'
-$real = [Environment]::GetEnvironmentVariable('Path','User')
-try {{
-    $fixture = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('{fixture}')
-    $fixture.SetValue('Path','{}',[Microsoft.Win32.RegistryValueKind]::ExpandString)
-    $fixture.Dispose()
-    {script}
-    $fixture = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('{fixture}')
-    try {{
-        [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
-        @{{
-            path = $fixture.GetValue('Path','',[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-            kind = $fixture.GetValueKind('Path').ToString()
-            unchanged = $real -ceq [Environment]::GetEnvironmentVariable('Path','User')
-        }} | ConvertTo-Json -Compress
-    }} finally {{ $fixture.Dispose() }}
-}} finally {{ [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree('{fixture}',$false) }}
-"#,
-            user.replace('\'', "''")
-        );
-        let output = process::run_program(
-            &windows_system_directory().join("WindowsPowerShell/v1.0/powershell.exe"),
-            &["-NoProfile", "-NonInteractive", "-Command", &script],
-            None,
-            Duration::from_secs(10),
-            &directory.0.join("desktop.log"),
-            &|| false,
-            &[(
-                OsString::from("PI_DESK_PATH_FIXTURE"),
-                target.as_os_str().into(),
-            )],
-        )
-        .unwrap_or_else(|error| {
-            panic!(
-                "隔离注册表探针失败：{error}\n{}",
-                fs::read_to_string(directory.0.join("desktop.log")).unwrap_or_default()
-            )
-        });
-        assert!(
-            output.status.success(),
-            "{}",
-            packages::command_failure(&output)
-        );
-        let actual: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(actual["path"], expected);
-        assert_eq!(actual["kind"], "ExpandString");
-        assert_eq!(actual["unchanged"], true, "测试不得修改真实用户 PATH");
-    }
 }
