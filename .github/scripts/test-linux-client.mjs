@@ -10,6 +10,10 @@ const root = resolve(process.env.CLIENT_SMOKE_ROOT)
 await mkdir(join(root, 'data'), { recursive: true })
 await mkdir(join(root, 'tmp'), { recursive: true })
 await writeFile(join(root, 'data/config.json'), JSON.stringify({ targets: [] }))
+await writeFile(
+  join(root, 'data/runtime.json'),
+  JSON.stringify({ targets: {}, hideOnStartup: false })
+)
 const env = {
   ...process.env,
   PI_DESK_DESKTOP_DATA_DIR: join(root, 'data'),
@@ -63,7 +67,17 @@ try {
     .trim()
     .split('\n')
   assert.ok(ids[0], '没有可见的控制中心窗口')
-  execFileSync('import', ['-window', ids[0], join(root, 'linux-desktop.png')], { stdio: 'pipe' })
+  await until(() => {
+    assert.ok(!app.exited, `界面就绪前桌面退出：${app.error ?? app.code}`)
+    const image = join(root, 'linux-desktop.png')
+    execFileSync('import', ['-window', ids[0], image], { stdio: 'pipe', timeout: 5000 })
+    const text = execFileSync('tesseract', [image, 'stdout', '-l', 'chi_sim', '--psm', '11'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 5000
+    })
+    return /连接你的\s*Pi\s*Desk/i.test(text)
+  }, '可操作的连接页面，不接受加载中画面')
   const quit = launch(['--exit-for-update'])
   await until(() => app.exited && quit.exited, '正常退出及单实例通知')
   assert.equal(quit.code, 0, `退出通知失败：${quit.error ?? stderr}`)
