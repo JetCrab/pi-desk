@@ -142,41 +142,8 @@ jobs:
         working-directory: apps/desktop
         run: |
           $env:TAURI_CONFIG = Get-Content "$env:CARGO_TARGET_DIR/tauri-ci.json" -Raw
-          $monitor = Start-Job -ScriptBlock {
-            $last = @{}
-            while ($true) {
-              Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'Is64BitOperatingSystem|PiDeskPathTest-' } | ForEach-Object {
-                $pidValue = $_.ProcessId
-                $now = [DateTime]::UtcNow
-                if (-not $last.ContainsKey($pidValue) -or ($now - $last[$pidValue]).TotalSeconds -ge 2) {
-                  $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
-                  if ($process) {
-                    @{ time=$now.ToString('o'); pid=$pidValue; parent=$_.ParentProcessId; image=$_.ExecutablePath; command=$_.CommandLine; cpu=$process.CPU; threads=@($process.Threads | ForEach-Object { @{ id=$_.Id; state=$_.ThreadState.ToString(); wait=$(try { $_.WaitReason.ToString() } catch { '' }) } }) } | ConvertTo-Json -Compress -Depth 4
-                    $last[$pidValue] = $now
-                  }
-                }
-              }
-              Start-Sleep -Milliseconds 500
-            }
-          }
-          try {
-            cargo test --manifest-path src-tauri/Cargo.toml --target i686-pc-windows-msvc --release --locked
-            $testExit = $LASTEXITCODE
-          } finally {
-            Stop-Job $monitor
-            Receive-Job $monitor | Out-File "$env:CARGO_TARGET_DIR/windows-probes.jsonl" -Encoding utf8
-            Remove-Job $monitor
-          }
-          if ($testExit -ne 0) { exit $testExit }
-      - name: 保留 Windows 探针诊断
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-probes-${{ github.run_id }}
-          overwrite: true
-          path: ${{ env.CARGO_TARGET_DIR }}/windows-probes.jsonl
-          retention-days: 7
-          if-no-files-found: ignore
+          cargo test --manifest-path src-tauri/Cargo.toml --target i686-pc-windows-msvc --release --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 构建 Windows x86 NSIS 安装包
         if: ${{ !inputs.check_only }}
         working-directory: apps/desktop

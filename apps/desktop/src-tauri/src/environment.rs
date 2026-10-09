@@ -12,6 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
+#[cfg(windows)]
+#[path = "environment_windows.rs"]
+mod windows;
+
 pub(crate) const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent";
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -1477,32 +1481,6 @@ pub(crate) fn windows_system_directory() -> PathBuf {
 }
 
 #[cfg(windows)]
-fn user_path_script(directory: &Path) -> String {
-    let directory = directory.to_string_lossy().replace('\'', "''");
-    format!(
-        r#"
-$ErrorActionPreference = 'Stop'
-$dir = '{directory}'
-$key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
-try {{
-    $path = [string]$key.GetValue('Path','',[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-    $kind = if ($key.GetValueNames() -contains 'Path') {{ $key.GetValueKind('Path') }} else {{ [Microsoft.Win32.RegistryValueKind]::ExpandString }}
-    $machine = [Environment]::GetEnvironmentVariable('Path','Machine')
-    $present = @(($machine + ';' + $path) -split ';' | Where-Object {{
-        [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -ieq $dir.TrimEnd('\')
-    }})
-    if ($present.Count -eq 0) {{
-        $next = if ([string]::IsNullOrEmpty($path)) {{ $dir }} else {{ $path.TrimEnd(';') + ';' + $dir }}
-        $key.SetValue('Path',$next,$kind)
-    }}
-}} finally {{
-    $key.Dispose()
-}}
-"#
-    )
-}
-
-#[cfg(windows)]
 fn ensure_user_path(
     directory: &Path,
     cancelled: &dyn Fn() -> bool,
@@ -1511,27 +1489,12 @@ fn ensure_user_path(
     if std::env::var_os("PI_DESK_DESKTOP_DATA_DIR").is_some() {
         return Err("隔离模式禁止修改用户 PATH".into());
     }
-    let executable = windows_system_directory().join("WindowsPowerShell/v1.0/powershell.exe");
-    let output = process::run_program(
-        &executable,
-        &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            &user_path_script(directory),
-        ],
-        None,
-        Duration::from_secs(10),
-        log,
-        cancelled,
-        &[],
-    )?;
-    if !output.status.success() {
-        return Err(format!(
-            "登记用户 PATH 失败：{}",
-            packages::command_failure(&output)
-        ));
+    if cancelled() {
+        return Err("操作已取消".into());
     }
+    windows::ensure_user_path(directory).inspect_err(|error| {
+        logging::write(log, "environment-user-path-failed", error);
+    })?;
     #[cfg(windows)]
     {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -1574,27 +1537,21 @@ fn refreshed_path(log: &Path, cancelled: &dyn Fn() -> bool, include_current: boo
     };
     #[cfg(windows)]
     {
-        let executable = windows_system_directory().join("WindowsPowerShell/v1.0/powershell.exe");
-        let result = process::run_program(&executable, &["-NoProfile", "-NonInteractive", "-Command", "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); [Environment]::GetEnvironmentVariable('Path','Machine'); [Environment]::GetEnvironmentVariable('Path','User')"], None, Duration::from_secs(10), log, cancelled, &[]);
-        match result {
-            Ok(output) if output.status.success() => {
-                let mut paths = Vec::new();
-                for line in process::decode_output(&output.stdout).lines() {
-                    paths.extend(std::env::split_paths(&OsString::from(line)));
-                }
+        if cancelled() {
+            return current;
+        }
+        match windows::read_paths() {
+            Ok(mut paths) => {
+                logging::write(
+                    log,
+                    "environment-path-refresh",
+                    "已读取 Windows 注册表 PATH",
+                );
                 paths.extend(std::env::split_paths(&current));
                 return std::env::join_paths(paths).unwrap_or(current);
             }
-            result => {
-                let error = match result {
-                    Ok(output) => packages::command_failure(&output),
-                    Err(error) => error,
-                };
-                logging::write(
-                    log,
-                    "environment-path-refresh-failed",
-                    &format!("powershell={} error={error}", executable.display()),
-                );
+            Err(error) => {
+                logging::write(log, "environment-path-refresh-failed", &error);
             }
         }
     }

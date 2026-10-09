@@ -76,6 +76,7 @@ jobs:
     uses: ./.github/workflows/check.yml
     with:
       source_sha: ${{ needs.prepare.outputs.sha }}
+      built_packages: ${{ needs.prepare.outputs.npm }}
 
   notes:
     needs: prepare

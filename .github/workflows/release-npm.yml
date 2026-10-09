@@ -193,7 +193,7 @@ jobs:
           name: npm-command-smoke-${{ github.run_id }}
           path: ${{ env.NPM_ARTIFACT_DIR }}/command-smoke
       - name: Windows 核心回归复用同批 SDK 产物
-        if: runner.os == 'Windows' && github.ref == 'refs/heads/dev'
+        if: runner.os == 'Windows'
         shell: bash
         run: |
           node .github/scripts/restore-sdk.mjs "$NPM_ARTIFACT_DIR/command-smoke/sdk.tgz" plugins/pi-desk-sdk
