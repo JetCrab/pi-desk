@@ -218,6 +218,19 @@ test('同一运行的制品名称跨重试稳定，构建数据仍按attempt隔�
   }
 })
 
+test('dev共享进程清理变更触发Windows客户端构建', async () => {
+  const workflow = await readFile(
+    new URL('../.github/workflows/build-dev-clients.yml', import.meta.url),
+    'utf8'
+  )
+  const dependency = 'src/server/l4_foundation/process/l4-process-tree.js'
+  assert.ok(workflow.split('\npermissions:')[0].includes(`- '${dependency}'`))
+  assert.match(
+    workflow,
+    /\.github\/scripts\/check-desktop-tunnel\.mjs\|src\/server\/l4_foundation\/process\/l4-process-tree\.js\)\n\s+windows=true\n\s+;;/
+  )
+})
+
 test('客户端dev保留产物和核心运行检查，完整回归只在main', async () => {
   const windows = await readFile(
     new URL('../.github/workflows/build-clients.yml', import.meta.url),

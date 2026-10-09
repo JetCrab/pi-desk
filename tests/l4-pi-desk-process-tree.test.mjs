@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 import { mkdir, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { runInNewContext } from 'node:vm'
 import test from 'node:test'
 
 const require = createRequire(import.meta.url)
@@ -128,11 +129,9 @@ test(
     })
 
     const tree = await spawnProcessTree('live', root)
+    const exit = once(tree.rootChild, 'exit')
     await withTimeout(terminateManagedTree(tree.rootChild), 'live root process tree termination')
-    await withTimeout(
-      once(tree.rootChild, 'exit').catch(() => undefined),
-      'live root exit'
-    )
+    await withTimeout(exit, 'live root exit')
     assert.equal(await processExists(tree.rootPid), false)
     assert.equal(await processExists(tree.childPid), false)
   }
@@ -170,6 +169,89 @@ test(
       'orphan child exit'
     )
     assert.equal(await processExists(tree.childPid), false)
+  }
+)
+
+test(
+  'Windows已退出且没有子进程的命令可以正常完成清理',
+  { skip: process.platform !== 'win32', timeout: 15_000 },
+  async () => {
+    const child = spawn(process.execPath, ['-e', 'process.exit(0)'], {
+      stdio: 'ignore',
+      windowsHide: true
+    })
+    spawnedRoots.add(child)
+    await withTimeout(once(child, 'exit'), 'leaf command exit')
+    await withTimeout(terminateManagedTree(child), 'leaf command cleanup')
+    assert.equal(await processExists(child.pid), false)
+  }
+)
+
+test(
+  'Windows孤儿进程清理不依赖CIM或WMI查询',
+  { skip: process.platform !== 'win32', timeout: 15_000 },
+  async (context) => {
+    const source = await readFile(
+      new URL('../src/server/l4_foundation/process/l4-process-tree.js', import.meta.url),
+      'utf8'
+    )
+    const runtime = { exports: {} }
+    runInNewContext(source, {
+      module: runtime,
+      process,
+      Buffer,
+      require(name) {
+        if (name !== 'node:child_process') return require(name)
+        return {
+          execFile(file, args, options, callback) {
+            if (file === 'powershell.exe') {
+              const index = args.indexOf('-EncodedCommand') + 1
+              const script = Buffer.from(args[index], 'base64').toString('utf16le')
+              args = [...args]
+              args[index] = Buffer.from(
+                `function Get-CimInstance { throw '测试禁止依赖 CIM/WMI 查询' }; ${script}`,
+                'utf16le'
+              ).toString('base64')
+            }
+            return execFile(file, args, options, callback)
+          }
+        }
+      }
+    })
+    const root = join(testRoot, 'without-cim')
+    await mkdir(root, { recursive: true })
+    context.after(() => rm(root, { recursive: true, force: true }))
+    const tree = await spawnProcessTree('orphan', root)
+    if (tree.rootChild.exitCode === null && tree.rootChild.signalCode === null) {
+      await withTimeout(once(tree.rootChild, 'exit'), 'non-CIM root exit')
+    }
+    assert.equal(await processExists(tree.childPid), true)
+    await withTimeout(
+      runtime.exports.terminateManagedTree(tree.rootChild),
+      'non-CIM orphan cleanup'
+    )
+    assert.equal(await processExists(tree.childPid), false)
+  }
+)
+
+test(
+  'Windows孤儿清理拒绝仍存活的根PID并保留其子进程',
+  { skip: process.platform !== 'win32', timeout: 15_000 },
+  async (context) => {
+    const root = join(testRoot, 'root-identity')
+    await mkdir(root, { recursive: true })
+    context.after(() => rm(root, { recursive: true, force: true }))
+    const tree = await spawnProcessTree('live', root)
+    try {
+      await assert.rejects(
+        terminateManagedTree({ pid: tree.rootPid, exitCode: 0, signalCode: null }),
+        /Managed PID is still present; refusing orphan cleanup/
+      )
+      assert.equal(await processExists(tree.rootPid), true)
+      assert.equal(await processExists(tree.childPid), true)
+    } finally {
+      await terminateManagedTree(tree.rootChild)
+    }
   }
 )
 

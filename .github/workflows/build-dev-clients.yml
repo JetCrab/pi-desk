@@ -10,6 +10,7 @@ on:
       - 'apps/tunnel/Cargo.toml'
       - '.github/scripts/pack-client.mjs'
       - '.github/scripts/check-desktop-tunnel.mjs'
+      - 'src/server/l4_foundation/process/l4-process-tree.js'
       - '.github/scripts/rust-cache.mjs'
       - '.github/scripts/apple-signing.sh'
       - '.github/workflows/build-clients.yml'
@@ -92,7 +93,7 @@ jobs:
                   windows=true
                   android=true
                   ;;
-                .github/scripts/check-desktop-tunnel.mjs)
+                .github/scripts/check-desktop-tunnel.mjs|src/server/l4_foundation/process/l4-process-tree.js)
                   windows=true
                   ;;
                 .github/scripts/apple-signing.sh|.github/workflows/release-apple.yml)
