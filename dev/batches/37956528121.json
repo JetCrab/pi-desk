@@ -1,0 +1,31 @@
+{
+  "runId": "37956528121",
+  "source": "b9efb5092b50406b496ac1191d13031a9abea4b9",
+  "versions": {
+    "pi-desk": "1.1.1",
+    "pi-desk-bg-run": "1.1.0",
+    "pi-desk-ctx": "1.1.0",
+    "pi-desk-deliverables": "1.1.0",
+    "pi-desk-quota-viewer": "1.1.0",
+    "pi-desk-remote-debug": "1.1.0",
+    "pi-desk-sdk": "1.1.0",
+    "pi-desk-subagent": "1.1.0",
+    "pi-desk-tibo-monitor": "1.1.0",
+    "pi-desk-tool-reason": "1.1.0",
+    "pi-desk-usage": "1.1.1",
+    "windows": "1.1.3",
+    "macos": "1.1.3",
+    "linux": "1.1.3",
+    "android": "1.1.0",
+    "ios": "1.1.0",
+    "tunnel": "1.1.0"
+  },
+  "selected": [
+    "pi-desk",
+    "pi-desk-usage"
+  ],
+  "npmVersions": {
+    "pi-desk": "1.1.1-dev",
+    "pi-desk-usage": "1.1.1-dev"
+  }
+}
