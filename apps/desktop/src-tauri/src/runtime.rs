@@ -3141,7 +3141,7 @@ child.on('exit', code => {{
             channel: ReleaseChannel::Stable,
         };
         let mut server = ServerConfig {
-            start_command: format!("node node_modules\\{PACKAGE_NAME}\\service.cjs -p {{port}}"),
+            start_command: format!("node node_modules/{PACKAGE_NAME}/service.cjs -p {{port}}"),
             ready_path: "/health".into(),
             package: Some(package.clone()),
         };
@@ -3240,7 +3240,7 @@ child.on('exit', code => {{
             channel: ReleaseChannel::Stable,
         };
         let server = ServerConfig {
-            start_command: format!("node node_modules\\{PACKAGE_NAME}\\service.cjs -p {{port}}"),
+            start_command: format!("node node_modules/{PACKAGE_NAME}/service.cjs -p {{port}}"),
             ready_path: "/health".into(),
             package: Some(package.clone()),
         };
@@ -3377,7 +3377,7 @@ child.on('message', () => process.exit(9));
             channel: ReleaseChannel::Stable,
         };
         let server = ServerConfig {
-            start_command: format!("node node_modules\\{PACKAGE_NAME}\\service.cjs -p {{port}}"),
+            start_command: format!("node node_modules/{PACKAGE_NAME}/service.cjs -p {{port}}"),
             ready_path: "/health".into(),
             package: Some(package.clone()),
         };
@@ -3793,7 +3793,7 @@ http.createServer((req, res) => res.writeHead(503).end('not ready'))
             channel: ReleaseChannel::Stable,
         };
         let server = ServerConfig {
-            start_command: format!("node node_modules\\{PACKAGE_NAME}\\service.cjs -p {{port}}"),
+            start_command: format!("node node_modules/{PACKAGE_NAME}/service.cjs -p {{port}}"),
             ready_path: "/health".into(),
             package: Some(package),
         };

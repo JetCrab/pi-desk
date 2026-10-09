@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto'
 import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { parse } from 'yaml'
+import { clientPlatforms } from '../.github/scripts/release-record.mjs'
 import { selectCiChecks } from '../.github/scripts/select-ci-checks.mjs'
 import { transferRustCache } from '../.github/scripts/rust-cache.mjs'
 import { npmValidationMode } from '../.github/scripts/release-npm.mjs'
@@ -154,10 +156,9 @@ test('正式审查只等待固定提交，发布仍等待审查和所有构建',
     workflow.indexOf('\n  assemble:'),
     workflow.indexOf('\n  npm-publish:')
   )
-  assert.match(
-    assemble,
-    /needs: \[prepare, checks, notes, npm-build, windows, macos, android, tunnel-build\]/
-  )
+  const required = ['prepare', 'checks', 'notes', 'npm-build', 'tunnel-build', ...clientPlatforms]
+  const dependencies = parse(workflow).jobs.assemble.needs
+  for (const job of required) assert.ok(dependencies.includes(job), `正式汇总必须等待 ${job}`)
   assert.match(assemble, /!contains\(needs\.\*\.result, 'failure'\)/)
   assert.match(assemble, /!contains\(needs\.\*\.result, 'cancelled'\)/)
 })
@@ -194,6 +195,7 @@ test('同一运行的制品名称跨重试稳定，构建数据仍按attempt隔�
     'release-main',
     'release-npm',
     'build-clients',
+    'build-linux',
     'release-apple',
     'release-tunnel',
     'release-docker'
@@ -257,8 +259,9 @@ test('客户端dev执行受影响回归，覆盖安装仍仅在main', async () =
     'utf8'
   )
   assert.match(main, /uses: \.\/.github\/workflows\/check.yml/)
-  assert.match(
-    main,
-    /needs: \[prepare, checks, notes, npm-build, windows, macos, android, tunnel-build\]/
-  )
+  const jobs = parse(main).jobs
+  for (const platform of clientPlatforms) {
+    assert.ok(jobs[platform]?.uses, `缺少 ${platform} 的构建入口`)
+    assert.ok(jobs.assemble.needs.includes(platform), `${platform} 未纳入发布门禁`)
+  }
 })

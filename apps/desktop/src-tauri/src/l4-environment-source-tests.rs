@@ -118,6 +118,7 @@ fn runtime() -> tokio::runtime::Runtime {
         .unwrap()
 }
 
+#[cfg(windows)]
 #[test]
 fn saved_domestic_choice_uses_tencent_npm_without_changing_binary_mirrors() {
     let directory = Directory::new("domestic-source-compatibility");
@@ -208,6 +209,7 @@ fn country_lookup_timeout_is_bounded_and_defaults_to_official() {
     assert_eq!(server.requests.load(Ordering::Acquire), 1);
 }
 
+#[cfg(windows)]
 #[test]
 fn recommendation_is_cached_but_only_accepted_source_is_persisted() {
     let directory = Directory::new("source-cache");
@@ -249,6 +251,25 @@ fn recommendation_is_cached_but_only_accepted_source_is_persisted() {
     );
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn unix_uses_official_source_without_country_lookup_or_rewriting_choices() {
+    let directory = Directory::new("unix-official-source");
+    let choices = directory.0.join("environment.json");
+    let original = r#"{"downloadSource":"npmmirror"}"#;
+    fs::write(&choices, original).unwrap();
+    let server = CountryServer::new(200, r#"{"success":true,"country_code":"CN"}"#, false);
+    let source = runtime().block_on(
+        directory
+            .state()
+            .download_source(&server.url(), &directory.0.join("desktop.log")),
+    );
+    assert_eq!(source, DownloadSource::Official);
+    assert_eq!(server.requests.load(Ordering::Acquire), 0);
+    assert_eq!(fs::read_to_string(choices).unwrap(), original);
+}
+
+#[cfg(windows)]
 #[test]
 fn accepted_source_wins_over_a_late_country_response() {
     let directory = Directory::new("source-late-response");
