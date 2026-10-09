@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { isDeepStrictEqual } from 'node:util'
-import { productionContent } from './prepare-stable-release.mjs'
+import { productionContent } from './release-version-model.mjs'
 import {
   changeSections,
   clientPlatforms,

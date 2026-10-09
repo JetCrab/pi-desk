@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { parse } from 'yaml'
 import { syncRelease } from '../apps/website/scripts/sync-release.mjs'
 import { deploymentConfig, websiteDeployScript } from '../.github/scripts/deploy-website.mjs'
 import { normalizeStaticSegments, verifyWebsite } from '../.github/scripts/build-website.mjs'
@@ -188,10 +189,23 @@ test('主发布把模型和部署凭据分开，不开放PR特权入口', async 
   const modelStep = main.slice(main.indexOf('name: 作者和审核者'), main.indexOf('name: 固定已核验'))
   assert.match(modelStep, /RELEASE_MODEL_API_KEY/)
   assert.doesNotMatch(modelStep, /GH_TOKEN|WEBSITE_SSH|ANDROID_.*PASSWORD/)
-  assert.match(dev, /contents: read/)
-  assert.doesNotMatch(
-    dev,
-    /contents: write|WEBSITE_SSH|RELEASE_MODEL_API_KEY|upload_server: true|distribute: true/
+  const workflow = parse(dev)
+  assert.equal(workflow.permissions.contents, 'read')
+  const writers = Object.entries(workflow.jobs).filter(
+    ([, job]) => job.permissions?.contents === 'write'
   )
+  assert.deepEqual(writers.map(([name]) => name).sort(), ['plan', 'result'])
+  for (const [name, job] of writers) {
+    const checkout = job.steps.find((step) => step.uses?.startsWith('actions/checkout@'))
+    assert.equal(checkout.with['persist-credentials'], false)
+    assert.ok(
+      job.steps.some(
+        (step) =>
+          step.run ===
+          `node .github/scripts/release-dev.mjs ${name === 'plan' ? 'prepare' : 'complete'}`
+      )
+    )
+  }
+  assert.doesNotMatch(dev, /WEBSITE_SSH|RELEASE_MODEL_API_KEY|upload_server: true|distribute: true/)
   assert.match(dev, /NPM_TOKEN: \$\{\{ secrets.NPM_TOKEN \}\}/)
 })

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
+import { format } from 'node:util'
 import {
   selectPackages,
   assertPackedManifest,
@@ -10,6 +11,11 @@ import {
   pruneHostBuild,
   run
 } from '../.github/scripts/release-npm.mjs'
+
+// Node 22 的测试 stdout 帧解析存在缺陷，诊断通道保留中文日志而不与报告混流。
+beforeEach((context) => {
+  context.mock.method(console, 'info', (...args) => context.diagnostic(format(...args)))
+})
 
 const publishConfig = { registry: 'https://registry.npmjs.org', access: 'public' }
 async function fixture(context) {

@@ -18,7 +18,7 @@ export function L3ConversationCodemodeCalls({
       <h4 className="mb-2 font-medium">
         {t(nestedCalls.complete ? 'nestedCalls' : 'nestedCallsIncomplete')}
       </h4>
-      <ol className="max-h-[min(24rem,45dvh)] space-y-2 overflow-auto overscroll-contain">
+      <ol className="max-h-[min(24rem,45dvh)] space-y-2 overflow-auto">
         {nestedCalls.calls.map((call, index) => (
           <li key={index} className="border-b pb-2 last:border-0 last:pb-0">
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">

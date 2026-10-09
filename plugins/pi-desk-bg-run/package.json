@@ -5,7 +5,7 @@
     "url": "git+https://github.com/JetCrab/pi-desk.git",
     "directory": "plugins/pi-desk-bg-run"
   },
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
     "access": "public"

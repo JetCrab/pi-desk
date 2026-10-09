@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { versionParts } from './npm-channel.mjs'
 import { lockDependencyContent } from './release-dependencies.mjs'
@@ -110,16 +109,10 @@ function patch(version) {
   return next
 }
 
-function plannedVersion(current, previous, affected, development = false) {
+function plannedVersion(current, previous, affected) {
   const version = stableVersion(current)
   const comparison = previous === null ? 1 : compareVersions(version, previous)
-  if (development) {
-    assert.ok(comparison >= 0, '版本不得回退')
-    if (!affected) return current
-    const next = versionParts(current)[3] !== null || comparison > 0 ? version : patch(version)
-    return `${next}-dev.1`
-  }
-  // dev 不必回合并 Actions 的版本准备提交；正式发布以上次成功版本为下限。
+  // 提交准备可使用成功发布基线迁移累计改动，已明确提高的版本保留。
   const baseline = comparison < 0 ? stableVersion(previous) : version
   return affected && comparison <= 0 ? patch(baseline) : baseline
 }
@@ -155,22 +148,34 @@ function productionManifest(manifest) {
   return result
 }
 
-async function npmEntries(root, baseline, { docker = false } = {}) {
+async function npmEntries(
+  root,
+  baseline,
+  { docker = false, read = (file) => readOptional(root, file), files = null } = {}
+) {
   const lockChanged = baseline.changed.has('pnpm-lock.yaml')
-  const currentLock = lockChanged ? await readOptional(root, 'pnpm-lock.yaml') : null
+  const currentLock = lockChanged ? await read('pnpm-lock.yaml') : null
   const previousLock = lockChanged ? baseline.read('pnpm-lock.yaml') : null
-  const plugins = await readdir(join(root, 'plugins'), { withFileTypes: true })
-  const files = [
-    'package.json',
-    ...plugins
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => `plugins/${entry.name}/package.json`)
-      .sort()
-  ]
+  if (files === null) {
+    const plugins = await readdir(join(root, 'plugins'), { withFileTypes: true }).catch((error) => {
+      if (error.code === 'ENOENT') return []
+      throw error
+    })
+    files = [
+      'package.json',
+      ...plugins
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => `plugins/${entry.name}/package.json`)
+        .sort()
+    ]
+  }
+  files = files.filter(
+    (file) => file === 'package.json' || /^plugins\/[^/]+\/package\.json$/.test(file)
+  )
   const entries = []
   const names = new Set()
   for (const file of files) {
-    const original = await readOptional(root, file)
+    const original = await read(file)
     if (file !== 'package.json' && original === null) continue
     assert.ok(original !== null, '缺少公开主包清单')
     const manifest = json(original, file)
@@ -271,18 +276,35 @@ function dependencyRange(range, target, development) {
   return next
 }
 
-function planNpm(entries, { baseline, development = false, versions = new Map() }) {
+function chooseVersion(id, current, previous, affected, options) {
+  if (!options.targets) return plannedVersion(current, previous, affected)
+  if (!options.targets.includes(id)) return current
+  if (options.mode === 'current') return stableVersion(current)
+  if (options.mode === 'patch') return patch(current)
+  const parts = versionParts(current).slice(0, 3)
+  parts[1]++
+  parts[2] = 0
+  const version = parts.join('.')
+  versionParts(version)
+  return version
+}
+
+function planNpm(entries, { baseline, ...options }) {
   const selected = new Set()
   for (const entry of entries) {
     const previous = entry.previous?.version ?? null
-    const versionChanged =
-      previous !== null &&
-      (development
-        ? entry.currentVersion !== previous
-        : compareVersions(entry.currentVersion, previous) > 0)
-    const affected = entry.affected || versionChanged || (baseline !== null && previous === null)
+    const versionChanged = previous !== null && compareVersions(entry.currentVersion, previous) > 0
+    const affected = options.targets
+      ? options.targets.includes(entry.manifest.name.slice('@jetcrab/'.length))
+      : entry.affected || versionChanged || (baseline !== null && previous === null)
     if (affected) selected.add(entry.manifest.name)
-    entry.manifest.version = plannedVersion(entry.currentVersion, previous, affected, development)
+    entry.manifest.version = chooseVersion(
+      entry.manifest.name.slice('@jetcrab/'.length),
+      entry.currentVersion,
+      previous,
+      affected,
+      options
+    )
   }
   // 自有依赖的制品版本变化会影响消费者；workspace 范围不需要改写。
   let added
@@ -291,30 +313,33 @@ function planNpm(entries, { baseline, development = false, versions = new Map() 
     for (const entry of entries) {
       if (selected.has(entry.manifest.name)) continue
       const affected = dependencyGroups.some((group) =>
-        Object.keys(entry.manifest[group] ?? {}).some((name) => selected.has(name))
+        Object.keys(entry.manifest[group] ?? {}).some(
+          (name) =>
+            selected.has(name) &&
+            (!options.targets ||
+              entries.some(
+                (target) =>
+                  target.manifest.name === name && target.manifest.version !== target.currentVersion
+              ))
+        )
       )
       if (!affected) continue
       selected.add(entry.manifest.name)
       entry.manifest.version = plannedVersion(
         entry.currentVersion,
         entry.previous?.version ?? null,
-        true,
-        development
+        true
       )
       added = true
     }
   } while (added)
-  for (const entry of entries) {
-    if (versions.has(entry.manifest.name))
-      entry.manifest.version = versions.get(entry.manifest.name)
-  }
   const byName = new Map(entries.map((entry) => [entry.manifest.name, entry]))
   const changes = []
   for (const entry of entries) {
     for (const group of dependencyGroups) {
       for (const [name, range] of Object.entries(entry.manifest[group] ?? {})) {
         const target = byName.get(name)
-        if (target) entry.manifest[group][name] = dependencyRange(range, target, development)
+        if (target) entry.manifest[group][name] = dependencyRange(range, target, false)
       }
     }
     if (!isDeepStrictEqual(json(entry.original, entry.file), entry.manifest)) {
@@ -374,6 +399,8 @@ export function productionContent(file, text) {
   }
   if (file.endsWith('/build.gradle.kts'))
     return text.replace(/^[ \t]*version(?:Name|Code)\s*=.*$/gm, '')
+  if (file === 'apps/ios/project.yml')
+    return text.replace(/^[ \t]*(?:MARKETING_VERSION|CURRENT_PROJECT_VERSION):.*$/gm, '')
   if (file.endsWith('/Cargo.toml') && /^\[package\]/m.test(text))
     return rustVersion(text, file, '0.0.0')
   if (file.endsWith('/Cargo.lock')) {
@@ -386,7 +413,7 @@ export function productionContent(file, text) {
   return text
 }
 
-async function nativeChanged(root, baseline, paths) {
+async function nativeChanged(root, baseline, paths, read = (file) => readOptional(root, file)) {
   for (const file of baseline.changed) {
     if (
       excluded.test(file) ||
@@ -394,7 +421,7 @@ async function nativeChanged(root, baseline, paths) {
     )
       continue
     if (!paths.some((path) => file === path || file.startsWith(`${path}/`))) continue
-    const current = await readOptional(root, file)
+    const current = await read(file)
     if (
       !isDeepStrictEqual(
         productionContent(file, baseline.read(file)),
@@ -406,7 +433,13 @@ async function nativeChanged(root, baseline, paths) {
   return false
 }
 
-async function planNative(root, baseline) {
+async function planNative(root, baseline, options = {}) {
+  const read = options.read ?? ((file) => readOptional(root, file))
+  const changed = (paths) => nativeChanged(root, baseline, paths, read)
+  const select = (id, current, previous, affected) => {
+    if (affected) options.affected?.add(id)
+    return chooseVersion(id, current, previous, affected, options)
+  }
   const changes = []
   const add = (file, original, content) => {
     if (original !== content) changes.push({ file, original, content })
@@ -417,7 +450,7 @@ async function planNative(root, baseline) {
     'apps/desktop/src-tauri/Cargo.toml',
     'apps/desktop/src-tauri/Cargo.lock'
   ]
-  const desktop = await Promise.all(desktopFiles.map((file) => readOptional(root, file)))
+  const desktop = await Promise.all(desktopFiles.map(read))
   if (desktop.every((text) => text !== null)) {
     const manifest = json(desktop[0], desktopFiles[0])
     const config = json(desktop[1], desktopFiles[1])
@@ -428,21 +461,24 @@ async function planNative(root, baseline) {
     const rust = rustPackage(desktop[2], desktopFiles[2])
     const old = baseline.read(desktopFiles[0])
     const previous = old === null ? null : json(old, desktopFiles[0]).version
-    const affected = await nativeChanged(root, baseline, ['apps/desktop', 'apps/tunnel/common'])
-    const version = plannedVersion(manifest.version, previous, affected)
+    const affected = await changed(['apps/desktop', 'apps/tunnel/common'])
+    const version = select('desktop', manifest.version, previous, affected)
     if (manifest.version !== version) {
       manifest.version = version
       add(desktopFiles[0], desktop[0], `${JSON.stringify(manifest, null, 2)}\n`)
     }
     if (config.version !== version) {
-      config.version = version
-      add(desktopFiles[1], desktop[1], `${JSON.stringify(config, null, 2)}\n`)
+      add(
+        desktopFiles[1],
+        desktop[1],
+        desktop[1].replace(/("version"\s*:\s*")[^"]+("\s*[,}])/, `$1${version}$2`)
+      )
     }
     add(desktopFiles[2], desktop[2], rustVersion(desktop[2], desktopFiles[2], version))
     add(desktopFiles[3], desktop[3], lockVersion(desktop[3], rust.name, version))
   }
   const androidFile = 'apps/android/app/build.gradle.kts'
-  const android = await readOptional(root, androidFile)
+  const android = await read(androidFile)
   if (android !== null) {
     const androidVersion = (text) => {
       const version = text.match(/^[ \t]*versionName\s*=\s*"([^"]+)"/m)?.[1]
@@ -457,8 +493,8 @@ async function planNative(root, baseline) {
     const current = androidVersion(android)
     const old = baseline.read(androidFile)
     const previous = old === null ? null : androidVersion(old)
-    const affected = await nativeChanged(root, baseline, ['apps/android'])
-    const version = plannedVersion(current.version, previous?.version ?? null, affected)
+    const affected = await changed(['apps/android'])
+    const version = select('android', current.version, previous?.version ?? null, affected)
     const code =
       previous && version !== previous.version
         ? Math.max(current.code, previous.code + 1)
@@ -474,13 +510,13 @@ async function planNative(root, baseline) {
   }
   const tunnelFile = 'apps/tunnel/server/Cargo.toml'
   const tunnelLock = 'apps/tunnel/Cargo.lock'
-  const tunnel = await readOptional(root, tunnelFile)
-  const lock = await readOptional(root, tunnelLock)
+  const tunnel = await read(tunnelFile)
+  const lock = await read(tunnelLock)
   if (tunnel !== null && lock !== null) {
     const current = rustPackage(tunnel, tunnelFile)
     const old = baseline.read(tunnelFile)
     const previous = old === null ? null : rustPackage(old, tunnelFile).version
-    const affected = await nativeChanged(root, baseline, [
+    const affected = await changed([
       'apps/tunnel/server',
       'apps/tunnel/common',
       'apps/tunnel/Cargo.toml',
@@ -488,11 +524,98 @@ async function planNative(root, baseline) {
       'apps/tunnel/Dockerfile',
       'apps/tunnel/.dockerignore'
     ])
-    const version = plannedVersion(current.version, previous, affected)
+    const version = select('tunnel', current.version, previous, affected)
     add(tunnelFile, tunnel, rustVersion(tunnel, tunnelFile, version))
     add(tunnelLock, lock, lockVersion(lock, current.name, version))
   }
+  const iosFile = 'apps/ios/project.yml'
+  const ios = await read(iosFile)
+  if (ios !== null) {
+    const parse = (text) => {
+      const version = text.match(/^\s*MARKETING_VERSION:\s*['"]?([\d.]+)['"]?\s*$/m)?.[1]
+      const build = Number(text.match(/^\s*CURRENT_PROJECT_VERSION:\s*['"]?(\d+)['"]?\s*$/m)?.[1])
+      assert.ok(version && versionParts(version)[3] === null, 'iOS 缺少正式 MARKETING_VERSION')
+      assert.ok(Number.isSafeInteger(build) && build > 0, 'iOS 构建号无效')
+      return { version, build }
+    }
+    const current = parse(ios)
+    const old = baseline.read(iosFile)
+    const previous = old === null ? null : parse(old)
+    const version = select(
+      'ios',
+      current.version,
+      previous?.version ?? null,
+      await changed(['apps/ios'])
+    )
+    const build = Math.max(
+      current.build,
+      (previous?.build ?? 0) + (previous && version !== previous.version ? 1 : 0)
+    )
+    assert.ok(Number.isSafeInteger(build), 'iOS 构建号超出安全整数范围')
+    add(
+      iosFile,
+      ios,
+      ios
+        .replace(/^(\s*MARKETING_VERSION:\s*)[^\r\n]+/m, `$1${version}`)
+        .replace(/^(\s*CURRENT_PROJECT_VERSION:\s*)[^\r\n]+/m, `$1${build}`)
+    )
+  }
+  const websiteFile = 'apps/website/package.json'
+  const website = await read(websiteFile)
+  if (website !== null) {
+    const manifest = json(website, websiteFile)
+    const old = baseline.read(websiteFile)
+    const version = select(
+      'website',
+      manifest.version,
+      old === null ? null : json(old, websiteFile).version,
+      await changed(['apps/website'])
+    )
+    if (manifest.version !== version) {
+      manifest.version = version
+      add(websiteFile, website, `${JSON.stringify(manifest, null, 2)}\n`)
+    }
+  }
   return changes
+}
+
+// 提交入口传入 Git index 的只读快照，规划期间不触碰工作树或暂存区。
+export async function planVersionChanges(root, baseline, options = {}) {
+  const entries = await npmEntries(root, baseline, { docker: true, ...options })
+  const plan = planNpm(entries, { baseline: 'HEAD', ...options })
+  const affected = new Set(
+    entries
+      .filter((entry) => entry.affected)
+      .map((entry) => entry.manifest.name.slice('@jetcrab/'.length))
+  )
+  const changedVersions = new Set(
+    entries
+      .filter((entry) => entry.previous && entry.currentVersion !== entry.previous.version)
+      .map((entry) => entry.manifest.name.slice('@jetcrab/'.length))
+  )
+  let added
+  do {
+    added = false
+    for (const entry of entries) {
+      const id = entry.manifest.name.slice('@jetcrab/'.length)
+      if (affected.has(id)) continue
+      if (
+        !dependencyGroups.some((group) =>
+          Object.keys(entry.manifest[group] ?? {}).some(
+            (name) =>
+              name.startsWith('@jetcrab/') &&
+              (affected.has(name.slice('@jetcrab/'.length)) ||
+                changedVersions.has(name.slice('@jetcrab/'.length)))
+          )
+        )
+      )
+        continue
+      affected.add(id)
+      added = true
+    }
+  } while (added)
+  plan.changes.push(...(await planNative(root, baseline, { ...options, affected })))
+  return { ...plan, affected: [...affected], entries }
 }
 
 async function applyChanges(root, changes) {
@@ -517,27 +640,19 @@ async function applyChanges(root, changes) {
   return changes.map((entry) => entry.file)
 }
 
-/** @returns {Promise<{changedFiles: string[], packages: {name: string, version: string}[]}>} */
-export async function prepareStableVersions(root, { base = null } = {}) {
-  root = resolve(root)
-  const baseline = snapshot(root, base)
-  const entries = await npmEntries(root, baseline, { docker: true })
-  const { changes } = planNpm(entries, { baseline: base })
-  changes.push(...(await planNative(root, baseline)))
-  // 所有版本、依赖和原生同步均已验证，再统一写入。
-  const changedFiles = await applyChanges(root, changes)
-  return {
-    changedFiles,
-    packages: entries.map(({ manifest }) => ({ name: manifest.name, version: manifest.version }))
-  }
-}
-
 export function nextDevelopmentVersion(planned, publishedVersions) {
   const base = stableVersion(planned)
   assert.ok(Array.isArray(publishedVersions), '已发布版本清单无效')
   let highest = 0
   for (const version of publishedVersions) {
     assert.equal(typeof version, 'string', '已发布版本必须为字符串')
+    if (/^\d+\.\d+\.\d+$/.test(version)) {
+      assert.ok(
+        compareVersions(base, version) > 0,
+        `开发基础版本 ${base} 必须高于已成功正式版本 ${version}`
+      )
+      continue
+    }
     if (!/^\d+\.\d+\.\d+-dev\.\d+$/.test(version)) continue
     const parts = versionParts(version)
     const comparison = compareVersions(base, version)
@@ -552,64 +667,107 @@ export function nextDevelopmentVersion(planned, publishedVersions) {
 /** @returns {Promise<{changedFiles: string[], packages: {name: string, version: string}[], selected: string[]}>} */
 export async function prepareDevelopmentVersions(
   root,
-  { before, readVersions, stableBase = null }
+  { before, readVersions, stableBase = null, selected = null, versions = {} }
 ) {
   root = resolve(root)
-  assert.equal(typeof readVersions, 'function', '缺少已发布开发版本查询')
   assert.ok(
     typeof before === 'string' && /^[a-f0-9]{40}$/i.test(before),
     'before 必须为完整提交 SHA'
   )
   const revision = /^0+$/.test(before) ? null : before
   const baseline = snapshot(root, revision, 'HEAD')
-  const entries = await npmEntries(root, baseline)
-  // 预规划只确定目标基础版本和消费者，最终编号一次性同步回原始清单。
-  const candidates = structuredClone(entries)
-  const planned = planNpm(candidates, { baseline: revision ?? 'HEAD', development: true })
-  const stable = stableBase ? snapshot(root, stableBase) : null
-  const targets = candidates.filter((entry) =>
-    planned.selected.includes(entry.manifest.name.slice('@jetcrab/'.length))
+  const committedFiles = git(root, 'ls-tree', '-r', '--name-only', '-z', 'HEAD')
+    .split('\0')
+    .filter(Boolean)
+  const committed = new Set(committedFiles)
+  const entries = await npmEntries(
+    root,
+    { ...baseline, changed: new Set() },
+    {
+      files: committedFiles,
+      read: (file) => (committed.has(file) ? git(root, 'show', `HEAD:${file}`) : null)
+    }
   )
-  const versions = new Map(
+  selected ??= entries
+    .filter((entry) => entry.previous === null || entry.currentVersion !== entry.previous.version)
+    .map((entry) => entry.manifest.name.slice('@jetcrab/'.length))
+  assert.ok(Array.isArray(selected), 'selected 必须为 npm 短名列表')
+  for (const id of selected)
+    assert.ok(
+      entries.some((entry) => entry.manifest.name === `@jetcrab/${id}`),
+      `未知开发包：${id}`
+    )
+  const stable = stableBase ? snapshot(root, stableBase) : null
+  const assigned = new Map(
     await Promise.all(
-      targets.map(async (entry) => {
-        let version = entry.manifest.version
-        const published = stable?.read(entry.file)
-        if (published) {
-          const currentStable = json(published, entry.file).version
-          if (compareVersions(version, currentStable) <= 0)
-            version = `${patch(stableVersion(currentStable))}-dev.1`
-        }
-        return [
-          entry.manifest.name,
-          nextDevelopmentVersion(version, await readVersions(entry.manifest.name))
-        ]
-      })
+      entries
+        .filter((entry) => selected.includes(entry.manifest.name.slice('@jetcrab/'.length)))
+        .map(async (entry) => {
+          const base = stableVersion(entry.currentVersion)
+          const published = stable?.read(entry.file)
+          if (published)
+            assert.ok(
+              compareVersions(base, json(published, entry.file).version) > 0,
+              `${entry.manifest.name} 开发基础版本 ${base} 必须高于已成功正式版本`
+            )
+          const fixed = versions[entry.manifest.name.slice('@jetcrab/'.length)]
+          let version
+          if (fixed !== undefined) {
+            assert.ok(
+              versionParts(fixed)[3] !== null && stableVersion(fixed) === base,
+              `${entry.manifest.name} 固定开发版本必须使用已提交基础版本 ${base}`
+            )
+            version = fixed
+          } else {
+            assert.equal(typeof readVersions, 'function', '缺少已发布开发版本查询')
+            version = nextDevelopmentVersion(base, await readVersions(entry.manifest.name))
+          }
+          return [entry.manifest.name, version]
+        })
     )
   )
-  const { changes, selected } = planNpm(entries, {
-    baseline: revision ?? 'HEAD',
-    development: true,
-    versions
-  })
+  // 未重新发布的 workspace 依赖仍须使用成功批次中的真实开发版本。
+  for (const [id, version] of Object.entries(versions)) {
+    const name = `@jetcrab/${id}`
+    if (assigned.has(name)) continue
+    const entry = entries.find((item) => item.manifest.name === name)
+    assert.ok(
+      entry && stableVersion(version) === stableVersion(entry.currentVersion),
+      `开发依赖版本与源码不匹配：${id}`
+    )
+    assert.notEqual(versionParts(version)[3], null, `开发依赖缺少预发布编号：${id}`)
+    assigned.set(name, version)
+  }
+  // 消费者由提交 Hook 升版，CI 不另行扩选或递增基础版本。
+  const byName = new Map(entries.map((entry) => [entry.manifest.name, entry]))
+  for (const entry of entries)
+    if (assigned.has(entry.manifest.name))
+      entry.manifest.version = assigned.get(entry.manifest.name)
+  const changes = []
+  for (const entry of entries) {
+    if (!assigned.has(entry.manifest.name)) continue
+    for (const group of dependencyGroups) {
+      for (const [name, range] of Object.entries(entry.manifest[group] ?? {})) {
+        const target = byName.get(name)
+        if (target && assigned.has(name))
+          entry.manifest[group][name] = dependencyRange(range, target, true)
+      }
+    }
+    const original = await readOptional(root, entry.file)
+    assert.ok(original !== null, `缺少开发包清单：${entry.file}`)
+    if (!isDeepStrictEqual(json(original, entry.file), entry.manifest))
+      changes.push({
+        file: entry.file,
+        original,
+        content: `${JSON.stringify(entry.manifest, null, 2)}\n`
+      })
+  }
   const changedFiles = await applyChanges(root, changes)
   return {
     changedFiles,
     packages: entries.map(({ manifest }) => ({ name: manifest.name, version: manifest.version })),
-    selected
+    selected: [...new Set(selected)].sort((a, b) =>
+      a === 'pi-desk-sdk' ? -1 : b === 'pi-desk-sdk' ? 1 : a.localeCompare(b)
+    )
   }
-}
-
-async function main() {
-  assert.ok(process.argv.length <= 3, '用法：node prepare-stable-release.mjs [公开仓库根目录]')
-  const root = process.argv[2] ?? resolve(import.meta.dirname, '../..')
-  const { changedFiles } = await prepareStableVersions(root)
-  for (const file of changedFiles) console.info(file)
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main().catch((error) => {
-    console.error(error.message)
-    process.exitCode = 1
-  })
 }

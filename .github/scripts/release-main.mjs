@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
 import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { prepareStableVersions } from './prepare-stable-release.mjs'
+import { validateVersions } from './commit-versions.mjs'
 import { createReleasePlan, git, latestSuccessfulRelease } from './release-plan.mjs'
 import { createGitHubClient, sha256 } from './release-github.mjs'
 import { clientFilename, releaseTagPattern, validateRecord } from './release-record.mjs'
@@ -29,62 +28,14 @@ async function batchRecord(github, release) {
   )
 }
 
-export async function prepareBatch(
-  root,
-  {
-    github,
-    source,
-    output,
-    prepareVersions = prepareStableVersions,
-    refreshLock = () =>
-      execFileSync(
-        'pnpm',
-        ['install', '--lockfile-only', '--ignore-scripts', '--registry=https://registry.npmjs.org'],
-        { cwd: root, stdio: 'inherit' }
-      )
-  }
-) {
+export async function prepareBatch(root, { github, source, output }) {
   assert.match(source, /^[a-f0-9]{40}$/)
-  // 重跑原始合并事件时，继续使用此前已回写的正式版本提交。
   const releases = await github.releases()
   const latest = latestSuccessfulRelease(releases)
   const previous = latest ? await loadReleaseRecord(github, latest.tag_name) : null
-  const message = `chore(release): prepare ${source}`
-  const prepared = git(
-    root,
-    'log',
-    'origin/main',
-    '--format=%H',
-    '--fixed-strings',
-    `--grep=${message}`
-  )
-    .split('\n')
-    .filter(Boolean)
-    .find((sha) => git(root, 'show', '-s', '--format=%P', sha) === source)
-  const candidate = prepared || source
-  const fixed = releases.find(
-    (item) => releaseTagPattern.test(item.tag_name) && item.target_commitish === candidate
-  )
-  git(root, 'checkout', '--detach', candidate)
-  if (!prepared && !fixed) {
-    const result = await prepareVersions(root, { base: previous?.source.head ?? null })
-    if (result.changedFiles.length) {
-      await refreshLock()
-      git(root, 'add', '--', ...result.changedFiles, 'pnpm-lock.yaml')
-      git(
-        root,
-        '-c',
-        'user.name=github-actions[bot]',
-        '-c',
-        'user.email=41898282+github-actions[bot]@users.noreply.github.com',
-        'commit',
-        '-m',
-        message
-      )
-      git(root, 'push', 'origin', 'HEAD:refs/heads/main')
-    }
-  }
-  const head = git(root, 'rev-parse', 'HEAD')
+  git(root, 'checkout', '--detach', source)
+  await validateVersions(root, { base: previous?.source.head ?? null, head: source })
+  const head = source
   let release = releases.find(
     (item) => releaseTagPattern.test(item.tag_name) && item.target_commitish === head
   )

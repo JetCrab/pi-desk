@@ -4,10 +4,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
-  prepareStableVersions,
   prepareDevelopmentVersions,
   nextDevelopmentVersion
-} from '../.github/scripts/prepare-stable-release.mjs'
+} from '../.github/scripts/release-version-model.mjs'
 import {
   createReleasePlan,
   latestSuccessfulRelease,
@@ -24,11 +23,8 @@ import {
 import { sha256 } from '../.github/scripts/release-github.mjs'
 import { validateRecord, changeSections } from '../.github/scripts/release-record.mjs'
 import { packageClient } from '../.github/scripts/pack-client.mjs'
-import {
-  developmentBaseline,
-  manualDevelopmentTargets,
-  readPublishedVersions
-} from '../.github/scripts/prepare-dev-release.mjs'
+import { readPublishedVersions } from '../.github/scripts/prepare-dev-release.mjs'
+import { prepareCommitVersions, validateVersions } from '../.github/scripts/commit-versions.mjs'
 
 async function fixture(t) {
   const parent = resolve('temp/tests/release-main/batch-regression')
@@ -107,6 +103,7 @@ snapshots:
   await repo.save('pnpm-lock.yaml', lock)
   const before = repo.commit()
   await repo.save('pnpm-lock.yaml', lock.replace('integrity: nested', 'integrity: new-nested'))
+  await repo.pkg('pi-desk-usage', '1.0.1', { dependencies: { 'plugin-lib': '^1.0.0' } })
   repo.commit()
   const result = await prepareDevelopmentVersions(repo.root, {
     before,
@@ -203,62 +200,13 @@ function draft(record) {
   }
 }
 
-test('正式版本准备去掉开发后缀并同步自有依赖，不改第三方和原生版本', async (t) => {
+test('正式源码清单不得仍引用自有SDK开发版本', async (t) => {
   const repo = await fixture(t)
-  await repo.pkg('pi-desk', '1.2.0-dev.7', {
+  await repo.pkg('pi-desk', '1.2.0', {
     dependencies: { '@jetcrab/pi-desk-sdk': '^1.1.0-dev.4', example: '2.0.0-dev.9' }
   })
-  await repo.pkg('pi-desk-sdk', '1.1.0-dev.4')
-  const result = await prepareStableVersions(repo.root)
-  assert.equal(result.packages.find((item) => item.name === '@jetcrab/pi-desk').version, '1.2.0')
-  const manifest = JSON.parse(await readFile(join(repo.root, 'package.json'), 'utf8'))
-  assert.equal(manifest.dependencies['@jetcrab/pi-desk-sdk'], '^1.1.0')
-  assert.equal(manifest.dependencies.example, '2.0.0-dev.9')
-  assert.equal(
-    JSON.parse(await readFile(join(repo.root, 'apps/desktop/package.json'), 'utf8')).version,
-    '1.0.0'
-  )
-  assert.deepEqual((await prepareStableVersions(repo.root)).changedFiles, [])
-})
-
-test('main 根据运行内容自动升版，开发分支旧版号不会导致正式回退', async (t) => {
-  const repo = await fixture(t)
-  await repo.save('src/main.ts', 'export const value = 1')
-  await prepareStableVersions(repo.root, { base: repo.head })
-  assert.equal(
-    JSON.parse(await readFile(join(repo.root, 'package.json'), 'utf8')).version,
-    '1.0.0',
-    '未跟踪文件不应进入发布版本计算'
-  )
-  const source = repo.commit()
-  await prepareStableVersions(repo.root, { base: repo.head })
-  assert.equal(JSON.parse(await readFile(join(repo.root, 'package.json'), 'utf8')).version, '1.0.1')
-  const firstRelease = repo.commit()
-  repo.git('checkout', '--detach', source)
-  await repo.save('src/main.ts', 'export const value = 2')
-  repo.commit()
-  await prepareStableVersions(repo.root, { base: firstRelease })
-  assert.equal(JSON.parse(await readFile(join(repo.root, 'package.json'), 'utf8')).version, '1.0.2')
-})
-
-test('新开发发布入口仅首次按完整快照准备，后续保留推送基线', async (t) => {
-  const repo = await fixture(t)
-  assert.equal(developmentBaseline(repo.root, repo.head), '0'.repeat(40))
-  await repo.save('.github/scripts/prepare-dev-release.mjs', '// fixture entry')
-  const activated = repo.commit()
-  assert.equal(developmentBaseline(repo.root, activated), activated)
-  assert.throws(() => developmentBaseline(repo.root, 'f'.repeat(40)))
-})
-
-test('指定开发包复验自动包含其SDK依赖，不选择无关包', async (t) => {
-  const repo = await fixture(t)
-  await repo.pkg('pi-desk', '1.0.1-dev.1', {
-    dependencies: { '@jetcrab/pi-desk-sdk': 'workspace:^' }
-  })
-  await repo.pkg('pi-desk-usage', '1.0.0')
-  assert.deepEqual(await manualDevelopmentTargets(repo.root, 'pi-desk'), ['pi-desk-sdk', 'pi-desk'])
-  assert.deepEqual(await manualDevelopmentTargets(repo.root, 'pi-desk-sdk'), ['pi-desk-sdk'])
-  await assert.rejects(manualDevelopmentTargets(repo.root, 'missing-package'))
+  await repo.pkg('pi-desk-sdk', '1.1.0')
+  await assert.rejects(validateVersions(repo.root, { base: null, head: repo.commit() }), /未同步/)
 })
 
 test('macOS归档参数在无证书时也不展开空数组', async () => {
@@ -271,9 +219,10 @@ test('macOS归档参数在无证书时也不展开空数组', async () => {
   assert.match(workflow, /trap 'status=\$\?; trap - EXIT;.*exit "\$status"'/)
 })
 
-test('dev普通源码推送自动生成测试版本，纯文档推送不发npm包', async (t) => {
+test('dev仅给已提交的新版本附加开发编号，纯文档推送不发npm包', async (t) => {
   const repo = await fixture(t)
   await repo.save('src/main.ts', 'export const value = 1')
+  await repo.pkg('pi-desk', '1.0.1')
   const head = repo.commit()
   const result = await prepareDevelopmentVersions(repo.root, {
     before: repo.head,
@@ -300,23 +249,23 @@ test('dev普通源码推送自动生成测试版本，纯文档推送不发npm�
   )
 })
 
-test('dev未回合并版本提交时测试版本仍高于main已发布版本', async (t) => {
+test('dev基础版本落后正式版本时明确拒绝，不在CI静默加号', async (t) => {
   const repo = await fixture(t)
   await repo.pkg('pi-desk', '1.2.0')
   const stableBase = repo.commit()
   repo.git('checkout', '--detach', repo.head)
   await repo.save('src/main.ts', 'export const changed = true')
   repo.commit()
-  const result = await prepareDevelopmentVersions(repo.root, {
-    before: repo.head,
-    readVersions: async () => ['1.0.1-dev.9001'],
-    stableBase
-  })
-  assert.deepEqual(result.selected, ['pi-desk'])
-  assert.equal(
-    JSON.parse(await readFile(join(repo.root, 'package.json'), 'utf8')).version,
-    '1.2.1-dev.1'
+  await assert.rejects(
+    prepareDevelopmentVersions(repo.root, {
+      before: repo.head,
+      selected: ['pi-desk'],
+      readVersions: async () => ['1.0.1-dev.9001'],
+      stableBase
+    }),
+    /版本|正式/
   )
+  assert.equal(JSON.parse(await readFile(join(repo.root, 'package.json'), 'utf8')).version, '1.0.0')
 })
 
 test('开发编号按同一基础版本的已发布最大值递增，旧高编号不回退', () => {
@@ -324,7 +273,8 @@ test('开发编号按同一基础版本的已发布最大值递增，旧高编�
   assert.equal(nextDevelopmentVersion('1.0.1-dev.1', versions), '1.0.1-dev.9002')
   assert.equal(nextDevelopmentVersion('1.0.2-dev.1', versions), '1.0.2-dev.1')
   assert.equal(nextDevelopmentVersion('1.0.1-dev.1', ['1.0.1-dev.1']), '1.0.1-dev.2')
-  assert.throws(() => nextDevelopmentVersion('1.0.0-dev.1', versions), /低于已发布版本/)
+  assert.throws(() => nextDevelopmentVersion('1.0.0-dev.1', versions), /必须高于已成功正式版本/)
+  assert.throws(() => nextDevelopmentVersion('1.0.0-dev.1', ['1.0.1-dev.1']), /低于已发布版本/)
   assert.throws(
     () => nextDevelopmentVersion('1.0.1-dev.1', ['1.0.1-dev.9007199254740991']),
     /安全整数/
@@ -337,6 +287,8 @@ test('SDK和消费者分别分配开发编号，并一次同步真实依赖范�
   await repo.pkg('pi-desk-usage', '1.0.0')
   const before = repo.commit()
   await repo.save('plugins/pi-desk-sdk/src/feature.ts', 'export const ready = true')
+  await repo.pkg('pi-desk-sdk', '1.0.1')
+  await repo.pkg('pi-desk', '1.0.1', { dependencies: { '@jetcrab/pi-desk-sdk': '>=1.0.1 <2.0.0' } })
   repo.commit()
   const queries = []
   const result = await prepareDevelopmentVersions(repo.root, {
@@ -369,6 +321,7 @@ test('SDK和消费者分别分配开发编号，并一次同步真实依赖范�
 test('开发版本查询失败时不写入任何清单', async (t) => {
   const repo = await fixture(t)
   await repo.save('src/feature.ts', 'export const ready = true')
+  await repo.pkg('pi-desk', '1.0.1')
   repo.commit()
   const before = await readFile(join(repo.root, 'package.json'), 'utf8')
   await assert.rejects(
@@ -432,9 +385,13 @@ test('开发发布只在重试时启用已发布制品的摘要复用', async ()
   assert.doesNotMatch(workflow, /name: dev-manifests-.*github.run_attempt/)
 })
 
-test('桌面四份版本和Android构建号在正式准备时自动保持一致', async (t) => {
+test('桌面四份版本和Android构建号在提交准备时自动保持一致', async (t) => {
   const repo = await fixture(t)
-  await repo.save('apps/desktop/src-tauri/tauri.conf.json', { version: '1.0.0' })
+  repo.git('switch', '-c', 'dev')
+  await repo.save(
+    'apps/desktop/src-tauri/tauri.conf.json',
+    '{\n  "version": "1.0.0",\n  "bundle": { "targets": ["nsis"] }\n}\n'
+  )
   await repo.save(
     'apps/desktop/src-tauri/Cargo.toml',
     '[package]\nname="pi-desk-desktop"\nversion="1.0.0"\n'
@@ -446,8 +403,8 @@ test('桌面四份版本和Android构建号在正式准备时自动保持一致'
   const base = repo.commit()
   await repo.save('apps/desktop/web/main.ts', 'export const feature=true')
   await repo.save('apps/android/app/src/main.kt', 'fun feature() = true')
-  repo.commit()
-  await prepareStableVersions(repo.root, { base })
+  repo.git('add', '.')
+  await prepareCommitVersions(repo.root, { base })
   assert.equal(
     JSON.parse(await readFile(join(repo.root, 'apps/desktop/package.json'), 'utf8')).version,
     '1.0.1'
@@ -456,6 +413,10 @@ test('桌面四份版本和Android构建号在正式准备时自动保持一致'
     JSON.parse(await readFile(join(repo.root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'))
       .version,
     '1.0.1'
+  )
+  assert.match(
+    await readFile(join(repo.root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'),
+    /"targets": \["nsis"\]/
   )
   for (const file of ['Cargo.toml', 'Cargo.lock'])
     assert.match(
@@ -467,12 +428,14 @@ test('桌面四份版本和Android构建号在正式准备时自动保持一致'
   assert.match(android, /versionCode = 2/)
 })
 
-test('版本校验失败不得留下部分正式化清单', async (t) => {
+test('版本校验失败不得留下部分修改清单', async (t) => {
   const repo = await fixture(t)
-  await repo.pkg('pi-desk', '1.1.0-dev.1')
+  repo.git('switch', '-c', 'dev')
+  await repo.pkg('pi-desk', '1.1.0')
   await repo.pkg('pi-desk-sdk', 'not-a-version')
+  repo.git('add', '.')
   const before = await readFile(join(repo.root, 'package.json'), 'utf8')
-  await assert.rejects(prepareStableVersions(repo.root))
+  await assert.rejects(prepareCommitVersions(repo.root))
   assert.equal(await readFile(join(repo.root, 'package.json'), 'utf8'), before)
 })
 
@@ -493,22 +456,23 @@ test('首次发布选择全部，后续按成功批次比较并复用未变化�
   assert.equal(next.tunnel, false)
 })
 
-test('Docker运行配方只驱动正式主包升版，不生成开发制品', async (t) => {
+test('Docker运行配方属于主包版本，文档不单独升版', async (t) => {
   const repo = await fixture(t)
+  repo.git('switch', '-c', 'dev')
   await repo.save('apps/docker/Dockerfile', 'FROM node:22-bookworm-slim\n')
   const before = repo.commit()
   const previous = completed(createReleasePlan(repo.root, { head: before }).record)
   await repo.save('apps/docker/Dockerfile', 'FROM node:22-bookworm-slim\nENV PORT=6233\n')
-  repo.commit()
+  repo.git('add', '.')
+  await prepareCommitVersions(repo.root)
+  const head = repo.commit()
   const development = await prepareDevelopmentVersions(repo.root, {
     before,
-    readVersions: async () => {
-      throw Error('Docker配方不应生成开发包')
-    }
+    readVersions: async () => []
   })
-  assert.deepEqual(development.selected, [])
-  await prepareStableVersions(repo.root, { base: before })
-  const plan = createReleasePlan(repo.root, { head: repo.commit(), previous })
+  assert.deepEqual(development.selected, ['pi-desk'])
+  repo.git('restore', 'package.json')
+  const plan = createReleasePlan(repo.root, { head, previous })
   assert.deepEqual(plan.npm, ['pi-desk'])
   assert.equal(
     plan.record.packages.find((item) => item.name === '@jetcrab/pi-desk').version,
@@ -574,9 +538,9 @@ test('复用安装包需验证实际字节摘要，最终记录包含三个平�
   )
 })
 
-test('正式准备回写固定版本提交，重跑不新增提交或推进失败基线', async (t) => {
+test('正式准备固定已提交版本，重跑不新增提交或推进失败基线', async (t) => {
   const repo = await fixture(t)
-  await repo.pkg('pi-desk', '1.1.0-dev.3')
+  await repo.pkg('pi-desk', '1.1.0')
   const source = repo.commit()
   const remote = `${repo.root}-remote.git`
   t.after(() => rm(remote, { recursive: true, force: true }))
@@ -605,10 +569,9 @@ test('正式准备回写固定版本提交，重跑不新增提交或推进失�
   const first = await prepareBatch(repo.root, {
     github,
     source,
-    output,
-    refreshLock: () => writeFile(join(repo.root, 'pnpm-lock.yaml'), 'lock fixture')
+    output
   })
-  assert.notEqual(first.outputs.sha, source)
+  assert.equal(first.outputs.sha, source)
   assert.equal(first.outputs.docker, true)
   assert.equal(repo.git('rev-parse', 'origin/main'), first.outputs.sha)
   assert.equal(first.plan.record.source.base, null)
@@ -619,10 +582,7 @@ test('正式准备回写固定版本提交，重跑不新增提交或推进失�
   const again = await prepareBatch(repo.root, {
     github,
     source,
-    output,
-    prepareVersions: () => {
-      throw Error('重跑不应再次准备版本')
-    }
+    output
   })
   assert.deepEqual(again.plan, first.plan)
   assert.equal(again.outputs.sha, first.outputs.sha)

@@ -93,8 +93,7 @@ interface DetailLoadState {
 const USER_MESSAGE_COLLAPSE_THRESHOLD_LINES = 6
 const MESSAGE_COPY_FEEDBACK_MS = 1500
 const PROCESS_ITEM_BATCH_SIZE = 64
-const TOOL_DETAIL_SCROLL_CLASS =
-  'max-h-[min(20rem,45dvh)] overflow-auto overscroll-contain [scrollbar-gutter:stable]'
+const TOOL_DETAIL_SCROLL_CLASS = 'max-h-[min(20rem,45dvh)] overflow-auto [scrollbar-gutter:stable]'
 const L3ConversationBeforeExpandContext = createContext<() => void>(() => undefined)
 const L3ConversationFileCwdContext = createContext<string | null>(null)
 const L3ConversationImageContext = createContext<L3ConversationAcquireImage | null>(null)

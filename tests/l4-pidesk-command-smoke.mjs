@@ -355,6 +355,12 @@ export async function createPiDeskCommandFixture(root, agentDir) {
         assert.equal(info.agentDir, agentDir)
         assert.deepEqual((await listed()).plugins, [])
         await invoke(['plugins', 'install', packageName, '--scope', 'global', '--version', '1.0.0'])
+        assert.ok(
+          !(await request('pi/tools/list', { source })).tools.some(
+            (tool) => tool.name === 'pidesk_command_fixture'
+          )
+        )
+        await invoke(['session', 'reload'])
         await installedVersion('1.0.0')
         const detail = JSON.parse(
           await invoke(['plugins', 'show', packageName, '--scope', 'global'])
@@ -372,8 +378,16 @@ export async function createPiDeskCommandFixture(root, agentDir) {
         await writeFile(join(installed, 'index.mjs'), 'export default () => {}\n')
         await invoke(['plugins', 'install', packageName, '--scope', 'global', '--version', '1.0.0'])
         assert.equal(await readFile(join(installed, 'index.mjs'), 'utf8'), extension('1.0.0'))
+        await invoke(['session', 'reload'])
         await installedVersion('1.0.0')
         await invoke(['plugins', 'install', packageName, '--scope', 'global'])
+        assert.equal(
+          (await request('pi/tools/list', { source })).tools.find(
+            (tool) => tool.name === 'pidesk_command_fixture'
+          )?.description,
+          'fixture-1.0.0'
+        )
+        await invoke(['session', 'reload'])
         await installedVersion('2.0.0')
         await invoke(
           ['plugins', 'install', packageName, '--scope', 'global', '--version', '9.0.0'],
@@ -386,6 +400,7 @@ export async function createPiDeskCommandFixture(root, agentDir) {
         )
         await installedVersion('2.0.0')
         await invoke(['plugins', 'install', packageName, '--scope', 'global', '--version', '1.0.0'])
+        await invoke(['session', 'reload'])
         await installedVersion('1.0.0')
         const before = (await request('work-sessions/list', {})).workSessions.find(
           (item) => item.workId === workId
@@ -400,6 +415,12 @@ export async function createPiDeskCommandFixture(root, agentDir) {
         assert.ok(after.messageCounts.total > before.messageCounts.total)
         await invoke(['plugins', 'remove', packageName, '--scope', 'global'])
         assert.ok(!(await listed()).plugins.some((item) => item.name === packageName))
+        assert.ok(
+          (await request('pi/tools/list', { source })).tools.some(
+            (tool) => tool.name === 'pidesk_command_fixture'
+          )
+        )
+        await invoke(['session', 'reload'])
         assert.ok(
           !(await request('pi/tools/list', { source })).tools.some(
             (tool) => tool.name === 'pidesk_command_fixture'

@@ -30,7 +30,7 @@ export function L4ErrorDetails({
         </CollapsibleTrigger>
         <CollapsibleContent className="h-[var(--collapsible-panel-height)] overflow-hidden transition-[height,opacity] duration-200 ease-out data-starting-style:h-0 data-starting-style:opacity-0 data-ending-style:h-0 data-ending-style:opacity-0 motion-reduce:transition-none">
           <div className="space-y-3 pt-2">
-            <pre className="max-h-[min(20rem,45dvh)] overflow-auto overscroll-contain rounded-md bg-background p-3 font-mono text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+            <pre className="max-h-[min(20rem,45dvh)] overflow-auto rounded-md bg-background p-3 font-mono text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
               {error.stack || error.message}
             </pre>
             {children}

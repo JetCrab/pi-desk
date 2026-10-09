@@ -5,7 +5,7 @@
     "url": "git+https://github.com/JetCrab/pi-desk.git",
     "directory": "plugins/pi-desk-tibo-monitor"
   },
-  "version": "1.0.0",
+  "version": "1.1.0",
   "license": "Apache-2.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

@@ -1,6 +1,6 @@
 {
   "name": "@jetcrab/pi-desk-desktop",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "Pi Desk native desktop shell",
   "type": "module",

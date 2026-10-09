@@ -3,7 +3,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { appendFile, cp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
-import { basename, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { npmTagFor, versionParts } from './npm-channel.mjs'
 
@@ -165,14 +165,22 @@ function archivePath(entry, output) {
   )
 }
 
+export function readNpmArchiveManifest(archive) {
+  return JSON.parse(
+    run(
+      process.platform === 'win32' ? 'tar.exe' : 'tar',
+      ['-xOzf', basename(archive), 'package/package.json'],
+      { cwd: dirname(resolve(archive)), capture: true }
+    )
+  )
+}
+
 async function verifyArchive(entry, output) {
   const archive = archivePath(entry, output)
   const list = run('tar', ['-tzf', basename(archive)], { cwd: output, capture: true })
     .trim()
     .split(/\r?\n/)
-  const packed = JSON.parse(
-    run('tar', ['-xOzf', basename(archive), 'package/package.json'], { cwd: output, capture: true })
-  )
+  const packed = readNpmArchiveManifest(archive)
   assertPackedManifest(packed, entry.manifest)
   assert.ok(list.includes('package/LICENSE'), `${packed.name} 缺少许可证`)
   for (const file of list) {

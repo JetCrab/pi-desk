@@ -47,10 +47,18 @@ jobs:
           CHECK_BASE: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
           CHECK_HEAD: ${{ inputs.source_sha || github.sha }}
         run: node .github/scripts/select-ci-checks.mjs
+      - name: 核对代码提交的版本同步
+        env:
+          CHECK_BASE: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
+          CHECK_HEAD: ${{ inputs.source_sha || github.sha }}
+        run: |
+          if [[ -n "$CHECK_BASE" && "$CHECK_BASE" != 0000000000000000000000000000000000000000 ]]; then
+            node .github/scripts/commit-versions.mjs check "$CHECK_BASE" "$CHECK_HEAD"
+          fi
 
   core:
     needs: changes
-    if: needs.changes.outputs.full != 'true' && (needs.changes.outputs.web == 'true' || needs.changes.outputs.automation == 'true')
+    if: needs.changes.outputs.automation == 'true' || (needs.changes.outputs.full != 'true' && needs.changes.outputs.web == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -69,6 +77,18 @@ jobs:
       - name: 安装发布检查工具
         if: needs.changes.outputs.automation == 'true'
         run: pnpm install --frozen-lockfile --ignore-scripts --registry=https://registry.npmjs.org
+      - name: 校验所有工作流语法、调用参数与权限
+        if: needs.changes.outputs.automation == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tools="$GITHUB_WORKSPACE/temp/cache/actionlint"
+          mkdir -p "$tools"
+          gh release download v1.7.7 --repo rhysd/actionlint --pattern actionlint_1.7.7_linux_amd64.tar.gz --pattern actionlint_1.7.7_checksums.txt --dir "$tools"
+          (cd "$tools" && sha256sum --check --ignore-missing actionlint_1.7.7_checksums.txt && tar -xzf actionlint_1.7.7_linux_amd64.tar.gz actionlint)
+          "$tools/actionlint" -shellcheck= -pyflakes=
+          node .github/scripts/check-workflows.mjs
       - name: 检查实际变动的发布脚本
         if: needs.changes.outputs.automation == 'true'
         env:
@@ -84,7 +104,22 @@ jobs:
         run: node --test tests/l4-public-boundary.test.mjs
       - name: 发布流程核心回归
         if: needs.changes.outputs.automation == 'true'
-        run: node --test tests/l4-release-main.test.mjs tests/l4-release-website.test.mjs tests/l4-release-versions.test.mjs tests/l4-release-speed.test.mjs tests/l4-release-dev.test.mjs tests/l4-release-parallel.test.mjs tests/l4-release-queue.test.mjs tests/l4-release-docker.test.mjs
+        run: >-
+          node --test
+          tests/l4-commit-versions.test.mjs
+          tests/l4-npm-channel.test.mjs
+          tests/l4-release-dev-state.test.mjs
+          tests/l4-release-dev-plan.test.mjs
+          tests/l4-workflow-contracts.test.mjs
+          tests/l4-restore-sdk.test.mjs
+          tests/l4-release-main.test.mjs
+          tests/l4-release-website.test.mjs
+          tests/l4-release-npm.test.mjs
+          tests/l4-release-speed.test.mjs
+          tests/l4-release-dev.test.mjs
+          tests/l4-release-parallel.test.mjs
+          tests/l4-release-queue.test.mjs
+          tests/l4-release-docker.test.mjs
 
   web:
     needs: changes
@@ -140,12 +175,6 @@ jobs:
           node --import tsx --test
           tests/l4-api-request.test.ts
           tests/l4-public-boundary.test.mjs
-          tests/l4-release-versions.test.mjs
-          tests/l4-release-npm.test.mjs
-          tests/l4-release-main.test.mjs
-          tests/l4-release-website.test.mjs
-          tests/l4-release-speed.test.mjs
-          tests/l4-release-docker.test.mjs
           tests/l2-chat-state.test.ts
           tests/l2-task-center-state.test.ts
           tests/l2-work-session-update.test.ts
