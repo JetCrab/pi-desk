@@ -3,6 +3,7 @@ import { mkdir, readFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { L4PluginRegistrySchema } from '@common/l4_foundation/plugin/l4-plugin-package'
 import { createJiti } from 'jiti'
+import packageRootApi from '../process/l4-package-root.js'
 
 const PACKAGE_CLI_TIMEOUT_MS = 5 * 60 * 1000
 
@@ -167,7 +168,7 @@ async function main(): Promise<void> {
       '@earendil-works/pi-agent-core',
       '@earendil-works/pi-ai'
     ],
-    tsconfigPaths: join(process.cwd(), 'tsconfig.json')
+    tsconfigPaths: join(packageRootApi.packageRoot, 'tsconfig.json')
   })
   const preferences = await jiti.import<typeof import('./l4-pi-plugin-preferences')>(
     './l4-pi-plugin-preferences.ts'

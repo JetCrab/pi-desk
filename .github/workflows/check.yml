@@ -23,6 +23,7 @@ jobs:
     outputs:
       full: ${{ steps.select.outputs.full }}
       web: ${{ steps.select.outputs.web }}
+      pidesk: ${{ steps.select.outputs.pidesk }}
       website: ${{ steps.select.outputs.website }}
       agent: ${{ steps.select.outputs.agent }}
       automation: ${{ steps.select.outputs.automation }}
@@ -108,6 +109,68 @@ jobs:
           tests/l2-workbench-layout.test.ts
           tests/l3-app-runtime-state.test.ts
           tests/l3-project-file-tree.test.ts
+
+  pidesk:
+    needs: changes
+    if: needs.changes.outputs.pidesk == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      TSX_TSCONFIG_PATH: ${{ github.workspace }}/tsconfig.json
+      PI_DESK_PI_PACKAGE_DIR: ${{ github.workspace }}/node_modules/@earendil-works/pi-coding-agent
+      PI_CODING_AGENT_DIR: ${{ github.workspace }}/temp/pi/ci-pidesk/commands-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}/agent
+      PI_CODING_AGENT_SESSION_DIR: ${{ github.workspace }}/temp/pi/ci-pidesk/commands-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}/agent/sessions
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+      - name: 核对并固定 Windows Git Bash
+        if: runner.os == 'Windows'
+        run: |
+          $original = (Get-Command bash.exe -ErrorAction SilentlyContinue).Source
+          Write-Host "原 Bash 路径：$original"
+          $gitRoot = Split-Path (Split-Path (Get-Command git.exe).Source)
+          $gitBin = Join-Path $gitRoot 'bin'
+          $bash = Join-Path $gitBin 'bash.exe'
+          if (-not (Test-Path $bash)) { throw 'Git for Windows 未提供 Bash' }
+          $gitBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $env:PATH = "$gitBin;$env:PATH"
+          Write-Host "测试 Bash 路径：$((Get-Command bash.exe).Source)"
+          & $bash --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $bash -c 'node -p process.platform'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 安装公开依赖
+        run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
+      - name: 准备 SDK Host Runtime
+        run: pnpm build:plugin-host-runtime
+      - name: 宿主命令核心回归
+        run: pnpm test:pidesk
+      - name: 真实宿主命令链验收
+        run: node --test tests/l1-pidesk.e2e.mjs
+      - name: 保留命令验收失败现场
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pidesk-failure-${{ matrix.os }}-${{ github.run_id }}
+          overwrite: true
+          path: |
+            temp/run/pidesk*/
+            temp/pi/l1-pidesk/
+          if-no-files-found: ignore
+          retention-days: 7
 
   website:
     needs: changes

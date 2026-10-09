@@ -117,7 +117,10 @@ test('React 子入口暴露 Hooks、ErrorBoundary 与通用插件组件', () => 
   assert.equal(typeof react.PluginKeyValueItem, 'function')
   assert.equal(typeof react.PluginLoadingState, 'function')
   assert.equal(typeof react.PluginSpinner, 'function')
-  assert.equal(typeof react.PluginSelectField, 'function')
+  assert.equal(typeof react.PluginSelect, 'function')
+  assert.equal(reactBase.PluginSelect, react.PluginSelect)
+  assert.equal('PluginSelectField' in react, false)
+  assert.equal('PluginSelectField' in reactBase, false)
   assert.equal(typeof react.PluginSplitView, 'function')
   assert.equal(typeof react.PluginListItem, 'function')
   assert.equal(typeof react.PluginMarkdown, 'function')
@@ -240,9 +243,10 @@ test('PluginCheckbox 与 Tab 提供统一宿主交互样式', () => {
   assert.match(markup, /aria-selected="true"/)
 })
 
-test('PluginSelectField 使用 Base UI 触发器并保留字段说明', () => {
+test('PluginSelect 使用 Base UI 触发器并保留字段说明', () => {
   const markup = renderToStaticMarkup(
-    createElement(react.PluginSelectField, {
+    createElement(react.PluginSelect, {
+      id: 'scope-select',
       label: '执行范围',
       description: '选择本次检查范围',
       size: 'sm',
@@ -253,6 +257,10 @@ test('PluginSelectField 使用 Base UI 触发器并保留字段说明', () => {
       ]
     })
   )
+  assert.doesNotMatch(markup, /<select\b/)
+  assert.match(markup, /<button[^>]*role="combobox"/)
+  assert.match(markup, /<label[^>]*for="scope-select"/)
+  assert.match(markup, /<button[^>]*id="scope-select"/)
   assert.match(markup, /pi-desk-ui-select-trigger-sm/)
   assert.match(markup, /执行范围/)
   assert.match(markup, /选择本次检查范围/)

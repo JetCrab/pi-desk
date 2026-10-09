@@ -12,6 +12,13 @@ export function selectCiChecks(paths, full) {
       paths.some((path) =>
         /^(?:src\/|bin\/|plugins\/|package\.json$|pnpm-|next\.config|tsconfig)/.test(path)
       ),
+    pidesk:
+      full ||
+      paths.some((path) =>
+        /^(?:src\/|bin\/|plugins\/pi-desk-sdk\/|package\.json$|pnpm-|next\.config|tsconfig|tests\/(?:l[124]-pidesk(?:-|\.)|l2-plugin-command|l4-(?:e2e-server|browser-cdp)-runtime)|\.github\/(?:scripts\/(?:select-ci-checks|release-npm|verify-npm-install)\.mjs$|workflows\/(?:check|release-npm)\.yml$))/.test(
+          path
+        )
+      ),
     website: full || paths.some((path) => path.startsWith('apps/website/')),
     agent:
       full ||

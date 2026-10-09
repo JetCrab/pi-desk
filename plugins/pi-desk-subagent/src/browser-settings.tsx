@@ -13,7 +13,7 @@ import {
   PluginErrorBoundary,
   PluginLoadingState,
   PluginPanelHeader,
-  PluginSelectField,
+  PluginSelect,
   PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
 
@@ -265,7 +265,7 @@ function Settings({
                         <span>{agent.name}</span>
                       </label>
                       <div className="subagent-settings-fields">
-                        <PluginSelectField
+                        <PluginSelect
                           className="subagent-settings-field"
                           label="模型"
                           value={agent.model}
@@ -278,7 +278,7 @@ function Settings({
                             })
                           }
                         />
-                        <PluginSelectField
+                        <PluginSelect
                           className="subagent-settings-field"
                           label="思考等级"
                           value={agent.thinking ?? ''}

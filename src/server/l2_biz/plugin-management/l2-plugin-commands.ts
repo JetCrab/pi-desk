@@ -140,14 +140,17 @@ export async function executeL2PluginCommand(
       const target = findL2PluginCommandTarget(current.plugins, name, agentDir)
       if (command.action === 'remove') {
         if (target) throw new Error('卸载后仍发现该包来源，无法确认卸载完成')
-        return '已卸载外层能力；已有会话保留原扩展，手动重载 PI 后移除。'
+        return '已卸载并完成加载，已有会话已刷新。'
       }
       if (!target) throw new Error('未发现安装后的插件，无法确认生效')
       if (target.error) throw new Error(selectL4LocalizedText(target.error.message, 'zh-CN'))
       if (target.status === 'disabled') throw new Error('该插件仍被现有配置禁用，尚未生效')
       if (command.version && target.version !== command.version)
         throw new Error(`实际版本 ${target.version ?? '未知'} 与目标版本 ${command.version} 不一致`)
-      return `已安装${target.version ? ` ${target.version}` : ''}，外层已更新。已有会话扩展不变，新会话或手动重载 PI 后使用新版。`
+      if (!readL2PluginNpmName(target.source)) {
+        return '已加载当前代码，服务与界面已更新。已有会话请重载 Pi 配置后使用新版工具。'
+      }
+      return `已安装${target.version ? ` ${target.version}` : ''}并完成加载，已有会话已刷新。`
     }
   )
   return {

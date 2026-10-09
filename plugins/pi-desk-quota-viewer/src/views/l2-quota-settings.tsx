@@ -8,7 +8,7 @@ import {
   PluginInput,
   PluginListItem,
   PluginScroll,
-  PluginSelectField,
+  PluginSelect,
   PluginSurface,
   PluginTab,
   PluginTabList
@@ -106,7 +106,7 @@ export function QuotaSettingsPage({
               {model.error ?? model.settings.error}
             </PluginAlert>
           ) : null}
-          <PluginSelectField
+          <PluginSelect
             label={t('重置时间格式')}
             value={model.resetTimeFormat}
             disabled={model.loading || model.saving}
@@ -227,7 +227,7 @@ export function QuotaSettingsPage({
                     {t('取消')}
                   </PluginButton>
                 </div>
-                <PluginSelectField
+                <PluginSelect
                   label={t('渠道')}
                   value={null}
                   placeholder={t('选择渠道')}

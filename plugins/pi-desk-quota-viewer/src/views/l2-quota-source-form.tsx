@@ -4,7 +4,7 @@ import {
   PluginField,
   PluginInput,
   PluginSecretInput,
-  PluginSelectField,
+  PluginSelect,
   PluginTextarea
 } from '@jetcrab/pi-desk-sdk/react/base'
 import { fieldId, type DraftSource } from '../hooks/l2-quota-settings.js'
@@ -63,7 +63,7 @@ export function QuotaSourceForm({
         const error = errors.get(`${source.draftKey}:${field.key}`)
         if (field.kind === 'select') {
           return (
-            <PluginSelectField
+            <PluginSelect
               key={field.key}
               id={id}
               label={t(field.label)}

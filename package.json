@@ -32,6 +32,7 @@
     "build:plugin-host-runtime": "pnpm --filter @jetcrab/pi-desk-sdk build",
     "start": "node bin/pi-desk.js --no-open",
     "test:package": "node --test tests/l4-pi-desk-package.test.mjs",
+    "test:pidesk": "node --import tsx --test tests/l4-pidesk-command.test.ts tests/l2-plugin-commands.test.ts tests/l2-plugin-command-completion.test.ts tests/l4-pidesk-session-reload.test.ts tests/l4-pidesk-runtime.test.ts tests/l4-pidesk-runtime-bundle.test.mjs tests/l4-pidesk-installed-runners.test.mjs tests/l4-pidesk-package-maintenance.test.ts tests/l4-pidesk-release-gate.test.mjs tests/l4-pi-global-runtime.test.mjs tests/l4-pi-desk-supervisor-cli.test.mjs",
     "test:app-websocket": "pnpm build && node --import tsx --test tests/l2-chat-state.test.ts tests/l2-workbench-chat-repository.test.ts tests/l2-workbench-chat.test.ts tests/l2-workbench-layout.test.ts tests/l2-work-session-column-layout.test.ts tests/l2-work-session-update.test.ts tests/l1-app-websocket.test.mjs",
     "lint": "eslint .",
     "lint:production": "eslint . --ignore-pattern \"apps/desktop/**\" --ignore-pattern \"**/tests/**\" --ignore-pattern \"**/__tests__/**\" --ignore-pattern \"**/*.test.*\" --ignore-pattern \"**/*.spec.*\"",

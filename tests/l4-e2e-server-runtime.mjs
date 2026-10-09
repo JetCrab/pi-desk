@@ -40,7 +40,8 @@ export function spawnE2eServer({
   standbyActivateFile,
   websiteDistDir,
   nextDirectory,
-  onOutput
+  onOutput,
+  environment = {}
 }) {
   assert.ok(Number.isInteger(port) && port > 0, 'E2E 服务端口必须是正整数')
   assert.ok(target === 'pi-desk' || target === 'website', '未知的 E2E 服务目标')
@@ -57,6 +58,7 @@ export function spawnE2eServer({
   const website = target === 'website'
   const env = {
     ...process.env,
+    ...environment,
     ...isolatedPiEnvironment(agentDir),
     ...(!website
       ? {

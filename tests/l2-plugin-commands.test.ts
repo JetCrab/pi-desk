@@ -190,8 +190,8 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       management.state.plugins[0].version = '2.0.0'
       management.finish()
       await notice.notification
-      assert.match(notice.messages[0], /2.0.0.*外层已更新/)
-      assert.match(notice.messages[0], /已有会话扩展不变.*手动重载 PI/)
+      assert.match(notice.messages[0], /2.0.0.*完成加载/)
+      assert.match(notice.messages[0], /已有会话已刷新/)
     })
 
     await t.test('查询保留未知版本、零插件、异常和重启要求', async () => {
@@ -264,7 +264,7 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       management.finish()
       await notice.notification
       assert.match(notice.messages[0], /实际版本.*不一致/)
-      assert.doesNotMatch(notice.messages[0], /外层已更新/)
+      assert.doesNotMatch(notice.messages[0], /完成加载/)
     })
 
     await t.test('同版本也调用重新安装，完成前不通知成功', async () => {
@@ -310,7 +310,8 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       assert.deepEqual(management.calls[0], ['apply', [local]])
       management.finish()
       await notice.notification
-      assert.match(notice.messages[0], /外层已更新/)
+      assert.match(notice.messages[0], /服务与界面已更新/)
+      assert.match(notice.messages[0], /已有会话请重载/)
       await assert.rejects(
         () =>
           execute(
@@ -351,7 +352,7 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       management.fail('插件尚未生效，需要重启 Pi Desk')
       await notice.notification
       assert.match(notice.messages[0], /尚未生效，需要重启/)
-      assert.doesNotMatch(notice.messages[0], /外层已更新/)
+      assert.doesNotMatch(notice.messages[0], /完成加载/)
     })
 
     await t.test('发起会话已释放时不再通知，基础模式直接拒绝管理', async () => {

@@ -226,7 +226,7 @@ export function spawnEdge(edgePath, cdpPort, userDataDir, windowSize = '1440,900
       ...extraArgs,
       'about:blank'
     ],
-    { stdio: 'ignore', windowsHide: true }
+    { stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32' }
   )
 }
 
@@ -368,8 +368,8 @@ export async function stopBrowserTree(browserProcess, cdpPort) {
           'Edge process tree cleanup failed'
         )
       }
-    } else if (browserProcess.exitCode === null && browserProcess.signalCode === null) {
-      browserProcess.kill('SIGKILL')
+    } else {
+      await terminateManagedTree(browserProcess)
       await Promise.race([exited, delay(10_000)])
       assert.ok(
         browserProcess.exitCode !== null || browserProcess.signalCode !== null,

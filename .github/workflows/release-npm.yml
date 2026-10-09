@@ -200,13 +200,75 @@ jobs:
           path: ${{ env.NPM_ARTIFACT_DIR }}/*.tgz
           if-no-files-found: error
           retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: contains(fromJSON(needs.plan.outputs.packages), 'pi-desk')
+        with:
+          name: npm-command-smoke-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.NPM_ARTIFACT_DIR }}/command-smoke/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+      - name: 保留 Windows npm 验证失败现场
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: npm-release-failure-windows-${{ github.run_id }}
+          overwrite: true
+          path: |
+            temp/run/npm-release/
+            temp/pi/npm-release/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  installed-commands-linux:
+    needs: [plan, build]
+    if: inputs.phase != 'publish' && contains(fromJSON(needs.plan.outputs.packages), 'pi-desk')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+      - uses: actions/download-artifact@v4
+        if: github.ref == 'refs/heads/dev'
+        with:
+          name: dev-manifests-${{ github.run_id }}
+          path: .
+      - name: 安装公开依赖
+        run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-command-smoke-${{ github.run_id }}
+          path: ${{ env.NPM_ARTIFACT_DIR }}/command-smoke
+      - name: 验收同一批实际 tarball 的 Linux 安装态命令
+        run: node .github/scripts/verify-npm-install.mjs "$NPM_ARTIFACT_DIR/command-smoke/sdk.tgz" "$NPM_ARTIFACT_DIR/command-smoke/host.tgz"
+      - name: 保留 Linux npm 验证失败现场
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: npm-release-failure-linux-${{ github.run_id }}
+          overwrite: true
+          path: |
+            temp/run/npm-release/
+            temp/pi/npm-release/
+          if-no-files-found: ignore
+          retention-days: 7
 
   publish:
     if: >-
       always() && !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.packages != '[]' &&
       ((inputs.source_sha && inputs.phase == 'publish') ||
-       (inputs.phase != 'build' && (github.event_name == 'push' || inputs.publish || inputs.source_sha) && needs.build.result == 'success'))
-    needs: [plan, build]
+       (inputs.phase != 'build' && (github.event_name == 'push' || inputs.publish || inputs.source_sha) && needs.build.result == 'success' &&
+        (!contains(fromJSON(needs.plan.outputs.packages), 'pi-desk') || needs.installed-commands-linux.result == 'success')))
+    needs: [plan, build, installed-commands-linux]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:

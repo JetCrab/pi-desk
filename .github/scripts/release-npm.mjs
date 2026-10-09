@@ -221,6 +221,18 @@ async function prepare(entries, output) {
   for (const entry of entries) {
     if (entry.manifest.name === sdkName) continue
     if (entry.directory === projectRoot) {
+      await stage('test 宿主命令核心', () =>
+        run('pnpm', ['test:pidesk'], {
+          env: {
+            ...process.env,
+            PI_OFFLINE: '1',
+            PI_DESK_PI_PACKAGE_DIR: join(
+              projectRoot,
+              'node_modules/@earendil-works/pi-coding-agent'
+            )
+          }
+        })
+      )
       if (full) {
         for (const command of ['typecheck', 'lint:production', 'check:layers', 'test:package']) {
           await stage(`test ${command}`, () => run('pnpm', [command]))
@@ -262,7 +274,7 @@ async function prepare(entries, output) {
     try {
       if (!sdkSelected) await pack(sdk, sdkOutput)
       const { verifyNpmInstall } = await import('./verify-npm-install.mjs')
-      await stage('smoke 隔离安装与启动', () =>
+      await stage('smoke 隔离安装与命令验收', () =>
         verifyNpmInstall({
           root: projectRoot,
           sdkArchive: archivePath(sdk, sdkOutput),
@@ -271,6 +283,12 @@ async function prepare(entries, output) {
           run
         })
       )
+      const smokeArtifacts = join(output, 'command-smoke')
+      await mkdir(smokeArtifacts, { recursive: true })
+      await Promise.all([
+        cp(archivePath(sdk, sdkOutput), join(smokeArtifacts, 'sdk.tgz')),
+        cp(archivePath(host, output), join(smokeArtifacts, 'host.tgz'))
+      ])
     } finally {
       if (!sdkSelected) await rm(verificationOutput, { recursive: true, force: true })
     }

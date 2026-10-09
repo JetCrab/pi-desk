@@ -12,6 +12,7 @@ test('dev只检查相关组件，README不触发构建类检查，main保留完�
   assert.deepEqual(selectCiChecks(['README.md'], false), {
     full: false,
     web: false,
+    pidesk: false,
     website: false,
     agent: false,
     automation: false
