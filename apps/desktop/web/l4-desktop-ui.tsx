@@ -1,4 +1,5 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { getVersion } from '@tauri-apps/api/app'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 const paths = {
   arrow: 'M5 12h14m-6-6 6 6-6 6',
@@ -18,7 +19,9 @@ const paths = {
   loader: 'M12 2a10 10 0 1 1-10 10',
   stop: 'M5 5h14v14H5z',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
-  close: 'm6 6 12 12M6 18 18 6'
+  close: 'm6 6 12 12M6 18 18 6',
+  edit: 'm16 3 5 5M4 20l4-1L21 6a2.1 2.1 0 0 0-3-3L5 16l-1 4Z',
+  trash: 'M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7'
 } as const
 
 export function DesktopIcon({
@@ -45,6 +48,16 @@ export function DesktopIcon({
 }
 
 export function DesktopHeader({ children }: { children?: ReactNode }): React.JSX.Element {
+  const [version, setVersion] = useState<string | null>(null)
+
+  useEffect(() => {
+    void getVersion()
+      .then(setVersion)
+      .catch((cause: unknown): void => {
+        console.error('读取桌面程序版本失败：', cause)
+      })
+  }, [])
+
   return (
     <header className="app-header">
       <div className="brand">
@@ -78,7 +91,7 @@ export function DesktopHeader({ children }: { children?: ReactNode }): React.JSX
             <path d="M256 300C256 317 246 327 232 327C220 327 211 322 207 314M256 300C256 317 266 327 280 327C292 327 301 322 305 314M101 298C116 293 132 292 146 292M110 327C123 318 135 312 148 310M411 298C396 293 380 292 366 292M402 327C389 318 377 312 364 310" />
           </g>
         </svg>
-        <span>Pi Desk</span>
+        <span>Pi Desk{version ? ` v${version}` : ''}</span>
       </div>
       <div className="header-actions">{children}</div>
     </header>
@@ -150,12 +163,14 @@ export function DesktopError({
   title,
   detail,
   onCopy,
-  copied = false
+  copied = false,
+  expanded = false
 }: {
   title?: string
   detail: string
   onCopy: () => void
   copied?: boolean
+  expanded?: boolean
 }): React.JSX.Element {
   return (
     <div className="error-block" role="alert">
@@ -165,7 +180,7 @@ export function DesktopError({
           {title}
         </p>
       )}
-      <details className="disclosure">
+      <details className="disclosure" open={expanded || undefined}>
         <summary>
           <DesktopIcon name="chevron" />
           问题详情

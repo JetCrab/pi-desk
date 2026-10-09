@@ -3,15 +3,17 @@
 import {
   ArrowLeftIcon,
   DatabaseIcon,
+  LogInIcon,
   PlusIcon,
-  Settings2Icon,
-  ServerIcon,
   StarIcon,
   Trash2Icon
 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
+  L2AccountModelSelection,
+  L2ModelAccount,
+  L2ModelSettingsGetResponse,
   L2ModelOption,
   L2ModelPreset,
   L2ModelProviderConfig
@@ -21,6 +23,7 @@ import { Input } from '@client/l4_foundation/ui/shadcn/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@client/l4_foundation/ui/shadcn/tooltip'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import { useL4ConfirmDialog } from '@client/l4_foundation/ui/l4-confirm-dialog'
+import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
 import {
   L4AppDialogRoot,
   L4AppDialogContent,
@@ -38,11 +41,22 @@ import {
 } from '../hooks/l2-use-model-provider-settings'
 import { L2ModelEditor } from './l2-model-editor'
 import { L2ModelServiceDialog } from './l2-model-service-dialog'
-import { Field, FixedSelect, tokensToK } from './l2-model-settings-form'
+import { Field, FixedSelect } from './l2-model-settings-form'
+import { useL2ModelAuth } from '../hooks/l2-use-model-auth'
+import { L2ModelAuthDialog } from './l2-model-auth-dialog'
+import { L2AccountModelPicker } from './l2-account-model-picker'
+import { L2AccountModelDetails } from './l2-account-model-details'
+import { L2ModelServiceGroup } from './l2-model-service-group'
+import { L2ModelServiceActions } from './l2-model-service-actions'
 
 interface Props {
   biz: L2ModelSettingsBiz
+  connectionReady: boolean
   providers: L2ModelProviderConfig[]
+  accounts: L2ModelAccount[]
+  accountModels: L2AccountModelSelection[]
+  onAccountModelsChange: (models: L2AccountModelSelection[]) => void
+  onRefreshAccounts: () => Promise<L2ModelSettingsGetResponse>
   savedModels: L2ModelOption[]
   savedProviders: L2ModelProviderConfig[]
   presets: L2ModelPreset[]
@@ -65,7 +79,12 @@ const THINKING_LABELS = {
 
 export function L2ModelProviderSettings({
   biz,
+  connectionReady,
   providers,
+  accounts,
+  accountModels,
+  onAccountModelsChange,
+  onRefreshAccounts,
   savedModels,
   savedProviders,
   presets,
@@ -77,15 +96,65 @@ export function L2ModelProviderSettings({
 }: Props): React.JSX.Element {
   const { t } = useTranslation('settings')
   const { confirm, dialog } = useL4ConfirmDialog()
+  const toast = useL4AppToast()
+  const [accountSelection, setAccountSelection] = useState<{
+    provider: string
+    modelId: string
+  } | null>(null)
+  const [pickerProvider, setPickerProvider] = useState<string | null>(null)
+  const [accountMobileDetail, setAccountMobileDetail] = useState(false)
+  const [visitedAccountKeys, setVisitedAccountKeys] = useState<Set<string>>(() => new Set())
+  const auth = useL2ModelAuth(connectionReady, async (provider, isCurrent) => {
+    await onRefreshAccounts()
+    if (isCurrent()) setPickerProvider(provider)
+  })
   const state = useL2ModelProviderSettings(providers, onChange, onInputState, resetVersion)
   const { selection, mobileDetail, query, setQuery, modelKeys, serviceIndex, newService } = state
   const groups = useRef(new Map<number, HTMLElement>())
   const rows = useRef(new Map<string, HTMLButtonElement>())
   const [presetOpen, setPresetOpen] = useState(false)
   const [presetLevel, setPresetLevel] = useState<L2ModelPreset['thinkingLevel']>('off')
-  const selectedProvider = selection ? providers[selection.providerIndex] : null
-  const selectedModel = selection ? selectedProvider?.models[selection.modelIndex] : null
-  const serviceId = selectedProvider?.provider || t('providerUnnamed')
+  const selectedAccountRef =
+    accountModels.find(
+      (ref) =>
+        ref.provider === accountSelection?.provider && ref.modelId === accountSelection?.modelId
+    ) ?? (providers.some((provider) => provider.models.length) ? undefined : accountModels[0])
+  const selectedAccount = accounts.find(
+    (account) => account.provider === selectedAccountRef?.provider
+  )
+  const selectedAccountModel = selectedAccount?.models.find(
+    (model) => model.modelId === selectedAccountRef?.modelId
+  )
+  const accountActive = Boolean(selectedAccountRef)
+  const selectedProvider = !accountActive && selection ? providers[selection.providerIndex] : null
+  const selectedModel =
+    !accountActive && selection ? selectedProvider?.models[selection.modelIndex] : null
+  const detailVisible = accountActive ? accountMobileDetail : mobileDetail && Boolean(selectedModel)
+  const detailName = accountActive
+    ? (selectedAccountModel?.name ?? selectedAccountRef?.modelId)
+    : selectedModel?.name || selectedModel?.modelId || t('modelUnnamed')
+  const serviceId =
+    selectedAccountRef?.provider || selectedProvider?.provider || t('providerUnnamed')
+  const pickerAccount = accounts.find((account) => account.provider === pickerProvider)
+  const groupIds = [
+    ...new Set([
+      ...providers.map((provider) => provider.provider),
+      ...accounts.map((account) => account.provider),
+      ...accountModels.map((model) => model.provider)
+    ])
+  ]
+  const accountKey = (ref: { provider: string; modelId: string }): string =>
+    `account:${ref.provider}:${ref.modelId}`
+  const currentAccountKeys = new Set(accountModels.map(accountKey))
+  const nextVisitedAccountKeys = new Set(
+    [...visitedAccountKeys].filter((key) => currentAccountKeys.has(key))
+  )
+  if (selectedAccountRef) nextVisitedAccountKeys.add(accountKey(selectedAccountRef))
+  if (
+    nextVisitedAccountKeys.size !== visitedAccountKeys.size ||
+    (selectedAccountRef && !visitedAccountKeys.has(accountKey(selectedAccountRef)))
+  )
+    setVisitedAccountKeys(nextVisitedAccountKeys)
   const [visitedModelKeys, setVisitedModelKeys] = useState<Set<string>>(() => new Set())
   const selectedModelKey = selection
     ? modelKeys[selection.providerIndex]?.[selection.modelIndex]
@@ -100,14 +169,19 @@ export function L2ModelProviderSettings({
     (selectedModelKey && !visitedModelKeys.has(selectedModelKey))
   )
     setVisitedModelKeys(nextVisitedModelKeys)
-  const availableModel =
-    selectedProvider &&
-    selectedModel &&
-    savedProviders.some(
-      (provider) =>
-        provider.provider === selectedProvider.provider &&
-        provider.models.some((model) => model.modelId === selectedModel.modelId)
-    )
+  const availableModel = accountActive
+    ? savedModels.find(
+        (model) =>
+          model.provider === selectedAccountRef?.provider &&
+          model.modelId === selectedAccountRef.modelId
+      )
+    : selectedProvider &&
+        selectedModel &&
+        savedProviders.some(
+          (provider) =>
+            provider.provider === selectedProvider.provider &&
+            provider.models.some((model) => model.modelId === selectedModel.modelId)
+        )
       ? savedModels.find(
           (model) =>
             model.provider === selectedProvider.provider && model.modelId === selectedModel.modelId
@@ -115,6 +189,20 @@ export function L2ModelProviderSettings({
       : undefined
 
   async function removeModel(): Promise<void> {
+    if (selectedAccountRef) {
+      if (
+        await confirm({
+          title: t('accountRemoveTitle'),
+          description: t('accountRemoveDescription', { name: detailName })
+        })
+      ) {
+        onAccountModelsChange(accountModels.filter((ref) => ref !== selectedAccountRef))
+        state.updateInputState(accountKey(selectedAccountRef), { dirty: false, invalid: false })
+        setAccountSelection(null)
+        setAccountMobileDetail(false)
+      }
+      return
+    }
     if (!selection || !selectedModel) return
     if (
       await confirm({
@@ -128,6 +216,15 @@ export function L2ModelProviderSettings({
   }
 
   function back(): void {
+    if (selectedAccountRef) {
+      setAccountMobileDetail(false)
+      window.requestAnimationFrame(() => {
+        const row = rows.current.get(accountKey(selectedAccountRef))
+        row?.scrollIntoView({ block: 'nearest' })
+        row?.focus({ preventScroll: true })
+      })
+      return
+    }
     state.backToList()
     window.requestAnimationFrame(() => {
       if (!selection) return
@@ -136,6 +233,50 @@ export function L2ModelProviderSettings({
       rows.current.get(key)?.scrollIntoView({ block: 'nearest' })
       rows.current.get(key)?.focus({ preventScroll: true })
     })
+  }
+
+  function addAccountModels(modelIds: string[]): void {
+    if (!pickerAccount) return
+    const additions = modelIds
+      .filter(
+        (modelId) =>
+          !accountModels.some(
+            (ref) => ref.provider === pickerAccount.provider && ref.modelId === modelId
+          ) &&
+          !providers.some(
+            (provider) =>
+              provider.provider === pickerAccount.provider &&
+              provider.models.some((model) => model.modelId === modelId)
+          )
+      )
+      .map((modelId) => ({ provider: pickerAccount.provider, modelId, overrides: {} }))
+    onAccountModelsChange([...accountModels, ...additions])
+    setPickerProvider(null)
+  }
+
+  async function logout(provider: string): Promise<void> {
+    if (
+      !(await confirm({
+        title: t('accountLogoutTitle'),
+        description: t('accountLogoutDescription', {
+          name: accounts.find((account) => account.provider === provider)?.name ?? provider
+        }),
+        confirmLabel: t('accountLogout')
+      }))
+    )
+      return
+    try {
+      await auth.logout(provider)
+      await onRefreshAccounts()
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : t('accountLogoutFailed'))
+    }
+  }
+
+  function openAccountModels(provider: string): void {
+    const account = accounts.find((account) => account.provider === provider)
+    if (account?.loggedIn) setPickerProvider(provider)
+    else auth.show(provider)
   }
 
   function addPreset(): void {
@@ -167,7 +308,7 @@ export function L2ModelProviderSettings({
           aria-label={t('providerList')}
           className={cn(
             'min-h-0 min-w-0 flex-col bg-sidebar @[48rem]/models:flex @[48rem]/models:border-r',
-            mobileDetail && selectedModel ? 'hidden' : 'flex'
+            detailVisible ? 'hidden' : 'flex'
           )}
         >
           <div className="shrink-0 p-3">
@@ -179,105 +320,66 @@ export function L2ModelProviderSettings({
             />
           </div>
           <div className="pi-desk-chat-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-            {providers.map((provider, providerIndex) => {
-              const name = provider.provider || t('providerUnnamed')
-              const matchingModels = provider.models
-                .map((model, modelIndex) => ({ model, modelIndex }))
-                .filter(({ model }) =>
-                  `${name} ${model.name} ${model.modelId}`
-                    .toLocaleLowerCase()
-                    .includes(query.toLocaleLowerCase())
-                )
-              if (
-                query &&
-                !matchingModels.length &&
-                !name.toLocaleLowerCase().includes(query.toLocaleLowerCase())
+            {groupIds.map((providerId) => {
+              const providerIndex = providers.findIndex(
+                (provider) => provider.provider === providerId
               )
-                return null
               return (
-                <section
-                  key={providerIndex}
-                  ref={(node) => {
+                <L2ModelServiceGroup
+                  key={providerId}
+                  providerId={providerId}
+                  custom={providers[providerIndex]}
+                  account={accounts.find((account) => account.provider === providerId)}
+                  accountModels={accountModels.filter((ref) => ref.provider === providerId)}
+                  query={query}
+                  modelKeys={modelKeys[providerIndex] ?? []}
+                  selectedCustomIndex={
+                    !accountActive && selection?.providerIndex === providerIndex
+                      ? selection.modelIndex
+                      : null
+                  }
+                  selectedAccountId={
+                    selectedAccountRef?.provider === providerId ? selectedAccountRef.modelId : null
+                  }
+                  presets={presets}
+                  onSelectCustom={(modelIndex) => {
+                    setAccountSelection(null)
+                    state.selectModel(providerIndex, modelIndex)
+                  }}
+                  onSelectAccount={(modelId) => {
+                    setAccountSelection({ provider: providerId, modelId })
+                    setAccountMobileDetail(true)
+                    setVisitedAccountKeys(
+                      (keys) => new Set([...keys, accountKey({ provider: providerId, modelId })])
+                    )
+                  }}
+                  onCustomSettings={() => state.openService(providerIndex)}
+                  onAddCustom={() => {
+                    setAccountSelection(null)
+                    state.addModel(providerIndex)
+                  }}
+                  onAddAccount={() => openAccountModels(providerId)}
+                  onLogin={() => auth.show(providerId)}
+                  onLogout={() => void logout(providerId)}
+                  onGroupRef={(node) => {
+                    if (providerIndex < 0) return
                     if (node) groups.current.set(providerIndex, node)
                     else groups.current.delete(providerIndex)
                   }}
-                  className="mb-3"
-                >
-                  <div className="flex items-center gap-2 px-2 py-1 text-foreground">
-                    <ServerIcon aria-hidden="true" className="size-4 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate text-sm font-semibold">{name}</span>
-                    <span className="text-xs text-muted-foreground">{provider.models.length}</span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={t('serviceSettingsNamed', { name })}
-                      onClick={() => state.openService(providerIndex)}
-                    >
-                      <Settings2Icon />
-                    </Button>
-                  </div>
-                  <div className="space-y-1">
-                    {matchingModels.map(({ model, modelIndex }) => {
-                      const selected =
-                        selection?.providerIndex === providerIndex &&
-                        selection.modelIndex === modelIndex
-                      const key = modelKeys[providerIndex]?.[modelIndex]
-                      return (
-                        <button
-                          key={key}
-                          ref={(node) => {
-                            if (node) rows.current.set(key, node)
-                            else rows.current.delete(key)
-                          }}
-                          type="button"
-                          aria-current={selected ? 'true' : undefined}
-                          className={cn(
-                            'flex min-h-14 w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring',
-                            selected && 'bg-accent text-accent-foreground'
-                          )}
-                          onClick={() => state.selectModel(providerIndex, modelIndex)}
-                        >
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium">
-                              {model.name || model.modelId || t('modelUnnamed')}
-                            </span>
-                            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                              {tokensToK(model.contextWindow)} K ·{' '}
-                              {t(model.input.includes('image') ? 'imageInput' : 'textInput')}
-                            </span>
-                          </span>
-                          {presets.some(
-                            (preset) =>
-                              preset.provider === provider.provider &&
-                              preset.modelId === model.modelId
-                          ) ? (
-                            <StarIcon className="size-4 shrink-0 text-muted-foreground" />
-                          ) : null}
-                        </button>
-                      )
-                    })}
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="mt-1 w-full border border-dashed border-input"
-                      aria-label={t('modelAddToService', { name })}
-                      onClick={() => state.addModel(providerIndex)}
-                    >
-                      <PlusIcon />
-                    </Button>
-                  </div>
-                </section>
+                  onRowRef={(key, node) => {
+                    if (node) rows.current.set(key, node)
+                    else rows.current.delete(key)
+                  }}
+                />
               )
             })}
-            {!providers.length ? (
+            {!groupIds.length ? (
               <p className="px-3 py-6 text-center text-sm text-muted-foreground">
                 {t('providerEmpty')}
               </p>
             ) : null}
           </div>
-          <div className="shrink-0 border-t p-3">
+          <div className="flex shrink-0 gap-2 border-t p-3">
             <Button
               type="button"
               variant="outline"
@@ -285,7 +387,11 @@ export function L2ModelProviderSettings({
               onClick={() => state.openService(null)}
             >
               <PlusIcon />
-              {t('providerNew')}
+              {t('accountCustomApi')}
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => auth.show()}>
+              <LogInIcon />
+              {t('accountLogin')}
             </Button>
           </div>
         </aside>
@@ -294,10 +400,10 @@ export function L2ModelProviderSettings({
           aria-label={t('modelsHeading')}
           className={cn(
             'min-h-0 min-w-0 flex-col @[48rem]/models:flex',
-            mobileDetail && selectedModel ? 'flex' : 'hidden'
+            detailVisible ? 'flex' : 'hidden'
           )}
         >
-          {!selectedModel || !selection ? (
+          {!accountActive && (!selectedModel || !selection) ? (
             <div className="flex flex-col items-center gap-3 p-6 text-sm text-muted-foreground">
               <DatabaseIcon className="size-6" />
               {t('selectModelToEdit')}
@@ -314,22 +420,34 @@ export function L2ModelProviderSettings({
                 >
                   <ArrowLeftIcon />
                 </Button>
-                <span className="min-w-0 flex-1 truncate text-sm font-medium">{serviceId}</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={t('currentServiceSettings')}
-                  onClick={() => state.openService(selection.providerIndex)}
+                <span
+                  className="min-w-0 flex-1 truncate text-sm font-medium"
+                  title={selectedAccount?.name ?? serviceId}
                 >
-                  <Settings2Icon />
-                </Button>
+                  {selectedAccount?.name ?? serviceId}
+                </span>
+                <L2ModelServiceActions
+                  name={serviceId}
+                  hasAccount={
+                    accounts.some((account) => account.provider === serviceId) ||
+                    accountModels.some((ref) => ref.provider === serviceId)
+                  }
+                  loggedIn={
+                    accounts.find((account) => account.provider === serviceId)?.loggedIn ?? false
+                  }
+                  hasCustom={providers.some((provider) => provider.provider === serviceId)}
+                  onCustomSettings={() =>
+                    state.openService(
+                      providers.findIndex((provider) => provider.provider === serviceId)
+                    )
+                  }
+                  onLogin={() => auth.show(serviceId)}
+                  onLogout={() => void logout(serviceId)}
+                />
               </div>
               <div className="pi-desk-chat-scrollbar min-h-0 flex-1 overflow-y-auto p-4 @[48rem]/models:p-6">
                 <div className="mb-5 flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="min-w-0 break-all text-lg font-semibold">
-                    {selectedModel.name || selectedModel.modelId || t('modelUnnamed')}
-                  </h3>
+                  <h3 className="min-w-0 break-all text-lg font-semibold">{detailName}</h3>
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
                       type="button"
@@ -353,23 +471,53 @@ export function L2ModelProviderSettings({
                             variant="ghost"
                             size="icon-sm"
                             className="text-destructive hover:text-destructive"
-                            aria-label={t('modelDeleteNamed', {
-                              name: selectedModel.name || selectedModel.modelId || t('modelUnnamed')
-                            })}
+                            aria-label={
+                              accountActive
+                                ? `${t('accountRemove')} ${detailName}`
+                                : t('modelDeleteNamed', { name: detailName })
+                            }
                             onClick={removeModel}
                           >
                             <Trash2Icon />
                           </Button>
                         }
                       />
-                      <TooltipContent>{t('modelDelete')}</TooltipContent>
+                      <TooltipContent>
+                        {t(accountActive ? 'accountRemove' : 'modelDelete')}
+                      </TooltipContent>
                     </Tooltip>
                   </div>
                 </div>
+                {accountModels.map((ref) => {
+                  const key = accountKey(ref)
+                  if (!nextVisitedAccountKeys.has(key)) return null
+                  const account = accounts.find((account) => account.provider === ref.provider)
+                  return (
+                    <div
+                      key={`${key}:${resetVersion}`}
+                      hidden={!accountActive || selectedAccountRef !== ref}
+                    >
+                      <L2AccountModelDetails
+                        account={account}
+                        model={account?.models.find((model) => model.modelId === ref.modelId)}
+                        overrides={ref.overrides}
+                        onChange={(overrides) =>
+                          onAccountModelsChange(
+                            accountModels.map((current) =>
+                              current === ref ? { ...ref, overrides } : current
+                            )
+                          )
+                        }
+                        onInputState={(inputState) => state.updateInputState(key, inputState)}
+                      />
+                    </div>
+                  )
+                })}
                 {providers.flatMap((provider, providerIndex) =>
                   provider.models.map((model, modelIndex) => {
                     const selected =
-                      selection.providerIndex === providerIndex &&
+                      !accountActive &&
+                      selection?.providerIndex === providerIndex &&
                       selection.modelIndex === modelIndex
                     const key = modelKeys[providerIndex]?.[modelIndex]
                     if (!nextVisitedModelKeys.has(key)) return null
@@ -391,6 +539,37 @@ export function L2ModelProviderSettings({
           )}
         </section>
       </div>
+      <L2ModelAuthDialog
+        open={auth.open}
+        connected={connectionReady}
+        providers={auth.providers}
+        state={auth.state}
+        loading={auth.loading}
+        submitting={auth.submitting}
+        error={auth.error}
+        onClose={auth.close}
+        onStart={auth.start}
+        onRespond={auth.respond}
+        onCopy={auth.copy}
+        onOpenUrl={auth.openUrl}
+        onRetry={() => (auth.state?.status === 'completed' ? void auth.finish() : auth.show())}
+      />
+      {pickerAccount ? (
+        <L2AccountModelPicker
+          key={pickerAccount.provider}
+          account={pickerAccount}
+          existingIds={[
+            ...accountModels
+              .filter((ref) => ref.provider === pickerAccount.provider)
+              .map((ref) => ref.modelId),
+            ...providers
+              .filter((provider) => provider.provider === pickerAccount.provider)
+              .flatMap((provider) => provider.models.map((model) => model.modelId))
+          ]}
+          onAdd={addAccountModels}
+          onClose={() => setPickerProvider(null)}
+        />
+      ) : null}
       {newService || serviceIndex !== null ? (
         <L2ModelServiceDialog
           provider={newService ? emptyL2ModelProvider() : providers[serviceIndex!]}

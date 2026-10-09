@@ -1,21 +1,27 @@
-import Module, { registerHooks } from 'node:module'
+import Module, { register, registerHooks } from 'node:module'
 import { fileURLToPath } from 'node:url'
+import { resolveHostImport } from './l4-pi-host-paths.mjs'
 import runtimeApi from './l4-pi-global-runtime.js'
 
-const { PI_RUNTIME_EXIT_CODE, findGlobalPi, resolvePiImport, checkPiModules } = runtimeApi
+const {
+  PI_RUNTIME_EXIT_CODE,
+  findGlobalPi,
+  resolvePiImport,
+  checkPiModules,
+  formatPiRuntimeError
+} = runtimeApi
 
 try {
+  // 别名在 tsx 后方解析，保留 tsx 按原始导入识别 CJS 命名导出的能力。
+  register('./l4-pi-host-paths.mjs', import.meta.url)
   const runtime = await findGlobalPi()
-  if (!runtime)
-    throw new Error(
-      '未安装全局 Pi。请在桌面端确认安装，或运行 npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.1。'
-    )
+  if (!runtime) throw new Error('未安装全局 Pi，Pi Desk 无法启动。')
   // tsx/Jiti 会先调用同步 require.resolve；Node hooks 不拦截这一步预解析。
   const resolveFilename = Module._resolveFilename
   Module._resolveFilename = function (specifier, ...args) {
     const target = resolvePiImport(runtime, specifier)
     if (target) return fileURLToPath(target)
-    const filename = resolveFilename.call(this, specifier, ...args)
+    const filename = resolveFilename.call(this, resolveHostImport(specifier) ?? specifier, ...args)
     const redirected = resolvePiImport(runtime, filename)
     return redirected ? fileURLToPath(redirected) : filename
   }
@@ -61,6 +67,6 @@ try {
   }
   console.info('[Pi Desk][PiRuntime] 使用全局 Pi', { version: runtime.version, path: runtime.root })
 } catch (error) {
-  console.error(`[Pi Desk][PiRuntime] ${error instanceof Error ? error.message : String(error)}`)
+  console.error(`[Pi Desk][PiRuntime] ${formatPiRuntimeError(error)}`)
   process.exit(PI_RUNTIME_EXIT_CODE)
 }

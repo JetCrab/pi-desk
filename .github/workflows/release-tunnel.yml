@@ -1,5 +1,4 @@
 name: Release tunnel
-run-name: ${{ inputs.phase || ((inputs.source_sha || inputs.publish) && '发布隧道镜像' || '构建隧道镜像') }}
 
 on:
   workflow_call:
@@ -12,12 +11,9 @@ on:
         description: build 仅构建，publish 推送已验证制品，all 完整执行
         type: string
         default: all
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: 发布已验证镜像到 GHCR
+      check_only:
+        description: 仅执行 Rust 检查，不构建测试镜像
         type: boolean
-        required: false
         default: false
 
 permissions:
@@ -28,7 +24,7 @@ defaults:
     shell: bash
 
 concurrency:
-  group: release-tunnel-${{ inputs.phase || 'all' }}
+  group: release-tunnel-${{ github.ref }}-${{ inputs.phase }}
   cancel-in-progress: false
 
 env:
@@ -39,15 +35,15 @@ jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
-      - name: 核对 main 分支和源码 SHA
+      - name: 核对构建渠道和固定源码 SHA
         env:
           WORKFLOW_REF: ${{ github.ref }}
           SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
           RELEASE_PHASE: ${{ inputs.phase || 'all' }}
         run: |
           set -euo pipefail
-          if [[ "$WORKFLOW_REF" != refs/heads/main ]]; then
-            echo '::error::隧道构建和发布仅允许从 main 分支运行'
+          if [[ "$WORKFLOW_REF" != refs/heads/main && !( "$WORKFLOW_REF" == refs/heads/dev && "$RELEASE_PHASE" == build ) ]]; then
+            echo '::error::main 可构建发布，dev 仅允许验证测试制品'
             exit 1
           fi
           case "$RELEASE_PHASE" in
@@ -121,9 +117,11 @@ jobs:
           cargo test --workspace --locked
 
       - name: Set up Docker Buildx
+        if: ${{ !inputs.check_only }}
         uses: docker/setup-buildx-action@v3
 
       - name: 构建并加载 linux/amd64 镜像
+        if: ${{ !inputs.check_only }}
         uses: docker/build-push-action@v6
         env:
           DOCKER_BUILD_RECORD_UPLOAD: 'false'
@@ -138,6 +136,7 @@ jobs:
             org.opencontainers.image.revision=${{ inputs.source_sha || github.sha }}
 
       - name: 容器 HTTP 健康探针
+        if: ${{ !inputs.check_only }}
         run: |
           export PI_DESK_TUNNEL_SERVER_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
           export PI_DESK_TUNNEL_PRIVATE_KEY="$(python3 -c 'import base64, secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())')"
@@ -171,12 +170,14 @@ jobs:
           PY
 
       - name: 保存已验证镜像
+        if: ${{ !inputs.check_only }}
         run: |
           mkdir -p "$PACKAGE_DIR"
           docker save "$IMAGE_REPOSITORY:$IMAGE_VERSION" \
             | gzip > "$PACKAGE_DIR/pi-desk-tunnel-$IMAGE_VERSION-linux-amd64.tar.gz"
 
       - name: 上传压缩镜像
+        if: ${{ !inputs.check_only }}
         uses: actions/upload-artifact@v4
         with:
           name: tunnel-image-${{ github.run_id }}
@@ -201,9 +202,9 @@ jobs:
 
   publish:
     if: >-
-      always() && !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.changed == 'true' &&
+      always() && !cancelled() && github.ref == 'refs/heads/main' && !inputs.check_only && needs.plan.result == 'success' && needs.plan.outputs.changed == 'true' &&
       ((inputs.source_sha && inputs.phase == 'publish') ||
-       (inputs.phase != 'build' && (inputs.source_sha || inputs.publish) && needs.build.result == 'success'))
+       (inputs.phase != 'build' && inputs.source_sha && needs.build.result == 'success'))
     needs: [plan, build]
     concurrency:
       group: release-tunnel-version-push

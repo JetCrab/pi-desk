@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 
 export type PackageUpdate = {
-  status: 'idle' | 'checking' | 'available' | 'installing' | 'switching' | 'failed'
+  status: 'idle' | 'checking' | 'available' | 'installing' | 'installed' | 'switching' | 'failed'
   version: string | null
   error: string | null
 }
@@ -34,6 +34,7 @@ export type EnvironmentComponent = {
   version: string | null
   path: string | null
   detail: string | null
+  download: { received: number; total: number | null } | null
 }
 
 export type DownloadSource = 'official' | 'npmmirror'
@@ -42,13 +43,21 @@ export type EnvironmentSnapshot = {
   status: 'checking' | 'required' | 'ready' | 'installing' | 'failed'
   components: EnvironmentComponent[]
   step: string
-  download: { received: number; total: number | null } | null
   error: string | null
 }
 
 export type ControlState = {
+  hideOnStartup: boolean | null
+  hideOnOpen: boolean
+  showOnClose: boolean
   targets: TargetSnapshot[]
   environment: EnvironmentSnapshot
+}
+
+export type StartupPreferences = {
+  hideOnStartup?: boolean
+  hideOnOpen?: boolean
+  showOnClose?: boolean
 }
 
 export type UpdatePolicy = 'none' | 'check' | 'update'

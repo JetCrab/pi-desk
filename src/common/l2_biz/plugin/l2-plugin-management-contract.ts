@@ -1,9 +1,13 @@
 import { z } from 'zod'
 import { L3PluginJsonObjectSchema } from '@common/l3_modules/plugin-host/l3-plugin-json-contract'
 import { L4LocalizedTextSchema } from '@common/l4_foundation/locale/l4-localized-text'
+import { L4PluginUpdateTagSchema } from '@common/l4_foundation/plugin/l4-plugin-package'
 import { defineL4AppSocketPush } from '@common/l4_foundation/realtime/l4-app-websocket-contract'
+import { L2PluginDownloadSourceSchema, L2PluginRegistrySchema } from './l2-plugin-catalog-contract'
 
 export const L2PluginManagementSourceSchema = z.string().trim().min(1).max(2048)
+export const L2PluginManagementTagSchema = L4PluginUpdateTagSchema
+const L2PluginManagementSourcesSchema = z.array(L2PluginManagementSourceSchema).min(1).max(32)
 
 export const L2PluginManagementErrorSchema = z
   .object({
@@ -163,7 +167,7 @@ export const L2PluginManagementCapabilitiesSchema = z
 
 export const L2PluginManagementOperationSchema = z
   .object({
-    action: z.enum(['add', 'update', 'del', 'apply']),
+    action: z.enum(['add', 'update', 'del', 'apply', 'enable', 'disable']),
     phase: z.enum(['queued', 'checking', 'applying', 'waiting', 'failed']),
     message: z.string().max(4000).nullable()
   })
@@ -180,9 +184,12 @@ export const L2PluginManagementItemSchema = z
     kind: z.enum(['package', 'extension']).default('package'),
     operation: L2PluginManagementOperationSchema.nullable().default(null),
     pluginName: z.string().trim().min(1).nullable(),
-    description: z.string().trim().min(1).nullable().default(null),
+    description: L4LocalizedTextSchema.nullable().default(null),
     version: z.string().trim().min(1).nullable(),
     updateAvailable: z.boolean().nullable(),
+    updateTag: L2PluginManagementTagSchema.nullable().optional(),
+    availableVersion: z.string().min(1).nullable().optional(),
+    updateError: z.string().max(4000).nullable().optional(),
     status: z.enum(['ready', 'available', 'disabled', 'failed']),
     error: L2PluginManagementErrorSchema.nullable(),
     capabilities: L2PluginManagementCapabilitiesSchema
@@ -192,6 +199,7 @@ export const L2PluginManagementItemSchema = z
 export const L2PluginManagementDetailSchema = z
   .object({
     source: L2PluginManagementSourceSchema,
+    readme: L4LocalizedTextSchema.nullable().default(null),
     tools: z.array(L2PluginManagementToolDetailSchema),
     skills: z.array(L2PluginManagementSkillDetailSchema),
     prompts: z.array(L2PluginManagementResourceDetailSchema)
@@ -216,11 +224,62 @@ export const L2PluginManagementReloadRequestSchema = L2PluginManagementEmptyRequ
   mode: z.enum(['normal', 'basic']).optional()
 }).strict()
 export const L2PluginManagementListRequestSchema = z
-  .object({ checkUpdates: z.boolean().optional() })
+  .object({
+    checkUpdates: z.boolean().optional(),
+    sources: L2PluginManagementSourcesSchema.optional(),
+    tag: L2PluginManagementTagSchema.optional()
+  })
   .strict()
 export const L2PluginManagementSourceRequestSchema = z
   .object({ source: L2PluginManagementSourceSchema })
   .strict()
+
+export const L2PluginManagementInstallRequestSchema = L2PluginManagementSourceRequestSchema.extend({
+  downloadSource: L2PluginDownloadSourceSchema.optional(),
+  registry: L2PluginRegistrySchema.optional(),
+  tag: L2PluginManagementTagSchema.optional()
+}).strict()
+export const L2PluginManagementBatchRequestSchema = z.discriminatedUnion('action', [
+  z
+    .object({
+      action: z.literal('add'),
+      items: z.array(L2PluginManagementInstallRequestSchema).min(1).max(32)
+    })
+    .strict(),
+  z.object({ action: z.literal('update'), sources: L2PluginManagementSourcesSchema }).strict(),
+  z.object({ action: z.literal('del'), sources: L2PluginManagementSourcesSchema }).strict(),
+  z
+    .object({
+      action: z.literal('tag'),
+      sources: L2PluginManagementSourcesSchema,
+      tag: L2PluginManagementTagSchema
+    })
+    .strict()
+])
+export const L2PluginManagementBatchResponseSchema = z
+  .object({
+    snapshot: L2PluginManagementSnapshotSchema,
+    results: z
+      .array(
+        z
+          .object({
+            source: L2PluginManagementSourceSchema,
+            error: z.string().max(4000).nullable()
+          })
+          .strict()
+      )
+      .max(32)
+  })
+  .strict()
+export type L2PluginManagementBatchRequest = z.infer<typeof L2PluginManagementBatchRequestSchema>
+export type L2PluginManagementBatchResponse = z.infer<typeof L2PluginManagementBatchResponseSchema>
+
+export const L2PluginManagementEnabledRequestSchema = L2PluginManagementSourceRequestSchema.extend({
+  enabled: z.boolean()
+}).strict()
+export type L2PluginManagementInstallRequest = z.infer<
+  typeof L2PluginManagementInstallRequestSchema
+>
 
 export type L2PluginManagementOperation = z.infer<typeof L2PluginManagementOperationSchema>
 export type L2PluginManagementError = z.infer<typeof L2PluginManagementErrorSchema>

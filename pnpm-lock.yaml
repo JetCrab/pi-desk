@@ -13,9 +13,6 @@ overrides:
 importers:
   .:
     dependencies:
-      '@ai-sdk/react':
-        specifier: ^4.0.68
-        version: 4.0.68(react@19.2.8)(zod@4.4.3)
       '@base-ui/react':
         specifier: ^1.7.0
         version: 1.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -58,9 +55,6 @@ importers:
       '@xterm/xterm':
         specifier: 6.0.0
         version: 6.0.0
-      ai:
-        specifier: ^7.0.65
-        version: 7.0.65(zod@4.4.3)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -85,9 +79,6 @@ importers:
       lucide-react:
         specifier: ^1.31.0
         version: 1.31.0(react@19.2.8)
-      monaco-editor:
-        specifier: 0.56.0
-        version: 0.56.0
       motion:
         specifier: ^13.1.0
         version: 13.1.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -176,6 +167,9 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
+      ai:
+        specifier: ^7.0.65
+        version: 7.0.65(zod@4.4.3)
       dependency-cruiser:
         specifier: ^18.2.0
         version: 18.2.0
@@ -188,6 +182,9 @@ importers:
       fake-indexeddb:
         specifier: ^6.2.5
         version: 6.2.5
+      monaco-editor:
+        specifier: 0.56.0
+        version: 0.56.0
       prettier:
         specifier: ^3.9.6
         version: 3.9.6

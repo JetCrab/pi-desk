@@ -3,7 +3,7 @@ import {
   PluginButton,
   PluginInput,
   PluginScroll,
-  PluginSelectField,
+  PluginSelect,
   PluginTab,
   PluginTabList
 } from '@jetcrab/pi-desk-sdk/react/base'
@@ -71,7 +71,7 @@ export function QuotaFilters({
               ))}
             </PluginTabList>
           </PluginScroll>
-          <PluginSelectField
+          <PluginSelect
             className="quota-channel-select"
             label={t('渠道')}
             value={adapter}

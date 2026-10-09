@@ -2,22 +2,31 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useControlState } from './l4-control-state'
 import { ControlPage } from './l2-control-page'
 import { SettingsPage } from './l2-settings-page'
+import { AccessPage } from './l2-access-page'
 import { useDesktopAction } from './hooks/l2-use-desktop-action'
 import { runDesktopAction } from './l2-desktop-biz'
 
 type Route =
   | { mode: 'control' }
   | { mode: 'target'; url: string | null; advanced: boolean }
-  | { mode: 'tunnel' }
+  | { mode: 'settings'; url: string | null }
+  | { mode: 'access'; url: string }
 
 function routeFromHash(hash: string): Route {
-  if (hash === '#/settings/tunnel') return { mode: 'tunnel' }
+  if (hash.startsWith('#/access?')) {
+    const url = new URLSearchParams(hash.slice(hash.indexOf('?') + 1)).get('url')
+    if (url) return { mode: 'access', url }
+  }
   if (hash.startsWith('#/settings/target')) {
     const [path, query] = hash.slice(1).split('?', 2)
     if (path === '/settings/target') {
       const params = new URLSearchParams(query)
       return { mode: 'target', url: params.get('url'), advanced: params.get('advanced') === '1' }
     }
+  }
+  const [path, query] = hash.slice(1).split('?', 2)
+  if (path === '/settings') {
+    return { mode: 'settings', url: new URLSearchParams(query).get('url') }
   }
   return { mode: 'control' }
 }
@@ -82,15 +91,27 @@ export function DesktopApp(): React.JSX.Element {
         dirty.current = value
       }}
     />
+  ) : route.mode === 'access' ? (
+    <AccessPage
+      key={route.url}
+      url={route.url}
+      target={state?.targets.find((target) => target.url === route.url)}
+      refresh={refresh}
+      onDirty={(value) => {
+        dirty.current = value
+      }}
+      onBack={() => navigate('#/')}
+    />
   ) : (
     <SettingsPage
-      key={`${route.mode}:${route.mode === 'target' ? (route.url ?? '') : ''}`}
-      mode={route.mode}
-      originalUrl={route.mode === 'target' ? route.url : null}
-      localTarget={
-        route.mode === 'target' &&
-        Boolean(state?.targets.find((target) => target.url === route.url)?.server)
-      }
+      key={`${route.mode}:${route.url ?? ''}`}
+      state={state}
+      readError={readError}
+      refresh={refresh}
+      global={route.mode === 'settings'}
+      onSelectTarget={(url) => navigate(`#/settings?url=${encodeURIComponent(url)}`)}
+      originalUrl={route.url}
+      localTarget={Boolean(state?.targets.find((target) => target.url === route.url)?.server)}
       initialAdvanced={route.mode === 'target' && route.advanced}
       onDirty={(value) => {
         dirty.current = value

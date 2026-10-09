@@ -17,10 +17,13 @@ import {
   getAgentDir,
   ModelRuntime,
   resolveModelScopeWithDiagnostics,
+  SessionManager,
   SettingsManager
 } from '@earendil-works/pi-coding-agent'
 import { getSupportedThinkingLevels, type Api, type Model } from '@earendil-works/pi-ai'
 import type {
+  L4AccountModelSelection,
+  L4ModelAccount,
   L4ModelCompatConfig,
   L4ModelConfig,
   L4ModelOption,
@@ -30,6 +33,14 @@ import type {
   L4ModelSelection,
   L4ModelSettingsReplaceInput
 } from './l4-model-settings-types'
+
+import {
+  applyAccountModelSelections,
+  collectedModelKey,
+  collectedModelKeys,
+  filterCollectedModels,
+  readAccountModelSelections
+} from './l4-model-collection'
 
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
@@ -200,6 +211,11 @@ function normalizeProviders(rawRoot: JsonRecord, runtime: ModelRuntime): L4Model
 
   for (const [providerId, providerValue] of Object.entries(rawProviders)) {
     if (!providerId.trim() || !isRecord(providerValue)) continue
+    if (
+      providerValue.modelOverrides !== undefined &&
+      Object.keys(providerValue).every((key) => key === 'modelOverrides')
+    )
+      continue
     const rawModels = Array.isArray(providerValue.models) ? providerValue.models : []
     providers.push({
       provider: providerId,
@@ -238,7 +254,8 @@ function toModelOption(model: Model<Api>): L4ModelOption {
 
 async function availableModelOptions(
   runtime: ModelRuntime,
-  cwd?: string
+  cwd?: string,
+  root = readJsonRecord(modelsPath())
 ): Promise<L4ModelOption[]> {
   // 调用方均使用已完成初始化刷新的 Runtime，不重复检查全部供应商凭据。
   let models = [...runtime.getAvailableSnapshot()]
@@ -253,7 +270,9 @@ async function availableModelOptions(
   }
 
   const unique = new Map<string, Model<Api>>()
-  for (const model of models) unique.set(modelKey(model.provider, model.id), model)
+  for (const model of filterCollectedModels(models, runtime, root)) {
+    unique.set(modelKey(model.provider, model.id), model)
+  }
   return [...unique.values()].map(toModelOption)
 }
 
@@ -440,7 +459,8 @@ function applyProvider(
 function mergeModelsRoot(
   current: JsonRecord,
   input: L4ModelSettingsReplaceInput,
-  runtime: ModelRuntime
+  runtime: ModelRuntime,
+  defaults: ModelRuntime
 ): JsonRecord {
   if (input.nativeConfig !== undefined) return input.nativeConfig
   const next = { ...current }
@@ -450,8 +470,9 @@ function mergeModelsRoot(
       normalizeProviders(current, runtime).map((provider) => [provider.provider, provider])
     )
     // 整集合替换只按当前 ID 复用声明；重命名属于删除旧身份并创建新身份。
-    next.providers = Object.fromEntries(
-      input.providers.map((provider) => [
+    next.providers = Object.fromEntries([
+      ...Object.entries(currentProviders).filter(([id]) => !baselineById.has(id)),
+      ...input.providers.map((provider) => [
         provider.provider,
         applyProvider(
           currentProviders[provider.provider],
@@ -459,7 +480,10 @@ function mergeModelsRoot(
           baselineById.get(provider.provider)
         )
       ])
-    )
+    ])
+  }
+  if (input.accountModels !== undefined) {
+    applyAccountModelSelections(current, next, input.accountModels, defaults)
   }
   if (input.presets && !isDeepStrictEqual(input.presets, normalizePresets(current))) {
     next.modelPresets = input.presets
@@ -488,7 +512,14 @@ async function validateModelsRoot(candidate: JsonRecord): Promise<ModelRuntime> 
   }
 }
 
-function assertPresetsValid(presets: L4ModelPreset[], models: L4ModelOption[]): void {
+function assertPresetsValid(
+  presets: L4ModelPreset[],
+  models: L4ModelOption[],
+  previous: L4ModelPreset[] = []
+): void {
+  const retained = new Set(
+    previous.map((item) => `${modelKey(item.provider, item.modelId)}\u0000${item.thinkingLevel}`)
+  )
   const options = new Map(models.map((model) => [modelKey(model.provider, model.modelId), model]))
   const seen = new Set<string>()
   for (const preset of presets) {
@@ -496,9 +527,95 @@ function assertPresetsValid(presets: L4ModelPreset[], models: L4ModelOption[]): 
     if (seen.has(key)) throw new Error('模型预设存在重复组合')
     seen.add(key)
     const model = options.get(modelKey(preset.provider, preset.modelId))
-    if (!model || !model.thinkingLevels.includes(preset.thinkingLevel)) {
+    if ((!model || !model.thinkingLevels.includes(preset.thinkingLevel)) && !retained.has(key)) {
       throw new Error(
         `模型预设 ${preset.provider}/${preset.modelId}:${preset.thinkingLevel} 不可用`
+      )
+    }
+  }
+}
+
+export function filterL4CollectedModels(
+  models: readonly Model<Api>[],
+  runtime: ModelRuntime
+): Model<Api>[] {
+  return filterCollectedModels(models, runtime, readJsonRecord(modelsPath()))
+}
+
+async function readAccounts(
+  defaults: ModelRuntime,
+  selections: L4AccountModelSelection[]
+): Promise<L4ModelAccount[]> {
+  const credentials = await defaults.listCredentials()
+  const loggedIn = new Set(
+    credentials.filter((item) => item.type === 'oauth').map((item) => item.providerId)
+  )
+  const providers = new Set([...loggedIn, ...selections.map((item) => item.provider)])
+  return [...providers].map((id) => {
+    const provider = defaults.getProvider(id)
+    return {
+      provider: id,
+      name: provider?.name ?? id,
+      loggedIn: loggedIn.has(id),
+      subscription: provider?.auth.oauth?.isSubscription === true,
+      models: defaults
+        .getModels(id)
+        .map((model) => normalizeModelConfig({ id: model.id, cost: model.cost }, model, undefined))
+    }
+  })
+}
+
+async function assertConnectionCredentials(
+  current: JsonRecord,
+  candidate: JsonRecord,
+  runtime: ModelRuntime
+): Promise<void> {
+  const credentials = await runtime.listCredentials()
+  const previous = isRecord(current.providers) ? current.providers : {}
+  const next = isRecord(candidate.providers) ? candidate.providers : {}
+  const fields = ['baseUrl', 'api', 'apiKey', 'headers', 'authHeader'] as const
+  for (const credential of credentials) {
+    if (credential.type !== 'oauth') continue
+    const previousProvider = previous[credential.providerId]
+    const nextProvider = next[credential.providerId]
+    const before = isRecord(previousProvider) ? previousProvider : {}
+    const after = isRecord(nextProvider) ? nextProvider : {}
+    if (
+      fields.some(
+        (field) => after[field] !== undefined && !isDeepStrictEqual(before[field], after[field])
+      )
+    ) {
+      throw new Error(
+        `服务 ${credential.providerId} 已保存账号登录，请为自定义 API 使用独立服务 ID，或先退出账号`
+      )
+    }
+  }
+}
+
+async function assertRemovalReferences(current: JsonRecord, candidate: JsonRecord): Promise<void> {
+  const nextKeys = collectedModelKeys(candidate)
+  const removed = new Set([...collectedModelKeys(current)].filter((key) => !nextKeys.has(key)))
+  if (!removed.size) return
+  for (const preset of normalizePresets(candidate)) {
+    if (removed.has(collectedModelKey(preset.provider, preset.modelId))) {
+      throw new Error(
+        `模型 ${preset.provider}/${preset.modelId} 仍被常用组合引用，请先移除对应组合`
+      )
+    }
+  }
+  // 仅在移除模型时检查已知项目，不扫描文件系统寻找任意项目配置。
+  const projects = new Set(
+    (await SessionManager.listAll()).map((session) => session.cwd).filter(Boolean)
+  )
+  for (const cwd of projects) {
+    const settings = readJsonRecord(join(cwd, CONFIG_DIR_NAME, 'settings.json'))
+    if (
+      typeof settings.defaultProvider === 'string' &&
+      typeof settings.defaultModel === 'string' &&
+      removed.has(collectedModelKey(settings.defaultProvider, settings.defaultModel))
+    ) {
+      throw new Error(
+        `项目“${cwd}”仍将 ${settings.defaultProvider}/${settings.defaultModel} 设为默认模型，请先在“项目默认”中调整`
       )
     }
   }
@@ -509,16 +626,22 @@ export async function readL4ModelSettings(): Promise<{
   presets: L4ModelPreset[]
   models: L4ModelOption[]
   nativeConfig: L4ModelNativeConfig
+  accountModels: L4AccountModelSelection[]
+  accounts: L4ModelAccount[]
 }> {
   const started = performance.now()
   const rawRoot = readJsonRecord(modelsPath())
   const runtime = await ModelRuntime.create({ allowModelNetwork: false })
+  const defaults = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
+  const accountModels = readAccountModelSelections(rawRoot)
   const runtimeReady = performance.now()
   const result = {
     providers: normalizeProviders(rawRoot, runtime),
     presets: normalizePresets(rawRoot),
-    models: await availableModelOptions(runtime),
-    nativeConfig: rawRoot as L4ModelNativeConfig
+    models: await availableModelOptions(runtime, undefined, rawRoot),
+    nativeConfig: rawRoot as L4ModelNativeConfig,
+    accountModels,
+    accounts: await readAccounts(defaults, accountModels)
   }
   const elapsed = performance.now() - started
   if (elapsed > 500) {
@@ -537,19 +660,32 @@ export async function replaceL4ModelSettings(input: L4ModelSettingsReplaceInput)
   await serializeWrite(async () => {
     const path = modelsPath()
     try {
+      let current: JsonRecord
+      try {
+        current = readJsonRecord(path)
+      } catch (error) {
+        if (input.nativeConfig === undefined) throw error
+        // 原生编辑是损坏配置的修复入口，不能要求旧文件先成功解析。
+        current = {}
+      }
       let candidate: JsonRecord
       if (input.nativeConfig !== undefined) {
         candidate = input.nativeConfig
       } else {
-        const current = readJsonRecord(path)
         const currentRuntime = await ModelRuntime.create({ allowModelNetwork: false })
         const error = currentRuntime.getError()
         if (error) throw new Error(`当前模型配置不可用，请先通过原生配置修正：${error}`)
-        candidate = mergeModelsRoot(current, input, currentRuntime)
+        const defaults =
+          input.accountModels === undefined
+            ? currentRuntime
+            : await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
+        candidate = mergeModelsRoot(current, input, currentRuntime, defaults)
       }
       const runtime = await validateModelsRoot(candidate)
-      const models = await availableModelOptions(runtime)
-      assertPresetsValid(normalizePresets(candidate), models)
+      const models = await availableModelOptions(runtime, undefined, candidate)
+      await assertConnectionCredentials(current, candidate, runtime)
+      await assertRemovalReferences(current, candidate)
+      assertPresetsValid(normalizePresets(candidate), models, normalizePresets(current))
       writeJsonRecordAtomic(path, candidate)
     } catch (cause) {
       console.error('[Pi Desk][ModelSettings] 模型配置保存失败', {

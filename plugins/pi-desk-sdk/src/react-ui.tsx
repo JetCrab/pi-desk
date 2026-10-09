@@ -13,7 +13,6 @@ import {
   type InputHTMLAttributes,
   type ReactNode,
   type Ref,
-  type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
   type UIEventHandler
 } from 'react'
@@ -925,7 +924,6 @@ export function PluginField({
       children.type === 'select' ||
       children.type === PluginInput ||
       children.type === PluginTextarea ||
-      children.type === PluginSelect ||
       children.type === PluginSecretInput)
       ? children
       : null
@@ -1030,27 +1028,6 @@ export function PluginSecretInput({
   )
 }
 
-export interface PluginSelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
-  controlSize?: PluginControlSize
-}
-
-export function PluginSelect({
-  controlSize = 'default',
-  className,
-  ...props
-}: PluginSelectProps): React.JSX.Element {
-  return (
-    <select
-      {...props}
-      className={classNames(
-        'pi-desk-ui-control',
-        controlSize === 'sm' && 'pi-desk-ui-control-sm',
-        className
-      )}
-    />
-  )
-}
-
 export interface PluginSelectOption {
   value: string
   label: ReactNode
@@ -1058,7 +1035,7 @@ export interface PluginSelectOption {
   textValue?: string
 }
 
-export interface PluginSelectFieldProps {
+export interface PluginSelectProps {
   id?: string
   name?: string
   label: ReactNode
@@ -1093,7 +1070,7 @@ function PluginSelectCheckIcon(): React.JSX.Element {
   )
 }
 
-export function PluginSelectField({
+export function PluginSelect({
   id,
   name,
   label,
@@ -1110,7 +1087,7 @@ export function PluginSelectField({
   triggerClassName,
   popupClassName,
   onValueChange
-}: PluginSelectFieldProps): React.JSX.Element {
+}: PluginSelectProps): React.JSX.Element {
   const generatedId = useId()
   const triggerId = id ?? generatedId
   const items = options.map((option) => ({ value: option.value, label: option.label }))

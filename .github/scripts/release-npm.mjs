@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { appendFile, cp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
@@ -81,6 +81,83 @@ export function run(tool, args, { cwd = projectRoot, capture = false, env = proc
   )
 }
 
+export function runAsync(
+  tool,
+  args,
+  { cwd = projectRoot, capture = false, env = process.env } = {}
+) {
+  const windows = process.platform === 'win32' && ['npm', 'pnpm'].includes(tool)
+  return new Promise((resolveCommand, rejectCommand) => {
+    const child = spawn(
+      windows ? 'cmd.exe' : tool,
+      windows ? ['/d', '/s', '/c', `${tool} ${args.map((value) => `"${value}"`).join(' ')}`] : args,
+      {
+        cwd,
+        env,
+        windowsHide: true,
+        windowsVerbatimArguments: windows,
+        stdio: capture ? ['ignore', 'pipe', 'inherit'] : 'inherit'
+      }
+    )
+    const chunks = []
+    let size = 0
+    let overflow
+    child.stdout?.on('data', (chunk) => {
+      if (overflow) return
+      size += chunk.length
+      if (size > 16 * 1024 * 1024) {
+        overflow = new Error(`命令输出超过 16MB：${tool}`)
+        child.kill()
+      } else {
+        chunks.push(chunk)
+      }
+    })
+    child.once('error', rejectCommand)
+    child.once('close', (code, signal) => {
+      if (overflow) rejectCommand(overflow)
+      else if (code !== 0)
+        rejectCommand(new Error(`命令执行失败：${tool}，退出码=${code}，信号=${signal ?? '无'}`))
+      else resolveCommand(capture ? Buffer.concat(chunks).toString('utf8') : '')
+    })
+  })
+}
+
+export async function runPackageTasks(entries, action) {
+  const byName = new Map(entries.map((entry) => [entry.manifest.name, entry]))
+  const tasks = new Map()
+  const visiting = new Set()
+  const start = (entry) => {
+    const name = entry.manifest.name
+    if (tasks.has(name)) return tasks.get(name)
+    assert.ok(!visiting.has(name), `公开包存在循环依赖：${name}`)
+    visiting.add(name)
+    const dependencies = [
+      ...new Set(
+        ['dependencies', 'optionalDependencies', 'peerDependencies'].flatMap((group) =>
+          Object.keys(entry.manifest[group] ?? {})
+        )
+      )
+    ].filter((dependency) => byName.has(dependency))
+    const task = Promise.all(dependencies.map((dependency) => start(byName.get(dependency)))).then(
+      () => action(entry)
+    )
+    visiting.delete(name)
+    tasks.set(name, task)
+    return task
+  }
+  const results = await Promise.allSettled(entries.map(start))
+  const errors = [
+    ...new Set(
+      results.filter((result) => result.status === 'rejected').map((result) => result.reason)
+    )
+  ]
+  if (errors.length)
+    throw new AggregateError(
+      errors,
+      `包任务失败：${errors.map((error) => error.message).join('；')}`
+    )
+}
+
 function archivePath(entry, output) {
   return join(
     output,
@@ -106,6 +183,13 @@ async function verifyArchive(entry, output) {
     assert.doesNotMatch(file, /(?:^|\/)\.env(?:\.|$)/)
   }
   if (entry.manifest.name === '@jetcrab/pi-desk') {
+    for (const file of list) {
+      assert.doesNotMatch(
+        file,
+        /^package\/temp\/build\/pi-desk\/release\/\.next\/(?:.*\.nft\.json$|(?:cache|trace|types)(?:\/|$))/,
+        `主程序包含多余构建文件：${file}`
+      )
+    }
     for (const file of [
       'bin/pi-desk.js',
       'bin/pi-desk-preflight.js',
@@ -132,6 +216,23 @@ async function verifyArchive(entry, output) {
   return packed
 }
 
+export async function pruneHostBuild(buildDir) {
+  for (const name of ['cache', 'trace', 'types']) {
+    await rm(join(buildDir, name), { recursive: true, force: true })
+  }
+  async function pruneTraces(directory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        await pruneTraces(path)
+      } else if (entry.isFile() && entry.name.endsWith('.nft.json')) {
+        await rm(path)
+      }
+    }
+  }
+  await pruneTraces(buildDir)
+}
+
 export function npmValidationMode(ref) {
   assert.ok(['refs/heads/main', 'refs/heads/dev'].includes(ref), '请从 main 或 dev 分支执行')
   return ref === 'refs/heads/main' ? 'full' : 'lightweight'
@@ -150,7 +251,7 @@ async function stage(name, action) {
 async function pack(entry, output) {
   await mkdir(output, { recursive: true })
   await stage(`pack ${entry.manifest.name}`, async () => {
-    run('pnpm', ['--dir', entry.directory, 'pack', '--pack-destination', output], {
+    await runAsync('pnpm', ['--dir', entry.directory, 'pack', '--pack-destination', output], {
       env: { ...process.env, npm_config_ignore_scripts: 'true' }
     })
     await verifyArchive(entry, output)
@@ -174,62 +275,91 @@ async function prepare(entries, output) {
   const [sdk] = needsSdk ? await selectPackages(projectRoot, 'pi-desk-sdk') : []
   if (sdk) {
     const env = { ...process.env, TSX_TSCONFIG_PATH: join(sdk.directory, 'tsconfig.json') }
-    await stage(`build ${sdkName}`, () => run('pnpm', ['--dir', sdk.directory, 'build'], { env }))
-    if (full) {
+    await stage(`build ${sdkName}`, () =>
+      runAsync('pnpm', ['--dir', sdk.directory, 'build'], { env })
+    )
+    if (full || entries.some(({ manifest }) => manifest.name === sdkName)) {
       // SDK test 脚本内含 build；直接执行同一测试集合，复用刚生成的产物。
       const tests = (await readdir(join(sdk.directory, 'tests')))
         .filter((file) => file.endsWith('.test.mjs'))
         .map((file) => join('tests', file))
       await stage(`test ${sdkName}`, () =>
-        run(process.execPath, ['--test', ...tests], { cwd: sdk.directory, env })
+        runAsync(process.execPath, ['--test', ...tests], { cwd: sdk.directory, env })
       )
     }
   }
   if (full) {
     await stage('test 发布边界', () =>
-      run(process.execPath, [
+      runAsync(process.execPath, [
         '--test',
         'tests/l4-public-boundary.test.mjs',
         'tests/l4-release-npm.test.mjs'
       ])
     )
   }
-  for (const entry of entries) {
-    if (entry.manifest.name === sdkName) continue
-    if (entry.directory === projectRoot) {
-      if (full) {
-        for (const command of ['typecheck', 'lint:production', 'check:layers', 'test:package']) {
-          await stage(`test ${command}`, () => run('pnpm', [command]))
+  await runPackageTasks(
+    entries.filter(({ manifest }) => manifest.name !== sdkName),
+    async (entry) => {
+      const agent = join(
+        projectRoot,
+        'temp/pi/npm-ci',
+        basename(output),
+        entry.manifest.name.slice('@jetcrab/'.length),
+        'agent'
+      )
+      const env = {
+        ...process.env,
+        TSX_TSCONFIG_PATH: join(entry.directory, 'tsconfig.json'),
+        PI_CODING_AGENT_DIR: agent,
+        PI_CODING_AGENT_SESSION_DIR: join(agent, 'sessions')
+      }
+      if (entry.directory === projectRoot) {
+        await stage('test 宿主命令核心', () =>
+          runAsync('pnpm', ['test:pidesk'], {
+            env: {
+              ...env,
+              PI_OFFLINE: '1',
+              PI_DESK_PI_PACKAGE_DIR: join(
+                projectRoot,
+                'node_modules/@earendil-works/pi-coding-agent'
+              )
+            }
+          })
+        )
+        if (full) {
+          for (const command of ['typecheck', 'lint:production', 'check:layers', 'test:package']) {
+            await stage(`test ${command}`, () => runAsync('pnpm', [command]))
+          }
+        }
+        const nextCache = join(projectRoot, 'temp/build/pi-desk/release/.next/cache')
+        const savedCache = join(projectRoot, 'temp/cache/next/npm-dev')
+        if (!full && existsSync(savedCache)) {
+          await cp(savedCache, nextCache, { recursive: true })
+        }
+        // 主包 build 的前半段只重复 SDK build；这里执行同一 Next 构建入口。
+        await stage(`build ${entry.manifest.name}`, () =>
+          runAsync('pnpm', ['exec', 'next', 'build', '--webpack'])
+        )
+        if (!full && existsSync(nextCache)) {
+          await mkdir(join(projectRoot, 'temp/cache/next'), { recursive: true })
+          await rm(savedCache, { recursive: true, force: true })
+          await rename(nextCache, savedCache)
+        }
+        await pruneHostBuild(join(projectRoot, 'temp/build/pi-desk/release/.next'))
+      } else {
+        await stage(`build ${entry.manifest.name}`, () =>
+          runAsync('pnpm', ['--dir', entry.directory, 'build'], { env })
+        )
+        if (entry.manifest.scripts?.test) {
+          await stage(`test ${entry.manifest.name}`, () =>
+            runAsync('pnpm', ['--dir', entry.directory, 'test'], { env })
+          )
         }
       }
-      const nextCache = join(projectRoot, 'temp/build/pi-desk/release/.next/cache')
-      const savedCache = join(projectRoot, 'temp/cache/next/npm-dev')
-      if (!full && existsSync(savedCache)) {
-        await cp(savedCache, nextCache, { recursive: true })
-      }
-      // 主包 build 的前半段只重复 SDK build；这里执行同一 Next 构建入口。
-      await stage(`build ${entry.manifest.name}`, () =>
-        run('pnpm', ['exec', 'next', 'build', '--webpack'])
-      )
-      if (!full && existsSync(nextCache)) {
-        await mkdir(join(projectRoot, 'temp/cache/next'), { recursive: true })
-        await rm(savedCache, { recursive: true, force: true })
-        await rename(nextCache, savedCache)
-      }
-      await rm(nextCache, { recursive: true, force: true })
-    } else {
-      const env = { ...process.env, TSX_TSCONFIG_PATH: join(entry.directory, 'tsconfig.json') }
-      await stage(`build ${entry.manifest.name}`, () =>
-        run('pnpm', ['--dir', entry.directory, 'build'], { env })
-      )
-      if (full) {
-        await stage(`test ${entry.manifest.name}`, () =>
-          run('pnpm', ['--dir', entry.directory, 'test'], { env })
-        )
-      }
+      await pack(entry, output)
     }
-  }
-  for (const entry of entries) await pack(entry, output)
+  )
+  if (entries.some(({ manifest }) => manifest.name === sdkName)) await pack(sdk, output)
   const host = entries.find((entry) => entry.directory === projectRoot)
   if (host) {
     const sdkSelected = entries.some((entry) => entry.manifest.name === sdkName)
@@ -237,16 +367,12 @@ async function prepare(entries, output) {
     const sdkOutput = sdkSelected ? output : verificationOutput
     try {
       if (!sdkSelected) await pack(sdk, sdkOutput)
-      const { verifyNpmInstall } = await import('./verify-npm-install.mjs')
-      await stage('smoke 隔离安装与启动', () =>
-        verifyNpmInstall({
-          root: projectRoot,
-          sdkArchive: archivePath(sdk, sdkOutput),
-          hostArchive: archivePath(host, output),
-          version: host.manifest.version,
-          run
-        })
-      )
+      const smokeArtifacts = join(output, 'command-smoke')
+      await mkdir(smokeArtifacts, { recursive: true })
+      await Promise.all([
+        cp(archivePath(sdk, sdkOutput), join(smokeArtifacts, 'sdk.tgz')),
+        cp(archivePath(host, output), join(smokeArtifacts, 'host.tgz'))
+      ])
     } finally {
       if (!sdkSelected) await rm(verificationOutput, { recursive: true, force: true })
     }
@@ -280,6 +406,70 @@ async function readTags(name) {
   return response.json()
 }
 
+export async function waitForDevelopmentTags(name, version) {
+  const deadline = Date.now() + 10 * 60_000
+  let nextLogAt = 0
+  while (true) {
+    const tags = await readTags(name)
+    assertDevelopmentTags(tags, name)
+    if (tags.dev === version) {
+      console.info(`开发标签校验通过：${name}@${version}`)
+      return
+    }
+    const now = Date.now()
+    if (now >= deadline) {
+      console.error(`等待开发标签同步超时（10 分钟）：${name}@${version}`)
+      assertDevelopmentTags(tags, name, version)
+    }
+    if (now >= nextLogAt) {
+      console.info(
+        `等待开发标签同步：${name}@${version}，当前 dev=${tags.dev ?? '未设置'}；每 5 秒检查，最多等待 10 分钟`
+      )
+      nextLogAt = now + 60_000
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5_000))
+  }
+}
+
+export async function waitForRegistryPackage(name, version) {
+  const deadline = Date.now() + 10 * 60_000
+  while (true) {
+    const response = await fetch(
+      `${registry}/${encodeURIComponent(name)}/${version}?validation=${Date.now()}`,
+      { headers: { 'cache-control': 'no-cache' }, signal: AbortSignal.timeout(30_000) }
+    )
+    if (response.status === 404 || response.status === 202) {
+      await response.body?.cancel()
+    } else {
+      assert.ok(response.ok, `无法核对 ${name}@${version}：HTTP ${response.status}`)
+      const metadata = await response.json()
+      assert.equal(metadata.version, version, 'Registry 版本与本批不一致')
+      assert.ok(
+        typeof metadata.dist?.tarball === 'string' &&
+          metadata.dist.tarball.startsWith(`${registry}/`),
+        'Registry 未提供有效 tarball'
+      )
+      const archive = await fetch(metadata.dist.tarball, {
+        method: 'HEAD',
+        headers: { 'cache-control': 'no-cache' },
+        signal: AbortSignal.timeout(30_000)
+      })
+      await archive.body?.cancel()
+      if (archive.ok && archive.status !== 202) {
+        console.info(`Registry 版本和安装包已就绪：${name}@${version}`)
+        return
+      }
+      assert.ok(
+        [404, 202].includes(archive.status),
+        `无法核对 ${name} tarball：HTTP ${archive.status}`
+      )
+    }
+    assert.ok(Date.now() < deadline, `等待 Registry 可安装状态超时：${name}@${version}`)
+    console.info(`等待 Registry 可安装状态：${name}@${version}`)
+    await new Promise((done) => setTimeout(done, 5_000))
+  }
+}
+
 async function publish(entries, output) {
   for (const entry of entries) npmTagFor(process.env.GITHUB_REF, entry.manifest.version)
   assert.equal(process.env.GITHUB_REPOSITORY, 'JetCrab/pi-desk', '仓库与 npm 授权不匹配')
@@ -295,7 +485,7 @@ async function publish(entries, output) {
   try {
     const selected = new Set(entries.map((entry) => entry.manifest.name))
     const existing = new Set()
-    for (const entry of entries) {
+    await runPackageTasks(entries, async (entry) => {
       const packed = await verifyArchive(entry, output)
       if (npmTagFor(process.env.GITHUB_REF, packed.version) === 'dev') {
         // npm 首次发布可能补充 latest；发布授权不一定允许随后删除标签。
@@ -316,7 +506,7 @@ async function publish(entries, output) {
           `${packed.name}@${packed.version} 已存在不同内容，拒绝覆盖`
         )
         existing.add(packed.name)
-        continue
+        return
       }
       assert.equal(
         response.status,
@@ -327,40 +517,43 @@ async function publish(entries, output) {
       )
       for (const [name, version] of Object.entries(packed.dependencies ?? {})) {
         if (name.startsWith('@jetcrab/') && !selected.has(name)) {
-          run(
+          await runAsync(
             'npm',
             ['view', `${name}@${version}`, 'version', '--json', `--registry=${registry}`],
             { env }
           )
         }
       }
-    }
-    for (const entry of entries) {
+    })
+    await runPackageTasks(entries, async (entry) => {
       if (existing.has(entry.manifest.name)) {
         console.info(`复用已验证发布：${entry.manifest.name}@${entry.manifest.version}`)
-        continue
-      }
-      console.info(`发布：${entry.manifest.name}@${entry.manifest.version}`)
-      run(
-        'npm',
-        [
-          'publish',
-          archivePath(entry, output),
-          '--ignore-scripts',
-          '--access=public',
-          `--tag=${npmTagFor(process.env.GITHUB_REF, entry.manifest.version)}`,
-          `--registry=${registry}`
-        ],
-        { env }
-      )
-      if (npmTagFor(process.env.GITHUB_REF, entry.manifest.version) === 'dev') {
-        assertDevelopmentTags(
-          await readTags(entry.manifest.name),
-          entry.manifest.name,
-          entry.manifest.version
+      } else {
+        console.info(`发布：${entry.manifest.name}@${entry.manifest.version}`)
+        await runAsync(
+          'npm',
+          [
+            'publish',
+            archivePath(entry, output),
+            '--ignore-scripts',
+            '--access=public',
+            `--tag=${npmTagFor(process.env.GITHUB_REF, entry.manifest.version)}`,
+            `--registry=${registry}`
+          ],
+          { env }
         )
       }
-    }
+      const checks = await Promise.allSettled([
+        npmTagFor(process.env.GITHUB_REF, entry.manifest.version) === 'dev'
+          ? waitForDevelopmentTags(entry.manifest.name, entry.manifest.version)
+          : Promise.resolve(),
+        entry.manifest.name === sdkName
+          ? waitForRegistryPackage(entry.manifest.name, entry.manifest.version)
+          : Promise.resolve()
+      ])
+      const failure = checks.find((check) => check.status === 'rejected')
+      if (failure) throw failure.reason
+    })
   } finally {
     await rm(config, { force: true })
   }

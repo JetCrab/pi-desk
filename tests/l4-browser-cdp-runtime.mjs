@@ -4,12 +4,15 @@ import { once } from 'node:events'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { dirname } from 'node:path'
+import { setTimeout as abortableDelay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import WebSocket from 'ws'
 import { terminateManagedTree } from '../src/server/l4_foundation/process/l4-process-tree.js'
 import { assertPortReleased } from './l4-e2e-server-runtime.mjs'
 
 const execFileAsync = promisify(execFile)
+const browserStartups = new WeakMap()
+const browserStderrLimit = 64 * 1024
 
 export function delay(milliseconds) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds))
@@ -211,8 +214,80 @@ export async function waitForPortReleased(port, timeoutMs = 10_000) {
   throw lastError ?? new Error(`端口未释放：${port}`)
 }
 
+function browserStartupDiagnostics(browser, startup, httpStatus) {
+  return [
+    `可执行文件：${browser.spawnfile}`,
+    `启动参数：${JSON.stringify(browser.spawnargs)}`,
+    `root PID：${browser.pid ?? '未创建'}`,
+    `退出码：${browser.exitCode ?? '无'}；退出信号：${browser.signalCode ?? '无'}`,
+    `启动错误：${startup.error?.message ?? '无'}；错误码：${startup.error?.code ?? '无'}`,
+    `CDP HTTP：${httpStatus}`,
+    `--- stderr（最多 64KB${startup.truncated ? '，已截断' : ''}）---`,
+    startup.stderr.subarray(0, startup.stderrBytes).toString('utf8') || '无输出'
+  ].join('\n')
+}
+
+function releaseBrowserStartup(browser) {
+  const startup = browserStartups.get(browser)
+  if (!startup) return
+  browser.removeListener('error', startup.onError)
+  browser.removeListener('exit', startup.onExit)
+  browser.stderr.removeListener('data', startup.onStderr)
+  // 旧调用方仍可使用 waitForHttp；释放诊断后继续排空管道，避免浏览器被写阻塞。
+  browser.stderr.resume()
+  startup.stderr = null
+  browserStartups.delete(browser)
+}
+
+export async function waitForBrowserReady(browser, cdpPort) {
+  const startup = browserStartups.get(browser)
+  assert.ok(startup, '浏览器必须由 spawnEdge 启动')
+  const controller = new AbortController()
+  startup.controller = controller
+  const timer = setTimeout(() => controller.abort(), 20_000)
+  let httpStatus = '尚未响应'
+  try {
+    while (true) {
+      if (startup.error) {
+        throw new Error(
+          `验收浏览器启动失败\n${browserStartupDiagnostics(browser, startup, httpStatus)}`
+        )
+      }
+      if (browser.exitCode !== null || browser.signalCode !== null) {
+        throw new Error(
+          `验收浏览器在就绪前退出\n${browserStartupDiagnostics(browser, startup, httpStatus)}`
+        )
+      }
+      if (controller.signal.aborted) {
+        throw new Error(
+          `验收浏览器启动超时\n${browserStartupDiagnostics(browser, startup, httpStatus)}`
+        )
+      }
+      try {
+        const response = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, {
+          signal: controller.signal
+        })
+        httpStatus = `状态码 ${response.status}`
+        await response.body?.cancel()
+        if (response.ok && !controller.signal.aborted) {
+          return `验收浏览器已就绪\n${browserStartupDiagnostics(browser, startup, httpStatus)}`
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          httpStatus = `${error.message}；错误码：${error.cause?.code ?? '无'}`
+        }
+      }
+      await abortableDelay(100, undefined, { signal: controller.signal }).catch(() => undefined)
+    }
+  } finally {
+    clearTimeout(timer)
+    controller.abort()
+    releaseBrowserStartup(browser)
+  }
+}
+
 export function spawnEdge(edgePath, cdpPort, userDataDir, windowSize = '1440,900', extraArgs = []) {
-  return spawn(
+  const browser = spawn(
     edgePath,
     [
       '--headless=new',
@@ -226,8 +301,38 @@ export function spawnEdge(edgePath, cdpPort, userDataDir, windowSize = '1440,900
       ...extraArgs,
       'about:blank'
     ],
-    { stdio: 'ignore', windowsHide: true }
+    {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+      detached: process.platform !== 'win32'
+    }
   )
+  const startup = {
+    stderr: Buffer.alloc(browserStderrLimit),
+    stderrBytes: 0,
+    truncated: false,
+    error: null,
+    controller: null,
+    onStderr(chunk) {
+      const available = browserStderrLimit - startup.stderrBytes
+      const bytes = Math.min(available, chunk.length)
+      chunk.copy(startup.stderr, startup.stderrBytes, 0, bytes)
+      startup.stderrBytes += bytes
+      if (chunk.length > available) startup.truncated = true
+    },
+    onError(error) {
+      startup.error = error
+      startup.controller?.abort()
+    },
+    onExit() {
+      startup.controller?.abort()
+    }
+  }
+  browserStartups.set(browser, startup)
+  browser.stderr.on('data', startup.onStderr)
+  browser.on('error', startup.onError)
+  browser.on('exit', startup.onExit)
+  return browser
 }
 
 async function hasProcessForBrowserProfile(browserProcess) {
@@ -315,7 +420,8 @@ async function waitForBrowserProfileExit(browserProcess) {
 }
 
 export async function stopBrowserTree(browserProcess, cdpPort) {
-  if (browserProcess) {
+  if (browserProcess) releaseBrowserStartup(browserProcess)
+  if (browserProcess?.pid) {
     const exited =
       browserProcess.exitCode !== null || browserProcess.signalCode !== null
         ? Promise.resolve()
@@ -368,8 +474,8 @@ export async function stopBrowserTree(browserProcess, cdpPort) {
           'Edge process tree cleanup failed'
         )
       }
-    } else if (browserProcess.exitCode === null && browserProcess.signalCode === null) {
-      browserProcess.kill('SIGKILL')
+    } else {
+      await terminateManagedTree(browserProcess)
       await Promise.race([exited, delay(10_000)])
       assert.ok(
         browserProcess.exitCode !== null || browserProcess.signalCode !== null,

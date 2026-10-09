@@ -26,10 +26,16 @@
     "README.md"
   ],
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi-desk-plugin"
   ],
   "piDesk": {
-    "entry": "./dist/l2-tibo-entry.js"
+    "entry": "./dist/l2-tibo-entry.js",
+    "i18n": {
+      "zh-CN": {
+        "description": "监控 Tibo 的 X 动态，按界面语言翻译，并提醒 Codex 限额重置。"
+      }
+    }
   },
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json && esbuild src/l2-browser-entry.ts --bundle --splitting --format=esm --platform=browser --target=es2022 --minify --define:process.env.NODE_ENV='production' --external:react --external:react/jsx-runtime --external:react/jsx-dev-runtime --external:react-dom --external:react-dom/client --external:@jetcrab/pi-desk-sdk/react/base --outdir=dist/browser --entry-names=entry --chunk-names=chunks/[name]-[hash]",

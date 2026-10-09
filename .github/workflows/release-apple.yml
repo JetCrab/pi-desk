@@ -1,5 +1,4 @@
 name: Build Apple clients
-run-name: 构建 Apple 客户端 · ${{ inputs.platform }}
 
 on:
   workflow_call:
@@ -23,13 +22,6 @@ on:
         required: false
       IOS_PROVISION_PROFILE_BASE64:
         required: false
-  workflow_dispatch:
-    inputs:
-      platform:
-        description: 构建平台
-        type: choice
-        options: [all, macos, ios]
-        default: all
 
 permissions:
   contents: read
@@ -70,8 +62,8 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 70
     env:
-      BUILD_PROFILE: ${{ github.ref == 'refs/heads/dev' && 'debug' || 'release' }}
-      RUST_CACHE_STAGE: ${{ github.workspace }}/temp/cache/rust/macos-${{ github.ref == 'refs/heads/dev' && 'debug' || 'release' }}
+      BUILD_PROFILE: release
+      RUST_CACHE_STAGE: ${{ github.workspace }}/temp/cache/rust/macos-release
       CARGO_TARGET_DIR: ${{ github.workspace }}/temp/build/macos-ci/${{ github.run_id }}-${{ github.run_attempt }}/target
       PI_DESK_DESKTOP_WEB_DIST: ${{ github.workspace }}/temp/build/macos-ci/${{ github.run_id }}-${{ github.run_attempt }}/web
       CLIENT_OUTPUT: ${{ github.workspace }}/temp/package/clients/macos/${{ github.run_id }}-${{ github.run_attempt }}
@@ -131,7 +123,6 @@ jobs:
         working-directory: apps/desktop
         run: |
           build_args=(exec tauri build --target universal-apple-darwin --bundles dmg --config "$CARGO_TARGET_DIR/tauri-ci.json")
-          if [[ "$BUILD_PROFILE" == debug ]]; then build_args+=(--debug); fi
           pnpm "${build_args[@]}"
       - run: node .github/scripts/rust-cache.mjs save
       - name: 检查两种架构与签名结构并归档

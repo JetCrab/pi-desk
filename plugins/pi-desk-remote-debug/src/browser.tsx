@@ -15,7 +15,7 @@ import {
   PluginList,
   PluginListItem,
   PluginScroll,
-  PluginSelectField,
+  PluginSelect,
   PluginSplitView,
   PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
@@ -101,7 +101,7 @@ function RemoteDebugApplication({
       >
         <div className="remote-debug-heading">
           <h2 className="remote-debug-project-title">{selectedProject?.label ?? '远程调试'}</h2>
-          <PluginSelectField
+          <PluginSelect
             className="remote-debug-mobile-project"
             label="项目"
             size="sm"

@@ -36,7 +36,8 @@
     "typebox": "*"
   },
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi-desk-plugin"
   ],
   "pi": {
     "extensions": [
@@ -44,7 +45,12 @@
     ]
   },
   "piDesk": {
-    "entry": "./dist/pi-desk.js"
+    "entry": "./dist/pi-desk.js",
+    "i18n": {
+      "zh-CN": {
+        "description": "将任务交给独立子代理执行，并在 Pi Desk 中查看子任务进度与结果。"
+      }
+    }
   },
   "devDependencies": {
     "@base-ui/react": "^1.7.0",

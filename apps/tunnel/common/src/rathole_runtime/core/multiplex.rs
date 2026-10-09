@@ -74,13 +74,12 @@ pub fn start_parent<T: Transport>(
     };
 
     tokio::spawn(async move {
-        // Yamux defaults to 512 streams and a 1 GiB aggregate receive window. Neither is a
-        // SuperTool product limit: stream count is only bounded by yamux's u32 stream ID space,
-        // while memory is naturally bounded by the host.
+        // Yamux 校验时会将流数量乘以默认窗口大小，32 位目标必须避免 usize 溢出。
+        let max_streams = (u32::MAX as usize).min(usize::MAX / yamux::DEFAULT_CREDIT as usize);
         let mut config = Config::default();
         config
             .set_max_connection_receive_window(None)
-            .set_max_num_streams(u32::MAX as usize);
+            .set_max_num_streams(max_streams);
         let mut connection = Connection::new(stream.compat(), config, mode);
         loop {
             tokio::select! {

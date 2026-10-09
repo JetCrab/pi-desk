@@ -196,6 +196,7 @@ interface L2WorkbenchProps extends L2WorkbenchComposerSlots {
   }) => ReactNode
   renderSettings: (input: {
     open: boolean
+    connectionReady: boolean
     initialPage?: 'model-presets'
     capabilityModes: L3AppRuntime['capabilityModes']
     workSessions: readonly L2WorkSessionListItem[]
@@ -712,17 +713,19 @@ export function L2Workbench({
   )
 
   const loadDirectories = useCallback(
-    async (forceRefresh = false): Promise<void> => {
+    async (forceRefresh = false): Promise<L2PiDirectoryListResponse['directories'] | null> => {
       const requestId = ++directoryRequestIdRef.current
       setDirectoriesLoading(true)
       setPickerError(null)
       try {
         const response = await workbenchBiz.listDirectories(forceRefresh)
-        if (directoryRequestIdRef.current !== requestId) return
+        if (directoryRequestIdRef.current !== requestId) return null
         setDirectories(response.directories)
+        return response.directories
       } catch (cause) {
-        if (directoryRequestIdRef.current !== requestId) return
+        if (directoryRequestIdRef.current !== requestId) return null
         setPickerError(errorMessage(cause, t('projectDirectoriesFailed')))
+        return null
       } finally {
         if (directoryRequestIdRef.current === requestId) setDirectoriesLoading(false)
       }
@@ -1169,8 +1172,13 @@ export function L2Workbench({
     cancelSessionHistory()
     setPickerCwd(null)
     setDirectoryDialogOpen(true)
-    void loadDirectories()
-  }, [cancelSessionHistory, loadDirectories, loading])
+    void loadDirectories().then((loadedDirectories) => {
+      if (loadedDirectories?.length !== 0) return
+      setPickerView('browser')
+      setDirectoryBrowser(readCachedDirectoryEntries(readL4PiDirectoryEntriesCache(null)))
+      void loadDirectoryEntries(null)
+    })
+  }, [cancelSessionHistory, loadDirectories, loadDirectoryEntries, loading])
 
   const openReplacePicker = useCallback((): void => {
     if (loading) return
@@ -1235,7 +1243,8 @@ export function L2Workbench({
 
   const navigateDirectoryBrowser = (cwd: string | null): void => {
     if (loading || pickerMode !== 'create') return
-    setDirectoryBrowser(readCachedDirectoryEntries(readL4PiDirectoryEntriesCache(cwd)))
+    const cachedEntries = readCachedDirectoryEntries(readL4PiDirectoryEntriesCache(cwd))
+    if (cachedEntries) setDirectoryBrowser(cachedEntries)
     void loadDirectoryEntries(cwd)
   }
 
@@ -1989,6 +1998,7 @@ export function L2Workbench({
         render={renderSettings}
         input={{
           open: settingsOpen,
+          connectionReady: loadPhase === 'ready',
           initialPage: settingsInitialPage,
           capabilityModes: appRuntime.capabilityModes,
           workSessions,
@@ -2003,7 +2013,6 @@ export function L2Workbench({
         }}
       />
       <L2WorkbenchPickerDialog
-        key={`${directoryDialogOpen}\u0000${pickerMode ?? ''}\u0000${pickerView}\u0000${pickerCwd ?? ''}\u0000${directoryBrowser?.cwd ?? ''}`}
         open={directoryDialogOpen}
         pickerMode={pickerMode}
         pickerView={pickerView}

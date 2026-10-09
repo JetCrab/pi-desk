@@ -1,0 +1,20 @@
+services:
+  pi-desk:
+    image: ghcr.io/jetcrab/pi-desk:latest
+    platform: linux/amd64
+    restart: always
+    ports:
+      - '127.0.0.1:6233:6233'
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data/home:/data/home
+      - ./data/workspace:/workspace
+    tmpfs:
+      - /tmp:rw,nosuid,size=512m
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'

@@ -47,7 +47,25 @@ export function runL4PiRunnerProcess(input: {
       settled = true
       if (timeout) clearTimeout(timeout)
       void terminateL4PiProcessTree(child).then(callback, (error: unknown) => {
-        rejectRun(input.cleanupError(stderr.trim(), error))
+        const failure = error instanceof Error ? error : new Error(String(error))
+        const code = 'code' in failure ? String(failure.code) : failure.name
+        const killed = 'killed' in failure && failure.killed === true
+        const detail =
+          'stderr' in failure && typeof failure.stderr === 'string'
+            ? failure.stderr.trim().slice(-2000)
+            : ''
+        console.error('[Pi Desk][Runner] 子进程清理未完成', {
+          pid: child.pid,
+          exitCode: child.exitCode,
+          code,
+          killed,
+          detail
+        })
+        const reason = new Error(
+          `子进程 ${child.pid} 清理${killed ? '超时' : '失败'}（${code}）${detail ? `：${detail}` : ''}`,
+          { cause: failure }
+        )
+        rejectRun(input.cleanupError(stderr.trim(), reason))
       })
     }
     const append = (current: string, chunk: Buffer): string =>

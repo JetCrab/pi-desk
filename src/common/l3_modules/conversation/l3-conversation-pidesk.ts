@@ -46,6 +46,7 @@ export function readL3ConversationPiDeskCommand(
   if (
     Object.keys(input).length !== 1 ||
     !Array.isArray(args) ||
+    args.length > 32 ||
     !args.every((arg) => typeof arg === 'string')
   ) {
     return fallback
@@ -82,8 +83,10 @@ export function readL3ConversationPiDeskCommand(
   if (args[0] !== 'plugins' || !action || !['list', 'show', 'install', 'remove'].includes(action))
     return fallback
   let scope: string | null = null
-  let name: string | null = null
+  const names: string[] = []
   let version: string | null = null
+  let tag: string | null = null
+  let checkUpdates = false
   for (let index = 2; index < args.length; index += 1) {
     const argument = args[index]!
     if (argument === '--scope' && scope === null && args[index + 1] === 'global') {
@@ -96,17 +99,29 @@ export function readL3ConversationPiDeskCommand(
     ) {
       version = args[++index]!
     } else if (
+      argument === '--tag' &&
+      ['list', 'install'].includes(action) &&
+      tag === null &&
+      (args[index + 1]?.length ?? 0) <= 128 &&
+      /^[a-zA-Z][a-zA-Z0-9._-]*$/.test(args[index + 1] ?? '')
+    ) {
+      tag = args[++index]!
+    } else if (argument === '--check-updates' && action === 'list' && !checkUpdates) {
+      checkUpdates = true
+    } else if (
       action !== 'list' &&
-      name === null &&
+      (action !== 'show' || names.length === 0) &&
       argument !== 'node_modules' &&
       pluginNamePattern.test(argument)
     ) {
-      name = argument
+      names.push(argument)
     } else {
       return fallback
     }
   }
-  if (action !== 'list' && (name === null || scope === null)) return fallback
+  if (tag !== null && version !== null) return fallback
+  if (action !== 'list' && (names.length === 0 || scope === null)) return fallback
+  const name = names.length > 0 ? names.join('、') : null
   switch (action) {
     case 'list':
       return { ...fallback, label: labels.list }
@@ -129,6 +144,9 @@ const pluginSchema = z
     kind: z.enum(['package', 'extension']),
     version: z.string().nullable(),
     status: z.enum(['ready', 'available', 'disabled', 'failed']),
+    updateTag: z.string().nullish(),
+    availableVersion: z.string().nullish(),
+    updateError: z.string().nullish(),
     operation: z
       .object({
         action: z.enum(['add', 'update', 'del', 'apply']),

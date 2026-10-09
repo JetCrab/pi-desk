@@ -1,6 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, readFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
+import { L4PluginRegistrySchema } from '@common/l4_foundation/plugin/l4-plugin-package'
+import { createJiti } from 'jiti'
+import packageRootApi from '../process/l4-package-root.js'
 
 const PACKAGE_CLI_TIMEOUT_MS = 5 * 60 * 1000
 
@@ -59,6 +62,25 @@ async function main(): Promise<void> {
   const action = readAction(process.argv[2])
   const source = process.argv[3]?.trim()
   if (!source || source.length > 2048) throw new Error('插件维护来源无效')
+  const registry = process.argv[4] ? L4PluginRegistrySchema.parse(process.argv[4]) : undefined
+  const scope = /^npm:(@[^/]+)\//.exec(source)?.[1]
+  const inheritedEnvironment = { ...process.env }
+  if (registry) {
+    // Windows 子进程的环境名不区分大小写，不能同时保留两种拼写。
+    const replaced = new Set([
+      'npm_config_registry',
+      ...(scope ? [`npm_config_${scope}:registry`.toLowerCase()] : [])
+    ])
+    for (const key of Object.keys(inheritedEnvironment)) {
+      if (replaced.has(key.toLowerCase())) delete inheritedEnvironment[key]
+    }
+  }
+  const registryEnvironment: Record<string, string> = registry
+    ? {
+        npm_config_registry: registry,
+        ...(scope ? { [`npm_config_${scope}:registry`]: registry } : {})
+      }
+    : {}
 
   const configuredAgentDir = process.env.PI_CODING_AGENT_DIR
   const agentDir =
@@ -95,7 +117,8 @@ async function main(): Promise<void> {
       const child = spawn(process.execPath, args, {
         cwd,
         env: {
-          ...process.env,
+          ...inheritedEnvironment,
+          ...registryEnvironment,
           FORCE_COLOR: '0',
           NO_COLOR: '1',
           PI_CODING_AGENT_DIR: agentDir,
@@ -139,6 +162,19 @@ async function main(): Promise<void> {
       timeout.unref()
     })
   }
+  const jiti = createJiti(import.meta.url, {
+    nativeModules: [
+      '@earendil-works/pi-coding-agent',
+      '@earendil-works/pi-agent-core',
+      '@earendil-works/pi-ai'
+    ],
+    tsconfigPaths: join(packageRootApi.packageRoot, 'tsconfig.json')
+  })
+  const preferences = await jiti.import<typeof import('./l4-pi-plugin-preferences')>(
+    './l4-pi-plugin-preferences.ts'
+  )
+  if (action === 'remove') preferences.removeL4PiPluginPreference(source, agentDir)
+  else if (registry) preferences.setL4PiPluginRegistry(source, registry, agentDir)
 }
 
 process.on('SIGINT', () => stop('SIGINT'))

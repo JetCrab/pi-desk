@@ -103,7 +103,17 @@ export function createReleasePlan(
       if (!increased && base) {
         const paths =
           item.name === '@jetcrab/pi-desk'
-            ? ['src', 'bin', 'package.json', 'next.config.ts', 'tsconfig.json']
+            ? [
+                'src',
+                'bin',
+                'package.json',
+                'next.config.ts',
+                'tsconfig.json',
+                'apps/docker/Dockerfile',
+                'apps/docker/.dockerignore',
+                'apps/docker/prune-image.mjs',
+                '.github/scripts/release-docker.mjs'
+              ]
             : [`plugins/${item.name.slice('@jetcrab/'.length)}`]
         assert.ok(
           !runtimeChanged(root, base, head, paths),

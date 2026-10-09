@@ -5,6 +5,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { createJiti } from 'jiti'
+import { ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent'
 import {
   L2ModelSettingsGetResponseSchema,
   L2ModelSettingsReplaceRequestSchema
@@ -274,6 +275,210 @@ test('模型设置：请求头按实际生效层写回，移除时不重新暴�
       'X-Shared' in (await store.readL4ModelSettings()).providers[0].models[0].headers,
       false
     )
+  })
+})
+
+async function withAccountFixture(
+  run: (store: Store, path: string, agentDir: string, modelIds: string[]) => Promise<void>
+): Promise<void> {
+  await withFixture(fixtureConfig(), async (store, path, agentDir) => {
+    await writeFile(
+      join(agentDir, 'auth.json'),
+      JSON.stringify({
+        'openai-codex': {
+          type: 'oauth',
+          access: 'fixture-access',
+          refresh: 'fixture-refresh',
+          expires: Date.now() + 86_400_000
+        }
+      })
+    )
+    const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
+    const ids = runtime
+      .getModels('openai-codex')
+      .slice(0, 2)
+      .map((model) => model.id)
+    assert.equal(ids.length, 2, '隔离用例需要两个 Pi 内置 Codex 模型')
+    await run(store, path, agentDir, ids)
+  })
+}
+
+test('账号模型：登录不自动收录，只保存引用并统一过滤聊天和项目目录', async () => {
+  await withAccountFixture(async (store, path, agentDir, [first, second]) => {
+    const before = await readFile(path, 'utf8')
+    const auth = await readFile(join(agentDir, 'auth.json'), 'utf8')
+    const loggedIn = L2ModelSettingsGetResponseSchema.parse(await store.readL4ModelSettings())
+    assert.equal(loggedIn.accounts.find((item) => item.provider === 'openai-codex')?.loggedIn, true)
+    assert.deepEqual(loggedIn.accountModels, [])
+    assert.deepEqual(
+      loggedIn.models.map((item) => item.provider),
+      ['fixture']
+    )
+    assert.equal(await readFile(path, 'utf8'), before)
+
+    await store.replaceL4ModelSettings({
+      accountModels: [{ provider: 'openai-codex', modelId: first, overrides: {} }]
+    })
+    const config = await readConfig(path)
+    assert.deepEqual(config.modelSelections, [{ provider: 'openai-codex', modelId: first }])
+    assert.equal((config.providers as Record<string, unknown>)['openai-codex'], undefined)
+    assert.equal(await readFile(join(agentDir, 'auth.json'), 'utf8'), auth)
+    const saved = await store.readL4ModelSettings()
+    assert.deepEqual(
+      saved.models.filter((item) => item.provider === 'openai-codex').map((item) => item.modelId),
+      [first]
+    )
+    assert.equal(
+      saved.models.some((item) => item.modelId === second),
+      false
+    )
+    assert.equal(
+      saved.models.some((item) => item.provider === 'fixture'),
+      true
+    )
+
+    const { readL4PiModelCatalog } = await jiti.import<
+      typeof import('../src/server/l4_foundation/pi/l4-pi-model-catalog')
+    >('../src/server/l4_foundation/pi/l4-pi-model-catalog.ts')
+    const chat = await readL4PiModelCatalog(null, agentDir)
+    assert.deepEqual(
+      chat.models.filter((item) => item.provider === 'openai-codex').map((item) => item.modelId),
+      [first]
+    )
+    const project = await store.readL4ProjectModelDefault(agentDir)
+    assert.deepEqual(
+      project.models.filter((item) => item.provider === 'openai-codex').map((item) => item.modelId),
+      [first]
+    )
+    await assert.rejects(
+      store.replaceL4ProjectModelDefault(agentDir, {
+        provider: 'openai-codex',
+        modelId: second,
+        thinkingLevel: 'off'
+      }),
+      /不可用/
+    )
+  })
+})
+
+test('账号模型：参数覆盖稀疏写入，恢复默认及自定义配置保存不丢失高级字段', async () => {
+  await withAccountFixture(async (store, path, _agentDir, [first]) => {
+    const config = await readConfig(path)
+    config.modelSelections = [{ provider: 'openai-codex', modelId: first }]
+    const providers = config.providers as Record<string, unknown>
+    providers['openai-codex'] = {
+      modelOverrides: { [first]: { promptCache: { long: 7200 }, cost: { input: 7 } } }
+    }
+    await writeFile(path, JSON.stringify(config))
+    const baseline = await store.readL4ModelSettings()
+    await store.replaceL4ModelSettings({
+      accountModels: baseline.accountModels,
+      providers: baseline.providers
+    })
+    assert.deepEqual(await readConfig(path), config)
+    baseline.accountModels[0].overrides.contextWindow = 64000
+    await store.replaceL4ModelSettings({ accountModels: baseline.accountModels })
+    const saved = await store.readL4ModelSettings()
+    assert.equal(
+      saved.models.find((item) => item.provider === 'openai-codex')?.contextWindow,
+      64000
+    )
+    assert.equal(
+      saved.accounts
+        .find((item) => item.provider === 'openai-codex')
+        ?.models.find((item) => item.modelId === first)?.contextWindow,
+      baseline.accounts
+        .find((item) => item.provider === 'openai-codex')
+        ?.models.find((item) => item.modelId === first)?.contextWindow
+    )
+    saved.providers[0].models[0].name = '保留账号覆盖的自定义编辑'
+    await store.replaceL4ModelSettings({ providers: saved.providers })
+    await store.replaceL4ModelSettings({
+      accountModels: [{ provider: 'openai-codex', modelId: first, overrides: {} }]
+    })
+    const final = await readConfig(path)
+    const provider = (final.providers as Record<string, Record<string, unknown>>)['openai-codex']
+    assert.equal(provider.models, undefined)
+    assert.deepEqual(provider.modelOverrides, { [first]: { promptCache: { long: 7200 } } })
+    assert.equal(modelOf(final).name, '保留账号覆盖的自定义编辑')
+  })
+})
+
+test('账号模型：移除保护常用组合和已知项目默认，失败不改文件', async () => {
+  await withAccountFixture(async (store, path, agentDir, [first]) => {
+    await store.replaceL4ModelSettings({
+      accountModels: [{ provider: 'openai-codex', modelId: first, overrides: {} }]
+    })
+    const settings = await store.readL4ModelSettings()
+    const model = settings.models.find((item) => item.provider === 'openai-codex')!
+    const preset = {
+      provider: model.provider,
+      modelId: first,
+      thinkingLevel: model.thinkingLevels[0],
+      color: null
+    }
+    await store.replaceL4ModelSettings({ presets: [...settings.presets, preset] })
+    const before = await readFile(path, 'utf8')
+    await assert.rejects(store.replaceL4ModelSettings({ accountModels: [] }), /常用组合/)
+    assert.equal(await readFile(path, 'utf8'), before)
+    const cwd = join(agentDir, 'project')
+    await mkdir(cwd, { recursive: true })
+    const manager = SessionManager.create(cwd)
+    manager.appendMessage({ role: 'user', content: 'fixture', timestamp: Date.now() })
+    // Pi 在第一条 assistant 消息后落盘，项目列表以真实 JSONL 为来源。
+    manager.appendMessage({
+      role: 'assistant',
+      api: 'openai-completions',
+      provider: 'fixture',
+      model: 'test-model',
+      content: [{ type: 'text', text: 'fixture' }],
+      stopReason: 'stop',
+      timestamp: Date.now(),
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+      }
+    })
+    await store.replaceL4ProjectModelDefault(cwd, preset)
+    await assert.rejects(
+      store.replaceL4ModelSettings({ accountModels: [], presets: settings.presets }),
+      /项目.*默认/
+    )
+    assert.equal(await readFile(path, 'utf8'), before)
+    await store.replaceL4ProjectModelDefault(cwd, null)
+    await store.replaceL4ModelSettings({ accountModels: [], presets: settings.presets })
+    assert.equal(
+      (await store.readL4ModelSettings()).models.some((item) => item.provider === 'openai-codex'),
+      false
+    )
+  })
+})
+
+test('账号模型：拒绝重复收录及用同 ID 自定义连接覆盖账号凭据', async () => {
+  await withAccountFixture(async (store, path, _agentDir, [first]) => {
+    const ref = { provider: 'openai-codex', modelId: first, overrides: {} }
+    const before = await readFile(path, 'utf8')
+    await assert.rejects(store.replaceL4ModelSettings({ accountModels: [ref, ref] }), /重复收录/)
+    const settings = await store.readL4ModelSettings()
+    const conflict = { ...settings.providers[0], provider: 'openai-codex' }
+    await assert.rejects(
+      store.replaceL4ModelSettings({ providers: [...settings.providers, conflict] }),
+      /独立服务 ID/
+    )
+    assert.equal(await readFile(path, 'utf8'), before)
+  })
+})
+
+test('模型设置：原生编辑仍可修复无法解析的旧文件', async () => {
+  await withFixture('{ broken', async (store, path) => {
+    await store.replaceL4ModelSettings(
+      L2ModelSettingsReplaceRequestSchema.parse({ nativeConfig: fixtureConfig() })
+    )
+    assert.deepEqual(await readConfig(path), fixtureConfig())
   })
 })
 

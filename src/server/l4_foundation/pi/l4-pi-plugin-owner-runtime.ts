@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { HostSettings } from '@jetcrab/pi-desk-sdk/settings'
 import { readFile, stat } from 'node:fs/promises'
 import { basename, join, isAbsolute, relative, resolve } from 'node:path'
@@ -303,6 +304,8 @@ export class L4PiPluginOwnerRuntime {
   private readonly loadingOwners = new Set<L4PiPluginOwner>()
   private readonly changeListeners = new Set<() => void>()
   private readonly changingSources = new Set<string>()
+  private readonly maintainingSources = new Set<string>()
+  private readonly lifetime = new AbortController()
   private readonly packageDiagnostics = new Map<string, L4PiPluginPackageDiagnostic>()
   private initializePromise: Promise<void> | null = null
   private initialized = false
@@ -354,6 +357,45 @@ export class L4PiPluginOwnerRuntime {
           message: errorMessage(error)
         })
       }
+    }
+  }
+
+  async withSourceIdle<T>(
+    source: string,
+    operation: () => Promise<T>,
+    signal: AbortSignal,
+    onWaiting: (reason: string) => void
+  ): Promise<T> {
+    const lifetime = AbortSignal.any([signal, this.lifetime.signal])
+    lifetime.throwIfAborted()
+    let onAbort!: () => void
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = (): void => reject(lifetime.reason)
+      lifetime.addEventListener('abort', onAbort, { once: true })
+    })
+    try {
+      await Promise.race([this.initialize(), aborted])
+    } finally {
+      lifetime.removeEventListener('abort', onAbort)
+    }
+    lifetime.throwIfAborted()
+    if (
+      !this.acceptingCalls ||
+      this.changingSources.has(source) ||
+      this.maintainingSources.has(source)
+    ) {
+      throw new L4PiPluginRuntimeBusyError()
+    }
+    this.maintainingSources.add(source)
+    try {
+      while (this.owners.some((owner) => owner.source === source && owner.activeCalls.size > 0)) {
+        onWaiting(`插件 ${source} 仍有调用正在执行`)
+        await delay(250, undefined, { signal: lifetime })
+      }
+      lifetime.throwIfAborted()
+      return await operation()
+    } finally {
+      this.maintainingSources.delete(source)
     }
   }
 
@@ -438,6 +480,7 @@ export class L4PiPluginOwnerRuntime {
     if (
       !this.acceptingCalls ||
       this.changingSources.size > 0 ||
+      this.maintainingSources.size > 0 ||
       this.owners.some((owner) => owner.activeCalls.size > 0)
     ) {
       throw new L4PiPluginRuntimeBusyError()
@@ -490,6 +533,7 @@ export class L4PiPluginOwnerRuntime {
     execute: (signal: AbortSignal) => Promise<T>
   ): Promise<T> {
     this.ensureOwnerActive(owner)
+    if (this.maintainingSources.has(owner.source)) throw new L4PiPluginRuntimeBusyError()
     const controller = new AbortController()
     let rejectCanceled!: (error: Error) => void
     const canceled = new Promise<never>((_, reject) => {
@@ -603,6 +647,7 @@ export class L4PiPluginOwnerRuntime {
   async dispose(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
+    this.lifetime.abort()
     this.acceptingCalls = false
     this.changeListeners.clear()
     this.workSessionProvider = null

@@ -1,7 +1,8 @@
-import { useState, type CSSProperties, type FormEvent } from 'react'
+import { useEffect, useState, type CSSProperties, type FormEvent } from 'react'
 import { useDesktopSettings } from './hooks/l2-use-desktop-settings'
-import { type ReleaseChannel, type UpdatePolicy } from './l4-desktop-ipc'
+import { type ControlState, type ReleaseChannel, type UpdatePolicy } from './l4-desktop-ipc'
 import { DesktopHeader, DesktopIcon } from './l4-desktop-ui'
+import { ConfigurationPreferences } from './views/l2-startup-preference'
 
 const updatePolicies = [
   { value: 'none', label: '无' },
@@ -41,7 +42,6 @@ const optionsStyle: CSSProperties = {
 }
 
 type Props = {
-  mode: 'target' | 'tunnel'
   originalUrl: string | null
   localTarget: boolean
   initialAdvanced?: boolean
@@ -51,19 +51,115 @@ type Props = {
 }
 
 export function SettingsPage({
-  mode,
+  state,
+  readError,
+  refresh,
+  global = false,
+  onSelectTarget,
+  ...props
+}: Props & {
+  state: ControlState | null
+  readError: string
+  refresh: () => void
+  global?: boolean
+  onSelectTarget: (url: string) => void
+}): React.JSX.Element {
+  const [targetSaving, setTargetSaving] = useState(false)
+  const local = state?.targets.filter((target) => target.server) ?? []
+  const selected = props.originalUrl
+    ? local.find((target) => target.url === props.originalUrl)
+    : local[0]
+  const targetUrl = global ? (selected?.url ?? null) : props.originalUrl
+  const showTarget = !global || Boolean(selected)
+
+  return (
+    <main className="desktop-settings">
+      <DesktopHeader />
+      <div className="page-heading">
+        <button
+          className="icon-button"
+          type="button"
+          aria-label="返回"
+          disabled={targetSaving}
+          onClick={props.onBack}
+        >
+          <DesktopIcon name="back" />
+        </button>
+        <h1>{global ? '设置' : props.localTarget ? '本机设置' : '连接已有 Pi Desk'}</h1>
+      </div>
+      {readError && (
+        <div className="page-error" role="alert">
+          <p>暂时无法读取状态：{readError}</p>
+          <button type="button" onClick={refresh}>
+            重新读取
+          </button>
+        </div>
+      )}
+      {(global || props.localTarget) && (
+        <ConfigurationPreferences state={state} refresh={refresh} />
+      )}
+      {global && selected && (
+        <div className="settings-target-heading">
+          <h2>本机设置</h2>
+          {local.length > 1 ? (
+            <label className="field">
+              本机地址
+              <select
+                value={selected.url}
+                disabled={targetSaving}
+                onChange={(event) => onSelectTarget(event.target.value)}
+              >
+                {local.map((target) => (
+                  <option key={target.url} value={target.url}>
+                    {target.url}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <p className="muted path-text">{selected.url}</p>
+          )}
+        </div>
+      )}
+      {global && !state && !readError && (
+        <p className="loading" role="status">
+          正在读取设置…
+        </p>
+      )}
+      {global && state && props.originalUrl && !selected && (
+        <p className="page-error" role="alert">
+          这个本机地址已被移除，请返回后重新选择。
+        </p>
+      )}
+      {showTarget && (
+        <TargetSettingsForm
+          key={targetUrl ?? 'new'}
+          {...props}
+          originalUrl={targetUrl}
+          localTarget={global || props.localTarget}
+          onSavingChange={setTargetSaving}
+        />
+      )}
+    </main>
+  )
+}
+
+function TargetSettingsForm({
   originalUrl,
   localTarget,
   initialAdvanced = false,
   onDirty,
   onSaved,
-  onBack
-}: Props): React.JSX.Element {
+  onBack,
+  onSavingChange
+}: Props & { onSavingChange: (saving: boolean) => void }): React.JSX.Element {
   const { draft, loadError, saveError, saving, patch, reload, save } = useDesktopSettings(
-    mode,
     originalUrl,
     onDirty
   )
+  useEffect(() => {
+    onSavingChange(saving)
+  }, [saving, onSavingChange])
   const [advanced, setAdvanced] = useState(initialAdvanced)
   const selectUpdatePolicy = (
     field: 'startupUpdate' | 'periodicUpdate',
@@ -91,22 +187,7 @@ export function SettingsPage({
   }
   const disabled = saving || Boolean(loadError)
   return (
-    <main className="desktop-settings">
-      <DesktopHeader />
-      <div className="page-heading">
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="返回"
-          disabled={saving}
-          onClick={onBack}
-        >
-          <DesktopIcon name="back" />
-        </button>
-        <h1>
-          {mode === 'tunnel' ? '其他设备访问' : originalUrl ? '连接设置' : '连接已有 Pi Desk'}
-        </h1>
-      </div>
+    <>
       {loadError && (
         <div className="page-error" role="alert">
           <p>设置读取失败：{loadError}</p>
@@ -123,227 +204,156 @@ export function SettingsPage({
       )}
       {draft && !loadError && (
         <form onSubmit={(event) => void submit(event)} onInvalid={() => setAdvanced(true)}>
-          {mode === 'target' ? (
-            <>
-              {!originalUrl && <p className="muted">输入电脑或服务器上的地址，即可打开。</p>}
-              <label className="field">
-                网页地址
-                <input
-                  required
-                  inputMode="url"
-                  autoComplete="off"
-                  placeholder="例如 http://192.168.1.20:30333"
-                  value={draft.url}
-                  disabled={disabled}
-                  onChange={(event) => patch({ url: event.target.value })}
-                />
-              </label>
-              {draft.serverEnabled && draft.packageEnabled && (
-                <section className="settings-section">
-                  <h2>服务更新</h2>
-                  {updateGroups.map((group) => (
-                    <fieldset key={group.field}>
-                      <legend>{group.label}</legend>
-                      <div className="field" style={optionsStyle}>
-                        {updatePolicies.map((option) => (
-                          <label className="toggle" key={option.value}>
-                            <input
-                              type="radio"
-                              name={group.field}
-                              value={option.value}
-                              style={radioStyle}
-                              checked={draft[group.field] === option.value}
-                              disabled={disabled}
-                              onChange={() => selectUpdatePolicy(group.field, option.value)}
-                            />
-                            {option.value === 'none'
-                              ? option.label
-                              : `${group.prefix}${option.label}`}
-                          </label>
-                        ))}
-                      </div>
-                    </fieldset>
-                  ))}
-                  <fieldset>
-                    <legend>版本</legend>
+          <>
+            {!originalUrl && <p className="muted">输入电脑或服务器上的地址，即可打开。</p>}
+            <label className="field">
+              网页地址
+              <input
+                required
+                inputMode="url"
+                autoComplete="off"
+                placeholder="例如 http://192.168.1.20:30333"
+                value={draft.url}
+                disabled={disabled}
+                onChange={(event) => patch({ url: event.target.value })}
+              />
+            </label>
+            {draft.serverEnabled && draft.packageEnabled && (
+              <section className="settings-section">
+                <h2>服务更新</h2>
+                {updateGroups.map((group) => (
+                  <fieldset key={group.field}>
+                    <legend>{group.label}</legend>
                     <div className="field" style={optionsStyle}>
-                      {releaseChannels.map((option) => (
+                      {updatePolicies.map((option) => (
                         <label className="toggle" key={option.value}>
                           <input
                             type="radio"
-                            name="channel"
+                            name={group.field}
                             value={option.value}
                             style={radioStyle}
-                            checked={draft.channel === option.value}
+                            checked={draft[group.field] === option.value}
                             disabled={disabled}
-                            onChange={() => selectChannel(option.value)}
+                            onChange={() => selectUpdatePolicy(group.field, option.value)}
                           />
-                          {option.label}
+                          {option.value === 'none'
+                            ? option.label
+                            : `${group.prefix}${option.label}`}
                         </label>
                       ))}
                     </div>
                   </fieldset>
-                </section>
-              )}
-              {localTarget && (
-                <details
-                  className="disclosure advanced-settings"
-                  open={advanced}
-                  onToggle={(event) => setAdvanced(event.currentTarget.open)}
-                >
-                  <summary>
-                    <DesktopIcon name="chevron" />
-                    高级设置
-                  </summary>
-                  <div className="fields">
-                    <fieldset>
-                      <legend>本机服务</legend>
-                      <label className="toggle">
+                ))}
+                <fieldset>
+                  <legend>版本</legend>
+                  <div className="field" style={optionsStyle}>
+                    {releaseChannels.map((option) => (
+                      <label className="toggle" key={option.value}>
                         <input
-                          type="checkbox"
-                          checked={draft.serverEnabled}
+                          type="radio"
+                          name="channel"
+                          value={option.value}
+                          style={radioStyle}
+                          checked={draft.channel === option.value}
                           disabled={disabled}
-                          onChange={(event) => patch({ serverEnabled: event.target.checked })}
+                          onChange={() => selectChannel(option.value)}
                         />
-                        由这台电脑启动服务
+                        {option.label}
                       </label>
-                      {draft.serverEnabled && (
-                        <div className="fields">
-                          <label className="field">
-                            启动命令
-                            <textarea
-                              required
-                              autoComplete="off"
-                              spellCheck={false}
-                              value={draft.startCommand}
-                              disabled={disabled}
-                              onChange={(event) => patch({ startCommand: event.target.value })}
-                            />
-                            <span className="hint">
-                              {'{port}'} 代表网址端口，{'{package}'} 代表包名和版本。
-                            </span>
-                          </label>
-                          <label className="field">
-                            就绪路径
-                            <input
-                              required
-                              autoComplete="off"
-                              value={draft.readyPath}
-                              disabled={disabled}
-                              onChange={(event) => patch({ readyPath: event.target.value })}
-                            />
-                          </label>
-                          <label className="toggle">
-                            <input
-                              type="checkbox"
-                              checked={draft.packageEnabled}
-                              disabled={disabled}
-                              onChange={(event) => patch({ packageEnabled: event.target.checked })}
-                            />
-                            管理服务安装包
-                          </label>
-                          {draft.packageEnabled && (
-                            <>
-                              <label className="field">
-                                包名
-                                <input
-                                  required
-                                  autoComplete="off"
-                                  value={draft.packageName}
-                                  disabled={disabled}
-                                  onChange={(event) => patch({ packageName: event.target.value })}
-                                />
-                              </label>
-                              <label className="field">
-                                下载源
-                                <input
-                                  type="url"
-                                  autoComplete="off"
-                                  placeholder="使用 npm 默认下载源"
-                                  value={draft.packageRegistry}
-                                  disabled={disabled}
-                                  onChange={(event) =>
-                                    patch({ packageRegistry: event.target.value })
-                                  }
-                                />
-                              </label>
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </fieldset>
-                    <fieldset>
-                      <legend>其他设备访问</legend>
-                      <label className="toggle">
-                        <input
-                          type="checkbox"
-                          checked={draft.tunnelEnabled}
-                          disabled={disabled}
-                          onChange={(event) => patch({ tunnelEnabled: event.target.checked })}
-                        />
-                        通过公网端口访问
-                      </label>
-                      {draft.tunnelEnabled && (
-                        <div className="fields">
-                          <label className="field">
-                            公网端口
-                            <input
-                              type="number"
-                              required
-                              min={1}
-                              max={65535}
-                              step={1}
-                              inputMode="numeric"
-                              value={draft.publicPort}
-                              disabled={disabled}
-                              onChange={(event) => patch({ publicPort: event.target.value })}
-                            />
-                          </label>
-                          <label className="toggle">
-                            <input
-                              type="checkbox"
-                              checked={draft.tunnelAutoStart}
-                              disabled={disabled}
-                              onChange={(event) => patch({ tunnelAutoStart: event.target.checked })}
-                            />
-                            打开桌面版时自动连接
-                          </label>
-                        </div>
-                      )}
-                    </fieldset>
+                    ))}
                   </div>
-                </details>
-              )}
-            </>
-          ) : (
-            <div className="fields">
-              <p className="muted">
-                填写你的访问服务信息。保存后，在地址的高级设置中配置公网端口。
-              </p>
-              <label className="field">
-                访问服务地址
-                <input
-                  type="url"
-                  autoComplete="off"
-                  placeholder="http://tunnel.example.com:7001"
-                  value={draft.controlServerUrl}
-                  disabled={disabled}
-                  onChange={(event) => patch({ controlServerUrl: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                连接密钥
-                <input
-                  type="password"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={draft.controlKey}
-                  disabled={disabled}
-                  onChange={(event) => patch({ controlKey: event.target.value })}
-                />
-              </label>
-            </div>
-          )}
+                </fieldset>
+              </section>
+            )}
+            {localTarget && (
+              <details
+                className="disclosure advanced-settings"
+                open={advanced}
+                onToggle={(event) => setAdvanced(event.currentTarget.open)}
+              >
+                <summary>
+                  <DesktopIcon name="chevron" />
+                  高级设置
+                </summary>
+                <div className="fields">
+                  <fieldset>
+                    <legend>本机服务</legend>
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={draft.serverEnabled}
+                        disabled={disabled}
+                        onChange={(event) => patch({ serverEnabled: event.target.checked })}
+                      />
+                      由这台电脑启动服务
+                    </label>
+                    {draft.serverEnabled && (
+                      <div className="fields">
+                        <label className="field">
+                          启动命令
+                          <textarea
+                            required
+                            autoComplete="off"
+                            spellCheck={false}
+                            value={draft.startCommand}
+                            disabled={disabled}
+                            onChange={(event) => patch({ startCommand: event.target.value })}
+                          />
+                          <span className="hint">
+                            {'{port}'} 代表网址端口，{'{package}'} 代表包名和版本。
+                          </span>
+                        </label>
+                        <label className="field">
+                          就绪路径
+                          <input
+                            required
+                            autoComplete="off"
+                            value={draft.readyPath}
+                            disabled={disabled}
+                            onChange={(event) => patch({ readyPath: event.target.value })}
+                          />
+                        </label>
+                        <label className="toggle">
+                          <input
+                            type="checkbox"
+                            checked={draft.packageEnabled}
+                            disabled={disabled}
+                            onChange={(event) => patch({ packageEnabled: event.target.checked })}
+                          />
+                          管理服务安装包
+                        </label>
+                        {draft.packageEnabled && (
+                          <>
+                            <label className="field">
+                              包名
+                              <input
+                                required
+                                autoComplete="off"
+                                value={draft.packageName}
+                                disabled={disabled}
+                                onChange={(event) => patch({ packageName: event.target.value })}
+                              />
+                            </label>
+                            <label className="field">
+                              下载源
+                              <input
+                                type="url"
+                                autoComplete="off"
+                                placeholder="使用 npm 默认下载源"
+                                value={draft.packageRegistry}
+                                disabled={disabled}
+                                onChange={(event) => patch({ packageRegistry: event.target.value })}
+                              />
+                            </label>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </fieldset>
+                </div>
+              </details>
+            )}
+          </>
           {saveError && (
             <p className="page-error" role="alert">
               {saveError}
@@ -354,11 +364,11 @@ export function SettingsPage({
               取消
             </button>
             <button className="primary" type="submit" disabled={disabled}>
-              {saving ? '正在保存…' : mode === 'target' && !originalUrl ? '添加并打开' : '保存设置'}
+              {saving ? '正在保存…' : !originalUrl ? '添加并打开' : '保存设置'}
             </button>
           </div>
         </form>
       )}
-    </main>
+    </>
   )
 }

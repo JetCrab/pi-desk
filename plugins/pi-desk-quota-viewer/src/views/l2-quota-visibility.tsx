@@ -7,7 +7,7 @@ import {
   PluginDialog,
   PluginEmptyState,
   PluginInput,
-  PluginSelectField
+  PluginSelect
 } from '@jetcrab/pi-desk-sdk/react/base'
 import { useQuotaVisibility } from '../hooks/l2-quota-visibility.js'
 import { quotaText, readQuotaRegion } from '../l2-quota-locale.js'
@@ -78,7 +78,7 @@ export function QuotaVisibilityDialog({
     >
       <div className="quota-visibility">
         <div className="quota-visibility-filters">
-          <PluginSelectField
+          <PluginSelect
             label={t('渠道')}
             value={adapter || 'all'}
             disabled={model.saving}

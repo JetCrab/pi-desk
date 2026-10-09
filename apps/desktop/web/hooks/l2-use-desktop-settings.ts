@@ -3,7 +3,6 @@ import { readDesktopSettings, saveDesktopSettings, type SettingsDraft } from '..
 import { errorMessage } from '../l4-desktop-ipc'
 
 export function useDesktopSettings(
-  mode: 'target' | 'tunnel',
   originalUrl: string | null,
   onDirty: (dirty: boolean) => void
 ): {
@@ -22,7 +21,7 @@ export function useDesktopSettings(
   const [reloadKey, setReloadKey] = useState(0)
   useEffect(() => {
     let disposed = false
-    void readDesktopSettings(mode, originalUrl).then(
+    void readDesktopSettings(originalUrl).then(
       (next) => {
         if (!disposed) setDraft(next)
       },
@@ -33,7 +32,7 @@ export function useDesktopSettings(
     return () => {
       disposed = true
     }
-  }, [mode, originalUrl, reloadKey])
+  }, [originalUrl, reloadKey])
   const patch = (value: Partial<SettingsDraft>): void => {
     setDraft((current) => (current ? { ...current, ...value } : null))
     setSaveError('')
@@ -44,7 +43,7 @@ export function useDesktopSettings(
     setSaving(true)
     setSaveError('')
     try {
-      return { url: await saveDesktopSettings(mode, originalUrl, draft) }
+      return { url: await saveDesktopSettings(originalUrl, draft) }
     } catch (cause) {
       setSaveError(errorMessage(cause))
       return null

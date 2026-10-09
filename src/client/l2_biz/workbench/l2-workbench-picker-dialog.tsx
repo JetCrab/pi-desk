@@ -302,7 +302,7 @@ export function L2WorkbenchPickerDialog({
     setSearchIn(DEFAULT_HISTORY_SEARCH_IN)
     setBrowserPathInput('')
     lastRequestedHistorySearchRef.current = ''
-  }, [open, pickerCwd, pickerView])
+  }, [open, pickerMode, pickerCwd, pickerView])
 
   const historySearchKey = `${query}\u0000${searchIn.join('\u0000')}`
   useEffect(() => {
@@ -453,7 +453,8 @@ export function L2WorkbenchPickerDialog({
       : pickerView === 'browser'
         ? (directoryBrowser?.directories.length ?? 0)
         : activeDirectories.length
-  const showInitialLoading = loading && itemCount === 0
+  const showInitialLoading =
+    loading && (pickerView === 'browser' ? directoryBrowser === null : itemCount === 0)
   const footerDescription =
     pickerView === 'history'
       ? t('currentProject', { path: pickerCwd ?? '' })
@@ -909,7 +910,7 @@ export function L2WorkbenchPickerDialog({
                       <button
                         key={directory.cwd}
                         type="button"
-                        disabled={working}
+                        disabled={loading || working}
                         onClick={() => navigateBrowserDirectory(directory.cwd)}
                         className="group flex min-h-15 w-full items-center gap-3 rounded-md px-2 py-2 text-left outline-none transition-colors hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-55 sm:px-3"
                       >

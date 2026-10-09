@@ -17,6 +17,7 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import { clearL4PiPluginCodeCache, loadL4PiDeskPluginEntry } from './l4-pi-plugin-module-loader'
 import { runL4PiPackageRootExclusive } from './l4-pi-package-root-gate'
+import { createL4PiPluginDisabledFilter } from './l4-pi-plugin-disabled'
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0]
 type Resource = Awaited<ReturnType<DefaultPackageManager['resolve']>>['extensions'][number]
@@ -124,11 +125,26 @@ export class L4PiSessionResources {
         throw new Error(`插件包未安装：${source}`)
       })
     )
+    const disabled = await createL4PiPluginDisabledFilter(agentDir, manager, settings)
+    const select = async (resources: Resource[]): Promise<Resource[]> => {
+      const enabled = await Promise.all(
+        resources.map(
+          async (resource) =>
+            resource.enabled &&
+            !(await disabled(
+              resource.metadata.source,
+              resource.path,
+              resource.metadata.scope === 'user' && resource.metadata.origin === 'package'
+            ))
+        )
+      )
+      return resources.filter((_, index) => enabled[index])
+    }
     return {
-      extensions: paths.extensions.filter((resource) => resource.enabled),
-      skills: paths.skills.filter((resource) => resource.enabled),
-      prompts: paths.prompts.filter((resource) => resource.enabled),
-      themes: paths.themes.filter((resource) => resource.enabled)
+      extensions: await select(paths.extensions),
+      skills: await select(paths.skills),
+      prompts: await select(paths.prompts),
+      themes: await select(paths.themes)
     }
   }
 

@@ -118,6 +118,7 @@ export function L1HomePage(): React.JSX.Element {
       <L2Settings
         key={`${input.open}:${input.initialPage ?? 'default'}`}
         open={input.open}
+        connectionReady={input.connectionReady}
         initialModelTab={input.initialPage === 'model-presets' ? 'presets' : undefined}
         workSessions={input.workSessions}
         focusedCwd={input.focusedCwd}

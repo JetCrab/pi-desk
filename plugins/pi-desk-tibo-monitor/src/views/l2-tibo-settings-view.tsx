@@ -7,7 +7,7 @@ import {
   PluginField,
   PluginInput,
   PluginLoadingState,
-  PluginSelectField
+  PluginSelect
 } from '@jetcrab/pi-desk-sdk/react/base'
 import type { useTiboPage } from '../l2-browser-hooks.js'
 import type { ModelSelection } from '../l4-tibo-protocol.js'
@@ -50,7 +50,7 @@ export function TiboSettingsView({
           void state.save()
         }}
       >
-        <PluginSelectField
+        <PluginSelect
           label={tiboText(region, '翻译模型', 'Translation model')}
           placeholder={chooseModel}
           value={modelKey(draft.model)}

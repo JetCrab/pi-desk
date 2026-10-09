@@ -7,7 +7,13 @@ import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import test, { before } from 'node:test'
 import { createJiti } from 'jiti'
-import type { L2PluginManagementSnapshot } from '../src/common/l2_biz/plugin/l2-plugin-management-contract'
+import type {
+  L2PluginManagementBatchRequest,
+  L2PluginManagementBatchResponse,
+  L2PluginManagementInstallRequest,
+  L2PluginManagementListRequest,
+  L2PluginManagementSnapshot
+} from '../src/common/l2_biz/plugin/l2-plugin-management-contract'
 
 const require = createRequire(import.meta.url)
 const jiti = createJiti(import.meta.url, {
@@ -73,6 +79,9 @@ function snapshot(source = 'npm:@fixture/plugin@1.0.0'): L2PluginManagementSnaps
 class ManagementFixture {
   state = snapshot()
   calls: unknown[][] = []
+  lastListInput: boolean | L2PluginManagementListRequest = false
+  rejected = new Map<string, string>()
+  waiting = new Map<string, Promise<void>>()
   private resolveCompletion!: () => void
   private rejectCompletion!: (error: Error) => void
   readonly completion = new Promise<void>((resolvePromise, rejectPromise) => {
@@ -80,18 +89,33 @@ class ManagementFixture {
     this.rejectCompletion = rejectPromise
   })
 
-  async list(): Promise<L2PluginManagementSnapshot> {
+  async list(
+    input: boolean | L2PluginManagementListRequest = false
+  ): Promise<L2PluginManagementSnapshot> {
+    this.lastListInput = input
     return this.state
   }
+  async batch(input: L2PluginManagementBatchRequest): Promise<L2PluginManagementBatchResponse> {
+    this.calls.push(['batch', input])
+    const sources = input.action === 'add' ? input.items.map((item) => item.source) : input.sources
+    return {
+      snapshot: this.state,
+      results: sources.map((source) => ({ source, error: this.rejected.get(source) ?? null }))
+    }
+  }
   async get(source: string) {
-    return { source, tools: [], skills: [], prompts: [] }
+    return { source, readme: null, tools: [], skills: [], prompts: [] }
   }
   async apply(sources?: readonly string[]): Promise<L2PluginManagementSnapshot> {
     this.calls.push(['apply', sources])
     return this.state
   }
-  async reinstall(source: string, previous?: string): Promise<L2PluginManagementSnapshot> {
-    this.calls.push(['reinstall', source, previous])
+  async reinstall(
+    source: string,
+    previous?: string,
+    options?: Omit<L2PluginManagementInstallRequest, 'source'>
+  ): Promise<L2PluginManagementSnapshot> {
+    this.calls.push(['reinstall', source, previous, ...(options ? [options] : [])])
     return this.state
   }
   async del(source: string): Promise<L2PluginManagementSnapshot> {
@@ -100,7 +124,7 @@ class ManagementFixture {
   }
   waitForOperations(sources: readonly string[], _signal: AbortSignal): Promise<void> {
     this.calls.push(['wait', sources])
-    return this.completion
+    return this.waiting.get(sources[0]) ?? this.completion
   }
   finish(): void {
     this.resolveCompletion()
@@ -190,8 +214,9 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       management.state.plugins[0].version = '2.0.0'
       management.finish()
       await notice.notification
-      assert.match(notice.messages[0], /2.0.0.*外层已更新/)
-      assert.match(notice.messages[0], /已有会话扩展不变.*手动重载 PI/)
+      assert.match(notice.messages[0], /2.0.0.*完成宿主加载/)
+      assert.doesNotMatch(notice.messages[0], /已有会话已刷新/)
+      assert.match(notice.messages[0], /主动 reload/)
     })
 
     await t.test('查询保留未知版本、零插件、异常和重启要求', async () => {
@@ -264,7 +289,7 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       management.finish()
       await notice.notification
       assert.match(notice.messages[0], /实际版本.*不一致/)
-      assert.doesNotMatch(notice.messages[0], /外层已更新/)
+      assert.doesNotMatch(notice.messages[0], /完成加载/)
     })
 
     await t.test('同版本也调用重新安装，完成前不通知成功', async () => {
@@ -310,7 +335,8 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       assert.deepEqual(management.calls[0], ['apply', [local]])
       management.finish()
       await notice.notification
-      assert.match(notice.messages[0], /外层已更新/)
+      assert.match(notice.messages[0], /服务与界面已更新/)
+      assert.match(notice.messages[0], /已有 Pi 会话.*主动 reload/)
       await assert.rejects(
         () =>
           execute(
@@ -339,6 +365,104 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       assert.match(notice.messages[0], /已卸载/)
     })
 
+    await t.test('批量部分拒绝不提前通知，全部接纳项收尾后只汇总一次', async () => {
+      const management = new ManagementFixture()
+      management.state.plugins = ['one', 'two', 'three'].map((name) => ({
+        ...snapshot(`npm:@fixture/${name}@1.0.0`).plugins[0],
+        updateTag: 'dev'
+      }))
+      management.rejected.set('npm:@fixture/three', '已有操作正在执行')
+      let finishSecond!: () => void
+      management.waiting.set(
+        'npm:@fixture/two',
+        new Promise<void>((done) => {
+          finishSecond = done
+        })
+      )
+      const notice = notificationContext(root)
+      const result = await execute(
+        {
+          kind: 'plugins',
+          action: 'install',
+          names: ['@fixture/one', '@fixture/two', '@fixture/three'],
+          tag: 'dev'
+        },
+        notice.context,
+        management,
+        agentDir
+      )
+      assert.equal(result.mode, 'async')
+      assert.deepEqual(management.calls[0], [
+        'batch',
+        {
+          action: 'add',
+          items: ['one', 'two', 'three'].map((name) => ({
+            source: `npm:@fixture/${name}`,
+            tag: 'dev'
+          }))
+        }
+      ])
+      management.fail('第一个包预检失败')
+      await new Promise<void>((done) => setImmediate(done))
+      assert.equal(notice.messages.length, 0, '尚有已接纳包在执行时不应通知整批完成')
+      finishSecond()
+      await notice.notification
+      assert.equal(notice.messages.length, 1)
+      assert.match(notice.messages[0], /@fixture\/one：失败.*预检失败/)
+      assert.match(notice.messages[0], /@fixture\/two：成功/)
+      assert.match(notice.messages[0], /@fixture\/three：未接纳.*已有操作/)
+    })
+
+    await t.test('纯原生包不需要创建已有会话才能报告安装完成', async () => {
+      const management = new ManagementFixture()
+      management.state.plugins[0].status = 'available'
+      const notice = notificationContext(root)
+      await execute(
+        { kind: 'plugins', action: 'install', name: '@fixture/plugin' },
+        notice.context,
+        management,
+        agentDir
+      )
+      management.finish()
+      await notice.notification
+      assert.match(notice.messages[0], /成功：已安装/)
+    })
+
+    await t.test('单包标签安装与仅dev检查复用管理业务，不猜测版本后缀', async () => {
+      const management = new ManagementFixture()
+      management.state.plugins[0].updateTag = 'dev'
+      management.state.plugins[0].availableVersion = '1.0.1-dev.2'
+      management.state.plugins.push({
+        ...snapshot('npm:@fixture/stable@1.0.0').plugins[0],
+        updateTag: 'latest'
+      })
+      const notice = notificationContext(root)
+      const listed = await execute(
+        { kind: 'plugins', action: 'list', checkUpdates: true, tag: 'dev' },
+        notice.context,
+        management,
+        agentDir
+      )
+      assert.deepEqual(management.lastListInput, { checkUpdates: true, tag: 'dev' })
+      assert.equal(JSON.parse(listed.message).plugins.length, 1)
+      assert.equal(JSON.parse(listed.message).plugins[0].availableVersion, '1.0.1-dev.2')
+      await execute(
+        { kind: 'plugins', action: 'install', name: '@fixture/plugin', tag: 'dev' },
+        notice.context,
+        management,
+        agentDir
+      )
+      assert.deepEqual(management.calls[0], [
+        'reinstall',
+        'npm:@fixture/plugin',
+        'npm:@fixture/plugin@1.0.0',
+        { tag: 'dev' }
+      ])
+      management.finish()
+      await notice.notification
+      assert.match(notice.messages[0], /成功/)
+    })
+
     await t.test('维护失败和重启要求使用原错误，不伪装成生效', async () => {
       const management = new ManagementFixture()
       const notice = notificationContext(root)
@@ -351,7 +475,7 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       management.fail('插件尚未生效，需要重启 Pi Desk')
       await notice.notification
       assert.match(notice.messages[0], /尚未生效，需要重启/)
-      assert.doesNotMatch(notice.messages[0], /外层已更新/)
+      assert.doesNotMatch(notice.messages[0], /完成加载/)
     })
 
     await t.test('发起会话已释放时不再通知，基础模式直接拒绝管理', async () => {

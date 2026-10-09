@@ -4,13 +4,37 @@ import { appendFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+export function selectPluginChecks(paths, full = false) {
+  if (full) return ['all']
+  return [
+    ...new Set(
+      paths
+        .filter((path) => !path.endsWith('.md'))
+        .flatMap((path) => {
+          const match = /^plugins\/(pi-desk[^/]+)\//.exec(path)
+          return match ? [match[1]] : []
+        })
+    )
+  ]
+}
+
 export function selectCiChecks(paths, full) {
+  paths = paths.filter((path) => !path.endsWith('.md'))
   return {
     full,
     web:
       full ||
       paths.some((path) =>
-        /^(?:src\/|bin\/|plugins\/|package\.json$|pnpm-|next\.config|tsconfig)/.test(path)
+        /^(?:src\/|bin\/|plugins\/pi-desk-sdk\/|package\.json$|pnpm-|next\.config|tsconfig)/.test(
+          path
+        )
+      ),
+    pidesk:
+      full ||
+      paths.some((path) =>
+        /^(?:src\/|bin\/|plugins\/pi-desk-sdk\/|package\.json$|pnpm-|next\.config|tsconfig|tests\/(?:l[124]-pidesk(?:-|\.)|l2-plugin-command|l4-(?:e2e-server|browser-cdp)-runtime)|\.github\/(?:scripts\/(?:select-ci-checks|release-npm|verify-npm-install)\.mjs$|workflows\/(?:check|release-npm)\.yml$))/.test(
+          path
+        )
       ),
     website: full || paths.some((path) => path.startsWith('apps/website/')),
     agent:
@@ -21,7 +45,10 @@ export function selectCiChecks(paths, full) {
         )
       ),
     automation:
-      full || paths.some((path) => /^\.github\/|^tests\/l4-(?:release|public-boundary)/.test(path))
+      full ||
+      paths.some((path) =>
+        /^\.github\/|^apps\/docker\/|^tests\/l4-(?:release|docker|public-boundary)/.test(path)
+      )
   }
 }
 
@@ -42,6 +69,10 @@ async function main() {
   const selected = selectCiChecks(paths, full)
   for (const [key, value] of Object.entries(selected))
     await appendFile(process.env.GITHUB_OUTPUT, `${key}=${value}\n`)
+  await appendFile(
+    process.env.GITHUB_OUTPUT,
+    `plugins=${JSON.stringify(selectPluginChecks(paths, full))}\nfiles=${JSON.stringify(paths)}\n`
+  )
   console.log(`检查模式：${full ? '正式完整检查' : '开发核心检查'}；${JSON.stringify(selected)}`)
 }
 

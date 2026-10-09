@@ -1,0 +1,135 @@
+name: Release Docker
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      release_tag:
+        type: string
+        required: true
+      phase:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  IMAGE_REPOSITORY: ghcr.io/jetcrab/pi-desk
+  SOURCE_SHA: ${{ inputs.source_sha }}
+  RELEASE_TAG: ${{ inputs.release_tag }}
+  DOCKER_ARTIFACT_DIR: ${{ github.workspace }}/temp/package/docker/${{ github.run_id }}-${{ github.run_attempt }}
+  NPM_ARTIFACT_DIR: ${{ github.workspace }}/temp/package/docker-npm/${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main' && inputs.phase == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - name: 恢复同批已验证镜像
+        id: image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-docker.mjs restore
+      - uses: actions/download-artifact@v4
+        if: steps.image.outputs.reused != 'true'
+        with:
+          name: npm-packages-${{ github.run_id }}
+          path: ${{ env.NPM_ARTIFACT_DIR }}
+      - name: 从正式 npm 制品准备镜像输入
+        if: steps.image.outputs.reused != 'true'
+        run: node .github/scripts/release-docker.mjs prepare
+      - uses: docker/setup-buildx-action@v3
+        if: steps.image.outputs.reused != 'true'
+      - name: 构建 linux/amd64 运行镜像
+        if: steps.image.outputs.reused != 'true'
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: 'false'
+        with:
+          context: ${{ env.DOCKER_ARTIFACT_DIR }}/context
+          file: ${{ env.DOCKER_ARTIFACT_DIR }}/context/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.IMAGE_REPOSITORY }}:${{ steps.image.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ inputs.source_sha }}
+            org.opencontainers.image.version=${{ steps.image.outputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+      - name: 验收启动、会话、文件、终端与容器重建
+        if: steps.image.outputs.reused != 'true'
+        run: node tests/l4-docker-smoke.mjs "$IMAGE_REPOSITORY:${{ steps.image.outputs.version }}" "${{ steps.image.outputs.version }}"
+      - name: 保存并归档已验证镜像
+        if: steps.image.outputs.reused != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          docker save "$IMAGE_REPOSITORY:${{ steps.image.outputs.version }}" | gzip > "$DOCKER_ARTIFACT_DIR/pi-desk-docker.tar.gz"
+          node .github/scripts/release-docker.mjs stage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-${{ github.run_id }}
+          overwrite: true
+          path: |
+            ${{ env.DOCKER_ARTIFACT_DIR }}/pi-desk-docker.tar.gz
+            ${{ env.DOCKER_ARTIFACT_DIR }}/docker-image.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: 保留镜像验收失败现场
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-failure-${{ github.run_id }}
+          overwrite: true
+          path: temp/run/docker-smoke/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  publish:
+    if: github.ref == 'refs/heads/main' && inputs.phase == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: docker-image-${{ github.run_id }}
+          path: ${{ env.DOCKER_ARTIFACT_DIR }}
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 核对固定版本并发布同一镜像
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-docker.mjs publish

@@ -1,4 +1,4 @@
-use crate::environment::EnvironmentState;
+use crate::environment::{Component, EnvironmentState};
 use crate::logging;
 use reqwest::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 use reqwest::{Client, Response, StatusCode};
@@ -25,6 +25,7 @@ pub(crate) fn client() -> Result<Client, String> {
 
 pub(crate) fn download(
     state: &EnvironmentState,
+    component: Component,
     client: &Client,
     url: &str,
     destination: &Path,
@@ -41,13 +42,14 @@ pub(crate) fn download(
     let result = (|| {
         check_cancelled(cancelled).map_err(Failure::message)?;
         validate_size(expected_size, expected_size).map_err(Failure::message)?;
-        state.progress(destination, 0, expected_size);
+        state.progress(component, destination, 0, expected_size);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|error| format!("初始化下载运行时失败：{error}"))?;
         let download = Download {
             state,
+            component,
             client,
             url,
             destination,
@@ -60,6 +62,7 @@ pub(crate) fn download(
         runtime.block_on(download.run(&mut created))
     })();
     if let Err(error) = &result {
+        state.clear_download(component);
         logging::write(
             log,
             "environment-download-failed",
@@ -82,6 +85,7 @@ pub(crate) fn download(
 
 struct Download<'a> {
     state: &'a EnvironmentState,
+    component: Component,
     client: &'a Client,
     url: &'a str,
     destination: &'a Path,
@@ -108,7 +112,8 @@ impl Download<'_> {
                 );
                 file.set_len(total)
                     .map_err(|error| format!("设置下载文件大小失败：{error}"))?;
-                self.state.progress(self.destination, 0, Some(total));
+                self.state
+                    .progress(self.component, self.destination, 0, Some(total));
                 if connections == 10 {
                     let part = total / 10;
                     tokio::try_join!(
@@ -143,6 +148,7 @@ impl Download<'_> {
         let hash = hash_file(self.destination, self.cancelled)?;
         // 无 Content-Length 的文件完成后已有确定大小，不再阻碍其他文件的百分比。
         self.state.progress(
+            self.component,
             self.destination,
             self.received.get(),
             Some(self.received.get()),
@@ -264,7 +270,8 @@ impl Download<'_> {
                 let mut file = File::create(self.destination)
                     .map_err(|error| Failure::Fatal(format!("重置下载文件失败：{error}")))?;
                 self.received.set(0);
-                self.state.progress(self.destination, 0, total);
+                self.state
+                    .progress(self.component, self.destination, 0, total);
                 let mut offset = 0;
                 self.stream(&mut response, &mut file, &mut offset, total, total)
                     .await
@@ -322,7 +329,7 @@ impl Download<'_> {
             *offset = next;
             self.received.set(self.received.get() + chunk.len() as u64);
             self.state
-                .progress(self.destination, self.received.get(), total);
+                .progress(self.component, self.destination, self.received.get(), total);
         }
         if end.is_some_and(|end| *offset != end) {
             return Err(Failure::Retry("下载响应提前结束，文件尚未完整".into()));

@@ -72,6 +72,7 @@ export type L2SettingsPluginAttention = 'error' | 'notice' | null
 
 interface L2SettingsProps {
   open: boolean
+  connectionReady?: boolean
   initialModelTab?: 'presets'
   workSessions: readonly Pick<L2WorkSessionListItem, 'cwd' | 'projectName'>[]
   focusedCwd: string | null
@@ -109,37 +110,18 @@ interface SettingsSectionOption {
   icon: ComponentType<{ className?: string }>
 }
 
-const SETTINGS_SECTION_GROUPS: readonly {
-  label: string
-  sections: readonly SettingsSectionOption[]
-}[] = [
-  {
-    label: 'general',
-    sections: [
-      { id: 'appearance', label: 'appearance', icon: PaletteIcon },
-      { id: 'region', label: 'region', icon: LanguagesIcon },
-      { id: 'habits', label: 'habits', icon: SlidersHorizontalIcon }
-    ]
-  },
-  {
-    label: 'workCapabilities',
-    sections: [
-      { id: 'models', label: 'models', icon: BotIcon },
-      { id: 'mcp-settings', label: 'mcpSettings', icon: PlugIcon },
-      { id: 'capability-modes', label: 'capabilityModes', icon: ListFilterIcon },
-      { id: 'skills', label: 'skills', icon: FolderTreeIcon },
-      { id: 'plugins', label: 'plugins', icon: PlugIcon }
-    ]
-  },
-  {
-    label: 'application',
-    sections: [
-      { id: 'auth', label: 'loginProtection', icon: ShieldCheckIcon },
-      { id: 'about', label: 'about', icon: InfoIcon }
-    ]
-  }
+const SETTINGS_SECTIONS: readonly SettingsSectionOption[] = [
+  { id: 'appearance', label: 'appearance', icon: PaletteIcon },
+  { id: 'region', label: 'region', icon: LanguagesIcon },
+  { id: 'habits', label: 'habits', icon: SlidersHorizontalIcon },
+  { id: 'models', label: 'models', icon: BotIcon },
+  { id: 'mcp-settings', label: 'mcpSettings', icon: PlugIcon },
+  { id: 'capability-modes', label: 'capabilityModes', icon: ListFilterIcon },
+  { id: 'skills', label: 'skills', icon: FolderTreeIcon },
+  { id: 'plugins', label: 'plugins', icon: PlugIcon },
+  { id: 'auth', label: 'loginProtection', icon: ShieldCheckIcon },
+  { id: 'about', label: 'about', icon: InfoIcon }
 ]
-const SETTINGS_SECTIONS = SETTINGS_SECTION_GROUPS.flatMap((group) => group.sections)
 
 function pluginSectionId(pluginName: string, contributionName: string): SettingsSection {
   return `plugin:${pluginName}:${contributionName}`
@@ -204,6 +186,7 @@ function AboutSettings(): React.JSX.Element {
 
 export function L2Settings({
   open,
+  connectionReady = false,
   initialModelTab,
   workSessions,
   focusedCwd,
@@ -257,9 +240,6 @@ export function L2Settings({
   const effectiveSection: SettingsSection =
     activeSection.startsWith('plugin:') && !activePluginPage ? 'appearance' : activeSection
   const activeBuiltinSection = SETTINGS_SECTIONS.find((section) => section.id === effectiveSection)
-  const compactLayout = ['appearance', 'region', 'habits', 'auth', 'about'].includes(
-    effectiveSection
-  )
   const ActiveBuiltinIcon = activeBuiltinSection?.icon
   const contentRef = useRef<HTMLDivElement>(null)
   useL4WindowReveal(contentRef, open && !activePluginPage ? effectiveSection : null)
@@ -304,12 +284,7 @@ export function L2Settings({
       }}
     >
       <L4AppDialogContent
-        className={cn(
-          compactLayout
-            ? 'h-[min(36rem,calc(100dvh-2rem))] max-w-[60rem]'
-            : 'h-[min(48rem,calc(100dvh-2rem))] max-w-6xl',
-          'max-sm:h-dvh max-sm:max-h-dvh max-sm:w-dvw max-sm:max-w-none max-sm:rounded-none max-sm:border-0'
-        )}
+        className="h-[min(48rem,calc(100dvh-2rem))] max-w-6xl max-sm:h-dvh max-sm:max-h-dvh max-sm:w-dvw max-sm:max-w-none max-sm:rounded-none max-sm:border-0"
         finalFocus={false}
         showCloseButton={!guardPending}
       >
@@ -359,31 +334,26 @@ export function L2Settings({
                 </SelectValue>
               </SelectTrigger>
               <SelectContent positionerClassName="z-[120]" align="start">
-                {SETTINGS_SECTION_GROUPS.map((group) => (
-                  <SelectGroup key={group.label}>
-                    <SelectLabel>{t(group.label)}</SelectLabel>
-                    {group.sections.map((section) => {
-                      const Icon = section.icon
-                      return (
-                        <SelectItem key={section.id} value={section.id}>
-                          <span className="relative shrink-0">
-                            <Icon className="size-4" />
-                            {section.id === 'plugins' && pluginAttention ? (
-                              <span
-                                aria-hidden="true"
-                                className={cn(
-                                  'absolute -right-1 -top-1 size-1.5 rounded-full',
-                                  pluginAttention === 'error' ? 'bg-destructive' : 'bg-primary'
-                                )}
-                              />
-                            ) : null}
-                          </span>
-                          <span>{t(section.label)}</span>
-                        </SelectItem>
-                      )
-                    })}
-                  </SelectGroup>
-                ))}
+                {SETTINGS_SECTIONS.map((section) => {
+                  const Icon = section.icon
+                  return (
+                    <SelectItem key={section.id} value={section.id}>
+                      <span className="relative shrink-0">
+                        <Icon className="size-4" />
+                        {section.id === 'plugins' && pluginAttention ? (
+                          <span
+                            aria-hidden="true"
+                            className={cn(
+                              'absolute -right-1 -top-1 size-1.5 rounded-full',
+                              pluginAttention === 'error' ? 'bg-destructive' : 'bg-primary'
+                            )}
+                          />
+                        ) : null}
+                      </span>
+                      <span>{t(section.label)}</span>
+                    </SelectItem>
+                  )
+                })}
                 {pluginPages.length > 0 ? (
                   <SelectGroup>
                     <SelectLabel>{t('pluginSettings')}</SelectLabel>
@@ -406,49 +376,42 @@ export function L2Settings({
             aria-label={t('category')}
             className="pi-desk-chat-scrollbar hidden w-48 shrink-0 space-y-4 overflow-auto border-r bg-sidebar p-3 sm:block"
           >
-            {SETTINGS_SECTION_GROUPS.map((group) => (
-              <div key={group.label}>
-                <p className="mb-2 px-2 text-xs font-medium text-muted-foreground">
-                  {t(group.label)}
-                </p>
-                <div className="grid grid-cols-1 gap-1">
-                  {group.sections.map((section) => {
-                    const Icon = section.icon
-                    const selected = section.id === effectiveSection
-                    return (
-                      <Button
-                        key={section.id}
-                        variant="ghost"
-                        disabled={guardPending}
-                        aria-current={selected ? 'page' : undefined}
-                        aria-label={`${t('category')}：${t(section.label)}`}
-                        onClick={() => selectSection(section.id)}
-                        className={cn(
-                          'min-w-0 justify-start',
-                          selected
-                            ? 'bg-accent text-accent-foreground hover:bg-accent'
-                            : 'text-muted-foreground'
-                        )}
-                      >
-                        <span className="relative shrink-0">
-                          <Icon className="size-4" />
-                          {section.id === 'plugins' && pluginAttention ? (
-                            <span
-                              aria-hidden="true"
-                              className={cn(
-                                'absolute -right-1 -top-1 size-1.5 rounded-full',
-                                pluginAttention === 'error' ? 'bg-destructive' : 'bg-primary'
-                              )}
-                            />
-                          ) : null}
-                        </span>
-                        <span className="truncate">{t(section.label)}</span>
-                      </Button>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
+            <div className="grid grid-cols-1 gap-1">
+              {SETTINGS_SECTIONS.map((section) => {
+                const Icon = section.icon
+                const selected = section.id === effectiveSection
+                return (
+                  <Button
+                    key={section.id}
+                    variant="ghost"
+                    disabled={guardPending}
+                    aria-current={selected ? 'page' : undefined}
+                    aria-label={`${t('category')}：${t(section.label)}`}
+                    onClick={() => selectSection(section.id)}
+                    className={cn(
+                      'min-w-0 justify-start',
+                      selected
+                        ? 'bg-accent text-accent-foreground hover:bg-accent'
+                        : 'text-muted-foreground'
+                    )}
+                  >
+                    <span className="relative shrink-0">
+                      <Icon className="size-4" />
+                      {section.id === 'plugins' && pluginAttention ? (
+                        <span
+                          aria-hidden="true"
+                          className={cn(
+                            'absolute -right-1 -top-1 size-1.5 rounded-full',
+                            pluginAttention === 'error' ? 'bg-destructive' : 'bg-primary'
+                          )}
+                        />
+                      ) : null}
+                    </span>
+                    <span className="truncate">{t(section.label)}</span>
+                  </Button>
+                )
+              })}
+            </div>
             {pluginPages.length > 0 ? (
               <Collapsible
                 open={pluginMenuOpen || Boolean(activePluginPage)}
@@ -543,6 +506,7 @@ export function L2Settings({
             <div ref={contentRef} className="min-h-0 flex-1 overflow-hidden">
               {open && (
                 <L2ModelSettingsView
+                  connectionReady={connectionReady}
                   initialTab={initialModelTab}
                   onBeforeLeaveChange={updateBeforeLeave}
                 />

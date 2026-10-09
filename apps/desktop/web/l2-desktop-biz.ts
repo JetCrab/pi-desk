@@ -1,12 +1,11 @@
 import {
   desktopCommand,
   getTargetSettings,
-  getTunnelConnection,
   type DownloadSource,
   type EnvironmentComponent,
   type ReleaseChannel,
+  type StartupPreferences,
   type TargetConfig,
-  type TunnelConnection,
   type UpdatePolicy
 } from './l4-desktop-ipc'
 
@@ -39,6 +38,10 @@ const commands: Record<DesktopAction, string> = {
 
 export async function runDesktopAction(action: DesktopAction, url?: string): Promise<void> {
   await desktopCommand(commands[action], url ? { url } : undefined)
+}
+
+export async function saveStartupPreference(preferences: StartupPreferences): Promise<void> {
+  await desktopCommand('set_startup_preference_command', preferences)
 }
 
 export async function prepareEnvironment(
@@ -101,19 +104,10 @@ export type SettingsDraft = {
   startupUpdate: UpdatePolicy
   periodicUpdate: UpdatePolicy
   channel: ReleaseChannel
-  tunnelEnabled: boolean
-  publicPort: string
-  tunnelAutoStart: boolean
-  controlServerUrl: string
-  controlKey: string
 }
 
-export async function readDesktopSettings(
-  mode: 'target' | 'tunnel',
-  originalUrl: string | null
-): Promise<SettingsDraft> {
-  const settings = mode === 'target' ? await getTargetSettings(originalUrl) : null
-  const connection = mode === 'tunnel' ? await getTunnelConnection() : null
+export async function readDesktopSettings(originalUrl: string | null): Promise<SettingsDraft> {
+  const settings = await getTargetSettings(originalUrl)
   const target = settings?.target
   const server = target?.server ?? settings?.defaultServer
   return {
@@ -126,28 +120,16 @@ export async function readDesktopSettings(
     packageRegistry: server?.package?.registry ?? '',
     startupUpdate: server?.package?.startupUpdate ?? 'check',
     periodicUpdate: server?.package?.periodicUpdate ?? 'none',
-    channel: server?.package?.channel ?? 'stable',
-    tunnelEnabled: Boolean(target?.tunnel),
-    publicPort: target?.tunnel ? String(target.tunnel.publicPort) : '',
-    tunnelAutoStart: Boolean(target?.tunnel?.enabled),
-    controlServerUrl: connection?.controlServerUrl ?? '',
-    controlKey: connection?.controlKey ?? ''
+    channel: server?.package?.channel ?? 'stable'
   }
 }
 
 export async function saveDesktopSettings(
-  mode: 'target' | 'tunnel',
   originalUrl: string | null,
   draft: SettingsDraft
-): Promise<string | null> {
-  if (mode === 'tunnel') {
-    const value: TunnelConnection = {
-      controlServerUrl: draft.controlServerUrl,
-      controlKey: draft.controlKey
-    }
-    await desktopCommand('apply_tunnel_connection_command', { value })
-    return null
-  }
+): Promise<string> {
+  const current = originalUrl ? await getTargetSettings(originalUrl) : null
+  if (originalUrl && !current?.target) throw new Error('这个地址已被移除，请刷新后重试')
   const value: TargetConfig = {
     url: normalizeDesktopAddress(draft.url),
     server: draft.serverEnabled
@@ -165,9 +147,7 @@ export async function saveDesktopSettings(
             : null
         }
       : null,
-    tunnel: draft.tunnelEnabled
-      ? { enabled: draft.tunnelAutoStart, publicPort: Number(draft.publicPort) }
-      : null
+    tunnel: current?.target?.tunnel ?? null
   }
   await desktopCommand('apply_target_command', { originalUrl, value })
   return value.url

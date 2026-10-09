@@ -59,10 +59,12 @@ function ModelSettingsPlaceholder({
 
 export function L2ModelSettingsView({
   onBeforeLeaveChange,
+  connectionReady = false,
   initialTab
 }: {
   onBeforeLeaveChange: (handler: BrowserBeforeLeaveHandler | null) => void
   initialTab?: ModelSettingsTab
+  connectionReady?: boolean
 }): React.JSX.Element {
   const { t } = useTranslation('settings')
   const { locale, timeZone } = useL4Region()
@@ -73,6 +75,9 @@ export function L2ModelSettingsView({
     settings,
     providers,
     presets,
+    accountModels,
+    changeAccountModels,
+    refreshAccounts,
     resetVersion,
     formDirty,
     formInvalid,
@@ -213,7 +218,12 @@ export function L2ModelSettingsView({
             >
               <L2ModelProviderSettings
                 biz={biz}
+                connectionReady={connectionReady}
                 providers={providers}
+                accounts={settings.accounts}
+                accountModels={accountModels}
+                onAccountModelsChange={changeAccountModels}
+                onRefreshAccounts={refreshAccounts}
                 savedProviders={settings.providers}
                 savedModels={settings.models}
                 presets={presets}

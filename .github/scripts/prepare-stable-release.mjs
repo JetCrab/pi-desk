@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { versionParts } from './npm-channel.mjs'
+import { lockDependencyContent } from './release-dependencies.mjs'
 
 const packageName = /^@jetcrab\/pi-desk(?:-[a-z0-9-]+)?$/
 const dependencyGroups = [
@@ -109,14 +110,14 @@ function patch(version) {
   return next
 }
 
-function plannedVersion(current, previous, affected, number = null) {
+function plannedVersion(current, previous, affected, development = false) {
   const version = stableVersion(current)
   const comparison = previous === null ? 1 : compareVersions(version, previous)
-  if (number !== null) {
+  if (development) {
     assert.ok(comparison >= 0, '版本不得回退')
     if (!affected) return current
     const next = versionParts(current)[3] !== null || comparison > 0 ? version : patch(version)
-    return `${next}-dev.${number}`
+    return `${next}-dev.1`
   }
   // dev 不必回合并 Actions 的版本准备提交；正式发布以上次成功版本为下限。
   const baseline = comparison < 0 ? stableVersion(previous) : version
@@ -154,7 +155,10 @@ function productionManifest(manifest) {
   return result
 }
 
-async function npmEntries(root, baseline) {
+async function npmEntries(root, baseline, { docker = false } = {}) {
+  const lockChanged = baseline.changed.has('pnpm-lock.yaml')
+  const currentLock = lockChanged ? await readOptional(root, 'pnpm-lock.yaml') : null
+  const previousLock = lockChanged ? baseline.read('pnpm-lock.yaml') : null
   const plugins = await readdir(join(root, 'plugins'), { withFileTypes: true })
   const files = [
     'package.json',
@@ -198,17 +202,29 @@ async function npmEntries(root, baseline) {
       }
     }
     const directory = dirname(file)
-    const affected = [...baseline.changed].some((path) => {
-      if (excluded.test(path)) return false
-      if (path === file)
-        return (
-          !previous ||
-          !isDeepStrictEqual(productionManifest(manifest), productionManifest(previous))
-        )
-      return directory === '.'
-        ? /^(?:src|bin)\//.test(path) || rootConfig.test(path)
-        : path.startsWith(`${directory}/`)
-    })
+    const dependencyChanged =
+      lockChanged &&
+      !isDeepStrictEqual(
+        lockDependencyContent(previousLock, directory),
+        lockDependencyContent(currentLock, directory)
+      )
+    const affected =
+      dependencyChanged ||
+      [...baseline.changed].some((path) => {
+        if (excluded.test(path)) return false
+        if (path === file)
+          return (
+            !previous ||
+            !isDeepStrictEqual(productionManifest(manifest), productionManifest(previous))
+          )
+        return directory === '.'
+          ? /^(?:src|bin)\//.test(path) ||
+              rootConfig.test(path) ||
+              (docker &&
+                ((/^apps\/docker\//.test(path) && path !== 'apps/docker/compose.yaml') ||
+                  path === '.github/scripts/release-docker.mjs'))
+          : path.startsWith(`${directory}/`)
+      })
     entries.push({ file, original, manifest, previous, affected, currentVersion: manifest.version })
   }
   return entries
@@ -255,18 +271,18 @@ function dependencyRange(range, target, development) {
   return next
 }
 
-function planNpm(entries, { baseline, number = null }) {
+function planNpm(entries, { baseline, development = false, versions = new Map() }) {
   const selected = new Set()
   for (const entry of entries) {
     const previous = entry.previous?.version ?? null
     const versionChanged =
       previous !== null &&
-      (number === null
-        ? compareVersions(entry.currentVersion, previous) > 0
-        : entry.currentVersion !== previous)
+      (development
+        ? entry.currentVersion !== previous
+        : compareVersions(entry.currentVersion, previous) > 0)
     const affected = entry.affected || versionChanged || (baseline !== null && previous === null)
     if (affected) selected.add(entry.manifest.name)
-    entry.manifest.version = plannedVersion(entry.currentVersion, previous, affected, number)
+    entry.manifest.version = plannedVersion(entry.currentVersion, previous, affected, development)
   }
   // 自有依赖的制品版本变化会影响消费者；workspace 范围不需要改写。
   let added
@@ -283,18 +299,22 @@ function planNpm(entries, { baseline, number = null }) {
         entry.currentVersion,
         entry.previous?.version ?? null,
         true,
-        number
+        development
       )
       added = true
     }
   } while (added)
+  for (const entry of entries) {
+    if (versions.has(entry.manifest.name))
+      entry.manifest.version = versions.get(entry.manifest.name)
+  }
   const byName = new Map(entries.map((entry) => [entry.manifest.name, entry]))
   const changes = []
   for (const entry of entries) {
     for (const group of dependencyGroups) {
       for (const [name, range] of Object.entries(entry.manifest[group] ?? {})) {
         const target = byName.get(name)
-        if (target) entry.manifest[group][name] = dependencyRange(range, target, number !== null)
+        if (target) entry.manifest[group][name] = dependencyRange(range, target, development)
       }
     }
     if (!isDeepStrictEqual(json(entry.original, entry.file), entry.manifest)) {
@@ -501,7 +521,7 @@ async function applyChanges(root, changes) {
 export async function prepareStableVersions(root, { base = null } = {}) {
   root = resolve(root)
   const baseline = snapshot(root, base)
-  const entries = await npmEntries(root, baseline)
+  const entries = await npmEntries(root, baseline, { docker: true })
   const { changes } = planNpm(entries, { baseline: base })
   changes.push(...(await planNative(root, baseline)))
   // 所有版本、依赖和原生同步均已验证，再统一写入。
@@ -512,10 +532,30 @@ export async function prepareStableVersions(root, { base = null } = {}) {
   }
 }
 
+export function nextDevelopmentVersion(planned, publishedVersions) {
+  const base = stableVersion(planned)
+  assert.ok(Array.isArray(publishedVersions), '已发布版本清单无效')
+  let highest = 0
+  for (const version of publishedVersions) {
+    assert.equal(typeof version, 'string', '已发布版本必须为字符串')
+    if (!/^\d+\.\d+\.\d+-dev\.\d+$/.test(version)) continue
+    const parts = versionParts(version)
+    const comparison = compareVersions(base, version)
+    assert.ok(comparison >= 0, `开发基础版本 ${base} 低于已发布版本 ${version}`)
+    if (comparison === 0) highest = Math.max(highest, parts[3])
+  }
+  const next = `${base}-dev.${highest + 1}`
+  versionParts(next)
+  return next
+}
+
 /** @returns {Promise<{changedFiles: string[], packages: {name: string, version: string}[], selected: string[]}>} */
-export async function prepareDevelopmentVersions(root, { before, number, stableBase = null }) {
+export async function prepareDevelopmentVersions(
+  root,
+  { before, readVersions, stableBase = null }
+) {
   root = resolve(root)
-  assert.ok(Number.isSafeInteger(number) && number > 0, '开发构建编号必须为正安全整数')
+  assert.equal(typeof readVersions, 'function', '缺少已发布开发版本查询')
   assert.ok(
     typeof before === 'string' && /^[a-f0-9]{40}$/i.test(before),
     'before 必须为完整提交 SHA'
@@ -523,23 +563,35 @@ export async function prepareDevelopmentVersions(root, { before, number, stableB
   const revision = /^0+$/.test(before) ? null : before
   const baseline = snapshot(root, revision, 'HEAD')
   const entries = await npmEntries(root, baseline)
-  let planned = planNpm(entries, { baseline: revision ?? 'HEAD', number })
-  if (stableBase) {
-    const stable = snapshot(root, stableBase)
-    for (const entry of entries.filter((entry) =>
-      planned.selected.includes(entry.manifest.name.slice('@jetcrab/'.length))
-    )) {
-      const published = stable.read(entry.file)
-      if (!published) continue
-      const version = json(published, entry.file).version
-      if (compareVersions(entry.manifest.version, version) <= 0) {
-        entry.currentVersion = `${patch(stableVersion(version))}-dev.${number}`
-        entry.manifest.version = entry.currentVersion
-      }
-    }
-    planned = planNpm(entries, { baseline: revision ?? 'HEAD', number })
-  }
-  const { changes, selected } = planned
+  // 预规划只确定目标基础版本和消费者，最终编号一次性同步回原始清单。
+  const candidates = structuredClone(entries)
+  const planned = planNpm(candidates, { baseline: revision ?? 'HEAD', development: true })
+  const stable = stableBase ? snapshot(root, stableBase) : null
+  const targets = candidates.filter((entry) =>
+    planned.selected.includes(entry.manifest.name.slice('@jetcrab/'.length))
+  )
+  const versions = new Map(
+    await Promise.all(
+      targets.map(async (entry) => {
+        let version = entry.manifest.version
+        const published = stable?.read(entry.file)
+        if (published) {
+          const currentStable = json(published, entry.file).version
+          if (compareVersions(version, currentStable) <= 0)
+            version = `${patch(stableVersion(currentStable))}-dev.1`
+        }
+        return [
+          entry.manifest.name,
+          nextDevelopmentVersion(version, await readVersions(entry.manifest.name))
+        ]
+      })
+    )
+  )
+  const { changes, selected } = planNpm(entries, {
+    baseline: revision ?? 'HEAD',
+    development: true,
+    versions
+  })
   const changedFiles = await applyChanges(root, changes)
   return {
     changedFiles,

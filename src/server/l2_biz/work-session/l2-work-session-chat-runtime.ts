@@ -345,8 +345,12 @@ export class L2WorkSessionChatRuntime {
     })
   }
 
-  async prepareSource(sourceInput: L2ChatSource): Promise<void> {
+  prepareSource(sourceInput: L2ChatSource): Promise<void> {
     const record = this.currentRecord(sourceInput)
+    return this.enqueueCommand(record, () => this.syncRecordRuntime(record))
+  }
+
+  private async syncRecordRuntime(record: L2WorkSessionChatRecord): Promise<void> {
     const source = record.source
     const runtime = L2ChatRuntimeSchema.parse({
       ...(await getL4PiWorkSessionRuntime(source.sessionId).readChatRuntime()),
@@ -458,9 +462,12 @@ export class L2WorkSessionChatRuntime {
     if (!record.acceptingCommands) {
       return Promise.reject(new L2ChatLifecycleBlockedError(record.source.workId))
     }
-    return record.compactionStart.then((started) =>
-      started ? send() : this.enqueueCommand(record, send)
-    )
+    return record.compactionStart.then((started) => {
+      if (!record.acceptingCommands) {
+        throw new L2ChatLifecycleBlockedError(record.source.workId)
+      }
+      return started ? send() : this.enqueueCommand(record, send)
+    })
   }
 
   interrupt(source: L2ChatSource): Promise<void> {
@@ -512,7 +519,7 @@ export class L2WorkSessionChatRuntime {
         await getL4PiWorkSessionRuntime(record.source.sessionId).reload(mode)
       } finally {
         if (this.recordsByWorkId.get(source.workId) === record) {
-          await this.prepareSource(source)
+          await this.syncRecordRuntime(record)
           if (
             record.state.runtime.extensionMode === 'basic' &&
             record.state.runtime.presentationMode !== 'basic'
@@ -884,6 +891,8 @@ export class L2WorkSessionChatRuntime {
   }
 
   private pluginReloadBlockReason(record: L2WorkSessionChatRecord): string | null {
+    if (getL4PiWorkSessionRuntime(record.source.sessionId).nativeUi.hasPending)
+      return '原生插件问题正在等待回答'
     if (record.directBashActive) return 'Direct Bash 正在运行'
     if (record.mainRunning) return '主 Agent 正在运行'
     if (record.backgroundTaskIds.size > 0) return '插件后台任务正在运行'

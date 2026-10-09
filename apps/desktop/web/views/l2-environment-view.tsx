@@ -15,7 +15,7 @@ const componentLabels = {
 const componentOrder = ['node', 'bash', 'pi'] as const
 
 export type EnvironmentViewAction =
-  | { kind: 'prepare' | 'check' | 'cancel' | 'open' | 'settings' | 'copy-error' | 'copy-command' }
+  | { kind: 'prepare' | 'check' | 'cancel' | 'open' | 'copy-error' | 'copy-command' }
   | { kind: 'options'; open: boolean }
   | { kind: 'download-source'; downloadSource: DownloadSource }
   | { kind: 'select'; component: EnvironmentComponent['name']; archive: boolean }
@@ -24,6 +24,61 @@ export type EnvironmentViewAction =
 function bytes(value: number): string {
   if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`
   return `${(value / 1024 / 1024).toFixed(1)} MB`
+}
+
+function SetupStep({
+  label,
+  ready,
+  active,
+  detail,
+  download,
+  failed = false
+}: {
+  label: string
+  ready: boolean
+  active: boolean
+  detail: string
+  download?: EnvironmentComponent['download']
+  failed?: boolean
+}): React.JSX.Element {
+  const percent = download?.total
+    ? Math.min(100, Math.round((download.received / download.total) * 100))
+    : undefined
+  return (
+    <li className="setup-step" data-active={active} data-ready={ready} data-failed={failed}>
+      <div className="step-heading">
+        <span className={`component-icon${ready ? ' good' : failed ? ' invalid' : ''}`}>
+          {ready || active || failed ? (
+            <DesktopIcon name={ready ? 'check' : failed ? 'alert' : 'loader'} spinning={active} />
+          ) : (
+            <span className="step-dot" />
+          )}
+        </span>
+        <strong>{label}</strong>
+      </div>
+      <p className="step-state">{detail}</p>
+      <div className="step-progress">
+        {active && !download ? (
+          <progress aria-label={`${label}安装进度`} />
+        ) : (
+          <progress
+            aria-label={`${label}下载进度`}
+            max={100}
+            value={ready ? 100 : download ? percent : 0}
+          />
+        )}
+      </div>
+      {download && (
+        <p className="step-bytes">
+          <span>
+            {bytes(download.received)}
+            {download.total ? ` / ${bytes(download.total)}` : ''}
+          </span>
+          {percent !== undefined && <span>{percent}%</span>}
+        </p>
+      )}
+    </li>
+  )
 }
 
 export type EnvironmentViewProps = {
@@ -67,141 +122,140 @@ export function EnvironmentView({
     error ||
     environment.error ||
     (!optionsOnly && target.server?.status === 'failed' ? target.server.detail : '')
-  const sourceRequiresLogin = /E401|E403|\b40[13]\b|unauthorized|forbidden/iu.test(failure)
   const canOpen = !target.server?.needsSetup && !checking
-  const progress = installing ? environment.download : null
-  const percent = progress?.total
-    ? Math.min(100, Math.round((progress.received / progress.total) * 100))
-    : undefined
   const components = componentOrder.flatMap((name) =>
     environment.components.filter((item) => item.name === name)
   )
-  const rows = components.filter((item) => working || item.status !== 'ready' || item.detail)
-  const serviceStarting = working && components.every((item) => item.status === 'ready')
+  const update = target.server?.update
+  const packageReady = update?.status === 'installed' || Boolean(target.server?.version)
+  const packageActive = working && ['checking', 'installing'].includes(update?.status ?? '')
+  const packageDetail =
+    update?.status === 'checking'
+      ? '正在查询版本'
+      : update?.status === 'installing'
+        ? `正在下载安装${update.version ? ` ${update.version}` : ''}`
+        : update?.status === 'failed'
+          ? '安装失败'
+          : packageReady
+            ? '已安装'
+            : working
+              ? '等待 Node.js 就绪'
+              : '待安装'
+  const source = (
+    <label className="field download-source">
+      下载源
+      <select
+        value={downloadSource}
+        disabled={locked}
+        onChange={(event) =>
+          onAction({
+            kind: 'download-source',
+            downloadSource: event.target.value as DownloadSource
+          })
+        }
+      >
+        {!isMacOS && <option value="npmmirror">国内镜像</option>}
+        <option value="official">官方源</option>
+      </select>
+    </label>
+  )
 
   return (
     <section className="environment-panel" aria-label="本机安装" data-options-only={optionsOnly}>
-      {working && !optionsOnly && (
-        <p className="setup-status" role="status">
-          <DesktopIcon name="loader" spinning />
-          {installing
-            ? progress
-              ? '正在下载所需组件…'
-              : '正在准备运行组件…'
-            : '正在打开 Pi Desk…'}
-        </p>
-      )}
-      {progress && (
-        <div className="download-progress" role="status">
-          <progress aria-label="下载进度" max={100} value={percent} />
-          <p>
-            <span>
-              {bytes(progress.received)}
-              {progress.total ? ` / ${bytes(progress.total)}` : ''}
-            </span>
-            <span>{percent === undefined ? '' : `${percent}%`}</span>
-          </p>
-        </div>
+      {!optionsOnly && (
+        <>
+          <div className="setup-caption" role="status">
+            <h3>
+              {checking
+                ? '正在检查所需组件'
+                : working
+                  ? '正在准备 Pi Desk'
+                  : failure
+                    ? '准备未完成'
+                    : '首次使用准备'}
+            </h3>
+            {working && <span className="muted">完成后自动打开</span>}
+          </div>
+          <ol className="setup-steps" aria-label="安装步骤">
+            {components.map((component) => {
+              const ready = component.status === 'ready' && !component.detail
+              const active = installing && !ready && Boolean(component.detail?.startsWith('正在'))
+              return (
+                <SetupStep
+                  key={component.name}
+                  label={componentLabels[component.name]}
+                  ready={ready}
+                  active={active}
+                  failed={component.status === 'invalid'}
+                  download={active ? component.download : null}
+                  detail={
+                    ready
+                      ? '已安装'
+                      : component.detail ||
+                        (checking ? '正在检测' : working ? '等待安装' : '待安装')
+                  }
+                />
+              )
+            })}
+            <SetupStep
+              label="Pi Desk"
+              ready={packageReady && !packageActive}
+              active={packageActive}
+              detail={packageDetail}
+              failed={update?.status === 'failed'}
+            />
+          </ol>
+          {working && components.every((item) => item.status === 'ready') && !packageActive && (
+            <p className="setup-status" role="status">
+              <DesktopIcon name="loader" spinning />
+              {target.server?.status === 'running'
+                ? '正在打开 Pi Desk…'
+                : '正在校验并启动 Pi Desk…'}
+            </p>
+          )}
+        </>
       )}
       {failure && (
         <DesktopError
-          title={
-            sourceRequiresLogin
-              ? '下载源需要登录，请更换下载源后重试'
-              : '未能完成安装，请重试或查看问题详情'
-          }
+          title="安装未完成"
           detail={failure}
+          expanded
           onCopy={() => onAction({ kind: 'copy-error' })}
           copied={copied === 'error'}
         />
       )}
       {!optionsOnly && (
-        <div className="actions setup-actions">
-          {working ? (
-            <button
-              type="button"
-              className="quiet"
-              disabled={cancelling || launching}
-              onClick={() => onAction({ kind: 'cancel' })}
-            >
-              {cancelling ? '正在取消…' : '取消安装'}
-            </button>
-          ) : (
-            <button
-              className="primary forward"
-              type="button"
-              disabled={locked}
-              onClick={() => onAction({ kind: canOpen ? 'open' : 'prepare' })}
-            >
-              {checking
-                ? '请稍候…'
-                : canOpen
-                  ? '打开 Pi Desk'
-                  : failure
-                    ? '重试安装'
-                    : '安装并打开'}
-              {!checking && <DesktopIcon name="arrow" />}
-            </button>
-          )}
-          {sourceRequiresLogin && !working && (
-            <button type="button" disabled={locked} onClick={() => onAction({ kind: 'settings' })}>
-              修改下载源
-            </button>
-          )}
-        </div>
-      )}
-      {!optionsOnly && !checking && rows.length > 0 && (
-        <details className="disclosure install-detail">
-          <summary>
-            <DesktopIcon name="chevron" />
-            {working ? '安装详情' : '所需组件'}
-          </summary>
-          {installing && environment.step && <p className="muted">{environment.step}</p>}
-          <ol className="setup-steps" aria-label="安装步骤">
-            {rows.map((component) => {
-              const ready = component.status === 'ready' && !component.detail
-              const active = installing && !ready && Boolean(component.detail?.startsWith('正在'))
-              return (
-                <li key={component.name} className="setup-step">
-                  <span className={`component-icon${ready ? ' good' : ''}`}>
-                    {ready || active ? (
-                      <DesktopIcon name={ready ? 'check' : 'loader'} spinning={active} />
-                    ) : (
-                      <span className="step-dot" />
-                    )}
-                  </span>
-                  <span className="grow">{componentLabels[component.name]}</span>
-                  <span className="step-state">
-                    {ready
-                      ? '已安装'
-                      : active
-                        ? component.detail
-                        : working
-                          ? '等待安装'
-                          : component.status === 'ready'
-                            ? '需要更新'
-                            : '待安装'}
-                  </span>
-                </li>
-              )
-            })}
-            {working && (
-              <li className="setup-step">
-                <span className="component-icon">
-                  {serviceStarting ? (
-                    <DesktopIcon name="loader" spinning />
-                  ) : (
-                    <span className="step-dot" />
-                  )}
-                </span>
-                <span className="grow">Pi Desk</span>
-                <span className="step-state">
-                  {serviceStarting ? '正在准备并启动' : '等待启动'}
-                </span>
-              </li>
+        <div className="setup-footer">
+          {!working && source}
+          <div className="actions setup-actions">
+            {working ? (
+              <button
+                type="button"
+                className="quiet"
+                disabled={cancelling || launching}
+                onClick={() => onAction({ kind: 'cancel' })}
+              >
+                {cancelling ? '正在取消…' : '取消安装'}
+              </button>
+            ) : (
+              <button
+                className="primary forward"
+                type="button"
+                disabled={locked}
+                onClick={() => onAction({ kind: canOpen ? 'open' : 'prepare' })}
+              >
+                {checking
+                  ? '请稍候…'
+                  : canOpen
+                    ? '打开 Pi Desk'
+                    : failure
+                      ? '重试安装'
+                      : '安装并打开'}
+                {!checking && <DesktopIcon name="arrow" />}
+              </button>
             )}
-          </ol>
-        </details>
+          </div>
+        </div>
       )}
       {!working && (
         <details
@@ -217,22 +271,7 @@ export function EnvironmentView({
             安装选项
           </summary>
           <div className="details-body">
-            <label className="field download-source">
-              下载源
-              <select
-                value={downloadSource}
-                disabled={locked}
-                onChange={(event) =>
-                  onAction({
-                    kind: 'download-source',
-                    downloadSource: event.target.value as DownloadSource
-                  })
-                }
-              >
-                {!isMacOS && <option value="npmmirror">国内镜像</option>}
-                <option value="official">官方源</option>
-              </select>
-            </label>
+            {optionsOnly && source}
             <div className="components">
               {components.map((component) => (
                 <details className="component" name="environment-component" key={component.name}>

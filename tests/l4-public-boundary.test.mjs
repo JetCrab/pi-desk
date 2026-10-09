@@ -137,6 +137,7 @@ test('官网应用可独立公开，维护资料仍留在私有侧', async () =>
   assert.deepEqual(docs.sort(), [
     'development.md',
     'devices.md',
+    'docker.md',
     'faq.md',
     'installation.md',
     'overview.md',

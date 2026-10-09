@@ -37,11 +37,19 @@
     "typescript": "^5"
   },
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi-desk-plugin"
   ],
   "pi": {
     "extensions": [
       "./dist/index.js"
     ]
+  },
+  "piDesk": {
+    "i18n": {
+      "zh-CN": {
+        "description": "为工具调用附上原因说明，便于理解每次操作的目的。"
+      }
+    }
   }
 }

@@ -15,6 +15,10 @@ on:
         description: 要求 Android 使用正式签名，不执行发布或上传
         type: boolean
         default: false
+      check_only:
+        description: 仅执行受影响检查，不生成安装包
+        type: boolean
+        default: false
     secrets:
       ANDROID_KEYSTORE_BASE64:
         required: false
@@ -69,8 +73,8 @@ jobs:
     env:
       # 系统环境测试共享 Windows 用户会话；用例内部的并发行为仍正常验证。
       RUST_TEST_THREADS: '1'
-      BUILD_PROFILE: ${{ github.ref == 'refs/heads/dev' && 'debug' || 'release' }}
-      RUST_CACHE_STAGE: ${{ github.workspace }}/temp/cache/rust/windows-${{ github.ref == 'refs/heads/dev' && 'debug' || 'release' }}
+      BUILD_PROFILE: release
+      RUST_CACHE_STAGE: ${{ github.workspace }}/temp/cache/rust/windows-release
       CARGO_TARGET_DIR: ${{ github.workspace }}/temp/build/desktop-ci/${{ github.run_id }}-${{ github.run_attempt }}
       PI_DESK_DESKTOP_WEB_DIST: ${{ github.workspace }}/temp/build/desktop-ci/${{ github.run_id }}-${{ github.run_attempt }}/web
       CLIENT_OUTPUT: ${{ github.workspace }}/temp/package/clients/windows/${{ github.run_id }}-${{ github.run_attempt }}
@@ -134,28 +138,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm run build:web
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: 正式发布桌面 Rust 回归
-        if: github.ref == 'refs/heads/main'
+      - name: 受影响桌面 Rust 回归
         working-directory: apps/desktop
         run: |
           $env:TAURI_CONFIG = Get-Content "$env:CARGO_TARGET_DIR/tauri-ci.json" -Raw
           cargo test --manifest-path src-tauri/Cargo.toml --target i686-pc-windows-msvc --release --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 构建 Windows x86 NSIS 安装包
+        if: ${{ !inputs.check_only }}
         working-directory: apps/desktop
         run: |
           $buildArgs = @('exec', 'tauri', 'build', '--target', 'i686-pc-windows-msvc', '--bundles', 'nsis', '--config', "$env:CARGO_TARGET_DIR/tauri-ci.json")
-          if ($env:BUILD_PROFILE -eq 'debug') { $buildArgs += '--debug' }
           & pnpm @buildArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 隔离验证覆盖安装与正常退出
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && !inputs.check_only
         working-directory: apps/desktop
         run: |
           node scripts/test-installer-overwrite.mjs "$env:CARGO_TARGET_DIR/i686-pc-windows-msvc/release/nsis/x86/installer.nsi" "$env:CARGO_TARGET_DIR/.tauri/NSIS/makensis.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: node .github/scripts/rust-cache.mjs save
       - name: 检查真实 PE 架构并归档
+        if: ${{ !inputs.check_only }}
         shell: pwsh
         run: |
           $release = Join-Path $env:CARGO_TARGET_DIR "i686-pc-windows-msvc/$env:BUILD_PROFILE"
@@ -178,6 +182,7 @@ jobs:
           node .github/scripts/pack-client.mjs windows $installers[0].FullName $env:CLIENT_OUTPUT
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.check_only }}
         with:
           name: client-windows-${{ github.run_id }}
           overwrite: true
@@ -226,6 +231,7 @@ jobs:
           ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           DISTRIBUTE: ${{ inputs.distribute }}
+          CHECK_ONLY: ${{ inputs.check_only }}
         run: |
           set -euo pipefail
           umask 077
@@ -276,14 +282,18 @@ jobs:
           }
           GRADLE
           chmod +x apps/android/gradlew
-          test_tasks=()
-          if [[ "$GITHUB_REF" == refs/heads/main ]]; then test_tasks=(:app:testDebugUnitTest); fi
+          build_tasks=(:app:testDebugUnitTest)
+          if [[ "$CHECK_ONLY" != true ]]; then build_tasks+=(:app:assembleRelease); fi
           (
             cd apps/android
             ./gradlew --no-daemon --project-cache-dir "$ANDROID_BUILD_ROOT/project-cache" \
               --init-script "$ANDROID_BUILD_ROOT/isolated-build.gradle" \
-              "${signing_args[@]}" "${test_tasks[@]}" :app:assembleRelease
+              "${signing_args[@]}" "${build_tasks[@]}"
           )
+          if [[ "$CHECK_ONLY" == true ]]; then
+            echo 'Android 受影响检查通过，不生成安装包。'
+            exit 0
+          fi
           apk="$ANDROID_BUILD_ROOT/app/outputs/apk/release/app-release.apk"
           if [[ "$signing_count" == 0 ]]; then
             apk="$ANDROID_BUILD_ROOT/app/outputs/apk/release/app-release-unsigned.apk"
@@ -309,6 +319,7 @@ jobs:
         if: always()
         run: rm -rf "$RUNNER_TEMP/pi-desk-signing-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
       - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.check_only }}
         with:
           name: client-android-${{ github.run_id }}
           overwrite: true

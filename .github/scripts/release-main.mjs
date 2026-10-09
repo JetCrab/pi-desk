@@ -138,6 +138,7 @@ export async function prepareBatch(
     npm_ready: npmReady,
     notes_ready: notesReady,
     tunnel: plan.tunnel,
+    docker: plan.npm.includes('pi-desk'),
     windows:
       !clientsReady && plan.clients.some((item) => item.platform === 'windows' && item.build),
     macos: !clientsReady && plan.clients.some((item) => item.platform === 'macos' && item.build),
@@ -167,6 +168,7 @@ export async function prepareWebsiteBatch({ github, tag, source, output }) {
       npm_ready: true,
       notes_ready: true,
       tunnel: false,
+      docker: false,
       windows: false,
       macos: false,
       android: false
@@ -260,8 +262,14 @@ export async function publishBatch({ github, release, repository }) {
   // 记录已持久保存，即使清理或公开失败，重试也不依赖这些临时附件。
   for (const entry of release.assets.filter(
     (item) =>
-      ['plan.json', 'changes.json', 'release.json', 'release.md'].includes(item.name) ||
-      item.name.endsWith('.tgz')
+      [
+        'plan.json',
+        'changes.json',
+        'release.json',
+        'release.md',
+        'docker-image.json',
+        'pi-desk-docker.tar.gz'
+      ].includes(item.name) || item.name.endsWith('.tgz')
   )) {
     await github.request(`/releases/assets/${entry.id}`, { method: 'DELETE' })
   }

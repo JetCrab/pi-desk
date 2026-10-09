@@ -9,6 +9,7 @@ import {
   type ExtensionError
 } from '@earendil-works/pi-coding-agent'
 import { discoverL4PiPluginSources } from './l4-pi-plugin-sources'
+import { createL4PiPluginDisabledFilter } from './l4-pi-plugin-disabled'
 
 const RESULT_PREFIX = '__PI_DESK_PLUGIN_CAPABILITIES__'
 const MAX_TEXT_LENGTH = 4 * 1024
@@ -145,9 +146,70 @@ async function main(): Promise<void> {
       ? extension.sourceInfo.source
       : sourceForPath(extension.resolvedPath || extension.path, configured)
 
-  const resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager })
+  const manager = new DefaultPackageManager({ cwd, agentDir, settingsManager })
+  const isDisabled = await createL4PiPluginDisabledFilter(agentDir, manager, settingsManager)
+  const resolved = await manager.resolve(async () => 'skip')
+  type Resource = (typeof resolved.extensions)[number]
+  const select = async (resources: Resource[]): Promise<Resource[]> => {
+    const result: Resource[] = []
+    for (const resource of resources) {
+      if (
+        resource.enabled &&
+        resource.metadata.scope === 'user' &&
+        !(await isDisabled(
+          resource.metadata.source,
+          resource.path,
+          resource.metadata.origin === 'package'
+        ))
+      )
+        result.push(resource)
+    }
+    return result
+  }
+  const [extensions, skills, prompts, themes] = await Promise.all([
+    select(resolved.extensions),
+    select(resolved.skills),
+    select(resolved.prompts),
+    select(resolved.themes)
+  ])
+  const resourceLoader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager: SettingsManager.inMemory({}),
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    additionalExtensionPaths: extensions.map((item) => item.path),
+    additionalSkillPaths: skills.map((item) => item.path),
+    additionalPromptTemplatePaths: prompts.map((item) => item.path),
+    additionalThemePaths: themes.map((item) => item.path)
+  })
   await resourceLoader.reload()
+  const restoreSource = (
+    item: { sourceInfo?: CapabilitySourceInfo },
+    path: string | undefined,
+    resources: Resource[]
+  ): void => {
+    if (!path) return
+    const selected = resources.find((resource) => {
+      const child = relative(resource.path, path)
+      return child === '' || (!child.startsWith('..') && !isAbsolute(child))
+    })
+    if (selected) item.sourceInfo = { ...selected.metadata, path }
+  }
   const extensionsResult = resourceLoader.getExtensions()
+  for (const extension of extensionsResult.extensions) {
+    restoreSource(extension, extension.resolvedPath || extension.path, extensions)
+    for (const tool of extension.tools.values()) tool.sourceInfo = extension.sourceInfo
+    for (const command of extension.commands.values()) command.sourceInfo = extension.sourceInfo
+  }
+  for (const skill of resourceLoader.getSkills().skills)
+    restoreSource(skill, skill.filePath, skills)
+  for (const prompt of resourceLoader.getPrompts().prompts)
+    restoreSource(prompt, prompt.filePath, prompts)
+  for (const theme of resourceLoader.getThemes().themes)
+    restoreSource(theme, theme.sourcePath, themes)
   const providerRecords = new Map<string, Map<string, ProviderCapability>>()
 
   const extensionsBeforeSession = extensionsResult.extensions.filter(

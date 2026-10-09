@@ -8,7 +8,12 @@ export const documents = {
   },
   '/docs/installation/': {
     title: '安装与启动',
-    description: '让 AI 帮你安装、下载客户端，或通过 Node.js 安装。',
+    description: '让 AI 帮你安装、下载客户端，或通过 Node.js 和 Docker 启动。',
+    group: '开始使用'
+  },
+  '/docs/docker/': {
+    title: 'Docker 部署与使用',
+    description: '在 Linux 服务器上启动 Pi Desk，管理项目、会话、升级与备份。',
     group: '开始使用'
   },
   '/docs/quickstart/': {

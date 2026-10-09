@@ -29,6 +29,7 @@ fn node_install_and_pi_finish_while_git_is_still_downloading() {
             pi_finished.send(()).unwrap();
             Ok(())
         },
+        |_| Ok(()),
     )
     .unwrap();
 }
@@ -50,8 +51,69 @@ fn git_installs_without_waiting_for_node_download() {
             Ok(())
         },
         |_| Ok(()),
+        |_| Ok(()),
     )
     .unwrap();
+}
+
+#[test]
+fn pi_and_service_install_in_parallel_after_node_is_ready() {
+    let node_ready = AtomicBool::new(false);
+    let ready = &node_ready;
+    let (pi_started, wait_pi) = mpsc::channel();
+    let (service_started, wait_service) = mpsc::channel();
+    prepare_components(
+        &|| false,
+        |_| {
+            node_ready.store(true, Ordering::Release);
+            Ok(())
+        },
+        |_| Ok(()),
+        move |_| {
+            assert!(ready.load(Ordering::Acquire));
+            pi_started.send(()).unwrap();
+            wait_service
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|_| "Pi Desk 必须与 Pi 并行安装".to_string())?;
+            Ok(())
+        },
+        move |_| {
+            assert!(ready.load(Ordering::Acquire));
+            service_started.send(()).unwrap();
+            wait_pi
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|_| "Pi 必须与 Pi Desk 并行安装".to_string())?;
+            Ok(())
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn service_failure_cancels_pi_and_waits_for_it_to_exit() {
+    let (pi_started, wait_pi) = mpsc::channel();
+    let pi_finished = AtomicBool::new(false);
+    let result = prepare_components(
+        &|| false,
+        |_| Ok(()),
+        |_| Ok(()),
+        |stopped| {
+            pi_started.send(()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !stopped() {
+                assert!(Instant::now() < deadline, "服务安装失败必须取消 Pi 安装");
+                std::thread::yield_now();
+            }
+            pi_finished.store(true, Ordering::Release);
+            Err("操作已取消".into())
+        },
+        move |_| {
+            wait_pi.recv_timeout(Duration::from_secs(2)).unwrap();
+            Err("服务安装失败".into())
+        },
+    );
+    assert_eq!(result.unwrap_err(), "服务安装失败");
+    assert!(pi_finished.load(Ordering::Acquire));
 }
 
 #[test]
@@ -59,6 +121,7 @@ fn failed_or_cancelled_node_preparation_never_starts_npm() {
     for failed in [true, false] {
         let cancelled = AtomicBool::new(false);
         let pi_started = AtomicBool::new(false);
+        let service_started = AtomicBool::new(false);
         let result = prepare_components(
             &|| cancelled.load(Ordering::Acquire),
             |_| {
@@ -74,6 +137,10 @@ fn failed_or_cancelled_node_preparation_never_starts_npm() {
                 pi_started.store(true, Ordering::Release);
                 Ok(())
             },
+            |_| {
+                service_started.store(true, Ordering::Release);
+                Ok(())
+            },
         );
         assert_eq!(
             result.unwrap_err(),
@@ -84,6 +151,7 @@ fn failed_or_cancelled_node_preparation_never_starts_npm() {
             }
         );
         assert!(!pi_started.load(Ordering::Acquire));
+        assert!(!service_started.load(Ordering::Acquire));
     }
 }
 

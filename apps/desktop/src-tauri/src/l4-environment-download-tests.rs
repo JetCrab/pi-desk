@@ -1,5 +1,5 @@
-use super::{client, download};
-use crate::environment::EnvironmentState;
+use super::{client, download as download_component};
+use crate::environment::{Component, EnvironmentState};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Write};
@@ -9,6 +9,37 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+fn download(
+    state: &EnvironmentState,
+    client: &reqwest::Client,
+    url: &str,
+    destination: &std::path::Path,
+    expected_size: Option<u64>,
+    cancelled: &dyn Fn() -> bool,
+    log: &std::path::Path,
+) -> Result<String, String> {
+    download_component(
+        state,
+        Component::Node,
+        client,
+        url,
+        destination,
+        expected_size,
+        cancelled,
+        log,
+    )
+}
+
+fn node_progress(state: &EnvironmentState) -> Option<crate::environment::DownloadSnapshot> {
+    state
+        .snapshot()
+        .components
+        .into_iter()
+        .find(|slot| slot.name == Component::Node)
+        .unwrap()
+        .download
+}
 
 struct Directory(PathBuf);
 
@@ -280,7 +311,7 @@ fn ten_connections_resume_interrupted_segment_and_preserve_file_hash() {
     assert_eq!(server.shared.max_active.load(Ordering::Acquire), 10);
     let requests = server.shared.requests.lock().unwrap();
     assert!(requests.iter().any(|range| matches!(range, Some((start, end)) if *start == 64 * 1024 && *end == server.shared.body.len() / 10 - 1)), "中断分段必须从已写入偏移续传：{requests:?}");
-    let progress = state.snapshot().download.unwrap();
+    let progress = node_progress(&state).unwrap();
     assert_eq!(progress.received, server.shared.body.len() as u64);
     assert_eq!(progress.total, Some(server.shared.body.len() as u64));
 }
@@ -321,7 +352,7 @@ fn concurrent_files_report_combined_downloaded_bytes() {
     });
     assert_eq!(fs::read(first_file).unwrap(), first.shared.body);
     assert_eq!(fs::read(second_file).unwrap(), second.shared.body);
-    let progress = state.snapshot().download.unwrap();
+    let progress = node_progress(&state).unwrap();
     assert_eq!(progress.received, 5 * 1024 * 1024);
     assert_eq!(progress.total, Some(5 * 1024 * 1024));
 }
@@ -394,10 +425,10 @@ fn completed_unknown_size_file_does_not_block_later_download_percentage() {
         .unwrap();
         assert_eq!(hash, format!("{:x}", Sha256::digest(&server.shared.body)));
         assert_eq!(fs::read(destination).unwrap(), server.shared.body);
-        let progress = state.snapshot().download.unwrap();
+        let progress = node_progress(&state).unwrap();
         assert_eq!(progress.total, Some(progress.received));
     }
-    let progress = state.snapshot().download.unwrap();
+    let progress = node_progress(&state).unwrap();
     assert_eq!(progress.received, (128 + 2 * 1024) * 1024);
     assert_eq!(progress.total, Some((128 + 2 * 1024) * 1024));
 }
@@ -421,7 +452,7 @@ fn server_without_range_support_retries_whole_file() {
     assert_eq!(fs::read(&destination).unwrap(), server.shared.body);
     assert!(server.shared.requests.lock().unwrap().len() >= 2);
     assert_eq!(
-        state.snapshot().download.unwrap().received,
+        node_progress(&state).unwrap().received,
         server.shared.body.len() as u64
     );
 }
@@ -497,19 +528,14 @@ fn cancellation_closes_active_requests_and_removes_partial_file() {
         &server.url(),
         &destination,
         None,
-        &|| {
-            state
-                .snapshot()
-                .download
-                .is_some_and(|progress| progress.received > 0)
-        },
+        &|| node_progress(&state).is_some_and(|progress| progress.received > 0),
         &directory.0.join("desktop.log"),
     )
     .unwrap_err();
     assert!(error.contains("取消"), "{error}");
     assert!(started.elapsed() < Duration::from_secs(1));
     assert!(!destination.exists());
-    assert!(state.snapshot().download.unwrap().received > 0);
+    assert!(node_progress(&state).is_none());
 }
 
 #[test]

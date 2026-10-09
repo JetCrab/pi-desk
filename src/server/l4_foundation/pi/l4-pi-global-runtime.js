@@ -190,6 +190,29 @@ async function checkPiModules(runtime) {
     )
 }
 
+function formatPiRuntimeError(error) {
+  const reason = error instanceof Error ? error.message : String(error)
+  const command = `npm install -g --ignore-scripts ${PI_PACKAGE}@${INSTALL_VERSION}`
+  return [
+    reason,
+    '',
+    'Pi Desk 使用当前 Node/npm 环境中的全局 Pi，不会自动安装或更新 Pi。',
+    `如需安装、更新或修复 Pi，以下命令任选一条，安装当前 Pi Desk 使用的 Pi ${INSTALL_VERSION}：`,
+    '',
+    '官方 npm 源：',
+    `  ${command} --registry=https://registry.npmjs.org`,
+    '',
+    '国内镜像（腾讯云，供中国用户加速下载）：',
+    `  ${command} --registry=https://mirrors.cloud.tencent.com/npm`,
+    '镜像同步可能有延迟；找不到版本时，改用官方源。',
+    '',
+    '安装后运行 pi --version 确认版本，再重新执行原来的 Pi Desk 启动命令。',
+    '若仍提示旧版本，请确认安装 Pi 和启动 Pi Desk 使用的是同一个 Node/npm 环境。',
+    '桌面端也可在安装选项中选择下载源，确认安装后点击“重新检测”并启动。',
+    '安装与更新说明：https://pidesk.dev/docs/installation/'
+  ].join('\n')
+}
+
 async function checkGlobalPi() {
   const runtime = await findGlobalPi()
   if (runtime) await checkPiModules(runtime)
@@ -206,5 +229,6 @@ module.exports = {
   findGlobalPi,
   resolvePiImport,
   checkPiModules,
-  checkGlobalPi
+  checkGlobalPi,
+  formatPiRuntimeError
 }

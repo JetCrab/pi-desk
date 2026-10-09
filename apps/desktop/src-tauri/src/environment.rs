@@ -39,6 +39,7 @@ pub(crate) struct ComponentSnapshot {
     pub version: Option<String>,
     pub path: Option<String>,
     pub detail: Option<String>,
+    pub download: Option<DownloadSnapshot>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -52,7 +53,6 @@ pub(crate) struct EnvironmentSnapshot {
     pub status: String,
     pub components: Vec<ComponentSnapshot>,
     pub step: String,
-    pub download: Option<DownloadSnapshot>,
     pub error: Option<String>,
 }
 
@@ -78,10 +78,22 @@ struct EnvironmentData {
     choices: Choices,
     search_path: OsString,
     preparation_steps: Vec<(Component, String)>,
-    downloads: BTreeMap<PathBuf, DownloadSnapshot>,
+    downloads: BTreeMap<PathBuf, (Component, DownloadSnapshot)>,
 }
 
 impl EnvironmentData {
+    fn clear_download(&mut self, component: Component) {
+        self.downloads.retain(|_, (name, _)| *name != component);
+        if let Some(slot) = self
+            .snapshot
+            .components
+            .iter_mut()
+            .find(|slot| slot.name == component)
+        {
+            slot.download = None;
+        }
+    }
+
     fn update_preparation_step(&mut self) {
         self.snapshot.step = match self.preparation_steps.as_slice() {
             [] => "正在验证准备结果".into(),
@@ -148,10 +160,10 @@ impl EnvironmentState {
                             version: None,
                             path: None,
                             detail: None,
+                            download: None,
                         })
                         .collect(),
                     step: "正在检测本机环境".into(),
-                    download: None,
                     error: None,
                 },
             }),
@@ -208,7 +220,9 @@ impl EnvironmentState {
         data.snapshot.status = status.into();
         data.snapshot.step = step.into();
         data.snapshot.error = error;
-        data.snapshot.download = None;
+        for slot in &mut data.snapshot.components {
+            slot.download = None;
+        }
         let steps = std::mem::take(&mut data.preparation_steps);
         for (component, _) in steps {
             if let Some(slot) = data
@@ -225,6 +239,7 @@ impl EnvironmentState {
 
     pub(crate) fn set_component_step(&self, component: Component, step: &str) {
         let mut data = self.data.lock().unwrap();
+        data.clear_download(component);
         if let Some(slot) = data
             .snapshot
             .components
@@ -246,20 +261,41 @@ impl EnvironmentState {
         data.update_preparation_step();
     }
 
-    pub(crate) fn progress(&self, file: &Path, received: u64, total: Option<u64>) {
+    pub(crate) fn progress(
+        &self,
+        component: Component,
+        file: &Path,
+        received: u64,
+        total: Option<u64>,
+    ) {
         let mut data = self.data.lock().unwrap();
-        data.downloads
-            .insert(file.to_path_buf(), DownloadSnapshot { received, total });
-        let received = data
+        data.downloads.insert(
+            file.to_path_buf(),
+            (component, DownloadSnapshot { received, total }),
+        );
+        let mut downloads = data
             .downloads
             .values()
-            .map(|download| download.received)
+            .filter(|(name, _)| *name == component);
+        let received = downloads
+            .clone()
+            .map(|(_, download)| download.received)
             .sum();
-        let total = data
-            .downloads
-            .values()
-            .try_fold(0, |sum, download| download.total.map(|total| sum + total));
-        data.snapshot.download = Some(DownloadSnapshot { received, total });
+        let total = downloads.try_fold(0, |sum, (_, download)| {
+            download.total.map(|total| sum + total)
+        });
+        if let Some(slot) = data
+            .snapshot
+            .components
+            .iter_mut()
+            .find(|slot| slot.name == component)
+        {
+            slot.download = Some(DownloadSnapshot { received, total });
+        }
+    }
+
+    pub(crate) fn clear_download(&self, component: Component) {
+        self.data.lock().unwrap().clear_download(component);
     }
 
     pub(crate) fn needs_setup(&self, server: &ServerConfig) -> bool {
@@ -551,6 +587,7 @@ impl EnvironmentState {
     #[cfg(windows)]
     fn invalidate_component(&self, component: Component, error: &str) {
         let mut data = self.data.lock().unwrap();
+        data.clear_download(component);
         if let Some(slot) = data
             .snapshot
             .components
@@ -803,6 +840,7 @@ impl EnvironmentState {
                     detail: Some(
                         "Pi 的 shellPath 指向旧桌面私有环境，请修正 Pi 设置后重新检测".into(),
                     ),
+                    download: None,
                 }
             } else {
                 self.probe_candidates(
@@ -849,6 +887,7 @@ impl EnvironmentState {
             version: Some(version),
             path: Some(path.to_string_lossy().into_owned()),
             detail: None,
+            download: None,
         });
         Ok(())
     }
@@ -893,6 +932,7 @@ impl EnvironmentState {
         let name = component.name;
         let ready = component.status == "ready";
         let mut data = self.data.lock().unwrap();
+        data.clear_download(name);
         if let Some(slot) = data
             .snapshot
             .components
@@ -922,6 +962,7 @@ impl EnvironmentState {
             version: None,
             path: None,
             detail: Some(format!("未找到可用的 {}", component.name())),
+            download: None,
         };
         for path in paths {
             if cancelled() {
@@ -943,6 +984,7 @@ impl EnvironmentState {
                         version: Some(version.clone()),
                         path: Some(path.to_string_lossy().into_owned()),
                         detail: None,
+                        download: None,
                     };
                     if component == Component::Node
                         && !manual
@@ -973,6 +1015,7 @@ impl EnvironmentState {
                             version: None,
                             path: Some(path.to_string_lossy().into_owned()),
                             detail: Some(error),
+                            download: None,
                         };
                     }
                 }
@@ -1212,10 +1255,11 @@ impl EnvironmentState {
         download_source: DownloadSource,
         cancelled: &(dyn Fn() -> bool + Sync),
         log: &Path,
+        service: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<(), String> + Send,
     ) -> Result<(), String> {
         fs::create_dir_all(&self.root).map_err(|error| error.to_string())?;
         self.check(cancelled, log)?;
-        environment_install::prepare(self, server, download_source, cancelled, log)
+        environment_install::prepare(self, server, download_source, cancelled, log, service)
     }
 
     pub(crate) fn verify_service(
@@ -1228,6 +1272,12 @@ impl EnvironmentState {
         if !requires_pi(server) {
             return Ok(());
         }
+        let started = std::time::Instant::now();
+        logging::write(
+            log,
+            "environment-compatibility-start",
+            "正在校验 Pi 与 Desk 服务兼容性",
+        );
         let script = pi_runtime_check_script(directory);
         let result = if !script.is_file() {
             Err("此 Pi Desk 服务包缺少 Pi 兼容检查入口，请选择支持桌面环境准备的服务版本".into())
@@ -1252,6 +1302,15 @@ impl EnvironmentState {
                 ))
             }
         });
+        logging::write(
+            log,
+            "environment-compatibility-end",
+            &format!(
+                "Pi 与 Desk 兼容校验 success={} elapsed_ms={}",
+                checked.is_ok(),
+                started.elapsed().as_millis()
+            ),
+        );
         if let Err(error) = &checked {
             let mut data = self.data.lock().unwrap();
             if let Some(pi) = data
@@ -1262,6 +1321,10 @@ impl EnvironmentState {
             {
                 pi.status = "invalid".into();
                 pi.detail = Some(error.clone());
+            }
+            data.downloads.clear();
+            for slot in &mut data.snapshot.components {
+                slot.download = None;
             }
             data.snapshot.status = "failed".into();
             data.snapshot.step = "Pi 与服务不兼容，请更新或选择兼容的 Pi 后重试".into();

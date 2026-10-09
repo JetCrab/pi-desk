@@ -15,6 +15,8 @@ const register = pathToFileURL(
   join(root, 'src/server/l4_foundation/pi/l4-pi-runtime-register.mjs')
 ).href
 const codingAgent = '@earendil-works/pi-coding-agent'
+const installVersion = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+  .devDependencies[codingAgent]
 const requirePi = createRequire(
   realpathSync(join(root, 'node_modules', codingAgent, 'package.json'))
 )
@@ -120,6 +122,22 @@ function run(args, piRoot) {
   })
 }
 
+function assertPiInstallHelp(stderr) {
+  for (const registry of ['https://registry.npmjs.org', 'https://mirrors.cloud.tencent.com/npm']) {
+    assert.ok(
+      stderr.includes(
+        `npm install -g --ignore-scripts ${codingAgent}@${installVersion} --registry=${registry}`
+      ),
+      '提示提供与当前包清单一致的安装命令'
+    )
+  }
+  assert.match(stderr, /供中国用户加速下载/)
+  assert.match(stderr, /不会自动安装或更新 Pi/)
+  assert.match(stderr, /pi --version/)
+  assert.match(stderr, /重新执行原来的 Pi Desk 启动命令/)
+  assert.match(stderr, /https:\/\/pidesk\.dev\/docs\/installation\//)
+}
+
 async function loadIdentity(piRoot) {
   const source = `
 import * as sdk from '@earendil-works/pi-coding-agent';
@@ -162,6 +180,7 @@ test('全局 Pi 缺失时检查返回 missing，启动拒绝本地回退', async
     (error) => {
       assert.equal(error.code, 78)
       assert.match(error.stderr, /未安装全局 Pi/)
+      assertPiInstallHelp(error.stderr)
       assert.doesNotMatch(error.stdout, /unexpected-start/)
       return true
     }
@@ -191,14 +210,21 @@ test('Pi Desk 不变，替换全局 Pi 后新进程使用新版且三种加载�
   })
 })
 
-test('全局 Pi 版本过旧时拒绝启动并提示当前基线', async (context) => {
+test('全局 Pi 版本过旧时检查和启动均提供更新指引', async (context) => {
   const directory = await fixture(context)
   const piRoot = await writePi(directory, '0.99.1')
-  await assert.rejects(run([checker, '--check'], piRoot), (error) => {
-    assert.equal(error.code, 78)
-    assert.match(error.stderr, /过旧，需要 1\.0\.1/)
-    return true
-  })
+  for (const args of [
+    [checker, '--check'],
+    ['--import', register, '-e', "console.log('unexpected-start')"]
+  ]) {
+    await assert.rejects(run(args, piRoot), (error) => {
+      assert.equal(error.code, 78)
+      assert.match(error.stderr, /过旧，需要 1\.0\.1/)
+      assertPiInstallHelp(error.stderr)
+      assert.doesNotMatch(error.stdout, /unexpected-start/)
+      return true
+    })
+  }
 })
 
 test('全局 Pi 核心依赖不一致或 SDK 缺失时返回前置失败', async (context) => {
@@ -210,12 +236,14 @@ test('全局 Pi 核心依赖不一致或 SDK 缺失时返回前置失败', async
   await assert.rejects(run([checker, '--check'], piRoot), (error) => {
     assert.equal(error.code, 78)
     assert.match(error.stderr, /核心依赖不一致/)
+    assertPiInstallHelp(error.stderr)
     return true
   })
   await writePi(directory, '1.0.1', 'createAgentSessionFromServices')
   await assert.rejects(run([checker, '--check'], piRoot), (error) => {
     assert.equal(error.code, 78)
     assert.match(error.stderr, /不兼容.*createAgentSessionFromServices/)
+    assertPiInstallHelp(error.stderr)
     return true
   })
 })

@@ -35,6 +35,19 @@ function PluginResult({ plugin }: { plugin: L3ConversationPiDeskPlugin }): React
         {' · '}
         <span className="font-mono">{plugin.source}</span>
       </p>
+      {plugin.updateTag || plugin.availableVersion ? (
+        <p className="flex flex-wrap gap-x-3 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+          {plugin.updateTag ? (
+            <span>{t('pidesk.updateChannel', { tag: plugin.updateTag })}</span>
+          ) : null}
+          {plugin.availableVersion ? (
+            <span>{t('pidesk.targetVersion', { version: plugin.availableVersion })}</span>
+          ) : null}
+        </p>
+      ) : null}
+      {plugin.updateError ? (
+        <p className="text-destructive [overflow-wrap:anywhere]">{plugin.updateError}</p>
+      ) : null}
       {plugin.operation ? (
         <p className="[overflow-wrap:anywhere]">
           {t(`pidesk.action.${plugin.operation.action}`)}

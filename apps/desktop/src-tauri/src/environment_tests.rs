@@ -35,6 +35,7 @@ fn mark_ready(state: &EnvironmentState, name: Component, version: &str, path: Pa
         version: Some(version.into()),
         path: Some(path.to_string_lossy().into_owned()),
         detail: None,
+        download: None,
     });
 }
 
@@ -190,15 +191,55 @@ fn preparation_steps_preserve_parallel_progress_and_clear_stale_status_on_exit()
     state.set_phase("installing", "正在准备", None);
     state.set_component_step(Component::Node, "正在下载 Node.js");
     state.set_component_step(Component::Bash, "正在下载 Git Bash");
-    state.progress(&directory.0.join("node.zip"), 10, Some(100));
-    state.progress(&directory.0.join("git.exe"), 20, None);
+    state.progress(
+        Component::Node,
+        &directory.0.join("node.zip"),
+        10,
+        Some(100),
+    );
+    state.progress(Component::Bash, &directory.0.join("git.exe"), 20, None);
+    let snapshot = state.snapshot();
+    let node = snapshot
+        .components
+        .iter()
+        .find(|item| item.name == Component::Node)
+        .unwrap();
+    let bash = snapshot
+        .components
+        .iter()
+        .find(|item| item.name == Component::Bash)
+        .unwrap();
+    assert_eq!(node.download.as_ref().unwrap().received, 10);
+    assert_eq!(node.download.as_ref().unwrap().total, Some(100));
+    assert_eq!(bash.download.as_ref().unwrap().received, 20);
+    assert_eq!(
+        bash.download.as_ref().unwrap().total,
+        None,
+        "未知大小不能显示虚假百分比"
+    );
     state.set_component_step(Component::Bash, "正在解压并校验 Git Bash");
     let snapshot = state.snapshot();
-    assert_eq!(snapshot.download.as_ref().unwrap().received, 30);
+    assert!(
+        snapshot
+            .components
+            .iter()
+            .find(|item| item.name == Component::Bash)
+            .unwrap()
+            .download
+            .is_none(),
+        "安装阶段不能保留下载进度"
+    );
     assert_eq!(
-        snapshot.download.unwrap().total,
-        None,
-        "有文件大小未知时不能报告虚假百分比"
+        snapshot
+            .components
+            .iter()
+            .find(|item| item.name == Component::Node)
+            .unwrap()
+            .download
+            .as_ref()
+            .unwrap()
+            .received,
+        10
     );
     assert!(snapshot
         .components
@@ -217,16 +258,29 @@ fn preparation_steps_preserve_parallel_progress_and_clear_stale_status_on_exit()
     );
     assert_eq!(state.snapshot().step, "正在下载 Node.js");
     state.set_phase("failed", "准备未完成", Some("网络错误".into()));
-    assert!(state.snapshot().download.is_none());
+    assert!(state
+        .snapshot()
+        .components
+        .iter()
+        .all(|item| item.download.is_none()));
     assert!(state
         .snapshot()
         .components
         .iter()
         .all(|component| component.detail.is_none()));
     state.set_phase("installing", "正在重试", None);
-    state.progress(&directory.0.join("retry.zip"), 1, Some(2));
+    state.progress(Component::Node, &directory.0.join("retry.zip"), 1, Some(2));
     assert_eq!(
-        state.snapshot().download.unwrap().received,
+        state
+            .snapshot()
+            .components
+            .iter()
+            .find(|item| item.name == Component::Node)
+            .unwrap()
+            .download
+            .as_ref()
+            .unwrap()
+            .received,
         1,
         "重试不能保留旧下载字节"
     );
@@ -241,7 +295,7 @@ fn checking_one_installer_preserves_other_components_and_download_progress() {
         state.set_component_step(Component::Node, "正在安装 Node.js");
         state.set_component_step(Component::Bash, "正在下载 Git Bash");
         state.set_component_step(Component::Pi, "正在安装 Pi");
-        state.progress(&directory.0.join("git.exe"), 10, Some(100));
+        state.progress(Component::Bash, &directory.0.join("git.exe"), 10, Some(100));
         let before = state.snapshot();
         state
             .check_in_path(
@@ -268,7 +322,20 @@ fn checking_one_installer_preserves_other_components_and_download_progress() {
             assert_eq!(actual.detail, component.detail);
         }
         assert_eq!(after.status, "installing");
-        assert_eq!(after.download.unwrap().received, 10);
+        if checking != Component::Bash {
+            assert_eq!(
+                after
+                    .components
+                    .iter()
+                    .find(|item| item.name == Component::Bash)
+                    .unwrap()
+                    .download
+                    .as_ref()
+                    .unwrap()
+                    .received,
+                10
+            );
+        }
         assert_eq!(after.step, before.step);
     }
 }

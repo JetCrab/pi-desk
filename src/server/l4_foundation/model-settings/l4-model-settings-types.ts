@@ -73,10 +73,37 @@ export interface L4ModelSelection {
   thinkingLevel: ThinkingLevel
 }
 
+export interface L4AccountModelSelection {
+  provider: string
+  modelId: string
+  overrides: {
+    contextWindow?: number
+    maxTokens?: number
+    cost?: Partial<L4ModelCost>
+  }
+}
+
+export interface L4ModelAccount {
+  provider: string
+  name: string
+  loggedIn: boolean
+  subscription: boolean
+  models: L4ModelConfig[]
+}
+
 export type L4ModelSettingsReplaceInput =
-  | { providers: L4ModelProviderConfig[]; presets?: L4ModelPreset[]; nativeConfig?: never }
-  | { providers?: L4ModelProviderConfig[]; presets: L4ModelPreset[]; nativeConfig?: never }
-  | { nativeConfig: L4ModelNativeConfig; providers?: never; presets?: never }
+  | {
+      providers?: L4ModelProviderConfig[]
+      presets?: L4ModelPreset[]
+      accountModels?: L4AccountModelSelection[]
+      nativeConfig?: never
+    }
+  | {
+      nativeConfig: L4ModelNativeConfig
+      providers?: never
+      presets?: never
+      accountModels?: never
+    }
 
 export interface L4ModelCatalogRequest {
   query: string

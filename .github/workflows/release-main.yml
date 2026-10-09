@@ -42,6 +42,7 @@ jobs:
       macos: ${{ steps.plan.outputs.macos }}
       android: ${{ steps.plan.outputs.android }}
       tunnel: ${{ steps.plan.outputs.tunnel }}
+      docker: ${{ steps.plan.outputs.docker }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -222,9 +223,23 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  npm-publish:
+  docker-build:
     needs: [prepare, assemble]
-    if: needs.prepare.outputs.npm != '[]'
+    if: needs.prepare.outputs.docker == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-docker.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.sha }}
+      release_tag: ${{ needs.prepare.outputs.tag }}
+      phase: build
+
+  npm-publish:
+    needs: [prepare, assemble, docker-build]
+    if: >-
+      always() && !cancelled() && needs.assemble.result == 'success' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
+      needs.prepare.outputs.npm != '[]'
     permissions:
       contents: read
       id-token: write
@@ -237,8 +252,11 @@ jobs:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   tunnel:
-    needs: [prepare, assemble]
-    if: needs.prepare.outputs.tunnel == 'true'
+    needs: [prepare, assemble, docker-build]
+    if: >-
+      always() && !cancelled() && needs.assemble.result == 'success' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
+      needs.prepare.outputs.tunnel == 'true'
     permissions:
       contents: read
       packages: write
@@ -247,8 +265,20 @@ jobs:
       source_sha: ${{ needs.prepare.outputs.sha }}
       phase: publish
 
+  docker:
+    needs: [prepare, docker-build]
+    if: needs.prepare.outputs.docker == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release-docker.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.sha }}
+      release_tag: ${{ needs.prepare.outputs.tag }}
+      phase: publish
+
   publish:
-    needs: [prepare, assemble, npm-publish, tunnel]
+    needs: [prepare, assemble, npm-publish, tunnel, docker]
     if: >-
       always() && !cancelled() && needs.assemble.result == 'success' &&
       !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')

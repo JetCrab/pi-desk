@@ -141,6 +141,36 @@ export const L2ModelSelectionSchema = z
   })
   .strict()
 
+export const L2AccountModelOverridesSchema = z
+  .object({
+    contextWindow: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+    maxTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+    cost: L2ModelCostSchema.partial().optional()
+  })
+  .strict()
+
+export const L2AccountModelSelectionSchema = z
+  .object({
+    provider: L2ModelProviderIdSchema,
+    modelId: L2ModelIdSchema,
+    overrides: L2AccountModelOverridesSchema
+  })
+  .strict()
+
+export const L2ModelAccountSchema = z
+  .object({
+    provider: L2ModelProviderIdSchema,
+    name: L2ModelNameSchema,
+    loggedIn: z.boolean(),
+    subscription: z.boolean(),
+    models: z.array(L2ModelConfigSchema)
+  })
+  .strict()
+
+export type L2AccountModelOverrides = z.infer<typeof L2AccountModelOverridesSchema>
+export type L2AccountModelSelection = z.infer<typeof L2AccountModelSelectionSchema>
+export type L2ModelAccount = z.infer<typeof L2ModelAccountSchema>
+
 export const L2ModelSettingsGetRequestSchema = z.object({}).strict()
 
 export const L2ModelSettingsGetResponseSchema = z
@@ -148,27 +178,31 @@ export const L2ModelSettingsGetResponseSchema = z
     providers: z.array(L2ModelProviderConfigSchema),
     presets: z.array(L2ModelPresetSchema),
     models: z.array(L2ModelOptionSchema),
-    nativeConfig: L2ModelNativeConfigSchema
+    nativeConfig: L2ModelNativeConfigSchema,
+    accountModels: z.array(L2AccountModelSelectionSchema),
+    accounts: z.array(L2ModelAccountSchema)
   })
   .strict()
 
-const L2ModelSettingsReplaceProvidersSchema = z
-  .object({
-    providers: z.array(L2ModelProviderConfigSchema),
-    presets: z.array(L2ModelPresetSchema).optional()
-  })
-  .strict()
-
-const L2ModelSettingsReplacePresetsSchema = z
+const L2ModelSettingsReplaceFormSchema = z
   .object({
     providers: z.array(L2ModelProviderConfigSchema).optional(),
-    presets: z.array(L2ModelPresetSchema)
+    presets: z.array(L2ModelPresetSchema).optional(),
+    accountModels: z.array(L2AccountModelSelectionSchema).optional()
   })
   .strict()
+  .refine(
+    (input) =>
+      input.providers !== undefined ||
+      input.presets !== undefined ||
+      input.accountModels !== undefined,
+    {
+      message: '请提交需要保存的模型配置'
+    }
+  )
 
 export const L2ModelSettingsReplaceRequestSchema = z.union([
-  L2ModelSettingsReplaceProvidersSchema,
-  L2ModelSettingsReplacePresetsSchema,
+  L2ModelSettingsReplaceFormSchema,
   z.object({ nativeConfig: L2ModelNativeConfigSchema }).strict()
 ])
 

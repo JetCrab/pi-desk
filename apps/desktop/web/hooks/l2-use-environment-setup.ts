@@ -14,8 +14,7 @@ import { useDownloadSource } from './l2-use-download-source'
 
 export function useEnvironmentSetup(
   state: ControlState | null,
-  refresh: () => void,
-  navigate: (hash: string) => void
+  refresh: () => void
 ): {
   optionsUrl: string | null
   activeUrl: string | null
@@ -62,8 +61,6 @@ export function useEnvironmentSetup(
       setCopied('')
     } else if (input.kind === 'options') {
       setOptionsUrl(input.open ? target.url : null)
-    } else if (input.kind === 'settings') {
-      navigate(`#/settings/target?url=${encodeURIComponent(target.url)}&advanced=1`)
     } else if (input.kind === 'cancel') {
       void cancellation
         .run(() =>
