@@ -109,6 +109,26 @@ async function fixture(toolCount = 1): Promise<{
   ])
   let worker: InstanceType<typeof L4PiChatWorker> | undefined
   async function close(succeeded: boolean): Promise<void> {
+    if (!succeeded) {
+      await writeFile(
+        join(root, 'failure.json'),
+        JSON.stringify(
+          {
+            blockReason: worker?.readPluginReloadBlockReason(),
+            requests: bodies.map((body, index) => ({
+              index,
+              queuedInput: body.includes('重载前排队的消息'),
+              reloadNotice: body.includes('Pi 配置已重载完成'),
+              newTool: body.includes('reload_fixture_v2'),
+              responded: responses[index]?.writableEnded
+            })),
+            events: events.slice(-30).map((event) => event.type)
+          },
+          null,
+          2
+        )
+      ).catch((error: unknown) => console.warn('保存重载测试诊断失败', error))
+    }
     try {
       await worker?.dispose()
     } finally {
@@ -235,6 +255,8 @@ test(
 
       await context.writePlugin(2)
       await worker.send({ text: '重载前排队的消息', images: [], mode: 'follow_up' })
+      // send 仅确认 Worker 接管；模型仍被本测试挂起，直到 Pi 完成真正入队。
+      await waitFor(() => readBlockReason() === '聊天队列不为空', '后续消息完成校验并进入队列')
       respond(responses[1], 2)
       await waitFor(() => bodies.length === 3, '排队消息被模型接管')
       const checksBefore = checks
