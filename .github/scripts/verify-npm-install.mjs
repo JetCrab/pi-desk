@@ -10,7 +10,7 @@ import {
 } from '../../tests/l4-e2e-server-runtime.mjs'
 import { reservePort } from '../../tests/l4-browser-cdp-runtime.mjs'
 import { createPiDeskCommandFixture } from '../../tests/l4-pidesk-command-smoke.mjs'
-import { run } from './release-npm.mjs'
+import { run, readNpmArchiveManifest } from './release-npm.mjs'
 
 async function waitForHealth(runtime, version) {
   const deadline = Date.now() + 120_000
@@ -154,13 +154,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     sdkArchive && hostArchive && process.argv.length === 4,
     '用法：verify-npm-install.mjs <sdk.tgz> <host.tgz>'
   )
-  const manifest = JSON.parse(
-    run(
-      process.platform === 'win32' ? 'tar.exe' : 'tar',
-      ['-xOf', hostArchive, 'package/package.json'],
-      { capture: true }
-    )
-  )
+  const manifest = readNpmArchiveManifest(hostArchive)
   assert.equal(manifest.name, '@jetcrab/pi-desk')
   verifyNpmInstall({
     root: resolve(import.meta.dirname, '../..'),
