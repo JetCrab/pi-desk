@@ -171,6 +171,27 @@ test('已有固定版本内容不同或无法确认远端状态时不推送', as
   assert.ok(calls.every((args) => args[0] !== 'push'))
 })
 
+test('Docker复用工作流的两个调用入口均授予构建与发布所需权限', async () => {
+  const main = await readFile(
+    new URL('../.github/workflows/release-main.yml', import.meta.url),
+    'utf8'
+  )
+  const jobs = main.split(/(?=^  [\w-]+:\s*$)/m)
+  for (const name of ['docker-build', 'docker']) {
+    const job = jobs.find((block) => block.startsWith(`  ${name}:\n`))
+    assert.ok(job, `应保留 Docker 工作流调用入口：${name}`)
+    const permissions = job.match(/^    permissions:\n((?:      [^\n]+\n)+)/m)?.[1]
+    assert.ok(permissions, `${name} 必须明确声明工作流权限`)
+    for (const permission of ['contents', 'packages']) {
+      assert.match(
+        permissions,
+        new RegExp(`^      ${permission}: write$`, 'm'),
+        `${name} 必须授予 ${permission}: write`
+      )
+    }
+  }
+})
+
 test('Docker仅由main调用且所有公开发布等待镜像验收', async () => {
   const main = await readFile(
     new URL('../.github/workflows/release-main.yml', import.meta.url),

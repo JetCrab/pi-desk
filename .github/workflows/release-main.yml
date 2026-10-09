@@ -228,6 +228,7 @@ jobs:
     if: needs.prepare.outputs.docker == 'true'
     permissions:
       contents: write
+      packages: write
     uses: ./.github/workflows/release-docker.yml
     with:
       source_sha: ${{ needs.prepare.outputs.sha }}
@@ -269,7 +270,7 @@ jobs:
     needs: [prepare, docker-build]
     if: needs.prepare.outputs.docker == 'true'
     permissions:
-      contents: read
+      contents: write
       packages: write
     uses: ./.github/workflows/release-docker.yml
     with:
