@@ -50,16 +50,19 @@ jobs:
     needs: queue
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     outputs:
-      packages: ${{ steps.npm.outputs.packages }}
-      windows: ${{ steps.clients.outputs.windows }}
-      macos: ${{ steps.clients.outputs.macos }}
-      android: ${{ steps.clients.outputs.android }}
-      ios: ${{ steps.clients.outputs.ios }}
-      tunnel: ${{ steps.clients.outputs.tunnel }}
-      desktop_checks: ${{ steps.clients.outputs.desktop_checks }}
-      android_checks: ${{ steps.clients.outputs.android_checks }}
-      tunnel_checks: ${{ steps.clients.outputs.tunnel_checks }}
+      packages: ${{ steps.plan.outputs.packages }}
+      check_base: ${{ steps.plan.outputs.check_base }}
+      windows: ${{ steps.plan.outputs.windows }}
+      macos: ${{ steps.plan.outputs.macos }}
+      android: ${{ steps.plan.outputs.android }}
+      ios: ${{ steps.plan.outputs.ios }}
+      tunnel: ${{ steps.plan.outputs.tunnel }}
+      desktop_checks: ${{ steps.plan.outputs.desktop_checks }}
+      android_checks: ${{ steps.plan.outputs.android_checks }}
+      tunnel_checks: ${{ steps.plan.outputs.tunnel_checks }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -73,33 +76,14 @@ jobs:
         with:
           version: 10.15.0
           run_install: false
-      - name: 核对推送比较基线
+      - name: 按成功版本选择范围并固定本批开发版本
+        id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if [[ "$RELEASE_BEFORE" != 0000000000000000000000000000000000000000 ]] && ! git cat-file -e "$RELEASE_BEFORE^{commit}"; then
-            authorization=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-            git -c http.extraheader="AUTHORIZATION: basic $authorization" fetch --no-tags origin "$RELEASE_BEFORE"
-          fi
-      - name: 区分原生生产输入和检查范围
-        id: clients
-        env:
           REQUESTED_TARGET: ${{ inputs.target }}
-        run: node .github/scripts/select-dev-targets.mjs
-      - name: 仅为实际变化的 npm 单元准备开发版本
-        id: npm
-        env:
-          RELEASE_PACKAGE: all
-          REQUESTED_TARGET: ${{ inputs.target }}
-        run: |
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$REQUESTED_TARGET" != all && "$REQUESTED_TARGET" != npm ]]; then
-            echo 'packages=[]' >> "$GITHUB_OUTPUT"
-          else
-            node .github/scripts/prepare-dev-release.mjs
-          fi
+        run: node .github/scripts/release-dev.mjs prepare
       - uses: actions/upload-artifact@v4
-        if: steps.npm.outputs.packages != '[]'
+        if: steps.plan.outputs.packages != '[]'
         with:
           name: dev-manifests-${{ github.run_id }}
           overwrite: true
@@ -112,7 +96,7 @@ jobs:
     uses: ./.github/workflows/check.yml
     with:
       source_sha: ${{ github.sha }}
-      base_sha: ${{ github.event.before || '0000000000000000000000000000000000000000' }}
+      base_sha: ${{ needs.plan.outputs.check_base }}
       built_packages: ${{ needs.plan.outputs.packages }}
 
   npm-build:
@@ -120,6 +104,7 @@ jobs:
     if: needs.plan.outputs.packages != '[]'
     permissions:
       contents: read
+      actions: read
       id-token: write
     uses: ./.github/workflows/release-npm.yml
     with:
@@ -183,6 +168,7 @@ jobs:
       needs.npm-build.result == 'success' && (github.event_name == 'push' || inputs.publish)
     permissions:
       contents: read
+      actions: read
       id-token: write
     uses: ./.github/workflows/release-npm.yml
     with:
@@ -194,18 +180,20 @@ jobs:
 
   result:
     needs: [plan, checks, npm-build, windows, macos, android, ios, tunnel, npm-publish]
-    if: always() && !cancelled()
+    if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: 汇总本批实际执行结果
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - name: 保存实际成功单元，失败范围留待后续批次
         env:
+          GH_TOKEN: ${{ github.token }}
           RESULTS: ${{ toJSON(needs) }}
-        run: |
-          node --input-type=module <<'NODE'
-          import { appendFileSync } from 'node:fs'
-          const results = JSON.parse(process.env.RESULTS)
-          appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-            `## 开发批次 ${process.env.GITHUB_SHA}\n\n` +
-            Object.entries(results).map(([name, task]) => `- ${name}: ${task.result}`).join('\n') + '\n')
-          if (Object.values(results).some(task => ['failure', 'cancelled'].includes(task.result))) process.exitCode = 1
-          NODE
+        run: node .github/scripts/release-dev.mjs complete

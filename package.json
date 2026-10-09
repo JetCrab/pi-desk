@@ -1,6 +1,6 @@
 {
   "name": "@jetcrab/pi-desk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -27,6 +27,10 @@
     "tsconfig.base.json"
   ],
   "scripts": {
+    "setup:git": "node .github/scripts/install-git-hooks.mjs",
+    "version:prepare": "node .github/scripts/commit-versions.mjs prepare",
+    "version:check": "node .github/scripts/commit-versions.mjs check",
+    "version:release": "node .github/scripts/commit-versions.mjs release",
     "dev": "pnpm run build:plugin-host-runtime && tsx watch --tsconfig tsconfig.json --exclude \"temp/**\" --exclude \"**/node_modules/**\" src/server/l1_entry/node/l1-server.ts --dev",
     "build": "pnpm run build:plugin-host-runtime && next build --webpack",
     "build:plugin-host-runtime": "pnpm --filter @jetcrab/pi-desk-sdk build",
@@ -106,7 +110,8 @@
     "prettier": "^3.9.6",
     "shadcn": "^4.18.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "yaml": "^2.9.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=1.0.1"

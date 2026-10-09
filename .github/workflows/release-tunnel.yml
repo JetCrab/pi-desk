@@ -82,17 +82,9 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\n')
           PY
-      - name: 检测服务版本变化
+      - name: 使用调用方已确认的构建范围
         id: selection
-        env:
-          RELEASE_BEFORE: ${{ github.event.before }}
-          REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
-        run: |
-          if [[ -n "$REQUESTED_SOURCE_SHA" ]]; then
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
-          else
-            node .github/scripts/release-versions.mjs tunnel
-          fi
+        run: echo 'changed=true' >> "$GITHUB_OUTPUT"
 
   build:
     needs: plan

@@ -47,7 +47,9 @@ export function selectCiChecks(paths, full) {
     automation:
       full ||
       paths.some((path) =>
-        /^\.github\/|^apps\/docker\/|^tests\/l4-(?:release|docker|public-boundary)/.test(path)
+        /^\.github\/|^\.githooks\/|^apps\/docker\/|^tests\/l4-(?:release|commit-versions|npm-channel|workflow-contracts|restore-sdk|docker|public-boundary)/.test(
+          path
+        )
       )
   }
 }

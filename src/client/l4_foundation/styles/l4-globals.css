@@ -387,6 +387,12 @@
   }
 }
 
+/* 工作台由各区域独立滚动，Portal 的临时溢出不应触发整页滚动条。 */
+html:has(.pi-desk-workbench),
+body:has(.pi-desk-workbench) {
+  overflow: hidden;
+}
+
 .pi-desk-chat-turn-contained {
   content-visibility: auto;
   contain-intrinsic-block-size: auto 24rem;

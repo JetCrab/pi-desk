@@ -127,6 +127,9 @@ export async function createGitEvidence({ root, source, signal }) {
       .trim()
     if (actual !== sha) fail('INVALID_SOURCE')
   }
+  if (source.base !== null) {
+    await git(['merge-base', '--is-ancestor', source.base, source.head])
+  }
   const emptyTree = (await git(['hash-object', '-t', 'tree', '--stdin'])).toString('utf8').trim()
   const before = source.base ?? emptyTree
   const trees = {}
@@ -185,7 +188,7 @@ export async function createGitEvidence({ root, source, signal }) {
             )
           )
           .map(({ path }) => path)
-      : [...changedPaths]
+      : []
   let cachedKey
   let cachedText
   async function fileText(revision, path, toolSignal) {
@@ -195,7 +198,9 @@ export async function createGitEvidence({ root, source, signal }) {
   return {
     source: { ...source },
     changedPaths: [...changedPaths],
-    requiredPaths: requiredPaths.length ? requiredPaths : [...changedPaths],
+    hasNetChanges: stats.length > 0,
+    requiredPaths:
+      source.base === null && !requiredPaths.length ? [...changedPaths] : requiredPaths,
     async listChanges({ offset = 0 } = {}) {
       offsetValue(offset, changes.length)
       let end = offset
@@ -206,7 +211,7 @@ export async function createGitEvidence({ root, source, signal }) {
         const file = {
           ...item,
           required:
-            source.base !== null || requiredPaths.includes(item.path) || !requiredPaths.length
+            source.base === null && (requiredPaths.includes(item.path) || !requiredPaths.length)
         }
         const size = Buffer.byteLength(JSON.stringify(file)) + 1
         if (bytes + size > pageBytes && files.length) break
@@ -266,25 +271,18 @@ export async function createGitEvidence({ root, source, signal }) {
       const { text, ...metadata } = data
       return { ...metadata, matches, matchCount: count, omittedMatches: count - matches.length }
     },
-    async log({ path, offset = 0 }, toolSignal) {
-      if (!allowedPath(path) || !changedPaths.has(path)) fail('PATH')
-      offsetValue(offset, 10_000)
-      const range = source.base ? `${source.base}..${source.head}` : source.head
-      const lines = textData(
-        await git(
-          ['log', range, '--format=%H %s', '--max-count=21', `--skip=${offset}`, '--', path],
-          toolSignal
+    async log({ offset = 0 } = {}, toolSignal) {
+      if (cachedKey !== 'log') {
+        const range = source.base ? `${source.base}..${source.head}` : source.head
+        cachedText = textData(
+          await git(
+            ['log', '--encoding=UTF-8', '--format=commit %H%nparents %P%n%B', range, '--'],
+            toolSignal
+          )
         )
-      )
-        .trim()
-        .split('\n')
-        .filter(Boolean)
-      return {
-        path,
-        offset,
-        entries: lines.slice(0, 20),
-        nextOffset: lines.length > 20 ? offset + 20 : null
+        cachedKey = 'log'
       }
+      return page(cachedText, offset)
     }
   }
 }

@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: release-npm-${{ github.ref_name }}-${{ inputs.phase }}
@@ -71,30 +72,36 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.15.0
-          run_install: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.2
-          cache: pnpm
+      - name: 检查同批已保存制品
+        id: artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/reuse-npm-artifacts.mjs
+      - uses: pnpm/action-setup@v4
+        if: steps.artifacts.outputs.reusable != 'true'
+        with:
+          version: 10.15.0
+          run_install: false
       - uses: actions/download-artifact@v4
-        if: github.ref == 'refs/heads/dev'
+        if: steps.artifacts.outputs.reusable != 'true' && github.ref == 'refs/heads/dev'
         with:
           name: dev-manifests-${{ github.run_id }}
           path: .
       - name: 安装公开依赖
+        if: steps.artifacts.outputs.reusable != 'true'
         run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
       - name: 复用 dev npm 包缓存
-        if: github.ref == 'refs/heads/dev'
+        if: steps.artifacts.outputs.reusable != 'true' && github.ref == 'refs/heads/dev'
         uses: actions/cache@v4
         with:
           path: temp/cache/npm-release/_cacache
           key: ${{ runner.os }}-npm-dev-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-npm-dev-
       - name: 复用 dev Next 构建缓存
-        if: github.ref == 'refs/heads/dev' && contains(fromJSON(needs.plan.outputs.packages), 'pi-desk')
+        if: steps.artifacts.outputs.reusable != 'true' && github.ref == 'refs/heads/dev' && contains(fromJSON(needs.plan.outputs.packages), 'pi-desk')
         uses: actions/cache@v4
         with:
           path: temp/cache/next/npm-dev
@@ -103,10 +110,12 @@ jobs:
             ${{ runner.os }}-next-npm-dev-${{ hashFiles('pnpm-lock.yaml') }}-
             ${{ runner.os }}-next-npm-dev-
       - name: 并行构建、检查并打包独立 npm 单元
+        if: steps.artifacts.outputs.reusable != 'true'
         env:
           NPM_CONFIG_CACHE: ${{ github.workspace }}/temp/cache/npm-release
         run: node .github/scripts/release-npm.mjs prepare
       - uses: actions/upload-artifact@v4
+        if: steps.artifacts.outputs.reusable != 'true'
         with:
           name: npm-packages-${{ github.run_id }}
           overwrite: true
@@ -114,7 +123,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
-        if: contains(fromJSON(needs.plan.outputs.packages), 'pi-desk')
+        if: steps.artifacts.outputs.reusable != 'true' && contains(fromJSON(needs.plan.outputs.packages), 'pi-desk')
         with:
           name: npm-command-smoke-${{ github.run_id }}
           overwrite: true
@@ -180,12 +189,7 @@ jobs:
         if: runner.os == 'Windows' && github.ref == 'refs/heads/dev'
         shell: bash
         run: |
-          node --input-type=module <<'NODE'
-          import { basename, dirname, resolve } from 'node:path'
-          import { run } from './.github/scripts/release-npm.mjs'
-          const sdk = resolve(process.env.NPM_ARTIFACT_DIR, 'command-smoke/sdk.tgz')
-          run('tar.exe', ['-xzf', basename(sdk), '--strip-components=1', '-C', resolve('plugins/pi-desk-sdk')], { cwd: dirname(sdk) })
-          NODE
+          node .github/scripts/restore-sdk.mjs "$NPM_ARTIFACT_DIR/command-smoke/sdk.tgz" plugins/pi-desk-sdk
           pnpm test:pidesk
       - name: 验收同一批实际 tarball 的安装态命令
         shell: bash

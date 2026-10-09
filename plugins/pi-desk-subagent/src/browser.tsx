@@ -48,7 +48,7 @@ button.subagent-message-header:hover{background:var(--pi-desk-plugin-muted,var(-
 .subagent-message-meta{display:flex;flex-wrap:wrap;gap:.25rem .5rem;margin:0;padding:.5rem .75rem;border-top:1px solid var(--pi-desk-plugin-border,var(--border));font-size:.75rem;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground))}
 .subagent-message-meta code{overflow-wrap:anywhere}
 .subagent-message-detail-scroll{max-height:min(20rem,45dvh)}
-.subagent-message-detail-scroll-viewport{padding-right:.25rem;overscroll-behavior:contain}
+.subagent-message-detail-scroll-viewport{padding-right:.25rem}
 .subagent-message-output{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
 .subagent-records{list-style:none;margin:0;padding:0 .75rem;border-top:1px solid var(--pi-desk-plugin-border,var(--border))}
 .subagent-record{padding:.625rem 0}.subagent-record+.subagent-record{border-top:1px solid var(--pi-desk-plugin-border,var(--border))}

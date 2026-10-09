@@ -203,7 +203,7 @@ export function L3ConversationPiDeskView({
               {outputAction}
             </div>
             <div
-              className="max-h-[min(24rem,50dvh)] overflow-auto overscroll-contain px-3 pt-1 pb-3"
+              className="max-h-[min(24rem,50dvh)] overflow-auto px-3 pt-1 pb-3"
               role="region"
               aria-label={t('pidesk.output')}
               tabIndex={0}

@@ -109,79 +109,97 @@ test('大diff必须逐页读完，作者与审核者的读取证据独立', asyn
   )
 })
 
-test('真实Pi SDK运行两个独立会话，通过工具多轮读取后提交一致记录', async (t) => {
-  const repo = await fixture(t)
-  const requests = []
-  const changes = { ...empty(), added: ['Added a sample feature.'] }
-  const commands = [
-    ['list_changes', {}],
-    ['read_diff', { path: 'source.js' }],
-    ['read_file', { revision: 'head', path: 'source.js' }],
-    ['submit_changes', changes]
-  ]
-  const server = createServer(async (req, res) => {
-    const chunks = []
-    for await (const chunk of req) chunks.push(chunk)
-    const body = JSON.parse(Buffer.concat(chunks).toString())
-    requests.push(body)
-    assert.equal(req.url, '/v1/chat/completions')
-    assert.equal(req.headers.authorization, 'Bearer fixture-token')
-    const tools = (body.messages ?? []).filter((message) => message.role === 'tool').length
-    const [name, args] = commands[Math.min(tools, commands.length - 1)]
-    res.writeHead(200, { 'content-type': 'text/event-stream' })
-    const common = {
-      id: 'chatcmpl-fixture',
-      object: 'chat.completion.chunk',
-      created: 1,
-      model: 'release-fixture'
+for (const subsequent of [false, true]) {
+  test(`真实Pi SDK运行独立作者和审核者：${subsequent ? '后续提交记录' : '首次源码取证'}`, async (t) => {
+    const repo = await fixture(t)
+    if (subsequent) {
+      const base = repo.source.head
+      await writeFile(join(repo.root, 'source.js'), 'export const feature = "updated"\n')
+      repo.git('add', 'source.js')
+      repo.git('commit', '-m', 'feat: 新增样例功能')
+      repo.source = { base, head: repo.git('rev-parse', 'HEAD') }
     }
-    res.write(
-      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call-${tools}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: null }] })}\n\n`
-    )
-    res.write(
-      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\n`
-    )
-    res.end('data: [DONE]\n\n')
-  })
-  server.listen(0, '127.0.0.1')
-  await once(server, 'listening')
-  const port = server.address().port
-  const output = join(repo.root, 'output/changes.json')
-  try {
-    const result = await runReleaseAgent({
-      root: repo.root,
-      plan: { record: { source: repo.source } },
-      output,
-      config: {
-        baseUrl: `http://127.0.0.1:${port}/v1`,
-        model: 'release-fixture',
-        apiKey: 'fixture-token'
+    const requests = []
+    const changes = { ...empty(), added: ['Added a sample feature.'] }
+    const commands = subsequent
+      ? [
+          ['read_log', {}],
+          ['submit_changes', changes]
+        ]
+      : [
+          ['list_changes', {}],
+          ['read_diff', { path: 'source.js' }],
+          ['read_file', { revision: 'head', path: 'source.js' }],
+          ['submit_changes', changes]
+        ]
+    const server = createServer(async (req, res) => {
+      const chunks = []
+      for await (const chunk of req) chunks.push(chunk)
+      const body = JSON.parse(Buffer.concat(chunks).toString())
+      requests.push(body)
+      assert.equal(req.url, '/v1/chat/completions')
+      assert.equal(req.headers.authorization, 'Bearer fixture-token')
+      const tools = (body.messages ?? []).filter((message) => message.role === 'tool').length
+      const [name, args] = commands[Math.min(tools, commands.length - 1)]
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      const common = {
+        id: 'chatcmpl-fixture',
+        object: 'chat.completion.chunk',
+        created: 1,
+        model: 'release-fixture'
       }
+      res.write(
+        `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call-${tools}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: null }] })}\n\n`
+      )
+      res.write(
+        `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\n`
+      )
+      res.end('data: [DONE]\n\n')
     })
-    assert.deepEqual(result, changes)
-    assert.equal(requests.length, 8, '两个会话各需四次模型工具响应')
-    const audit = JSON.parse(await readFile(`${output}.evidence.json`, 'utf8'))
-    assert.ok(audit.author.reads.some((item) => item.tool === 'read_file'))
-    assert.ok(audit.reviewer.reads.some((item) => item.tool === 'read_file'))
-    for (const request of requests) {
-      const text = JSON.stringify(request)
-      assert.match(text, /精简英文发布说明/)
-      assert.match(text, /六类英文字符串数组/)
-      assert.ok(!text.includes('fixture-token'))
-      assert.ok(!text.includes('FIXTURE_SECRET'))
-      const names = request.tools.map((item) => item.function.name)
-      for (const tool of ['bash', 'write', 'edit']) assert.ok(!names.includes(tool))
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const port = server.address().port
+    const output = join(repo.root, 'output/changes.json')
+    try {
+      const result = await runReleaseAgent({
+        root: repo.root,
+        plan: { record: { source: repo.source } },
+        output,
+        config: {
+          baseUrl: `http://127.0.0.1:${port}/v1`,
+          model: 'release-fixture',
+          apiKey: 'fixture-token'
+        }
+      })
+      assert.deepEqual(result, changes)
+      assert.equal(requests.length, commands.length * 2, '作者和审核者必须各自完成取证')
+      const audit = JSON.parse(await readFile(`${output}.evidence.json`, 'utf8'))
+      for (const role of ['author', 'reviewer']) {
+        assert.ok(
+          audit[role].reads.some((item) => item.tool === (subsequent ? 'read_log' : 'read_file'))
+        )
+        assert.equal(audit[role].scope, subsequent ? 'commit-history' : 'initial-capabilities')
+      }
+      for (const request of requests) {
+        const text = JSON.stringify(request)
+        assert.match(text, /精简英文发布说明/)
+        assert.match(text, /六类英文字符串数组/)
+        assert.ok(!text.includes('fixture-token'))
+        assert.ok(!text.includes('FIXTURE_SECRET'))
+        const names = request.tools.map((item) => item.function.name)
+        for (const tool of ['bash', 'write', 'edit']) assert.ok(!names.includes(tool))
+      }
+      assert.ok(!JSON.stringify(audit).includes('fixture-token'))
+    } finally {
+      server.closeAllConnections()
+      await new Promise((done) => server.close(done))
+      const check = createServer()
+      check.listen(port, '127.0.0.1')
+      await once(check, 'listening')
+      await new Promise((done) => check.close(done))
     }
-    assert.ok(!JSON.stringify(audit).includes('fixture-token'))
-  } finally {
-    server.closeAllConnections()
-    await new Promise((done) => server.close(done))
-    const check = createServer()
-    check.listen(port, '127.0.0.1')
-    await once(check, 'listening')
-    await new Promise((done) => check.close(done))
-  }
-})
+  })
+}
 
 test('模型拒绝请求时只返回类别并释放会话，不暴露认证响应', async (t) => {
   const repo = await fixture(t)
@@ -219,6 +237,64 @@ test('模型拒绝请求时只返回类别并释放会话，不暴露认证响�
     server.closeAllConnections()
     await new Promise((done) => server.close(done))
   }
+})
+
+test('后续发布完整读取固定范围提交正文，未读完不能提交且无需强制源码扫描', async (t) => {
+  const repo = await fixture(t)
+  const base = repo.source.head
+  const body = Array.from(
+    { length: 1200 },
+    (_, i) => `修复细节 ${i}：保留用户草稿并支持继续操作。`
+  ).join('\n')
+  await writeFile(join(repo.root, 'source.js'), 'export const feature = "updated"\n')
+  repo.git('add', 'source.js')
+  repo.git('commit', '-m', 'fix: 保留草稿', '-m', body)
+  const head = repo.git('rev-parse', 'HEAD')
+  repo.git('commit', '--allow-empty', '-m', '范围外提交不得被读取')
+  const reader = await createGitEvidence({ root: repo.root, source: { base, head } })
+  const { tools, state } = createReleaseTools(reader)
+  const call = (name, params = {}) =>
+    tools
+      .find((tool) => tool.name === name)
+      .execute('fixture', params, new AbortController().signal)
+  const changes = { ...empty(), fixed: ['Preserved drafts when continuing a session.'] }
+  await assert.rejects(call('submit_changes', changes), /EVIDENCE_REQUIRED/)
+  const first = await call('read_log')
+  assert.notEqual(first.details.nextOffset, null)
+  await assert.rejects(call('submit_changes', changes), /EVIDENCE_REQUIRED/)
+  let offset = first.details.nextOffset
+  let text = first.details.text
+  do {
+    const result = await call('read_log', { offset })
+    text += result.details.text
+    offset = result.details.nextOffset
+  } while (offset !== null)
+  assert.match(text, /修复细节 1199/)
+  assert.ok(text.includes(head))
+  assert.doesNotMatch(text, /范围外提交不得被读取|\nfixture\n/)
+  await call('submit_changes', changes)
+  assert.deepEqual(state.submitted, changes)
+  assert.ok(!state.evidence.some((item) => ['read_diff', 'read_file'].includes(item.tool)))
+  const reviewer = createReleaseTools(reader)
+  await assert.rejects(
+    reviewer.tools.find((tool) => tool.name === 'submit_changes').execute('fixture', changes),
+    /EVIDENCE_REQUIRED/
+  )
+})
+
+test('提交信息有矛盾时可以补读固定范围净差异，不读后续工作树', async (t) => {
+  const repo = await fixture(t)
+  const base = repo.source.head
+  await writeFile(join(repo.root, 'source.js'), 'export const feature = "kept"\n')
+  repo.git('add', 'source.js')
+  repo.git('commit', '-m', 'feat: 调整行为', '-m', '保留兼容入口。')
+  const head = repo.git('rev-parse', 'HEAD')
+  await writeFile(join(repo.root, 'source.js'), 'outside fixed scope')
+  const reader = await createGitEvidence({ root: repo.root, source: { base, head } })
+  assert.match((await reader.log()).text, /保留兼容入口/)
+  const diff = await reader.readDiff({ path: 'source.js' })
+  assert.match(diff.text, /kept/)
+  assert.doesNotMatch(diff.text, /outside fixed scope/)
 })
 
 test('英文正文不重复标题、版本表和下载清单，保留必要安装限制', () => {
