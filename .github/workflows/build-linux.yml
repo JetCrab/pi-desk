@@ -112,6 +112,9 @@ jobs:
         with:
           name: linux-desktop-check-${{ github.run_id }}
           overwrite: true
-          path: ${{ env.CLIENT_SMOKE_ROOT }}/
+          path: |
+            ${{ env.CLIENT_SMOKE_ROOT }}/*.png
+            ${{ env.CLIENT_SMOKE_ROOT }}/*.log
+            ${{ env.CLIENT_SMOKE_ROOT }}/data/logs/*.log
           retention-days: 7
           if-no-files-found: ignore

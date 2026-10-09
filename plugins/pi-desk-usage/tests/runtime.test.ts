@@ -841,7 +841,10 @@ test('单 Session 分析按具体子代理标题分组并累计 Resume', async (
   context.after(() => rm(root, { recursive: true, force: true }))
   const cwd = join(root, 'project')
   const sessionsRoot = join(root, 'agent', 'sessions')
-  const projectSessions = join(sessionsRoot, '--project--')
+  const projectSessions = join(
+    sessionsRoot,
+    `--${cwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`
+  )
   const mainSessionId = 'analysis-session'
   const mainFile = join(projectSessions, `2026-08-01T00-00-00_${mainSessionId}.jsonl`)
   const childOneDirectory = join(projectSessions, 'subagents', mainSessionId)
@@ -1108,7 +1111,10 @@ test('单 Session 时间轴共享主子代理调用序列并回溯忽略与压�
   context.after(() => rm(root, { recursive: true, force: true }))
   const cwd = join(root, 'project')
   const sessionsRoot = join(root, 'agent', 'sessions')
-  const projectSessions = join(sessionsRoot, '--project--')
+  const projectSessions = join(
+    sessionsRoot,
+    `--${cwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`
+  )
   const sessionId = 'timeline-session'
   const mainFile = join(projectSessions, `2026-08-01T00-00-00_${sessionId}.jsonl`)
   const childDirectory = join(projectSessions, 'subagents', sessionId)

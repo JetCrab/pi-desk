@@ -4,6 +4,7 @@ import { versionParts } from './npm-channel.mjs'
 
 const branch = 'release-data'
 const statePath = 'dev/state.json'
+const artifactSourcesPath = 'dev/artifact-sources.json'
 const nativeUnits = new Set(['windows', 'macos', 'linux', 'android', 'ios', 'tunnel'])
 const sourcePattern = /^[a-f0-9]{40}$/
 const runPattern = /^[1-9]\d*$/
@@ -72,7 +73,7 @@ function validateBatch(batch) {
     assert.match(id, /^pi-desk(?:-[a-z0-9-]+)?$/)
     assert.notEqual(versionParts(version)[3], null, 'npm开发版本必须带预发布后缀')
     assert.equal(
-      version.split('-dev.')[0],
+      version.replace(/-dev(?:\.\d+)?$/, ''),
       batch.versions[id],
       `npm开发版本与单元版本不匹配：${id}`
     )
@@ -165,6 +166,53 @@ export async function loadDevBatch(github, runId) {
   const batch = validateBatch(decode(file))
   assert.equal(batch.runId, runId, '开发批次身份不匹配')
   return batch
+}
+
+/** @returns {Record<string, string>} */
+function validateArtifactSources(sources) {
+  assert.ok(sources && typeof sources === 'object' && !Array.isArray(sources))
+  for (const [id, runId] of Object.entries(sources)) {
+    assert.match(id, /^pi-desk(?:-[a-z0-9-]+)?$/)
+    assert.match(runId, runPattern)
+  }
+  return sources
+}
+
+/** @returns {Promise<Record<string, string>>} */
+export async function loadDevArtifactSources(github) {
+  const file = await readFile(github, artifactSourcesPath)
+  return file ? validateArtifactSources(decode(file)) : {}
+}
+
+/** 上传原始 npm 制品后调用；不推进发布成功状态。 @returns {Promise<void>} */
+export async function recordDevArtifactSources(github, batch) {
+  validateBatch(batch)
+  const saved = await loadDevBatch(github, batch.runId)
+  assert.ok(isDeepStrictEqual(saved, batch), '制品来源必须引用已保存的固定开发批次')
+  await updateFile(github, artifactSourcesPath, async (previous) => {
+    const sources = previous ? validateArtifactSources(previous) : {}
+    const next = { ...sources }
+    const batches = new Map()
+    for (const id of batch.selected.filter((name) => !nativeUnits.has(name))) {
+      assert.ok(Object.hasOwn(batch.npmVersions, id), `缺少原始制品的 npm 开发版本：${id}`)
+      const oldRunId = sources[id]
+      if (oldRunId) {
+        if (!batches.has(oldRunId)) batches.set(oldRunId, await loadDevBatch(github, oldRunId))
+        const old = batches.get(oldRunId)
+        assert.ok(
+          old?.selected.includes(id) && old.npmVersions[id],
+          `制品来源批次无效：${id}/${oldRunId}`
+        )
+        if (
+          compareVersions(batch.versions[id], old.versions[id]) < 0 ||
+          BigInt(batch.runId) <= BigInt(oldRunId)
+        )
+          continue
+      }
+      next[id] = batch.runId
+    }
+    return isDeepStrictEqual(sources, next) ? null : next
+  })
 }
 
 /** @returns {Promise<void>} */

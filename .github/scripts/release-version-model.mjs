@@ -89,7 +89,7 @@ function json(text, file) {
 
 function stableVersion(version) {
   versionParts(version)
-  return version.replace(/-dev\.\d+$/, '')
+  return version.replace(/-dev(?:\.\d+)?$/, '')
 }
 
 function compareVersions(left, right) {
@@ -241,9 +241,9 @@ function dependencyRange(range, target, development) {
   const retarget =
     target.manifest.version !== target.currentVersion ||
     (target.previous !== null && target.manifest.version !== target.previous.version)
-  if (!retarget && (development || !range.includes('-dev.'))) return range
+  if (!retarget && (development || !range.includes('-dev'))) return range
   const single =
-    /^(\s*(?:workspace:)?(?:[~^]|[<>]=?|=)?\s*)(\d+\.\d+\.\d+(?:-dev\.\d+)?)(\s*)$/.exec(range)
+    /^(\s*(?:workspace:)?(?:[~^]|[<>]=?|=)?\s*)(\d+\.\d+\.\d+(?:-dev(?:\.\d+)?)?)(\s*)$/.exec(range)
   if (single) {
     versionParts(single[2])
     return `${single[1]}${retarget ? target.manifest.version : stableVersion(single[2])}${single[3]}`
@@ -251,7 +251,7 @@ function dependencyRange(range, target, development) {
   // 复合范围保留上界，仅同步原目标版本或基线版本所在的端点。
   let matched = false
   const next = range.replace(
-    /(?<![\w.])\d+\.\d+\.\d+(?:-dev\.\d+)?(?![\w.+-])/g,
+    /(?<![\w.])\d+\.\d+\.\d+(?:-dev(?:\.\d+)?)?(?![\w.+-])/g,
     (version, offset) => {
       const stable = stableVersion(version)
       const upperBound = /(?:<=?\s*|-\s*)$/.test(range.slice(0, offset))
@@ -267,7 +267,7 @@ function dependencyRange(range, target, development) {
       return development ? version : stable
     }
   )
-  const syntax = next.replace(/^workspace:/, '').replace(/\d+\.\d+\.\d+-dev\.\d+/g, '0.0.0')
+  const syntax = next.replace(/^workspace:/, '').replace(/\d+\.\d+\.\d+-dev(?:\.\d+)?/g, '0.0.0')
   assert.ok(/^[\d.xX*~^<>=|\s-]+$/.test(syntax), '不支持自动同步的自有依赖范围')
   assert.ok(
     !retarget || matched || /^[xX*\d.\s]+$/.test(range),
@@ -643,7 +643,8 @@ async function applyChanges(root, changes) {
 export function nextDevelopmentVersion(planned, publishedVersions) {
   const base = stableVersion(planned)
   assert.ok(Array.isArray(publishedVersions), '已发布版本清单无效')
-  let highest = 0
+  const next = `${base}-dev`
+  let historical = false
   for (const version of publishedVersions) {
     assert.equal(typeof version, 'string', '已发布版本必须为字符串')
     if (/^\d+\.\d+\.\d+$/.test(version)) {
@@ -653,14 +654,16 @@ export function nextDevelopmentVersion(planned, publishedVersions) {
       )
       continue
     }
-    if (!/^\d+\.\d+\.\d+-dev\.\d+$/.test(version)) continue
+    if (!/^\d+\.\d+\.\d+-dev(?:\.\d+)?$/.test(version)) continue
     const parts = versionParts(version)
     const comparison = compareVersions(base, version)
     assert.ok(comparison >= 0, `开发基础版本 ${base} 低于已发布版本 ${version}`)
-    if (comparison === 0) highest = Math.max(highest, parts[3])
+    if (comparison === 0 && parts[3] >= 0) historical = true
   }
-  const next = `${base}-dev.${highest + 1}`
-  versionParts(next)
+  assert.ok(
+    !historical || publishedVersions.includes(next),
+    `开发基础版本 ${base} 已发布历史 dev.N，请按旧固定计划重试或递增源码第三位`
+  )
   return next
 }
 
@@ -735,7 +738,7 @@ export async function prepareDevelopmentVersions(
       entry && stableVersion(version) === stableVersion(entry.currentVersion),
       `开发依赖版本与源码不匹配：${id}`
     )
-    assert.notEqual(versionParts(version)[3], null, `开发依赖缺少预发布编号：${id}`)
+    assert.notEqual(versionParts(version)[3], null, `开发依赖缺少预发布后缀：${id}`)
     assigned.set(name, version)
   }
   // 消费者由提交 Hook 升版，CI 不另行扩选或递增基础版本。

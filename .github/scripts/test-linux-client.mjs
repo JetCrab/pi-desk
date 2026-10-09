@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
@@ -81,4 +81,5 @@ try {
   await until(() => processes.every((state) => state.exited), '测试进程清理', 10000)
   await writeFile(join(root, 'stdout.log'), stdout)
   await writeFile(join(root, 'stderr.log'), stderr)
+  await rm(join(root, 'tmp'), { recursive: true, force: true })
 }

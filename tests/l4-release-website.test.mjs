@@ -236,7 +236,7 @@ test('主发布把模型和部署凭据分开，不开放PR特权入口', async 
   const writers = Object.entries(workflow.jobs).filter(
     ([, job]) => job.permissions?.contents === 'write'
   )
-  assert.deepEqual(writers.map(([name]) => name).sort(), ['plan', 'result'])
+  assert.deepEqual(writers.map(([name]) => name).sort(), ['npm-artifacts', 'plan', 'result'])
   for (const [name, job] of writers) {
     const checkout = job.steps.find((step) => step.uses?.startsWith('actions/checkout@'))
     assert.equal(checkout.with['persist-credentials'], false)
@@ -244,7 +244,11 @@ test('主发布把模型和部署凭据分开，不开放PR特权入口', async 
       job.steps.some(
         (step) =>
           step.run ===
-          `node .github/scripts/release-dev.mjs ${name === 'plan' ? 'prepare' : 'complete'}`
+          {
+            plan: 'node .github/scripts/release-dev.mjs prepare',
+            result: 'node .github/scripts/release-dev.mjs complete',
+            'npm-artifacts': 'node .github/scripts/release-dev-reuse.mjs record'
+          }[name]
       )
     )
   }

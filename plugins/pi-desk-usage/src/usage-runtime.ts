@@ -44,6 +44,7 @@ import {
 } from './l4-usage-aggregate.js'
 import {
   descriptor,
+  listSessionCandidates,
   listStandardSessionFiles,
   nestedParentSessionId,
   pathKey
@@ -581,10 +582,7 @@ export class UsageRuntime {
     workSession: { source: PluginSource; cwd: string },
     signal: AbortSignal
   ): Promise<LoadedSessionDetails> {
-    const main = await this.loadSessionById(workSession.source.sessionId, signal)
-    if (pathKey(main.file.cwd) !== pathKey(workSession.cwd)) {
-      throw new PluginMethodError(409, '工作会话目录与 Pi Session 不一致')
-    }
+    const main = await this.loadSessionById(workSession.source.sessionId, workSession.cwd, signal)
 
     const parent = main.file.parentSessionPath
       ? await this.loadExactFile(main.file.parentSessionPath, false, signal)
@@ -725,26 +723,43 @@ export class UsageRuntime {
     return { source: workSession.source, cwd: workSession.cwd }
   }
 
-  private async loadSessionById(sessionId: string, signal: AbortSignal): Promise<CacheEntry> {
-    const cached = [...this.cache.values()].find(
-      (entry) => !entry.descriptor.nestedSubagent && entry.file.sessionId === sessionId
-    )
+  private async loadSessionById(
+    sessionId: string,
+    cwd: string,
+    signal: AbortSignal
+  ): Promise<CacheEntry> {
+    const cwdKey = pathKey(cwd)
+    const matches = (entry: CacheEntry | undefined): entry is CacheEntry =>
+      entry !== undefined &&
+      !entry.descriptor.nestedSubagent &&
+      entry.file.sessionId === sessionId &&
+      pathKey(entry.file.cwd) === cwdKey
+    const cached = [...this.cache.values()].find(matches)
     if (cached) {
+      const key = pathKey(cached.file.path)
       const current = await descriptor(cached.file.path, false)
+      if (!current || signature(current) !== signature(cached.descriptor)) {
+        this.cache.delete(key)
+      }
       if (current) await this.loadChanged([current], signal)
-      const refreshed = this.cache.get(pathKey(cached.file.path))
-      if (refreshed) return refreshed
+      const refreshed = this.cache.get(key)
+      if (matches(refreshed)) return refreshed
     }
 
-    const standardFiles = await listStandardSessionFiles(this.sessionsRoot)
-    const suffix = `_${sessionId}.jsonl`.toLowerCase()
-    const candidates = standardFiles.filter(
-      (file) => !file.nestedSubagent && basename(file.path).toLowerCase().endsWith(suffix)
-    )
+    const candidates = await listSessionCandidates(this.sessionsRoot, cwd, sessionId)
+    for (const candidate of candidates) {
+      const key = pathKey(candidate.path)
+      const previous = this.cache.get(key)
+      if (previous && signature(previous.descriptor) !== signature(candidate)) {
+        this.cache.delete(key)
+      }
+    }
     await this.loadChanged(candidates, signal)
-    const found = [...this.cache.values()].find(
-      (entry) => !entry.descriptor.nestedSubagent && entry.file.sessionId === sessionId
-    )
+    const loaded = candidates.map((file) => this.cache.get(pathKey(file.path)))
+    const found = loaded.find(matches)
+    if (!found && loaded.some((entry) => entry?.file.sessionId === sessionId)) {
+      throw new PluginMethodError(409, '工作会话目录与 Pi Session 不一致')
+    }
     if (!found) throw new PluginMethodError(404, 'Pi Session 文件不存在')
     return found
   }

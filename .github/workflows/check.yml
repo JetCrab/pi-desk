@@ -108,6 +108,9 @@ jobs:
           node --test
           tests/l4-commit-versions.test.mjs
           tests/l4-npm-channel.test.mjs
+          tests/l4-development-suffix.test.mjs
+          tests/l4-dev-artifact-sources.test.mjs
+          tests/l4-release-dev-reuse.test.mjs
           tests/l4-release-dev-state.test.mjs
           tests/l4-release-dev-plan.test.mjs
           tests/l4-workflow-contracts.test.mjs

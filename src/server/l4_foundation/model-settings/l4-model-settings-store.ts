@@ -17,10 +17,10 @@ import {
   getAgentDir,
   ModelRuntime,
   resolveModelScopeWithDiagnostics,
-  SessionManager,
   SettingsManager
 } from '@earendil-works/pi-coding-agent'
 import { getSupportedThinkingLevels, type Api, type Model } from '@earendil-works/pi-ai'
+import { listL4PiDirectorySummaries } from '@server/l4_foundation/pi/l4-pi-session-catalog'
 import type {
   L4AccountModelSelection,
   L4ModelAccount,
@@ -604,10 +604,8 @@ async function assertRemovalReferences(current: JsonRecord, candidate: JsonRecor
     }
   }
   // 仅在移除模型时检查已知项目，不扫描文件系统寻找任意项目配置。
-  const projects = new Set(
-    (await SessionManager.listAll()).map((session) => session.cwd).filter(Boolean)
-  )
-  for (const cwd of projects) {
+  const projects = await listL4PiDirectorySummaries(true)
+  for (const { cwd } of projects) {
     const settings = readJsonRecord(join(cwd, CONFIG_DIR_NAME, 'settings.json'))
     if (
       typeof settings.defaultProvider === 'string' &&

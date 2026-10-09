@@ -59,7 +59,7 @@ export function assertPackedManifest(packed, source) {
       assert.ok(!name.startsWith('@jetcrab-private/'), `制品依赖私有包：${name}`)
       assert.doesNotMatch(value, /^(?:workspace:|file:|link:)/, `制品包含本地依赖：${name}`)
       if (versionParts(packed.version)[3] === null && name.startsWith('@jetcrab/')) {
-        assert.doesNotMatch(value, /-dev\./, `稳定包不得依赖开发包：${name}`)
+        assert.doesNotMatch(value, /-dev\b/, `稳定包不得依赖开发包：${name}`)
       }
     }
   }
@@ -257,6 +257,11 @@ async function stage(name, action) {
 }
 
 async function pack(entry, output) {
+  if (process.env.GITHUB_REF === 'refs/heads/dev' && existsSync(archivePath(entry, output))) {
+    await verifyArchive(entry, output)
+    console.info(`保留原始制品：${entry.manifest.name}@${entry.manifest.version}`)
+    return
+  }
   await mkdir(output, { recursive: true })
   await stage(`pack ${entry.manifest.name}`, async () => {
     await runAsync('pnpm', ['--dir', entry.directory, 'pack', '--pack-destination', output], {
@@ -339,6 +344,10 @@ async function prepare(entries, output) {
             await stage(`test ${command}`, () => runAsync('pnpm', [command]))
           }
         }
+        if (!full && existsSync(archivePath(entry, output))) {
+          await pack(entry, output)
+          return
+        }
         const nextCache = join(projectRoot, 'temp/build/pi-desk/release/.next/cache')
         const savedCache = join(projectRoot, 'temp/cache/next/npm-dev')
         if (!full && existsSync(savedCache)) {
@@ -414,24 +423,23 @@ async function readTags(name) {
   return response.json()
 }
 
-export async function waitForDevelopmentTags(name, version) {
+export async function waitForNpmTags(name, version, tag) {
   const deadline = Date.now() + 10 * 60_000
   let nextLogAt = 0
   while (true) {
     const tags = await readTags(name)
-    assertDevelopmentTags(tags, name)
-    if (tags.dev === version) {
-      console.info(`开发标签校验通过：${name}@${version}`)
+    if (tag === 'dev') assertDevelopmentTags(tags, name)
+    if (tags[tag] === version) {
+      console.info(`${tag} 标签校验通过：${name}@${version}`)
       return
     }
     const now = Date.now()
     if (now >= deadline) {
-      console.error(`等待开发标签同步超时（10 分钟）：${name}@${version}`)
-      assertDevelopmentTags(tags, name, version)
+      assert.equal(tags[tag], version, `等待 ${tag} 标签同步超时（10 分钟）：${name}@${version}`)
     }
     if (now >= nextLogAt) {
       console.info(
-        `等待开发标签同步：${name}@${version}，当前 dev=${tags.dev ?? '未设置'}；每 5 秒检查，最多等待 10 分钟`
+        `等待 ${tag} 标签同步：${name}@${version}，当前值=${tags[tag] ?? '未设置'}；每 5 秒检查，最多等待 10 分钟`
       )
       nextLogAt = now + 60_000
     }
@@ -478,7 +486,7 @@ export async function waitForRegistryPackage(name, version) {
   }
 }
 
-async function publish(entries, output) {
+export async function publish(entries, output) {
   for (const entry of entries) npmTagFor(process.env.GITHUB_REF, entry.manifest.version)
   assert.equal(process.env.GITHUB_REPOSITORY, 'JetCrab/pi-desk', '仓库与 npm 授权不匹配')
   const config = join(process.env.RUNNER_TEMP, 'pi-desk-publish.npmrc')
@@ -503,7 +511,7 @@ async function publish(entries, output) {
         `${registry}/${encodeURIComponent(packed.name)}/${packed.version}`,
         { signal: AbortSignal.timeout(30_000) }
       )
-      if (response.ok && process.env.RELEASE_RESUME === 'true') {
+      if (response.ok) {
         const metadata = await response.json()
         const integrity = `sha512-${createHash('sha512')
           .update(await readFile(archivePath(entry, output)))
@@ -552,12 +560,12 @@ async function publish(entries, output) {
         )
       }
       const checks = await Promise.allSettled([
-        npmTagFor(process.env.GITHUB_REF, entry.manifest.version) === 'dev'
-          ? waitForDevelopmentTags(entry.manifest.name, entry.manifest.version)
-          : Promise.resolve(),
-        entry.manifest.name === sdkName
-          ? waitForRegistryPackage(entry.manifest.name, entry.manifest.version)
-          : Promise.resolve()
+        waitForNpmTags(
+          entry.manifest.name,
+          entry.manifest.version,
+          npmTagFor(process.env.GITHUB_REF, entry.manifest.version)
+        ),
+        waitForRegistryPackage(entry.manifest.name, entry.manifest.version)
       ])
       const failure = checks.find((check) => check.status === 'rejected')
       if (failure) throw failure.reason

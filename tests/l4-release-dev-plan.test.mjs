@@ -61,10 +61,10 @@ test('同一失败批次重跑固定开发版本，不依赖新的Registry编号
     github,
     source,
     runId: '42',
-    readPublished: async () => ['1.0.8-dev.1']
+    readPublished: async () => ['1.0.7', '1.0.7-dev.1']
   })
   assert.deepEqual(first.batch.selected, ['pi-desk'])
-  assert.equal(first.batch.npmVersions['pi-desk'], '1.0.8-dev.2')
+  assert.equal(first.batch.npmVersions['pi-desk'], '1.0.8-dev')
   git('restore', 'package.json')
   const retried = await prepareDevBatch(root, {
     github,
@@ -75,7 +75,7 @@ test('同一失败批次重跑固定开发版本，不依赖新的Registry编号
     }
   })
   assert.deepEqual(retried.batch, first.batch)
-  assert.equal(retried.prepared.packages[0].version, '1.0.8-dev.2')
+  assert.equal(retried.prepared.packages[0].version, '1.0.8-dev')
 })
 
 test('重跑只有同批完整且未过期的制品才能复用', () => {

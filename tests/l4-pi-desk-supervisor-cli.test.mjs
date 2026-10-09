@@ -318,6 +318,13 @@ test(
     )
     assert.equal(pendingEvents[1]?.safeMode, '1')
     assert.match(pending.output(), /不重放消息、工具或插件维护操作/)
+    await waitFor(
+      async () =>
+        (await readDiagnostics(pending.managedLog)).filter(
+          (entry) => entry.message === '托管服务已创建'
+        ).length === 2,
+      'fallback creation diagnostics'
+    )
     const pendingDiagnostics = await readDiagnostics(pending.managedLog)
     assert.deepEqual(
       pendingDiagnostics
@@ -349,6 +356,13 @@ test(
         (await readEvents(code75.fixtureLog)).filter((event) => event.kind === 'service-start')
           .length === 2,
       'code75 service restart'
+    )
+    await waitFor(
+      async () =>
+        (await readDiagnostics(code75.managedLog)).filter(
+          (entry) => entry.message === '托管服务已创建'
+        ).length === 2,
+      'restart creation diagnostics'
     )
     const code75Events = await readEvents(code75.fixtureLog)
     assert.equal(code75Events[1]?.safeMode, '')

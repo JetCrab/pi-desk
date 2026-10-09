@@ -169,12 +169,44 @@ jobs:
       phase: build
       check_only: ${{ needs.plan.outputs.tunnel != 'true' }}
 
+  npm-artifacts:
+    needs: [plan, npm-build]
+    if: always() && !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.packages != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - name: 确认本批原始制品已完整上传
+        id: artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PACKAGES_JSON: ${{ needs.plan.outputs.packages }}
+        run: node .github/scripts/reuse-npm-artifacts.mjs
+      - name: 阻止原始制品缺失的发布
+        if: needs.npm-build.result == 'success' && steps.artifacts.outputs.reusable != 'true'
+        run: |
+          echo '构建成功但缺少完整原始制品，停止发布以免无法续跑。' >&2
+          exit 1
+      - name: 保存可续跑的原始制品来源
+        if: steps.artifacts.outputs.reusable == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-dev-reuse.mjs record
+
   npm-publish:
-    needs: [plan, checks, npm-build]
+    needs: [plan, checks, npm-build, npm-artifacts]
     if: >-
       always() && !cancelled() && needs.plan.result == 'success' &&
       needs.plan.outputs.packages != '[]' && needs.checks.result == 'success' &&
-      needs.npm-build.result == 'success' && (github.event_name == 'push' || inputs.publish)
+      needs.npm-build.result == 'success' && needs.npm-artifacts.result == 'success' && (github.event_name == 'push' || inputs.publish)
     permissions:
       contents: read
       actions: read
@@ -188,7 +220,20 @@ jobs:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   result:
-    needs: [plan, checks, npm-build, windows, macos, linux, android, ios, tunnel, npm-publish]
+    needs:
+      [
+        plan,
+        checks,
+        npm-build,
+        npm-artifacts,
+        windows,
+        macos,
+        linux,
+        android,
+        ios,
+        tunnel,
+        npm-publish
+      ]
     if: always()
     runs-on: ubuntu-latest
     permissions:

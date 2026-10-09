@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import Module from 'node:module'
+import Module, { syncBuiltinESMExports } from 'node:module'
+import fs from 'node:fs'
 import { readFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -29,6 +30,7 @@ Module._load = function load(request, parent, isMain) {
       migrateSessionEntries: () => undefined,
       parseSessionEntries,
       SessionManager: {
+        findById: () => undefined,
         create: () => ({
           getSessionDir: () => process.env.PI_CODING_AGENT_SESSION_DIR
         })
@@ -305,7 +307,86 @@ test('空 Assistant 文本不进入持久缓存，空 User 文本仍分页且消
   assert.equal(record.textBytes, Buffer.byteLength('visible user text', 'utf8'))
 })
 
-test('工作台历史缓存与替换标题保持本轮结构约束', async () => {
+function observeTranscriptReads(context) {
+  const reads = context.mock.method(fs, 'createReadStream')
+  syncBuiltinESMExports()
+  context.after(() => {
+    reads.mock.restore()
+    syncBuiltinESMExports()
+  })
+  return reads
+}
+
+test('手动刷新只读取新增或变化会话，未变化文件继续复用投影', async (context) => {
+  const { agentDir, testRoot } = await createIsolatedAgent(context)
+  const cwd = join(testRoot, 'refresh-project')
+  const first = await createSessionFile(agentDir, cwd, {
+    fileName: 'first.jsonl',
+    sessionId: 'first',
+    messages: [{ id: 'user-first', role: 'user', text: 'first' }]
+  })
+  const second = await createSessionFile(agentDir, cwd, {
+    fileName: 'second.jsonl',
+    sessionId: 'second',
+    messages: [{ id: 'user-second', role: 'user', text: 'second' }]
+  })
+  await runHistoryProbe(agentDir, cwd)
+  const reads = observeTranscriptReads(context)
+  await listL4PiSessionHistory(cwd, '', true)
+  assert.equal(reads.mock.calls.length, 0)
+  await writeFile(
+    first,
+    `${await readFile(first, 'utf8')}${sessionLine(messageEntry('new-user', 'user-first', 'user', 'changed', 4))}`
+  )
+  await rm(second)
+  const result = await listL4PiSessionHistory(cwd, '', true)
+  assert.deepEqual(
+    reads.mock.calls.map((call) => call.arguments[0]),
+    [first]
+  )
+  assert.equal(result.length, 1)
+  assert.equal(result[0].messageCount, 2)
+})
+
+test('冷启动用户消息分页只读取目标文件，后续历史列表仍补齐其他会话', async (context) => {
+  const { agentDir, testRoot } = await createIsolatedAgent(context)
+  const cwd = join(testRoot, 'page-project')
+  const target = await createSessionFile(agentDir, cwd, {
+    fileName: 'target.jsonl',
+    sessionId: 'target',
+    messages: [{ id: 'user-target', role: 'user', text: 'target text' }]
+  })
+  const other = await createSessionFile(agentDir, cwd, {
+    fileName: 'other.jsonl',
+    sessionId: 'other',
+    messages: [{ id: 'user-other', role: 'user', text: 'other text' }]
+  })
+  prepareHistoryProbe(agentDir)
+  const reads = observeTranscriptReads(context)
+  const input = { cwd, sessionId: 'target', query: '', page: { index: 1, size: 20 } }
+  assert.equal((await listL4PiSessionUserMessages(input)).messages[0].text, 'target text')
+  await listL4PiSessionUserMessages(input)
+  assert.deepEqual(
+    reads.mock.calls.map((call) => call.arguments[0]),
+    [target]
+  )
+  assert.equal((await listL4PiSessionHistory(cwd)).length, 2)
+  assert.deepEqual(
+    reads.mock.calls.map((call) => call.arguments[0]),
+    [target, other]
+  )
+  await writeFile(
+    target,
+    `${await readFile(target, 'utf8')}${sessionLine(messageEntry('new-user', 'user-target', 'user', 'new text', 4))}`
+  )
+  assert.equal((await listL4PiSessionUserMessages(input)).page.total, 2)
+  assert.deepEqual(
+    reads.mock.calls.map((call) => call.arguments[0]),
+    [target, other, target]
+  )
+})
+
+test('历史选择器命中缓存时结束加载，刷新请求保留筛选范围', async () => {
   const pickerDialog = await readFile(
     resolve(projectRoot, 'src/client/l2_biz/workbench/l2-workbench-picker-dialog.tsx'),
     'utf8'
@@ -316,12 +397,12 @@ test('工作台历史缓存与替换标题保持本轮结构约束', async () =>
   )
 
   const workbench = await readFile(
-    resolve(projectRoot, 'src/client/l2_biz/workbench/l2-workbench.tsx'),
+    resolve(projectRoot, 'src/client/l2_biz/workbench/hooks/l2-workbench-session-history.ts'),
     'utf8'
   )
   assert.match(
     workbench,
-    /if \(cachedSessions && !forceRefresh\) \{[\s\S]*?setHistoryLoading\(false\)[\s\S]*?return\n/
+    /if \(cachedSessions && !forceRefresh\) \{[\s\S]*?setLoading\(false\)[\s\S]*?return\n/
   )
   assert.match(
     workbench,

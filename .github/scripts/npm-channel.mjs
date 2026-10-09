@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict'
 
 export function versionParts(version) {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-dev\.(0|[1-9]\d*))?$/.exec(version)
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-dev(?:\.(0|[1-9]\d*))?)?$/.exec(
+    version
+  )
   assert.ok(
     typeof version === 'string' && match?.[0] === version,
-    `版本必须为 x.y.z 或 x.y.z-dev.N：${version}`
+    `版本必须为 x.y.z、x.y.z-dev 或 x.y.z-dev.N：${version}`
   )
   const numbers = match.slice(1).map((value) => (value === undefined ? null : Number(value)))
+  if (version.endsWith('-dev')) numbers[3] = -1
   assert.ok(
     numbers.every((value) => value === null || Number.isSafeInteger(value)),
     '版本号超出安全整数范围'
