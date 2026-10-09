@@ -115,12 +115,13 @@ snapshots:
 function completed(record) {
   return {
     ...record,
-    clients: ['windows', 'macos', 'android'].map((platform) => ({
+    clients: ['windows', 'macos', 'linux', 'android'].map((platform) => ({
       platform,
       version: '1.0.0',
       file: {
         windows: 'PiDesk-Windows-x86-Setup.exe',
         macos: 'PiDesk-macOS-universal.dmg',
+        linux: 'PiDesk-Linux-x86_64.AppImage',
         android: 'PiDesk-Android.apk'
       }[platform],
       sha256: sha256(Buffer.from(platform))
@@ -199,6 +200,20 @@ function draft(record) {
     files: new Map()
   }
 }
+
+test('历史三平台记录可读取，下一批补建Linux且不重建未变化客户端', async (t) => {
+  const repo = await fixture(t)
+  const previous = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
+  previous.clients = previous.clients.filter((client) => client.platform !== 'linux')
+  validateRecord(previous)
+  await repo.save('README.md', '支持 Linux 下载')
+  const plan = createReleasePlan(repo.root, { head: repo.commit(), previous, date: 2 })
+  assert.deepEqual(
+    plan.clients.filter((client) => client.build).map((client) => client.platform),
+    ['linux']
+  )
+  assert.equal(plan.clients.find((client) => client.platform === 'linux').version, '1.0.0')
+})
 
 test('正式源码清单不得仍引用自有SDK开发版本', async (t) => {
   const repo = await fixture(t)
@@ -511,7 +526,7 @@ test('草稿、开发版和平台Release不能推进正式变更基线', () => {
   )
 })
 
-test('复用安装包需验证实际字节摘要，最终记录包含三个平台', async (t) => {
+test('复用安装包需验证实际字节摘要，最终记录包含四个平台', async (t) => {
   const repo = await fixture(t)
   const oldRecord = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
   const old = { ...draft(oldRecord), draft: false }
@@ -528,7 +543,7 @@ test('复用安装包需验证实际字节摘要，最终记录包含三个平�
     directory: repo.root,
     repository: 'fixture/project'
   })
-  assert.equal(record.clients.length, 3)
+  assert.equal(record.clients.length, 4)
   for (const item of record.clients) assert.equal(sha256(release.files.get(item.file)), item.sha256)
   assert.ok(release.files.has('release.json'))
   assert.ok(!release.files.has('release.md'))
@@ -648,7 +663,7 @@ test('只重部署最新官网，不创建新Release或重发产品', async (t) 
   assert.equal(result.plan.record.source.head, repo.head)
   assert.equal(result.outputs.npm, '[]')
   assert.equal(result.outputs.published, true)
-  for (const platform of ['windows', 'macos', 'android', 'tunnel', 'docker'])
+  for (const platform of ['windows', 'macos', 'linux', 'android', 'tunnel', 'docker'])
     assert.equal(result.outputs[platform], false)
   assert.ok(github.calls.slice(before).every((call) => !call.method))
   await assert.rejects(

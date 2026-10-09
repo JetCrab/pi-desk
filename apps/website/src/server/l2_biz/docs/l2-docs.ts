@@ -19,21 +19,24 @@ function escapeHtml(value: string): string {
 
 async function createClientDownloadsMarkdown(release: SiteRelease): Promise<string> {
   const clients = [
-    { label: 'Windows x64', url: release.desktop?.url },
-    { label: 'macOS', url: null },
-    { label: 'Linux', url: null },
-    { label: 'Android', url: release.androidUrl },
+    { label: 'Windows x86', url: release.downloads.windows },
+    { label: 'macOS', url: release.downloads.macos },
+    { label: 'Linux x86_64 AppImage', url: release.downloads.linux },
+    { label: 'Android', url: release.downloads.android },
     { label: 'iOS', url: null }
   ]
   const table = [
     '| 客户端 | 下载 |',
     '| --- | --- |',
-    ...clients.map(({ label, url }) => `| ${label} | ${url ? `[下载](<${url}>)` : '待上线'} |`)
+    ...clients.map(
+      ({ label, url }): string =>
+        `| ${label} | ${url ? `[下载](<${url}>)` : label === 'iOS' ? '筹备中' : '尚未发布'} |`
+    )
   ].join('\n')
-  if (!release.androidUrl) return table
+  if (!release.downloads.android) return table
 
-  const qrCode = await createQrCodeDataUrl(release.androidUrl)
-  return `${table}\n\nAndroid 扫码下载：\n\n[![扫码下载 Android 版](${qrCode})](<${release.androidUrl}>)`
+  const qrCode = await createQrCodeDataUrl(release.downloads.android)
+  return `${table}\n\nAndroid 扫码下载：\n\n[![扫码下载 Android 版](${qrCode})](<${release.downloads.android}>)`
 }
 
 export async function getDocumentContent(

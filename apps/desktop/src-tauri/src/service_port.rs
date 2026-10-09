@@ -58,7 +58,7 @@ pub fn wait_until_free(port: u16, timeout: Duration, log_path: &Path) -> Result<
 
 #[cfg(not(windows))]
 fn listener_description(port: u16) -> String {
-    match std::process::Command::new("/usr/sbin/lsof")
+    match std::process::Command::new("lsof")
         .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-t"])
         .output()
     {

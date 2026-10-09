@@ -52,8 +52,7 @@ async function prepareSite(root) {
       sourceUrl: 'https://github.com/fixture/project',
       license: { name: 'Apache-2.0', url: 'https://example.test/license' },
       installCommand: null,
-      desktop: null,
-      androidUrl: null
+      downloads: {}
     })
   )
 }
@@ -72,10 +71,10 @@ test('官网复用同一记录并同步实际安装版本与下载链接', async
   assert.equal(await readFile(result.changelogPath, 'utf8'), input.markdown)
   const site = JSON.parse(await readFile(result.siteReleasePath, 'utf8'))
   assert.equal(
-    site.desktop.url,
+    site.downloads.windows,
     `https://github.com/fixture/project/releases/download/${record.tag}/PiDesk-Windows-x86-Setup.exe`
   )
-  assert.ok(site.androidUrl.endsWith('/PiDesk-Android.apk'))
+  assert.ok(site.downloads.android.endsWith('/PiDesk-Android.apk'))
   assert.equal(site.installCommand, 'npm install -g @jetcrab/pi-desk@1.2.0')
   assert.equal(site.siteUrl, 'https://example.test')
   assert.equal(site.license.name, 'Apache-2.0')
@@ -85,6 +84,49 @@ test('官网复用同一记录并同步实际安装版本与下载链接', async
     /拒绝覆盖/
   )
   assert.equal(await readFile(result.changelogPath, 'utf8'), input.markdown)
+})
+
+test('官网统一生成 Linux 与已有 macOS 下载，不向历史记录虚构平台', async (t) => {
+  const root = await directory(t)
+  await prepareSite(root)
+  const next = {
+    ...record,
+    tag: 'v1.1.1',
+    clients: [
+      ...record.clients,
+      {
+        platform: 'linux',
+        version: '1.1.2',
+        file: 'PiDesk-Linux-x86_64.AppImage',
+        sha256: 'c'.repeat(64)
+      },
+      {
+        platform: 'macos',
+        version: '1.1.2',
+        file: 'PiDesk-macOS-universal.dmg',
+        sha256: 'd'.repeat(64)
+      }
+    ]
+  }
+  const input = {
+    websiteRoot: root,
+    record: next,
+    repository: 'fixture/project',
+    markdown: '## v1.1.1\n'
+  }
+  const result = await syncRelease(input)
+  const site = JSON.parse(await readFile(result.siteReleasePath, 'utf8'))
+  assert.equal(
+    site.downloads.linux,
+    'https://github.com/fixture/project/releases/download/v1.1.1/PiDesk-Linux-x86_64.AppImage'
+  )
+  assert.ok(site.downloads.macos.endsWith('/PiDesk-macOS-universal.dmg'))
+  assert.equal(site.desktop, undefined)
+  assert.equal(site.androidUrl, undefined)
+  await syncRelease({ ...input, record, markdown: '## v1.0.0\n' })
+  const historical = JSON.parse(await readFile(result.siteReleasePath, 'utf8'))
+  assert.equal(historical.downloads.linux, undefined)
+  assert.equal(historical.downloads.macos, undefined)
 })
 
 test('官网无主包更新时也移除旧安装命令中的下载源', async (t) => {

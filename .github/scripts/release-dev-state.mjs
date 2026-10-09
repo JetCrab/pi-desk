@@ -4,7 +4,7 @@ import { versionParts } from './npm-channel.mjs'
 
 const branch = 'release-data'
 const statePath = 'dev/state.json'
-const nativeUnits = new Set(['windows', 'macos', 'android', 'ios', 'tunnel'])
+const nativeUnits = new Set(['windows', 'macos', 'linux', 'android', 'ios', 'tunnel'])
 const sourcePattern = /^[a-f0-9]{40}$/
 const runPattern = /^[1-9]\d*$/
 

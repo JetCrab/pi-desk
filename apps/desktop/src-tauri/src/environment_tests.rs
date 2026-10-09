@@ -54,6 +54,41 @@ fn generic_server() -> ServerConfig {
 }
 
 #[test]
+fn npm_cli_accepts_linux_distribution_layout() {
+    let directory = TestDirectory::new("linux-npm-layout");
+    let node = directory.0.join("usr/bin/node");
+    let cli = directory.0.join("usr/share/nodejs/npm/bin/npm-cli.js");
+    fs::create_dir_all(node.parent().unwrap()).unwrap();
+    fs::create_dir_all(cli.parent().unwrap()).unwrap();
+    fs::write(&node, "").unwrap();
+    fs::write(&cli, "").unwrap();
+    let found = npm_cli(&node).expect("应识别发行版提供的 npm-cli.js");
+    assert_eq!(
+        fs::canonicalize(found).unwrap(),
+        fs::canonicalize(cli).unwrap()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn pi_root_resolves_unix_bin_symlinks() {
+    let directory = TestDirectory::new("unix-pi-symlink");
+    let prefix = directory.0.join("prefix");
+    let package = prefix.join("lib/node_modules").join(PI_PACKAGE);
+    fs::create_dir_all(package.join("dist")).unwrap();
+    fs::create_dir_all(prefix.join("bin")).unwrap();
+    fs::write(
+        package.join("package.json"),
+        format!("{{\"name\":\"{PI_PACKAGE}\"}}"),
+    )
+    .unwrap();
+    fs::write(package.join("dist/cli.js"), "").unwrap();
+    let link = prefix.join("bin/pi");
+    std::os::unix::fs::symlink(package.join("dist/cli.js"), &link).unwrap();
+    assert_eq!(pi_root(&link).unwrap(), fs::canonicalize(package).unwrap());
+}
+
+#[test]
 fn pi_check_entry_prefers_current_name_and_supports_legacy_packages() {
     let directory = TestDirectory::new("pi-check-entry");
     let bin = directory.0.join("node_modules/@jetcrab/pi-desk/bin");
@@ -166,7 +201,7 @@ fn chosen_runtime_is_injected_only_into_child_environment() {
     let path = env.iter().find(|(name, _)| name == "PATH").unwrap();
     let parts = std::env::split_paths(&path.1).collect::<Vec<_>>();
     assert_eq!(parts.first().unwrap(), node.parent().unwrap());
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     assert!(parts.contains(&directory.0.join("pi")));
     assert!(parts.contains(&directory.0.join("git/bin")));
     #[cfg(windows)]
@@ -182,6 +217,32 @@ fn chosen_runtime_is_injected_only_into_child_environment() {
         original,
         "不得更改宿主或系统 PATH"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_runtime_uses_application_prefix_without_changing_host_path() {
+    let directory = TestDirectory::new("unix-prefix");
+    let state = directory.state();
+    let original = std::env::var_os("PATH");
+    let prefix = state.root.join("npm");
+    let pi = prefix.join("lib/node_modules").join(PI_PACKAGE);
+    mark_ready(
+        &state,
+        Component::Node,
+        "v22.22.2",
+        state.root.join("node/bin/node"),
+    );
+    mark_ready(&state, Component::Pi, "1.0.1", pi.clone());
+    let environment = state.child_environment();
+    let path = environment.iter().find(|(name, _)| name == "PATH").unwrap();
+    let paths = std::env::split_paths(&path.1).collect::<Vec<_>>();
+    assert!(paths.contains(&prefix.join("bin")));
+    assert!(environment
+        .iter()
+        .any(|(name, value)| name == "npm_config_prefix" && value == prefix.as_os_str()));
+    assert!(!state.is_private_path(&pi));
+    assert_eq!(std::env::var_os("PATH"), original);
 }
 
 #[test]

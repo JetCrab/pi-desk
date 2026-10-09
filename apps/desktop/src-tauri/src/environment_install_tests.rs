@@ -4,6 +4,17 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 #[test]
+fn unix_node_archives_match_the_target_platform() {
+    let linux = super::unix_node_download("linux", "x86_64").unwrap();
+    assert_eq!(linux.version, "v22.22.2");
+    assert_eq!(linux.file, "node-v22.22.2-linux-x64.tar.gz");
+    let mac = super::unix_node_download("macos", "aarch64").unwrap();
+    assert_eq!(mac.file, "node-v22.22.2-darwin-arm64.tar.gz");
+    assert!(super::unix_node_download("linux", "mips").is_err());
+    assert!(super::unix_node_download("windows", "x86_64").is_err());
+}
+
+#[test]
 fn node_install_and_pi_finish_while_git_is_still_downloading() {
     let (git_started, wait_git) = mpsc::channel();
     let (pi_finished, wait_pi) = mpsc::channel();

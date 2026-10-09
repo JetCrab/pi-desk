@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { clientPlatforms } from './release-record.mjs'
 
 export async function packageClient({
   platform,
@@ -11,7 +12,7 @@ export async function packageClient({
   source,
   output
 }) {
-  if (!['windows', 'android', 'macos'].includes(platform)) {
+  if (!clientPlatforms.includes(platform)) {
     throw new Error(`不支持的客户端平台：${platform}`)
   }
   if (
@@ -40,7 +41,9 @@ export async function packageClient({
       ? `pi-desk-windows-${version}-x86-setup.exe`
       : platform === 'macos'
         ? `pi-desk-macos-${version}-universal-${developerId ? 'developer-id' : 'adhoc'}.dmg`
-        : `pi-desk-android-${version}${unsigned ? '-unsigned' : ''}.apk`
+        : platform === 'linux'
+          ? `pi-desk-linux-${version}-x86_64.AppImage`
+          : `pi-desk-android-${version}${unsigned ? '-unsigned' : ''}.apk`
   const destination = join(output, filename)
   await copyFile(source, destination)
   const sha256 = createHash('sha256')
@@ -58,10 +61,10 @@ async function main() {
     flags.length > 1
   ) {
     throw new Error(
-      '用法：pack-client.mjs <windows|android|macos> <source> <output> [--unsigned|--developer-id]'
+      '用法：pack-client.mjs <windows|android|macos|linux> <source> <output> [--unsigned|--developer-id]'
     )
   }
-  if (!['windows', 'android', 'macos'].includes(platform)) {
+  if (!clientPlatforms.includes(platform)) {
     throw new Error(`不支持的客户端平台：${platform}`)
   }
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')

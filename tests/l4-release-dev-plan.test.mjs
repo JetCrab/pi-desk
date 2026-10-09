@@ -87,10 +87,11 @@ test('重跑只有同批完整且未过期的制品才能复用', () => {
   assert.equal(hasNpmArtifacts([packages, smoke], '43', ['pi-desk']), false)
 })
 
-test('桌面共用产品版本但Windows与macOS分别记录成功，检查与打包选择分开', () => {
+test('桌面三平台共用产品版本但分别记录成功，检查与打包选择分开', () => {
   assert.deepEqual(developmentUnits({ desktop: '1.1.2', website: '1.0.1', 'pi-desk': '1.0.8' }), {
     windows: '1.1.2',
     macos: '1.1.2',
+    linux: '1.1.2',
     'pi-desk': '1.0.8'
   })
   assert.deepEqual(

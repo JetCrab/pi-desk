@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict'
 
 export const changeSections = ['breaking', 'features', 'added', 'changed', 'fixed', 'removed']
-export const clientPlatforms = ['windows', 'macos', 'android']
+export const clientPlatforms = ['windows', 'macos', 'linux', 'android']
 export const releaseTagPattern = /^v\d+\.\d+\.\d+$/
 
 export function clientFilename(platform) {
   const files = {
     windows: 'PiDesk-Windows-x86-Setup.exe',
     macos: 'PiDesk-macOS-universal.dmg',
+    linux: 'PiDesk-Linux-x86_64.AppImage',
     android: 'PiDesk-Android.apk'
   }
   assert.ok(Object.hasOwn(files, platform), '客户端平台无效')

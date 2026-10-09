@@ -6,11 +6,11 @@ import type {
 } from '../l4-desktop-ipc'
 import { DesktopError, DesktopIcon } from '../l4-desktop-ui'
 
-const isMacOS = /Macintosh|Mac OS X/u.test(navigator.userAgent)
+const isWindows = /Windows/u.test(navigator.userAgent)
 const componentLabels = {
   node: 'Node.js',
   pi: 'Pi',
-  bash: isMacOS ? 'Git 和 Bash' : 'Git Bash'
+  bash: isWindows ? 'Git Bash' : 'Git 和 Bash'
 } as const
 const componentOrder = ['node', 'bash', 'pi'] as const
 
@@ -154,7 +154,7 @@ export function EnvironmentView({
           })
         }
       >
-        {!isMacOS && <option value="npmmirror">国内镜像</option>}
+        {isWindows && <option value="npmmirror">国内镜像</option>}
         <option value="official">官方源</option>
       </select>
     </label>
@@ -319,7 +319,7 @@ export function EnvironmentView({
                         <DesktopIcon name="folder" />
                         选择已安装的位置
                       </button>
-                      {component.name === 'node' && !isMacOS && (
+                      {component.name === 'node' && isWindows && (
                         <button
                           className="quiet"
                           type="button"

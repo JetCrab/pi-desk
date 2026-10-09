@@ -4,6 +4,7 @@ const release = JSON.parse(await readFile(new URL('../site-release.json', import
 const errors = []
 const showcase = process.argv.includes('--showcase')
 
+/** @returns {void} */
 function checkUrl(value, label) {
   try {
     const url = new URL(value)
@@ -21,8 +22,13 @@ function checkUrl(value, label) {
 checkUrl(release.siteUrl, '官网地址')
 checkUrl(release.license?.url, '许可证')
 if (!release.license?.name?.trim()) errors.push('许可证名称尚未填写')
-if (release.androidUrl !== null) checkUrl(release.androidUrl, 'Android 下载')
-if (release.desktop !== null || !showcase) checkUrl(release.desktop?.url, 'Windows 下载')
+const platforms = { windows: 'Windows', macos: 'macOS', linux: 'Linux', android: 'Android' }
+for (const [platform, label] of Object.entries(platforms)) {
+  const url = release.downloads[platform]
+  if (url !== undefined || (platform === 'windows' && !showcase)) {
+    checkUrl(url, `${label} 下载`)
+  }
+}
 if (showcase) {
   if (release.installCommand !== null) {
     errors.push('仅发布客户端下载时，公开安装命令必须保持 null')

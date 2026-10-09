@@ -1,3 +1,5 @@
+import { clientPlatforms } from './release-record.mjs'
+
 const categories = ['breaking', 'features', 'added', 'changed', 'fixed', 'removed']
 const headings = ['Breaking Changes', 'New Features', 'Added', 'Changed', 'Fixed', 'Removed']
 
@@ -64,7 +66,7 @@ export function renderReleaseNotes(record, { repository }) {
   })
   for (const client of record.clients) {
     if (
-      !['windows', 'macos', 'android'].includes(client.platform) ||
+      !clientPlatforms.includes(client.platform) ||
       typeof client.file !== 'string' ||
       !client.file
     ) {

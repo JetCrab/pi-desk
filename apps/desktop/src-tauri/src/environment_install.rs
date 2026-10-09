@@ -52,6 +52,24 @@ pub(crate) fn node_download(
     })
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+pub(crate) fn unix_node_download(os: &str, arch: &str) -> Result<NodeDownload, String> {
+    let platform = match (os, arch) {
+        ("linux", "x86_64") => "linux-x64",
+        ("macos", "x86_64") => "darwin-x64",
+        ("macos", "aarch64") => "darwin-arm64",
+        _ => {
+            return Err(format!(
+                "不支持自动准备 {os} {arch} Node.js，请选择本机环境"
+            ));
+        }
+    };
+    Ok(NodeDownload {
+        version: "v22.22.2".into(),
+        file: format!("node-v22.22.2-{platform}.tar.gz"),
+    })
+}
+
 pub(crate) struct RuntimeDownloads {
     pub git_url: &'static str,
     pub git_sha256: &'static str,
@@ -162,7 +180,7 @@ pub(crate) fn install_node(
     _cancelled: &dyn Fn() -> bool,
     _log: &Path,
 ) -> Result<PathBuf, String> {
-    Err("当前平台不支持 MSI；macOS 请自动准备 Node.js 或选择已安装环境目录".into())
+    Err("当前平台不支持 MSI；请自动准备 Node.js 或选择已安装的运行环境".into())
 }
 
 #[cfg(windows)]
@@ -261,7 +279,7 @@ pub(crate) fn prepare(
     Ok(())
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub(crate) fn prepare(
     _state: &EnvironmentState,
     _server: &ServerConfig,
@@ -273,7 +291,7 @@ pub(crate) fn prepare(
     Err("当前平台不支持自动准备运行环境，请选择本机环境".into())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn prepare(
     state: &EnvironmentState,
     server: &ServerConfig,
@@ -309,6 +327,11 @@ pub(crate) fn prepare(
             ));
         }
     }
+    #[cfg(target_os = "linux")]
+    if needs_pi && state.component_path(Component::Bash).is_none() {
+        return Err("未找到可用的 Git 和 Bash，请通过发行版软件包管理器安装 git 和 bash，然后重新检测或选择已安装的位置".into());
+    }
+    #[cfg(target_os = "macos")]
     if needs_pi && state.component_path(Component::Bash).is_none() {
         state.set_component_step(Component::Bash, "正在请求安装 Command Line Tools");
         let output = crate::process::run_program(
@@ -418,7 +441,7 @@ pub(crate) fn prepare(
     Ok(())
 }
 
-#[cfg(any(windows, target_os = "macos", test))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
 fn prepare_components(
     cancelled: &(dyn Fn() -> bool + Sync),
     node: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<(), String> + Send,
@@ -480,7 +503,7 @@ fn download_node(
     log: &Path,
 ) -> Result<NodeDownload, String> {
     let node_base = download_source.node_base();
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let node = {
         #[cfg(windows)]
         let architecture = architecture_for_host(log)?;
@@ -503,22 +526,8 @@ fn download_node(
             architecture,
         )?
     };
-    #[cfg(target_os = "macos")]
-    let node = {
-        let architecture = match std::env::consts::ARCH {
-            "aarch64" => "arm64",
-            "x86_64" => "x64",
-            architecture => {
-                return Err(format!(
-                    "不支持自动准备 macOS {architecture} Node.js，请选择本机环境"
-                ))
-            }
-        };
-        NodeDownload {
-            version: "v22.22.2".into(),
-            file: format!("node-v22.22.2-darwin-{architecture}.tar.gz"),
-        }
-    };
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let node = unix_node_download(std::env::consts::OS, std::env::consts::ARCH)?;
     logging::write(
         log,
         "environment-node-version",

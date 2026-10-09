@@ -23,6 +23,7 @@ export function developmentUnits(versions) {
     if (name === 'desktop') {
       result.windows = version
       result.macos = version
+      result.linux = version
     } else if (name !== 'website') {
       result[name] = version
     }
@@ -36,7 +37,9 @@ export async function prepareDevBatch(
 ) {
   assert.match(source, /^[a-f0-9]{40}$/)
   assert.match(runId, /^\d+$/)
-  assert.ok(['all', 'npm', 'windows', 'macos', 'android', 'ios', 'tunnel'].includes(target))
+  assert.ok(
+    ['all', 'npm', 'windows', 'macos', 'linux', 'android', 'ios', 'tunnel'].includes(target)
+  )
   await validateVersions(root, { base: null, head: source })
   const state = await loadDevState(github)
   let batch = await loadDevBatch(github, runId)
@@ -185,7 +188,7 @@ async function main() {
     packages: JSON.stringify(prepared.selected),
     check_base: checkBase ?? '0'.repeat(40),
     ...Object.fromEntries(
-      ['windows', 'macos', 'android', 'ios', 'tunnel'].map((name) => [
+      ['windows', 'macos', 'linux', 'android', 'ios', 'tunnel'].map((name) => [
         name,
         batch.selected.includes(name)
       ])
