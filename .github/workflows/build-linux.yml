@@ -48,7 +48,7 @@ jobs:
       - name: 安装 Linux 编译与无显示器验收依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev patchelf file xvfb xauth xdotool imagemagick dbus-x11 fonts-noto-cjk
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev patchelf file xvfb xauth xdotool imagemagick dbus-x11 fonts-noto-cjk tesseract-ocr tesseract-ocr-chi-sim
       - name: 安装独立桌面依赖
         working-directory: apps/desktop
         run: pnpm install --ignore-workspace --frozen-lockfile
