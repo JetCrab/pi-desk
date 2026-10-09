@@ -2,14 +2,17 @@ import Module, { registerHooks } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import runtimeApi from './l4-pi-global-runtime.js'
 
-const { PI_RUNTIME_EXIT_CODE, findGlobalPi, resolvePiImport, checkPiModules } = runtimeApi
+const {
+  PI_RUNTIME_EXIT_CODE,
+  findGlobalPi,
+  resolvePiImport,
+  checkPiModules,
+  formatPiRuntimeError
+} = runtimeApi
 
 try {
   const runtime = await findGlobalPi()
-  if (!runtime)
-    throw new Error(
-      '未安装全局 Pi。请在桌面端确认安装，或运行 npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.1。'
-    )
+  if (!runtime) throw new Error('未安装全局 Pi，Pi Desk 无法启动。')
   // tsx/Jiti 会先调用同步 require.resolve；Node hooks 不拦截这一步预解析。
   const resolveFilename = Module._resolveFilename
   Module._resolveFilename = function (specifier, ...args) {
@@ -61,6 +64,6 @@ try {
   }
   console.info('[Pi Desk][PiRuntime] 使用全局 Pi', { version: runtime.version, path: runtime.root })
 } catch (error) {
-  console.error(`[Pi Desk][PiRuntime] ${error instanceof Error ? error.message : String(error)}`)
+  console.error(`[Pi Desk][PiRuntime] ${formatPiRuntimeError(error)}`)
   process.exit(PI_RUNTIME_EXIT_CODE)
 }

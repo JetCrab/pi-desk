@@ -6,7 +6,7 @@ use semver::Version;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
@@ -106,26 +106,48 @@ pub(crate) fn query_version_with_environment(
     npm: &str,
     environment: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> Result<String, String> {
-    let tag = match package.channel {
-        ReleaseChannel::Stable => "latest",
-        ReleaseChannel::Dev => "dev",
-    };
-    let output = run_with_environment(
-        &format!(
-            "{npm} view {} version --json{}",
-            quote(&format!("{}@{tag}", package.name)),
-            registry_argument(package)
-        ),
-        None,
-        QUERY_TIMEOUT,
+    let started = Instant::now();
+    logging::write(
         log,
-        cancelled,
-        environment,
-    )?;
-    let version: String =
-        serde_json::from_str(&output).map_err(|error| format!("npm 版本响应无效：{error}"))?;
-    channel_version(package, &version)?;
-    Ok(version)
+        "package-query-start",
+        &format!(
+            "正在查询 npm 包版本 package={} channel={:?}",
+            package.name, package.channel
+        ),
+    );
+    let result = (|| {
+        let tag = match package.channel {
+            ReleaseChannel::Stable => "latest",
+            ReleaseChannel::Dev => "dev",
+        };
+        let output = run_with_environment(
+            &format!(
+                "{npm} view {} version --json{}",
+                quote(&format!("{}@{tag}", package.name)),
+                registry_argument(package)
+            ),
+            None,
+            QUERY_TIMEOUT,
+            log,
+            cancelled,
+            environment,
+        )?;
+        let version: String =
+            serde_json::from_str(&output).map_err(|error| format!("npm 版本响应无效：{error}"))?;
+        channel_version(package, &version)?;
+        Ok(version)
+    })();
+    logging::write(
+        log,
+        "package-query-end",
+        &format!(
+            "npm 版本查询 package={} success={} elapsed_ms={}",
+            package.name,
+            result.is_ok(),
+            started.elapsed().as_millis()
+        ),
+    );
+    result
 }
 
 fn channel_version(package: &PackageConfig, version: &str) -> Result<Version, String> {
@@ -217,12 +239,18 @@ pub(crate) fn install_with_environment(
     if cancelled() {
         return Err("操作已取消".into());
     }
+    let started = Instant::now();
     channel_version(package, version)?;
     if let Some(directory) = installed_directory(base, package, version) {
         logging::write(
             log,
             "package-reused",
-            &format!("version={version} directory={}", directory.display()),
+            &format!(
+                "复用已安装 npm 包 package={} version={version} directory={} elapsed_ms={}",
+                package.name,
+                directory.display(),
+                started.elapsed().as_millis()
+            ),
         );
         return Ok(directory);
     }
@@ -234,6 +262,11 @@ pub(crate) fn install_with_environment(
     fs::create_dir_all(&directory).map_err(|error| format!("创建候选包目录失败：{error}"))?;
     fs::write(directory.join("package.json"), "{\"private\":true}\n")
         .map_err(|error| format!("创建候选包清单失败：{error}"))?;
+    logging::write(
+        log,
+        "package-install-start",
+        &format!("正在安装 npm 包 package={} version={version}", package.name),
+    );
     let result = run_with_environment(
         &format!(
             "{npm} install --omit=dev --save-exact --no-audit --no-fund --progress=false {}{}",
@@ -253,6 +286,16 @@ pub(crate) fn install_with_environment(
             Ok(directory.clone())
         }
     });
+    logging::write(
+        log,
+        "package-install-end",
+        &format!(
+            "npm 包安装 package={} version={version} success={} elapsed_ms={}",
+            package.name,
+            result.is_ok(),
+            started.elapsed().as_millis()
+        ),
+    );
     if result.is_err() {
         if let Err(error) = fs::remove_dir_all(&directory) {
             logging::write(

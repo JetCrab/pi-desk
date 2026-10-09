@@ -3,7 +3,8 @@
 
 const {
   PI_RUNTIME_EXIT_CODE,
-  checkGlobalPi
+  checkGlobalPi,
+  formatPiRuntimeError
 } = require('../src/server/l4_foundation/pi/l4-pi-global-runtime.js')
 
 if (process.argv.length !== 3 || process.argv[2] !== '--check') {
@@ -15,7 +16,7 @@ if (process.argv.length !== 3 || process.argv[2] !== '--check') {
       process.stdout.write(`${JSON.stringify(result)}\n`)
     },
     (error) => {
-      console.error(`[Pi Desk][PiRuntime] ${error.message}`)
+      console.error(`[Pi Desk][PiRuntime] ${formatPiRuntimeError(error)}`)
       process.exitCode = PI_RUNTIME_EXIT_CODE
     }
   )

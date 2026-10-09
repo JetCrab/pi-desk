@@ -15,6 +15,7 @@ import {
   type SiteRelease
 } from '@common/l3_modules/site/l3-site-release'
 import { Command } from '@client/l4_foundation/ui/l4-command'
+import { CliInstall } from './l3-cli-install'
 
 export function GetStarted({
   release,
@@ -26,7 +27,7 @@ export function GetStarted({
   return (
     <Tabs.Root
       defaultValue="download"
-      className="w-full max-w-[400px] min-w-0"
+      className="w-full max-w-[480px] min-w-0"
       aria-label="安装与下载"
     >
       <Tabs.List activateOnFocus className="mb-4 flex justify-center gap-2" aria-label="安装方式">
@@ -44,7 +45,7 @@ export function GetStarted({
         </Tabs.Tab>
       </Tabs.List>
       <div className="min-h-[108px]">
-        <Tabs.Panel value="download" className="text-left">
+        <Tabs.Panel value="download" className="mx-auto max-w-[400px] text-left">
           <ul className="divide-y divide-border">
             <li className="flex min-h-14 flex-wrap items-center gap-x-3 gap-y-2 py-3">
               <span className="flex flex-1 items-center gap-3 font-medium">
@@ -121,9 +122,9 @@ export function GetStarted({
             </li>
           </ul>
         </Tabs.Panel>
-        <Tabs.Panel value="cli" className="mx-auto w-full max-w-[340px] space-y-2 text-left">
+        <Tabs.Panel value="cli" className="space-y-5 text-left">
           {release.installCommand ? (
-            <Command label="安装" command={release.installCommand} />
+            <CliInstall command={release.installCommand} />
           ) : (
             <p className="flex min-h-9 items-center rounded-lg bg-muted px-3 text-muted-foreground">
               公开安装包准备中

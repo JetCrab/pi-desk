@@ -146,6 +146,11 @@ export class L4PiWorkSessionRuntime {
     return this.branchIdValue
   }
 
+  get isWorkerInitialized(): boolean {
+    this.assertActive()
+    return this.chatWorker.isInitialized
+  }
+
   readChatBackgroundTaskIds(): string[] {
     this.assertActive()
     return this.chatWorker.getBackgroundTaskIds()

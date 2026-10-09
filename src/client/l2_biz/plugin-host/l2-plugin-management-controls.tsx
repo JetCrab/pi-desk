@@ -8,14 +8,14 @@ import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 
 export type L2PluginManagementControlAction =
-  'reload' | 'update' | 'remove' | 'retry' | 'retry-browser'
+  'reload' | 'update' | 'remove' | 'retry' | 'retry-browser' | 'enable' | 'disable'
 
 interface L2PluginManagementControlsProps {
   plugin: L2PluginManagementItem
   displayName: string
   browserError: string | null
+  requestError?: string | null
   disabled: boolean
-  reloadDisabled: boolean
   pending: boolean
   browserRetryPending: boolean
   onAction: (action: L2PluginManagementControlAction) => void
@@ -25,8 +25,8 @@ export function L2PluginManagementControls({
   plugin,
   displayName,
   browserError,
+  requestError,
   disabled,
-  reloadDisabled,
   pending,
   browserRetryPending,
   onAction
@@ -34,37 +34,56 @@ export function L2PluginManagementControls({
   const { t } = useTranslation('pluginManagement')
   const { locale } = useL4Region()
   const phase = plugin.operation?.phase
-  const sourceError = plugin.error ? selectL4LocalizedText(plugin.error.message, locale) : null
-  const duplicateError = phase === 'failed' && plugin.operation?.message === sourceError
+  const unfinished = Boolean(plugin.operation && phase !== 'failed')
+  const enabled = plugin.status !== 'disabled'
   const failed = plugin.status === 'failed' || browserError !== null
-
+  const sourceError = plugin.error ? selectL4LocalizedText(plugin.error.message, locale) : null
+  const status = unfinished
+    ? t(`phase_${phase}`)
+    : failed
+      ? t('notLoaded')
+      : enabled
+        ? t('enabled')
+        : t('disabled')
   return (
-    <div className="space-y-3">
-      <p className={`text-sm ${failed ? 'text-destructive' : 'text-muted-foreground'}`}>
-        {plugin.kind === 'extension' ? `${t('localExtension')} · ` : ''}
-        {plugin.status === 'disabled'
-          ? t('disabledByPi')
-          : failed
-            ? t('notLoaded')
-            : plugin.status === 'available'
-              ? t('discovered')
-              : t('active')}
-      </p>
+    <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        {browserError && plugin.pluginName ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={disabled || browserRetryPending}
-            onClick={() => onAction('retry-browser')}
+        {unfinished || pending || failed ? (
+          <span
+            role="status"
+            className={`inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs ${failed && !unfinished ? 'text-destructive' : 'text-muted-foreground'}`}
           >
-            {t('retry')}
-          </Button>
+            {unfinished && phase !== 'waiting' ? (
+              <LoaderCircleIcon className="size-3.5 animate-spin" />
+            ) : null}
+            {pending && !unfinished ? t('submitting') : status}
+          </span>
         ) : null}
-        {plugin.updateAvailable ? (
+        {plugin.kind === 'extension' ? (
+          <span className="text-xs text-muted-foreground">{t('localExtension')}</span>
+        ) : null}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          role="switch"
+          aria-checked={enabled}
+          aria-label={t('togglePlugin', { name: displayName })}
+          disabled={disabled || pending}
+          onClick={() => onAction(enabled ? 'disable' : 'enable')}
+        >
+          <span
+            aria-hidden="true"
+            className={`flex h-4 w-7 items-center rounded-full p-0.5 ${enabled ? 'bg-primary' : 'bg-muted-foreground'}`}
+          >
+            <span
+              className={`size-3 rounded-full bg-primary-foreground transition-transform ${enabled ? 'translate-x-3' : ''}`}
+            />
+          </span>
+          {t(enabled ? 'enabled' : 'disabled')}
+        </Button>
+        {plugin.updateAvailable && plugin.kind !== 'extension' ? (
           <Button
-            type="button"
             size="sm"
             variant="outline"
             disabled={disabled || pending}
@@ -73,9 +92,20 @@ export function L2PluginManagementControls({
             {t('update')}
           </Button>
         ) : null}
+        {plugin.kind !== 'extension' ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-muted-foreground hover:text-destructive"
+            disabled={disabled || pending}
+            onClick={() => onAction('remove')}
+          >
+            <Trash2Icon data-icon="inline-start" />
+            {t('remove')}
+          </Button>
+        ) : null}
         {phase === 'failed' ? (
           <Button
-            type="button"
             size="sm"
             variant="outline"
             disabled={disabled || pending}
@@ -84,53 +114,53 @@ export function L2PluginManagementControls({
             {t('retry')}
           </Button>
         ) : null}
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={reloadDisabled}
-          aria-label={t('reloadSource', { name: displayName })}
-          onClick={() => onAction('reload')}
-        >
-          {t('reloadOne')}
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="text-muted-foreground hover:text-destructive"
-          disabled={disabled || pending || plugin.kind === 'extension'}
-          title={plugin.kind === 'extension' ? t('localSourceHelp') : undefined}
-          onClick={() => onAction('remove')}
-        >
-          <Trash2Icon data-icon="inline-start" />
-          {t('remove')}
-        </Button>
+        {browserError && plugin.pluginName ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={disabled || browserRetryPending}
+            onClick={() => onAction('retry-browser')}
+          >
+            {t('retryView')}
+          </Button>
+        ) : null}
+        <details className="text-sm">
+          <summary className="cursor-pointer rounded-lg px-2 py-1.5 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">
+            {t('more')}
+          </summary>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="mt-1"
+            disabled={disabled || (pending && phase !== 'waiting')}
+            aria-label={t('reloadSource', { name: displayName })}
+            onClick={() => onAction('reload')}
+          >
+            {t('reloadOne')}
+          </Button>
+        </details>
       </div>
-      {plugin.operation ? (
-        <div
-          className={`flex items-start gap-2 text-sm ${phase === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}
-          role="status"
+      {plugin.operation?.message ? (
+        <p
+          className={`whitespace-pre-wrap text-sm [overflow-wrap:anywhere] ${phase === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}
         >
-          {phase !== 'failed' && phase !== 'waiting' ? (
-            <LoaderCircleIcon className="mt-0.5 size-4 shrink-0 animate-spin" />
-          ) : null}
-          <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
-            {t(`phase_${phase}`)}
-            {plugin.operation.message ? `：${plugin.operation.message}` : ''}
-          </span>
-        </div>
-      ) : null}
-      {sourceError && !duplicateError ? (
-        <p className="whitespace-pre-wrap text-sm text-destructive [overflow-wrap:anywhere]">
-          {sourceError}
+          {plugin.operation.message}
         </p>
       ) : null}
-      {browserError ? (
-        <p className="whitespace-pre-wrap text-sm text-destructive [overflow-wrap:anywhere]">
-          {browserError}
-        </p>
-      ) : null}
+      {[requestError, sourceError, browserError]
+        .filter(
+          (message, index, all) =>
+            message && all.indexOf(message) === index && message !== plugin.operation?.message
+        )
+        .map((message) => (
+          <p
+            key={message}
+            role="alert"
+            className="whitespace-pre-wrap text-sm text-destructive [overflow-wrap:anywhere]"
+          >
+            {message}
+          </p>
+        ))}
     </div>
   )
 }

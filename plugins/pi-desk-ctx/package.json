@@ -47,7 +47,8 @@
     "typescript": "^5"
   },
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi-desk-plugin"
   ],
   "pi": {
     "extensions": [
@@ -55,6 +56,11 @@
     ]
   },
   "piDesk": {
-    "entry": "./dist/pi-desk.js"
+    "entry": "./dist/pi-desk.js",
+    "i18n": {
+      "zh-CN": {
+        "description": "管理会话上下文，查看占用并按需忽略消息，减少不必要的上下文消耗。"
+      }
+    }
   }
 }

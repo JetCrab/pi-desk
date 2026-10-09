@@ -106,6 +106,13 @@ async function verifyArchive(entry, output) {
     assert.doesNotMatch(file, /(?:^|\/)\.env(?:\.|$)/)
   }
   if (entry.manifest.name === '@jetcrab/pi-desk') {
+    for (const file of list) {
+      assert.doesNotMatch(
+        file,
+        /^package\/temp\/build\/pi-desk\/release\/\.next\/(?:.*\.nft\.json$|(?:cache|trace|types)(?:\/|$))/,
+        `主程序包含多余构建文件：${file}`
+      )
+    }
     for (const file of [
       'bin/pi-desk.js',
       'bin/pi-desk-preflight.js',
@@ -130,6 +137,23 @@ async function verifyArchive(entry, output) {
   }
   console.info(`制品检查通过：${packed.name}@${packed.version}`)
   return packed
+}
+
+export async function pruneHostBuild(buildDir) {
+  for (const name of ['cache', 'trace', 'types']) {
+    await rm(join(buildDir, name), { recursive: true, force: true })
+  }
+  async function pruneTraces(directory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        await pruneTraces(path)
+      } else if (entry.isFile() && entry.name.endsWith('.nft.json')) {
+        await rm(path)
+      }
+    }
+  }
+  await pruneTraces(buildDir)
 }
 
 export function npmValidationMode(ref) {
@@ -216,7 +240,7 @@ async function prepare(entries, output) {
         await rm(savedCache, { recursive: true, force: true })
         await rename(nextCache, savedCache)
       }
-      await rm(nextCache, { recursive: true, force: true })
+      await pruneHostBuild(join(projectRoot, 'temp/build/pi-desk/release/.next'))
     } else {
       const env = { ...process.env, TSX_TSCONFIG_PATH: join(entry.directory, 'tsconfig.json') }
       await stage(`build ${entry.manifest.name}`, () =>

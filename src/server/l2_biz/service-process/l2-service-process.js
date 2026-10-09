@@ -120,9 +120,30 @@ function runServiceProcess(options) {
         sources.has(maintenance.source)
       )
         return null
+      if (maintenance.registry !== undefined) {
+        if (typeof maintenance.registry !== 'string' || maintenance.registry.length > 2048)
+          return null
+        try {
+          const url = new URL(maintenance.registry)
+          if (
+            !['https:', 'http:'].includes(url.protocol) ||
+            url.username ||
+            url.password ||
+            url.search ||
+            url.hash
+          )
+            return null
+        } catch {
+          return null
+        }
+      }
       sources.add(maintenance.source)
     }
-    return requests.map(({ action, source }) => ({ action, source }))
+    return requests.map(({ action, source, registry }) => ({
+      action,
+      source,
+      ...(registry ? { registry } : {})
+    }))
   }
 
   function runPackageMaintenance(maintenance) {
@@ -136,7 +157,8 @@ function runServiceProcess(options) {
           pathToFileURL(tsxImport).href,
           packageMaintenanceEntry,
           maintenance.action,
-          maintenance.source
+          maintenance.source,
+          ...(maintenance.registry ? [maintenance.registry] : [])
         ],
         {
           cwd: packageRoot,

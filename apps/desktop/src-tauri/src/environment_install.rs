@@ -172,10 +172,11 @@ pub(crate) fn prepare(
     download_source: DownloadSource,
     cancelled: &(dyn Fn() -> bool + Sync),
     log: &Path,
+    service: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<(), String> + Send,
 ) -> Result<(), String> {
     let needs_pi = environment::requires_pi(server);
     if !environment::requires_node(server) && !needs_pi {
-        return Ok(());
+        return service(cancelled);
     }
     if std::env::var_os("PI_DESK_DESKTOP_DATA_DIR").is_some() {
         return Err("隔离模式禁止安装或修改全局运行环境".into());
@@ -249,6 +250,7 @@ pub(crate) fn prepare(
             }
             Ok(())
         },
+        service,
     )?;
     state.verify_global_commands(needs_pi, cancelled, log)?;
     logging::write(
@@ -266,6 +268,7 @@ pub(crate) fn prepare(
     _download_source: DownloadSource,
     _cancelled: &(dyn Fn() -> bool + Sync),
     _log: &Path,
+    _service: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<(), String> + Send,
 ) -> Result<(), String> {
     Err("当前平台不支持自动准备运行环境，请选择本机环境".into())
 }
@@ -277,10 +280,11 @@ pub(crate) fn prepare(
     _download_source: DownloadSource,
     cancelled: &(dyn Fn() -> bool + Sync),
     log: &Path,
+    service: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<(), String> + Send,
 ) -> Result<(), String> {
     let needs_pi = environment::requires_pi(server);
     if !environment::requires_node(server) && !needs_pi {
-        return Ok(());
+        return service(cancelled);
     }
     if std::env::var_os("PI_DESK_DESKTOP_DATA_DIR").is_some() {
         return Err("隔离模式禁止下载或安装真实运行环境".into());
@@ -337,58 +341,74 @@ pub(crate) fn prepare(
     }
     let work = staging(state)?;
     state.set_phase("installing", "正在准备应用运行环境", None);
-    if state.component_path(Component::Node).is_none() || (needs_pi && node_old) {
-        let node = download_node(
-            state,
-            &client()?,
-            &work.0,
-            DownloadSource::Official,
-            cancelled,
-            log,
-        )?;
-        let extracted = work.0.join("node");
-        fs::create_dir_all(&extracted).map_err(|error| error.to_string())?;
-        state.set_component_step(Component::Node, "正在解压并校验 Node.js");
-        let output = crate::process::run_program(
-            Path::new("/usr/bin/tar"),
-            &[
-                "-xzf",
-                &work.0.join(&node.file).to_string_lossy(),
-                "--strip-components=1",
-                "-C",
-                &extracted.to_string_lossy(),
-            ],
-            None,
-            Duration::from_secs(60),
-            log,
-            cancelled,
-            &state.child_environment(),
-        )?;
-        if !output.status.success() {
-            return Err(format!(
-                "解压 Node.js 失败：{}",
-                packages::command_failure(&output)
-            ));
-        }
-        let executable = extracted.join("bin/node");
-        if state.probe(Component::Node, &executable, cancelled, log)? != node.version {
-            return Err("Node.js 实际版本与官方归档版本不一致，已停止安装".into());
-        }
-        if cancelled() {
-            return Err("操作已取消".into());
-        }
-        let installed = state.root.join("node");
-        if installed.exists() {
-            fs::remove_dir_all(&installed)
-                .map_err(|error| format!("替换应用 Node.js 失败：{error}"))?;
-        }
-        fs::rename(extracted, &installed)
-            .map_err(|error| format!("安装应用 Node.js 失败：{error}"))?;
-        state.use_installed(Component::Node, &installed.join("bin/node"), cancelled, log)?;
-    }
-    if needs_pi && state.component_path(Component::Pi).is_none() {
-        prepare_pi(state, &work.0, DownloadSource::Official, cancelled, log)?;
-    }
+    prepare_components(
+        cancelled,
+        |cancelled| {
+            if state.component_path(Component::Node).is_none() || (needs_pi && node_old) {
+                let node = download_node(
+                    state,
+                    &client()?,
+                    &work.0,
+                    DownloadSource::Official,
+                    cancelled,
+                    log,
+                )?;
+                let extracted = work.0.join("node");
+                fs::create_dir_all(&extracted).map_err(|error| error.to_string())?;
+                state.set_component_step(Component::Node, "正在解压并校验 Node.js");
+                let output = crate::process::run_program(
+                    Path::new("/usr/bin/tar"),
+                    &[
+                        "-xzf",
+                        &work.0.join(&node.file).to_string_lossy(),
+                        "--strip-components=1",
+                        "-C",
+                        &extracted.to_string_lossy(),
+                    ],
+                    None,
+                    Duration::from_secs(60),
+                    log,
+                    cancelled,
+                    &state.child_environment(),
+                )?;
+                if !output.status.success() {
+                    return Err(format!(
+                        "解压 Node.js 失败：{}",
+                        packages::command_failure(&output)
+                    ));
+                }
+                let executable = extracted.join("bin/node");
+                if state.probe(Component::Node, &executable, cancelled, log)? != node.version {
+                    return Err("Node.js 实际版本与官方归档版本不一致，已停止安装".into());
+                }
+                if cancelled() {
+                    return Err("操作已取消".into());
+                }
+                let installed = state.root.join("node");
+                if installed.exists() {
+                    fs::remove_dir_all(&installed)
+                        .map_err(|error| format!("替换应用 Node.js 失败：{error}"))?;
+                }
+                fs::rename(extracted, &installed)
+                    .map_err(|error| format!("安装应用 Node.js 失败：{error}"))?;
+                state.use_installed(
+                    Component::Node,
+                    &installed.join("bin/node"),
+                    cancelled,
+                    log,
+                )?;
+            }
+            Ok(())
+        },
+        |_| Ok(()),
+        |cancelled| {
+            if needs_pi && state.component_path(Component::Pi).is_none() {
+                prepare_pi(state, &work.0, DownloadSource::Official, cancelled, log)?;
+            }
+            Ok(())
+        },
+        service,
+    )?;
     state.verify_global_commands(needs_pi, cancelled, log)?;
     logging::write(
         log,
@@ -398,12 +418,13 @@ pub(crate) fn prepare(
     Ok(())
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 fn prepare_components(
     cancelled: &(dyn Fn() -> bool + Sync),
     node: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<(), String> + Send,
     bash: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<(), String> + Send,
     pi: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<(), String> + Send,
+    service: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<(), String> + Send,
 ) -> Result<(), String> {
     parallel(
         cancelled,
@@ -412,7 +433,8 @@ fn prepare_components(
             if stopped() {
                 return Err("操作已取消".into());
             }
-            pi(stopped)
+            parallel(stopped, pi, service)?;
+            Ok(())
         },
         bash,
     )?;
@@ -468,6 +490,7 @@ fn download_node(
         let index = work.join("node-index.json");
         download(
             state,
+            Component::Node,
             client,
             &format!("{node_base}index.json"),
             &index,
@@ -513,6 +536,7 @@ fn download_node(
         |cancelled| {
             download(
                 state,
+                Component::Node,
                 client,
                 &format!("{base}{}", node.file),
                 &archive,
@@ -524,6 +548,7 @@ fn download_node(
         |cancelled| {
             download(
                 state,
+                Component::Node,
                 client,
                 &format!("{base}SHASUMS256.txt"),
                 &sums,
@@ -565,6 +590,7 @@ fn download_bash(
     let archive = work.join("git-installer.exe");
     if download(
         state,
+        Component::Bash,
         client,
         &download_source.git_url(downloads.git_url),
         &archive,
@@ -626,7 +652,8 @@ fn prepare_pi(
     cancelled: &dyn Fn() -> bool,
     log: &Path,
 ) -> Result<(), String> {
-    state.set_component_step(Component::Pi, "正在安装 Pi，查询最新正式版本");
+    let started = std::time::Instant::now();
+    state.set_component_step(Component::Pi, "正在查询 Pi 最新正式版本");
     let node = state
         .component_path(Component::Node)
         .ok_or("Node.js 尚未就绪")?;
@@ -665,7 +692,8 @@ fn prepare_pi(
             download_source.npm_registry()
         ),
     );
-    state.run_node(
+    let installing = std::time::Instant::now();
+    let installation = state.run_node(
         &[
             &npm.to_string_lossy(),
             "install",
@@ -682,11 +710,29 @@ fn prepare_pi(
         Duration::from_secs(600),
         cancelled,
         log,
-    )?;
+    );
+    logging::write(
+        log,
+        "environment-pi-install-end",
+        &format!(
+            "Pi npm 安装 success={} elapsed_ms={}",
+            installation.is_ok(),
+            installing.elapsed().as_millis()
+        ),
+    );
+    installation?;
     let actual_version = state.probe(Component::Pi, &installed, cancelled, log)?;
     if actual_version != version {
         return Err("Pi 实际版本与查询的正式版本不一致，已停止安装".into());
     }
     state.use_installed(Component::Pi, &installed, cancelled, log)?;
+    logging::write(
+        log,
+        "environment-pi-prepared",
+        &format!(
+            "Pi 准备完成 version={version} elapsed_ms={}",
+            started.elapsed().as_millis()
+        ),
+    );
     Ok(())
 }

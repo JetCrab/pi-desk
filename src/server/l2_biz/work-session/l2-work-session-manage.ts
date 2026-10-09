@@ -252,6 +252,17 @@ export class WorkSessionManage {
     this.chat.refreshPluginMessages()
   }
 
+  async runPluginChange<T>(
+    operation: () => Promise<T>,
+    signal: AbortSignal,
+    onWaiting: (reason: string) => void
+  ): Promise<T> {
+    signal.throwIfAborted()
+    await this.initialize()
+    signal.throwIfAborted()
+    return this.chat.runPluginChange(operation, signal, onWaiting)
+  }
+
   runPluginRestart<T>(operation: () => Promise<T>): Promise<T> {
     return this.runExclusive(async () => {
       await this.ensureHydrated()

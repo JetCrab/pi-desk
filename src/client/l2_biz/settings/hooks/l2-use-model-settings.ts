@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { BrowserBeforeLeaveHandler } from '@jetcrab/pi-desk-sdk/browser'
 import type {
+  L2AccountModelSelection,
   L2ModelPreset,
   L2ModelProviderConfig,
   L2ModelSettingsGetResponse,
@@ -25,6 +26,9 @@ interface ModelSettingsState {
   settings: L2ModelSettingsGetResponse | null
   providers: L2ModelProviderConfig[]
   presets: L2ModelPreset[]
+  accountModels: L2AccountModelSelection[]
+  changeAccountModels: (models: L2AccountModelSelection[]) => void
+  refreshAccounts: () => Promise<L2ModelSettingsGetResponse>
   providersDirty: boolean
   presetsDirty: boolean
   loading: boolean
@@ -73,6 +77,8 @@ export function useL2ModelSettings(
   const [settings, setSettings] = useState<L2ModelSettingsGetResponse | null>(null)
   const [providers, setProviders] = useState<L2ModelProviderConfig[]>([])
   const [presets, setPresets] = useState<L2ModelPreset[]>([])
+  const [accountModels, setAccountModels] = useState<L2AccountModelSelection[]>([])
+  const [accountModelsDirty, setAccountModelsDirty] = useState(false)
   const [providersDirty, setProvidersDirty] = useState(false)
   const [presetsDirty, setPresetsDirty] = useState(false)
   const [projectDefaultDirty, setProjectDefaultDirty] = useState(false)
@@ -91,7 +97,7 @@ export function useL2ModelSettings(
   const savingRef = useRef(false)
   const nativeBaseline = settings ? JSON.stringify(settings.nativeConfig, null, 2) : ''
   const nativeDirty = nativeOpen && nativeText !== nativeBaseline
-  const formDirty = providersDirty || presetsDirty || inputState.dirty
+  const formDirty = providersDirty || presetsDirty || accountModelsDirty || inputState.dirty
   const dirty = formDirty || projectDefaultDirty || serviceDirty || nativeDirty
 
   useEffect(() => {
@@ -124,6 +130,8 @@ export function useL2ModelSettings(
     setSettings(result)
     setProviders(structuredClone(result.providers))
     setPresets(structuredClone(result.presets))
+    setAccountModels(structuredClone(result.accountModels))
+    setAccountModelsDirty(false)
     setProvidersDirty(false)
     setPresetsDirty(false)
     setInputState({ dirty: false, invalid: false })
@@ -167,6 +175,7 @@ export function useL2ModelSettings(
         page: { index: 1, size: 1 }
       })
       setCatalogUpdatedAt(result.updatedAt)
+      await refreshAccounts()
       toast.success(
         result.refreshResult === 'cached'
           ? t('catalogCached')
@@ -192,19 +201,22 @@ export function useL2ModelSettings(
     savingRef.current = true
     setSaving(true)
     try {
-      const originalCustomProviders = new Set(
-        settings.providers.map((provider) => provider.provider)
-      )
-      const currentModels = new Set(
-        providers.flatMap((provider) =>
+      const currentModels = new Set([
+        ...providers.flatMap((provider) =>
           provider.models.map((model) => `${provider.provider}\u0000${model.modelId}`)
-        )
-      )
-      const nextPresets = presets.filter(
-        (preset) =>
-          !originalCustomProviders.has(preset.provider) ||
-          currentModels.has(`${preset.provider}\u0000${preset.modelId}`)
-      )
+        ),
+        ...accountModels.map((model) => `${model.provider}\u0000${model.modelId}`)
+      ])
+      const originalModels = new Set([
+        ...settings.providers.flatMap((provider) =>
+          provider.models.map((model) => `${provider.provider}\u0000${model.modelId}`)
+        ),
+        ...settings.accountModels.map((model) => `${model.provider}\u0000${model.modelId}`)
+      ])
+      const nextPresets = presets.filter((preset) => {
+        const key = `${preset.provider}\u0000${preset.modelId}`
+        return !originalModels.has(key) || currentModels.has(key)
+      })
       const removedPresetCount = presets.length - nextPresets.length
       if (
         removedPresetCount > 0 &&
@@ -217,13 +229,11 @@ export function useL2ModelSettings(
         return
       }
 
-      const input: L2ModelSettingsReplaceRequest =
-        providersDirty || inputState.dirty
-          ? {
-              providers,
-              ...(presetsDirty || removedPresetCount > 0 ? { presets: nextPresets } : {})
-            }
-          : { presets: nextPresets }
+      const input: L2ModelSettingsReplaceRequest = {
+        ...(providersDirty || inputState.dirty ? { providers } : {}),
+        ...(accountModelsDirty ? { accountModels } : {}),
+        ...(presetsDirty || removedPresetCount > 0 ? { presets: nextPresets } : {})
+      }
       await biz.replaceSettings(input)
       applySettings(await biz.getSettings())
       setProvidersDirty(false)
@@ -235,6 +245,22 @@ export function useL2ModelSettings(
       savingRef.current = false
       setSaving(false)
     }
+  }
+
+  async function refreshAccounts(): Promise<L2ModelSettingsGetResponse> {
+    const result = await biz.getSettings()
+    // 授权刷新不能覆盖正在编辑的配置或触发编辑器重置。
+    setSettings((current) =>
+      current
+        ? {
+            ...current,
+            accounts: result.accounts,
+            models: result.models,
+            nativeConfig: result.nativeConfig
+          }
+        : result
+    )
+    return result
   }
 
   async function revertConfig(): Promise<void> {
@@ -319,6 +345,12 @@ export function useL2ModelSettings(
     settings,
     providers,
     presets,
+    accountModels,
+    changeAccountModels: (nextModels) => {
+      setAccountModels(nextModels)
+      setAccountModelsDirty(JSON.stringify(nextModels) !== JSON.stringify(settings?.accountModels))
+    },
+    refreshAccounts,
     providersDirty,
     presetsDirty,
     loading,

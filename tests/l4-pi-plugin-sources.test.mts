@@ -1,9 +1,29 @@
 import assert from 'node:assert/strict'
 import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join, resolve, dirname } from 'node:path'
+import { createRequire } from 'node:module'
 import test from 'node:test'
 import { DefaultPackageManager, SettingsManager } from '@earendil-works/pi-coding-agent'
-import { discoverL4PiPluginSources } from '../src/server/l4_foundation/pi/l4-pi-plugin-sources'
+import { createJiti } from 'jiti'
+const require = createRequire(import.meta.url)
+const jiti = createJiti(import.meta.url, {
+  nativeModules: [
+    '@earendil-works/pi-coding-agent',
+    '@earendil-works/pi-agent-core',
+    '@earendil-works/pi-ai'
+  ],
+  tsconfigPaths: resolve('tsconfig.json'),
+  alias: { 'server-only': join(dirname(require.resolve('server-only')), 'empty.js') }
+})
+const { discoverL4PiPluginSources } = await jiti.import<
+  typeof import('../src/server/l4_foundation/pi/l4-pi-plugin-sources')
+>('../src/server/l4_foundation/pi/l4-pi-plugin-sources.ts')
+const { setL4PiPluginEnabled } = await jiti.import<
+  typeof import('../src/server/l4_foundation/pi/l4-pi-plugin-preferences')
+>('../src/server/l4_foundation/pi/l4-pi-plugin-preferences.ts')
+const { createL4PiPluginDisabledFilter } = await jiti.import<
+  typeof import('../src/server/l4_foundation/pi/l4-pi-plugin-disabled')
+>('../src/server/l4_foundation/pi/l4-pi-plugin-disabled.ts')
 
 const testRoot = resolve('temp', 'pi', 'l4-pi-plugin-sources-test', String(process.pid))
 
@@ -182,4 +202,36 @@ test('静态discover使用官方PackageManager、归属本地入口且不执行e
   assert.match(snapshot.errors[0] ?? '', /与已配置包 .* 重复，保留包来源/)
   assert.deepEqual(bySource.get(packageRoot)?.nativePaths, [resolve(packageRoot, 'native.mjs')])
   await assert.rejects(import('node:fs/promises').then(({ access }) => access(marker)))
+
+  setL4PiPluginEnabled(packageRoot, false, agentDir)
+  const disabled = await discoverL4PiPluginSources(cwd, agentDir, {
+    DefaultPackageManager,
+    SettingsManager
+  })
+  assert.equal(disabled.sources.find((item) => item.source === packageRoot)?.enabled, false)
+  assert.equal(
+    disabled.sources.find((item) => item.source === resolve(extensionDir, 'bare.ts'))?.enabled,
+    true
+  )
+  const settings = SettingsManager.create(cwd, agentDir, { projectTrusted: false })
+  const manager = new DefaultPackageManager({ cwd, agentDir, settingsManager: settings })
+  const blocked = await createL4PiPluginDisabledFilter(agentDir, manager, settings)
+  assert.equal(await blocked(packageRoot, join(packageRoot, 'native.mjs'), true), true)
+  assert.equal(
+    await blocked('alias', join(extensionDir, 'package-alias', 'native.mjs'), false),
+    true
+  )
+  for (const path of ['skills/a/SKILL.md', 'prompts/a.md', 'themes/a.json']) {
+    assert.equal(await blocked(packageRoot, join(packageRoot, path), true), true)
+  }
+  assert.equal(
+    await blocked(packageRoot, join(cwd, 'independent-package', 'native.mjs'), false),
+    false
+  )
+  setL4PiPluginEnabled(packageRoot, true, agentDir)
+  const restored = await discoverL4PiPluginSources(cwd, agentDir, {
+    DefaultPackageManager,
+    SettingsManager
+  })
+  assert.equal(restored.sources.find((item) => item.source === packageRoot)?.enabled, true)
 })

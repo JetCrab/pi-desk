@@ -852,9 +852,18 @@ fn run_environment_operation(
             }
             EnvironmentOperation::Prepare(url, download_source) => {
                 let server = configured_server(&state, &url)?;
-                state
-                    .environment
-                    .prepare(&server, download_source, &cancelled, &state.log_path)?;
+                let prepared = Mutex::new(None);
+                state.environment.prepare(
+                    &server,
+                    download_source,
+                    &cancelled,
+                    &state.log_path,
+                    |stopped| {
+                        *prepared.lock().unwrap() =
+                            prepare_service_package(&state, &url, &server, stopped)?;
+                        Ok(())
+                    },
+                )?;
                 if state.environment.needs_setup(&server) {
                     return Err("环境仍未就绪，请检查缺失组件或重新选择兼容路径".into());
                 }
@@ -864,8 +873,14 @@ fn run_environment_operation(
                 if !has_child(&state, &url) {
                     started_service = true;
                     set_phase(&state, &url, ServerPhase::Starting("正在准备服务".into()));
-                    let result =
-                        execute_operation(&state, &url, &server, Operation::Start, &cancelled);
+                    let result = execute_operation_with_prepared(
+                        &state,
+                        &url,
+                        &server,
+                        Operation::Start,
+                        &cancelled,
+                        prepared.into_inner().unwrap(),
+                    );
                     record_operation_failure(
                         &state,
                         &url,
@@ -930,6 +945,9 @@ fn run_environment_operation(
             let runtime = runtimes.entry(url).or_default();
             runtime.operation = None;
             runtime.stop_requested = false;
+            if cancelled() {
+                runtime.update = PackageUpdateSnapshot::default();
+            }
         }
     }
     *state.environment_operation.lock().unwrap() = None;
@@ -1262,12 +1280,201 @@ fn record_operation_failure(
     }
 }
 
+struct PackageSelection {
+    version: String,
+    cached_directory: Option<PathBuf>,
+    startup_available: Option<String>,
+}
+
+struct PreparedPackage {
+    selection: PackageSelection,
+    directory: PathBuf,
+}
+
+fn select_package(
+    state: &ShellState,
+    url: &str,
+    package: &config::PackageConfig,
+    operation: Operation,
+    cached: Option<&str>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<PackageSelection, String> {
+    let base = package_directory(state, url)?;
+    let cached_directory =
+        cached.and_then(|version| packages::installed_directory(&base, package, version));
+    let mut version = cached_directory.as_ref().and(cached).map(str::to_string);
+    let mut startup_available = None;
+    if matches!(
+        operation,
+        Operation::Check | Operation::Update | Operation::AutoUpdate
+    ) || cached_directory.is_none()
+        || (matches!(operation, Operation::Start) && package.startup_update != UpdatePolicy::None)
+    {
+        set_update(state, url, "checking", None, None);
+        match packages::query_version_with_environment(
+            package,
+            &state.log_path,
+            cancelled,
+            &state
+                .environment
+                .npm_command()
+                .unwrap_or_else(|_| "npm".into()),
+            &state.environment.child_environment(),
+        ) {
+            Ok(latest) => {
+                if cached_directory.is_none()
+                    || should_select_version(package, Some(&latest), cached)
+                {
+                    if matches!(operation, Operation::Start)
+                        && package.startup_update == UpdatePolicy::Check
+                        && cached_directory.is_some()
+                    {
+                        startup_available = Some(latest);
+                    } else {
+                        version = Some(latest);
+                    }
+                }
+            }
+            Err(error)
+                if matches!(operation, Operation::Start)
+                    && cached_directory.is_some()
+                    && !cancelled() =>
+            {
+                write_shell_log(
+                    state,
+                    "version-check-fallback",
+                    &format!("url={url} error={error}"),
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(PackageSelection {
+        version: version.ok_or_else(|| "没有可安装的版本".to_string())?,
+        cached_directory,
+        startup_available,
+    })
+}
+
+fn install_selected_package(
+    state: &ShellState,
+    url: &str,
+    package: &config::PackageConfig,
+    selection: &PackageSelection,
+    cached: Option<&str>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<PathBuf, String> {
+    let started = Instant::now();
+    if cancelled() {
+        return Err("操作已取消".into());
+    }
+    if let Some(directory) = selection
+        .cached_directory
+        .as_ref()
+        .filter(|_| Some(selection.version.as_str()) == cached)
+    {
+        write_shell_log(
+            state,
+            "package-reused",
+            &format!(
+                "复用已安装服务 npm 包 package={} version={} elapsed_ms={}",
+                package.name,
+                selection.version,
+                started.elapsed().as_millis()
+            ),
+        );
+        return Ok(directory.clone());
+    }
+    set_update(
+        state,
+        url,
+        "installing",
+        Some(selection.version.clone()),
+        None,
+    );
+    packages::install_with_environment(
+        &package_directory(state, url)?,
+        package,
+        &selection.version,
+        &state.log_path,
+        cancelled,
+        &state
+            .environment
+            .npm_command()
+            .unwrap_or_else(|_| "npm".into()),
+        &state.environment.child_environment(),
+    )
+}
+
+fn prepare_service_package(
+    state: &ShellState,
+    url: &str,
+    server: &ServerConfig,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<PreparedPackage>, String> {
+    let Some(package) = &server.package else {
+        return Ok(None);
+    };
+    set_update(state, url, "checking", None, None);
+    let result: Result<Option<PreparedPackage>, String> = (|| {
+        let cached = cached_version(state, url)?;
+        let selection = select_package(
+            state,
+            url,
+            package,
+            Operation::Start,
+            cached.as_deref(),
+            cancelled,
+        )?;
+        let directory = install_selected_package(
+            state,
+            url,
+            package,
+            &selection,
+            cached.as_deref(),
+            cancelled,
+        )?;
+        set_update(
+            state,
+            url,
+            "installed",
+            Some(selection.version.clone()),
+            None,
+        );
+        Ok(Some(PreparedPackage {
+            selection,
+            directory,
+        }))
+    })();
+    if let Err(error) = &result {
+        let version = state
+            .target_runtimes
+            .lock()
+            .unwrap()
+            .get(url)
+            .and_then(|runtime| runtime.update.version.clone());
+        set_update(state, url, "failed", version, Some(error.clone()));
+    }
+    result
+}
+
 fn execute_operation(
     state: &ShellState,
     url: &str,
     server: &ServerConfig,
     operation: Operation,
     cancelled: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    execute_operation_with_prepared(state, url, server, operation, cancelled, None)
+}
+
+fn execute_operation_with_prepared(
+    state: &ShellState,
+    url: &str,
+    server: &ServerConfig,
+    operation: Operation,
+    cancelled: &dyn Fn() -> bool,
+    prepared: Option<PreparedPackage>,
 ) -> Result<(), String> {
     let previous = state
         .target_runtimes
@@ -1306,68 +1513,21 @@ fn execute_operation(
         cached_version(state, url)?
     };
     let base = package_directory(state, url)?;
-    let environment = state.environment.child_environment();
-    // 生产调用已经由 begin_operation 完成环境门禁；测试可直接验证通用服务操作。
-    let npm = state
-        .environment
-        .npm_command()
-        .unwrap_or_else(|_| "npm".into());
     let mut version = cached.clone();
     let mut directory = None;
     let mut startup_available = None;
     if let Some(package) = &server.package {
-        let cached_directory = cached
-            .as_deref()
-            .and_then(|version| packages::installed_directory(&base, package, version));
-        if cached_directory.is_none() {
-            version = None;
-        }
-        if matches!(
-            operation,
-            Operation::Check | Operation::Update | Operation::AutoUpdate
-        ) || cached_directory.is_none()
-            || (matches!(operation, Operation::Start)
-                && package.startup_update != UpdatePolicy::None)
-        {
-            set_update(state, url, "checking", None, None);
-            match packages::query_version_with_environment(
-                package,
-                &state.log_path,
-                cancelled,
-                &npm,
-                &environment,
-            ) {
-                Ok(latest) => {
-                    if cached_directory.is_none()
-                        || should_select_version(package, Some(&latest), cached.as_deref())
-                    {
-                        if matches!(operation, Operation::Start)
-                            && package.startup_update == UpdatePolicy::Check
-                            && cached_directory.is_some()
-                        {
-                            startup_available = Some(latest);
-                        } else {
-                            version = Some(latest);
-                        }
-                    }
-                }
-                Err(error)
-                    if matches!(operation, Operation::Start)
-                        && cached_directory.is_some()
-                        && !cancelled() =>
-                {
-                    write_shell_log(
-                        state,
-                        "version-check-fallback",
-                        &format!("url={url} error={error}"),
-                    );
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        let selected = version
-            .as_deref()
-            .ok_or_else(|| "没有可安装的版本".to_string())?;
+        let (selection, prepared_directory) = match prepared {
+            Some(prepared) => (prepared.selection, Some(prepared.directory)),
+            None => (
+                select_package(state, url, package, operation, cached.as_deref(), cancelled)?,
+                None,
+            ),
+        };
+        version = Some(selection.version.clone());
+        startup_available = selection.startup_available.clone();
+        let cached_directory = &selection.cached_directory;
+        let selected = selection.version.as_str();
         if matches!(operation, Operation::Check) {
             if cached_directory.is_none()
                 || should_select_version(package, version.as_deref(), cached.as_deref())
@@ -1391,20 +1551,16 @@ fn execute_operation(
         if cancelled() {
             return Err("操作已取消".into());
         }
-        let installation = match cached_directory {
-            Some(directory) if version == cached => Ok(directory),
-            _ => {
-                set_update(state, url, "installing", version.clone(), None);
-                packages::install_with_environment(
-                    &base,
-                    package,
-                    selected,
-                    &state.log_path,
-                    cancelled,
-                    &npm,
-                    &environment,
-                )
-            }
+        let installation = match prepared_directory {
+            Some(directory) => Ok(directory),
+            None => install_selected_package(
+                state,
+                url,
+                package,
+                &selection,
+                cached.as_deref(),
+                cancelled,
+            ),
         };
         directory = Some(match installation {
             Ok(directory) => directory,
@@ -2744,6 +2900,91 @@ child.on('exit', code => {{
     fn available_port() -> u16 {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         listener.local_addr().unwrap().port()
+    }
+
+    #[test]
+    fn prepared_package_waits_in_memory_and_starts_without_another_query() {
+        let directory = test_directory();
+        let _npm_environment = crate::test_support::NpmEnvironment::new(&directory);
+        let registry = VersionRegistry::new();
+        let port = available_port();
+        let url = format!("http://127.0.0.1:{port}/");
+        let package = PackageConfig {
+            name: PACKAGE_NAME.into(),
+            registry: Some(registry.address.clone()),
+            startup_update: UpdatePolicy::Check,
+            periodic_update: UpdatePolicy::None,
+            channel: ReleaseChannel::Stable,
+        };
+        let mut server = ServerConfig {
+            start_command: format!("node node_modules\\{PACKAGE_NAME}\\service.cjs -p {{port}}"),
+            ready_path: "/health".into(),
+            package: Some(package.clone()),
+        };
+        let state = ShellState::new(
+            DesktopConfig {
+                targets: vec![TargetConfig {
+                    url: url.clone(),
+                    server: Some(server.clone()),
+                    tunnel: None,
+                }],
+                tunnel: TunnelConnectionConfig::default(),
+            },
+            RuntimeInfo::default(),
+            directory.join("config.json"),
+            directory.join("runtime.json"),
+            directory.join("logs/desktop.log"),
+        );
+        let candidate = crate::packages::version_directory(
+            &package_directory(&state, &url).unwrap(),
+            &package,
+            "2.0.0",
+        );
+        write_runtime_package(&candidate, "2.0.0", "const http=require('node:http');http.createServer((req,res)=>res.writeHead(200).end('ready')).listen(Number(process.argv[process.argv.indexOf('-p')+1]),'127.0.0.1');");
+        let before = fs::read(directory.join("runtime.json")).ok();
+        let prepared = super::prepare_service_package(&state, &url, &server, &|| false).unwrap();
+        assert!(
+            super::cached_version(&state, &url).unwrap().is_none(),
+            "安装候选不能提前成为成功版本"
+        );
+        assert_eq!(fs::read(directory.join("runtime.json")).ok(), before);
+        let snapshot = control_state(&state).unwrap();
+        let update = snapshot.targets[0]
+            .server
+            .as_ref()
+            .unwrap()
+            .update
+            .as_ref()
+            .unwrap();
+        assert_eq!(update.status, "installed");
+        assert_eq!(update.version.as_deref(), Some("2.0.0"));
+        drop(registry);
+        server.package.as_mut().unwrap().registry = Some("http://127.0.0.1:1".into());
+        let result = super::execute_operation_with_prepared(
+            &state,
+            &url,
+            &server,
+            Operation::Start,
+            &|| false,
+            prepared,
+        );
+        let current = control_state(&state).unwrap();
+        stop_active_child(&state, &url).unwrap();
+        assert!(
+            result.is_ok(),
+            "复用候选启动不应再次访问已离线的npm源：{result:?}"
+        );
+        assert_eq!(
+            current.targets[0].server.as_ref().unwrap().status,
+            "running"
+        );
+        assert_eq!(
+            super::cached_version(&state, &url).unwrap().as_deref(),
+            Some("2.0.0")
+        );
+        let log = fs::read_to_string(directory.join("logs/desktop.log")).unwrap();
+        assert_eq!(log.matches("[package-query-start]").count(), 1);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

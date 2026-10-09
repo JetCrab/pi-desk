@@ -8,6 +8,18 @@
 
 详见[安装与启动](/docs/installation/)。
 
+## npx 或 npm 安装 Pi Desk 会自动安装 Pi 吗
+
+不会。`npx @jetcrab/pi-desk` 只下载或运行 Pi Desk，`npm install -g @jetcrab/pi-desk` 只全局安装 Pi Desk，都不会自动安装 Pi。缺少 Pi 时，启动提示会列出可直接复制的安装命令，并说明安装后如何重新启动。
+
+提示中的国内镜像供中国用户加速下载，与官方源提供相同的 npm 包。桌面客户端会提供 Pi 安装入口，需要你确认后才安装。详细命令见[通过 Node.js 安装](/docs/installation/#通过-nodejs-安装)。
+
+## 提示 Pi 版本过旧，怎么更新
+
+启动提示会保留检测到的 Pi 版本和所需版本，并给出安装或更新命令。先停止 Pi Desk，在启动服务所用的 Node/npm 环境中执行命令，再重新启动服务。具体命令和供中国用户加速下载的镜像见[更新 Pi 和 Pi Desk](/docs/installation/#更新-pi-和-pi-desk)。
+
+更新 Pi Desk、更新插件或“重载 Pi 配置”都不能代替更新 Pi 本体。如果已经更新仍提示旧版本，检查终端和桌面端是否使用了不同的 Node/npm 环境；桌面端可在安装选项中核对 Pi 的位置，再点击“重新检测”。
+
 ## 安装后为什么没有可用模型
 
 Pi Desk 不包含模型额度。按照[开始对话](/docs/quickstart/)中的步骤连接自己的服务，再为会话选择可用模型。模型列表出现一个名字，也不代表账号已经获得该模型的使用权限。

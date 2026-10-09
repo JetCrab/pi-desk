@@ -3,6 +3,7 @@ import 'server-only'
 export interface L4PiDeskPackageMaintenanceRequest {
   action: 'install' | 'update' | 'remove' | 'reinstall'
   source: string
+  registry?: string
 }
 
 type L4PiDeskRestartHandler = (

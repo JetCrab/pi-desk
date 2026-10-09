@@ -75,7 +75,7 @@ test('官网复用同一记录并同步实际安装版本与下载链接', async
     `https://github.com/fixture/project/releases/download/${record.tag}/PiDesk-Windows-x86-Setup.exe`
   )
   assert.ok(site.androidUrl.endsWith('/PiDesk-Android.apk'))
-  assert.match(site.installCommand, /@jetcrab\/pi-desk@1\.2\.0/)
+  assert.equal(site.installCommand, 'npm install -g @jetcrab/pi-desk@1.2.0')
   assert.equal(site.siteUrl, 'https://example.test')
   assert.equal(site.license.name, 'Apache-2.0')
   assert.deepEqual(await syncRelease(input), result)
@@ -84,6 +84,26 @@ test('官网复用同一记录并同步实际安装版本与下载链接', async
     /拒绝覆盖/
   )
   assert.equal(await readFile(result.changelogPath, 'utf8'), input.markdown)
+})
+
+test('官网无主包更新时也移除旧安装命令中的下载源', async (t) => {
+  const root = await directory(t)
+  await prepareSite(root)
+  const configPath = join(root, 'site-release.json')
+  const config = JSON.parse(await readFile(configPath, 'utf8'))
+  config.installCommand =
+    'npm install -g @jetcrab/pi-desk@1.1.0 --registry=https://registry.npmjs.org'
+  await writeFile(configPath, JSON.stringify(config))
+  await syncRelease({
+    websiteRoot: root,
+    record: { ...record, packages: [] },
+    repository: 'fixture/project',
+    markdown: '## fixture\n'
+  })
+  assert.equal(
+    JSON.parse(await readFile(configPath, 'utf8')).installCommand,
+    'npm install -g @jetcrab/pi-desk@1.1.0'
+  )
 })
 
 test('官网拒绝路径逃逸与未固定的主包开发版本', async (t) => {

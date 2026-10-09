@@ -150,12 +150,14 @@ export function DesktopError({
   title,
   detail,
   onCopy,
-  copied = false
+  copied = false,
+  expanded = false
 }: {
   title?: string
   detail: string
   onCopy: () => void
   copied?: boolean
+  expanded?: boolean
 }): React.JSX.Element {
   return (
     <div className="error-block" role="alert">
@@ -165,7 +167,7 @@ export function DesktopError({
           {title}
         </p>
       )}
-      <details className="disclosure">
+      <details className="disclosure" open={expanded || undefined}>
         <summary>
           <DesktopIcon name="chevron" />
           问题详情

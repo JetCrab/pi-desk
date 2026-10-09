@@ -45,6 +45,7 @@ Pi 负责代理运行，Pi Desk 提供围绕它的工作界面。核心保持轻
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent --registry=https://mirrors.cloud.tencent.com/npm # 中国用户可改用这个加速下载
 ```
 
 开始对话前，请在 Pi 中配置模型服务和账号，操作方式见 [Pi 配置指南](https://pi.dev/docs/latest)。没有配置模型时也可以打开客户端，但不能进行模型对话。
@@ -55,12 +56,14 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
 ```bash
 npx @jetcrab/pi-desk
+npx --registry=https://mirrors.cloud.tencent.com/npm @jetcrab/pi-desk # 中国用户可改用这个加速下载
 ```
 
 也可以全局安装，方便后续启动：
 
 ```bash
 npm install -g @jetcrab/pi-desk
+npm install -g @jetcrab/pi-desk --registry=https://mirrors.cloud.tencent.com/npm # 中国用户可改用这个加速下载
 pi-desk
 ```
 
@@ -116,6 +119,7 @@ Pi Desk 是具有文件访问、命令执行和插件执行能力的**单用户�
 git clone https://github.com/JetCrab/pi-desk.git
 cd pi-desk
 pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
+pnpm install --frozen-lockfile --registry=https://mirrors.cloud.tencent.com/npm # 中国用户可改用这个加速下载
 pnpm dev
 ```
 

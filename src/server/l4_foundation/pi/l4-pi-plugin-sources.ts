@@ -4,6 +4,9 @@ import { readFile, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { DefaultPackageManager, SettingsManager } from '@earendil-works/pi-coding-agent'
+import { readL4PluginDescription } from '@common/l4_foundation/plugin/l4-plugin-package'
+import type { L4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
+import { createL4PiPluginDisabledFilter } from './l4-pi-plugin-disabled'
 
 export interface L4PiPluginSource {
   source: string
@@ -13,7 +16,7 @@ export interface L4PiPluginSource {
   hasPiResources?: boolean
   piDeskRoot: string | null
   version: string | null
-  description: string | null
+  description: L4LocalizedText | null
   enabled: boolean
   error: string | null
 }
@@ -47,7 +50,7 @@ function pathKey(path: string): string {
 
 async function manifest(root: string): Promise<{
   version: string | null
-  description: string | null
+  description: L4LocalizedText | null
   hasNodeEntry: boolean
   hasNativeEntries?: boolean
   error: string | null
@@ -68,7 +71,7 @@ async function manifest(root: string): Promise<{
     }
     return {
       version: typeof data.version === 'string' ? data.version : null,
-      description: typeof data.description === 'string' ? data.description.trim() || null : null,
+      description: readL4PluginDescription(value),
       hasNodeEntry: data.piDesk?.entry !== undefined || data.piDesk?.global !== undefined,
       hasNativeEntries: Array.isArray(data.pi?.extensions) && data.pi.extensions.length > 0,
       error: null
@@ -248,6 +251,11 @@ export async function discoverL4PiPluginSources(
     item.error = metadata.error
     if (metadata.hasNodeEntry && item.enabled) item.piDeskRoot = root
     sources.set(root, item)
+  }
+
+  const disabled = await createL4PiPluginDisabledFilter(agentDir, manager, settings)
+  for (const item of sources.values()) {
+    if (await disabled(item.source, item.path, item.kind === 'package')) item.enabled = false
   }
 
   return {

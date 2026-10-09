@@ -62,7 +62,10 @@ export async function syncRelease({ websiteRoot, record, repository, markdown })
   const mainPackage = record.packages.find((item) => item.name === '@jetcrab/pi-desk')
   if (mainPackage) {
     assert.match(mainPackage.version, /^\d+\.\d+\.\d+$/u, '主包必须使用正式版本')
-    release.installCommand = `npm install -g @jetcrab/pi-desk@${mainPackage.version} --registry=https://registry.npmjs.org`
+    release.installCommand = `npm install -g @jetcrab/pi-desk@${mainPackage.version}`
+  }
+  if (release.installCommand) {
+    release.installCommand = release.installCommand.replace(/ --registry=\S+/gu, '')
   }
   for (const client of record.clients) {
     if (client.platform === 'windows') {

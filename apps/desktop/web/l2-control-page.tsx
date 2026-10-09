@@ -55,10 +55,8 @@ function TargetRow({
   const action = useDesktopAction(refresh)
   const packageAction = useDesktopAction(refresh)
   const cancellation = useDesktopAction(refresh)
-  const [copied, setCopied] = useState('')
+  const [copied, setCopied] = useState(false)
   const [copyHint, setCopyHint] = useState('')
-  const [sharingOpen, setSharingOpen] = useState(false)
-  const sharingId = useId()
   const setupId = useId()
   const { server, tunnel, url } = target
   const parsed = new URL(url)
@@ -67,9 +65,6 @@ function TargetRow({
       ? '这台电脑'
       : `这台电脑 · ${parsed.port || '80'}`
     : parsed.host
-  const accessUrl = tunnel?.publicAddr
-    ? `${parsed.protocol}//${tunnel.publicAddr}${parsed.pathname}${parsed.search}${parsed.hash}`
-    : ''
   const working = server?.status === 'starting'
   const updating =
     packageAction.busy ||
@@ -88,11 +83,11 @@ function TargetRow({
     server?.update?.error ||
     ''
   const status = checking
-    ? '正在准备…'
+    ? '正在检查组件…'
     : environmentBusy
       ? '正在准备组件'
       : server?.needsSetup
-        ? '首次使用，完成准备即可打开'
+        ? '首次使用，需要准备以下组件'
         : server?.status === 'running'
           ? '已就绪'
           : server?.status === 'starting'
@@ -105,22 +100,13 @@ function TargetRow({
       command === 'check-update' || command === 'update' ? packageAction : action
     void commandAction.run(() => runDesktopAction(command, url))
   }
-  const copyError = async (detail: string = failure): Promise<void> => {
+  const copyError = async (): Promise<void> => {
     try {
-      await copyDesktopText(`${title}\n${url}\n${detail}`)
-      setCopied('error')
+      await copyDesktopText(`${title}\n${url}\n${failure}`)
+      setCopied(true)
       setCopyHint('')
     } catch {
       setCopyHint('当前无法自动复制，请选中问题详情中的文字复制。')
-    }
-  }
-  const copyAddress = async (): Promise<void> => {
-    try {
-      await copyDesktopText(accessUrl)
-      setCopied(accessUrl)
-      setCopyHint('')
-    } catch {
-      setCopyHint('当前无法自动复制，请选中地址后复制。')
     }
   }
   const stop = (): void => {
@@ -144,6 +130,7 @@ function TargetRow({
     <article
       className={server ? 'target local-target' : 'target remote-target'}
       aria-label={title}
+      data-testid={url}
       data-preparing={preparing}
     >
       {editor || (
@@ -174,7 +161,7 @@ function TargetRow({
             </button>
           )}
           <DesktopMenu label={`${title}的更多操作`}>
-            {server && (
+            {server ? (
               <>
                 <button
                   type="button"
@@ -182,7 +169,7 @@ function TargetRow({
                   onClick={() => navigate(`#/settings/target?url=${encodeURIComponent(url)}`)}
                 >
                   <DesktopIcon name="settings" />
-                  设置
+                  本机设置
                 </button>
                 {server.status === 'running' && (
                   <button type="button" disabled={locked} onClick={restart}>
@@ -196,42 +183,8 @@ function TargetRow({
                     停止服务
                   </button>
                 )}
-                {server.update && (
-                  <>
-                    <button
-                      type="button"
-                      disabled={locked || server.needsSetup}
-                      onClick={() => run('check-update')}
-                    >
-                      <DesktopIcon name="download" />
-                      检查更新
-                    </button>
-                    <button
-                      type="button"
-                      disabled={locked || server.needsSetup}
-                      onClick={() => run('update')}
-                    >
-                      更新到最新
-                    </button>
-                    {updating && !working && server.update.status !== 'switching' && (
-                      <button
-                        type="button"
-                        disabled={cancellation.busy}
-                        onClick={() =>
-                          void cancellation.run(() => runDesktopAction('cancel-update', url))
-                        }
-                      >
-                        {cancellation.busy ? '正在取消…' : '取消更新'}
-                      </button>
-                    )}
-                  </>
-                )}
-                <button type="button" disabled={locked} onClick={() => onSetup(url)}>
-                  安装选项
-                </button>
               </>
-            )}
-            {!server && (
+            ) : (
               <button type="button" disabled={locked} onClick={() => onEdit(url)}>
                 编辑地址
               </button>
@@ -281,24 +234,45 @@ function TargetRow({
           )}
         </div>
       )}
-      {server?.update?.status === 'available' && (
-        <div className="update-state" role="status">
-          <span>
-            有可用更新
-            {server.update.version ? ` · ${server.update.version}` : ''}
-          </span>
-          <button type="button" disabled={locked} onClick={() => run('update')}>
-            安装更新
-          </button>
-        </div>
-      )}
+      {!preparing &&
+        server?.update &&
+        (updating || (server.update.status === 'available' && !optionsOpen)) && (
+          <div className="update-state" role="status">
+            <span>
+              {updating ? <DesktopIcon name="loader" spinning /> : null}
+              {server.update.status === 'installing'
+                ? '正在安装更新'
+                : server.update.status === 'switching'
+                  ? '正在切换版本'
+                  : updating
+                    ? '正在检查更新'
+                    : '有可用更新'}
+              {server.update.version ? ` · ${server.update.version}` : ''}
+            </span>
+            {server.update.status === 'available' && (
+              <button type="button" disabled={locked} onClick={() => run('update')}>
+                安装更新
+              </button>
+            )}
+            {updating && !working && server.update.status !== 'switching' && (
+              <button
+                type="button"
+                disabled={cancellation.busy}
+                onClick={() => void cancellation.run(() => runDesktopAction('cancel-update', url))}
+              >
+                {cancellation.busy ? '正在取消…' : '取消更新'}
+              </button>
+            )}
+          </div>
+        )}
       {failure && !preparing && (
         <>
           <DesktopError
             title={server?.status === 'failed' ? '暂时无法打开 Pi Desk' : '操作未完成'}
             detail={failure}
             onCopy={() => void copyError()}
-            copied={copied === 'error'}
+            copied={copied}
+            expanded
           />
           {copyHint && (
             <p className="muted" role="status">
@@ -310,12 +284,10 @@ function TargetRow({
       {(server || tunnel) && (
         <div className="target-tools">
           <button
-            className="quiet"
+            className="quiet forward"
             type="button"
             aria-label="在其他设备上使用"
-            aria-expanded={sharingOpen}
-            aria-controls={sharingId}
-            onClick={() => setSharingOpen(!sharingOpen)}
+            onClick={() => navigate(`#/access?url=${encodeURIComponent(url)}`)}
           >
             <DesktopIcon name="globe" />
             在其他设备上使用
@@ -325,7 +297,7 @@ function TargetRow({
             {tunnel?.status === 'failed' && (
               <span className="connection-badge connection-problem">连接失败</span>
             )}
-            <DesktopIcon name="chevron" />
+            <DesktopIcon name="arrow" />
           </button>
           {server && !preparing && (
             <button
@@ -342,116 +314,34 @@ function TargetRow({
           )}
         </div>
       )}
-      {(server || tunnel) && (
-        <DesktopExpansion id={sharingId} open={sharingOpen}>
-          <section className="target-panel" aria-label="其他设备访问">
-            <div className="panel-heading">
-              <h3>在其他设备上使用</h3>
-              <button className="quiet" type="button" onClick={() => navigate('#/settings/tunnel')}>
-                <DesktopIcon name="settings" />
-                访问设置
-              </button>
-            </div>
-            {tunnel ? (
-              <>
-                <p className="muted">
-                  {tunnel.status === 'listening'
-                    ? '在手机或其他电脑的浏览器中打开此地址。'
-                    : tunnel.status === 'stopped'
-                      ? '开启后，可通过访问地址连接这台电脑。'
-                      : tunnel.status === 'failed'
-                        ? '连接未成功，请重试或检查访问设置。'
-                        : tunnel.status === 'stopping'
-                          ? '正在关闭访问…'
-                          : '正在连接…'}
-                </p>
-                {tunnel.status === 'listening' && accessUrl && (
-                  <div className="access-address">
-                    <p className="path-text">{accessUrl}</p>
-                    <button type="button" onClick={() => void copyAddress()}>
-                      <DesktopIcon name="copy" />
-                      {copied === accessUrl ? '已复制' : '复制地址'}
-                    </button>
-                  </div>
-                )}
-                {tunnel.status === 'failed' && tunnel.detail && (
-                  <DesktopError
-                    detail={tunnel.detail}
-                    onCopy={() => void copyError(tunnel.detail)}
-                    copied={copied === 'error'}
-                  />
-                )}
-                <div className="actions">
-                  <button
-                    type="button"
-                    disabled={locked || tunnel.status === 'stopping'}
-                    onClick={() =>
-                      run(
-                        tunnel.status === 'stopped' || tunnel.status === 'failed'
-                          ? 'start-tunnel'
-                          : 'stop-tunnel'
-                      )
-                    }
-                  >
-                    {tunnel.status === 'stopped' || tunnel.status === 'failed'
-                      ? '开启访问'
-                      : '关闭访问'}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="actions">
-                <button
-                  type="button"
-                  onClick={() =>
-                    navigate(`#/settings/target?url=${encodeURIComponent(url)}&advanced=1`)
-                  }
-                >
-                  设置访问方式
-                  <DesktopIcon name="arrow" />
-                </button>
-              </div>
-            )}
-            {copyHint && (
-              <p className="muted" role="status">
-                {copyHint}
-              </p>
-            )}
-          </section>
-        </DesktopExpansion>
-      )}
       {server && (
         <DesktopExpansion id={setupId} open={preparing || optionsOpen}>
           <div className="target-panel">
             {optionsOpen && !preparing && (
               <div className="panel-heading">
-                <h3>安装与版本</h3>
-                <span className="muted">{server.version ? `Pi Desk ${server.version}` : ''}</span>
+                <div>
+                  <h3>安装与版本</h3>
+                  <p className="muted">
+                    {server.version ? `Pi Desk ${server.version}` : '尚未安装 Pi Desk'}
+                  </p>
+                </div>
+                {server.update && (
+                  <button
+                    type="button"
+                    disabled={locked || server.needsSetup}
+                    onClick={() =>
+                      run(server.update?.status === 'available' ? 'update' : 'check-update')
+                    }
+                  >
+                    <DesktopIcon name="download" />
+                    {server.update.status === 'available'
+                      ? `安装更新${server.update.version ? ` ${server.update.version}` : ''}`
+                      : '检查更新'}
+                  </button>
+                )}
               </div>
             )}
             {setupPanel}
-            {optionsOpen && !preparing && (
-              <details className="disclosure">
-                <summary>
-                  <DesktopIcon name="chevron" />
-                  连接详情
-                </summary>
-                <div className="details-body">
-                  <p className="path-text">{url}</p>
-                  <p className="muted">
-                    {server.autoStart ? '下次打开桌面版时自动启动' : '已关闭自动启动'}
-                  </p>
-                  <button
-                    className="quiet"
-                    type="button"
-                    onClick={() => navigate(`#/settings/target?url=${encodeURIComponent(url)}`)}
-                  >
-                    <DesktopIcon name="settings" />
-                    连接设置
-                  </button>
-                </div>
-              </details>
-            )}
           </div>
         </DesktopExpansion>
       )}
@@ -497,7 +387,7 @@ export function ControlPage({
   onDirty
 }: PageProps): React.JSX.Element {
   const [editingUrl, setEditingUrl] = useState<string | null | undefined>(undefined)
-  const setup = useEnvironmentSetup(state, refresh, navigate)
+  const setup = useEnvironmentSetup(state, refresh)
   const added = useDesktopAction(refresh)
   const local = state?.targets.filter((target) => target.server) ?? []
   const remote = state?.targets.filter((target) => !target.server) ?? []
@@ -526,36 +416,7 @@ export function ControlPage({
     ) : null
   return (
     <main className="desktop-control">
-      <DesktopHeader>
-        <DesktopMenu
-          label="桌面设置"
-          trigger={
-            <>
-              <DesktopIcon name="settings" />
-              设置
-            </>
-          }
-        >
-          {local.map((target) => (
-            <button
-              key={target.url}
-              type="button"
-              onClick={() => navigate(`#/settings/target?url=${encodeURIComponent(target.url)}`)}
-            >
-              <DesktopIcon name="monitor" />
-              {local.length === 1 ? '这台电脑' : new URL(target.url).host}
-            </button>
-          ))}
-          <button type="button" onClick={() => navigate('#/settings/tunnel')}>
-            其他设备访问
-          </button>
-          {local[0] && (
-            <button type="button" onClick={() => setup.showOptions(local[0].url)}>
-              安装选项
-            </button>
-          )}
-        </DesktopMenu>
-      </DesktopHeader>
+      <DesktopHeader />
       {readError && (
         <div className="page-error" role="alert">
           <p>暂时无法读取状态：{readError}</p>
@@ -597,6 +458,9 @@ export function ControlPage({
               {local.map((target) => {
                 const preparing = Boolean(
                   setup.activeUrl === target.url ||
+                  (target.server?.status === 'starting' &&
+                    !target.server.version &&
+                    Boolean(target.server.update)) ||
                   (state.environment.status !== 'checking' && target.server?.needsSetup) ||
                   (['installing', 'failed'].includes(state.environment.status) &&
                     target.url === (setup.activeUrl ?? local[0]?.url))
@@ -634,9 +498,9 @@ export function ControlPage({
             </div>
           )}
           {(local.length > 0 || remote.length > 0 || editingUrl === null) && (
-            <section className="remote-targets" aria-label="其他电脑">
+            <section className="remote-targets" aria-label="连接另一台电脑">
               <div className="section-heading">
-                <h2 className="section-title">其他电脑</h2>
+                <h2 className="section-title">连接另一台电脑</h2>
                 <button type="button" className="quiet" onClick={() => editAddress(null)}>
                   <DesktopIcon name="plus" />
                   {remote.length ? '添加连接' : '连接其他电脑'}

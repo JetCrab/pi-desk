@@ -62,7 +62,14 @@ export async function runL4PiPackageMaintenance(input: {
   )
 
   const { stdout, stderr, code } = await runL4PiRunnerProcess({
-    args: ['--import', tsxImport, runnerPath, input.maintenance.action, input.maintenance.source],
+    args: [
+      '--import',
+      tsxImport,
+      runnerPath,
+      input.maintenance.action,
+      input.maintenance.source,
+      ...(input.maintenance.registry ? [input.maintenance.registry] : [])
+    ],
     agentDir: input.agentDir,
     env: { PI_DESK_PACKAGE_MAINTENANCE_CWD: input.cwd },
     maxOutputBytes: L4_PI_PACKAGE_MAINTENANCE_MAX_OUTPUT_BYTES,

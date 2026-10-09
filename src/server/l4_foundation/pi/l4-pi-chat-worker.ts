@@ -964,6 +964,10 @@ export class L4PiChatWorker {
     this.emitRuntime()
   }
 
+  get isInitialized(): boolean {
+    return this.session !== null
+  }
+
   async reload(mode?: 'normal' | 'basic'): Promise<void> {
     const target = mode ?? (isL4PiDeskSafeMode() ? 'basic' : 'normal')
     if (isL4PiDeskSafeMode() && target === 'normal') {

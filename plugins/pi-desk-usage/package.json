@@ -26,13 +26,19 @@
     "README.md"
   ],
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi-desk-plugin"
   ],
   "pi": {
     "extensions": []
   },
   "piDesk": {
-    "entry": "./dist/pi-desk.js"
+    "entry": "./dist/pi-desk.js",
+    "i18n": {
+      "zh-CN": {
+        "description": "汇总近期模型调用、Token、缓存和费用用量，在看板中查看使用趋势。"
+      }
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node -e \"const fs=require('node:fs');fs.rmSync('dist/browser',{recursive:true,force:true});for(const name of fs.readdirSync('dist'))if(name.startsWith('browser')&&['.js','.d.ts','.js.map'].some(ext=>name.endsWith(ext)))fs.rmSync('dist/'+name,{force:true})\" && esbuild src/browser-entry.ts --bundle --splitting --format=esm --platform=browser --target=es2022 --minify --define:process.env.NODE_ENV='production' --external:react --external:react/jsx-runtime --external:react/jsx-dev-runtime --external:react-dom --external:react-dom/client --external:@jetcrab/pi-desk-sdk/react/base --external:@jetcrab/pi-desk-sdk/react/markdown --outdir=dist/browser --entry-names=entry --chunk-names=chunks/[name]-[hash]",

@@ -45,6 +45,7 @@ If you do not already have a compatible Pi installation:
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent --registry=https://mirrors.cloud.tencent.com/npm # Users in China can use this for faster downloads
 ```
 
 Configure your model provider and account in Pi before starting a conversation. See [Pi's setup instructions](https://pi.dev/docs/latest). You can open the client without a configured model, but model conversations require one.
@@ -55,12 +56,14 @@ Run directly with npx:
 
 ```bash
 npx @jetcrab/pi-desk
+npx --registry=https://mirrors.cloud.tencent.com/npm @jetcrab/pi-desk # Users in China can use this for faster downloads
 ```
 
 Or install globally for repeated use:
 
 ```bash
 npm install -g @jetcrab/pi-desk
+npm install -g @jetcrab/pi-desk --registry=https://mirrors.cloud.tencent.com/npm # Users in China can use this for faster downloads
 pi-desk
 ```
 
@@ -116,6 +119,7 @@ Install pnpm, then run:
 git clone https://github.com/JetCrab/pi-desk.git
 cd pi-desk
 pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
+pnpm install --frozen-lockfile --registry=https://mirrors.cloud.tencent.com/npm # Users in China can use this for faster downloads
 pnpm dev
 ```
 

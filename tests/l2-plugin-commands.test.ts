@@ -84,7 +84,7 @@ class ManagementFixture {
     return this.state
   }
   async get(source: string) {
-    return { source, tools: [], skills: [], prompts: [] }
+    return { source, readme: null, tools: [], skills: [], prompts: [] }
   }
   async apply(sources?: readonly string[]): Promise<L2PluginManagementSnapshot> {
     this.calls.push(['apply', sources])

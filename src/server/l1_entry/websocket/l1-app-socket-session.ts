@@ -19,6 +19,7 @@ import { L1AppRuntimeSocketController } from './l1-app-runtime-socket-controller
 import { L1ChatSocketController } from './l1-chat-socket-controller'
 import { L1PluginLogSocketController } from './l1-plugin-log-socket-controller'
 import { L1NativeUiSocketController } from './l1-native-ui-socket-controller'
+import { L1ModelAuthSocketController } from './l1-model-auth-socket-controller'
 import { L1PluginSocketController } from './l1-plugin-socket-controller'
 import { L1TaskCenterSocketController } from './l1-task-center-socket-controller'
 import { L1TerminalSocketController } from './l1-terminal-socket-controller'
@@ -33,6 +34,7 @@ export class L1AppSocketSession {
   private readonly chat: L1ChatSocketController
   private readonly plugins: L1PluginSocketController
   private readonly nativeUi: L1NativeUiSocketController
+  private readonly modelAuth: L1ModelAuthSocketController
   private readonly pluginLogs: L1PluginLogSocketController
   private readonly taskCenter: L1TaskCenterSocketController
   private readonly terminals: L1TerminalSocketController
@@ -56,6 +58,7 @@ export class L1AppSocketSession {
       this.workSessions.isReady()
     )
     this.nativeUi = new L1NativeUiSocketController(this.connection, manage)
+    this.modelAuth = new L1ModelAuthSocketController(this.connection)
     this.pluginLogs = new L1PluginLogSocketController(this.connection)
     this.taskCenter = new L1TaskCenterSocketController(this.connection, manage, taskCenter)
     this.terminals = new L1TerminalSocketController(this.connection, terminals, () =>
@@ -66,6 +69,7 @@ export class L1AppSocketSession {
     this.registerRoutes(this.chat.routes)
     this.registerRoutes(this.plugins.routes)
     this.registerRoutes(this.nativeUi.routes)
+    this.registerRoutes(this.modelAuth.routes)
     this.registerRoutes(this.pluginLogs.routes)
     this.registerRoutes(this.taskCenter.routes)
     this.registerRoutes(this.terminals.routes)
@@ -148,6 +152,7 @@ export class L1AppSocketSession {
   private disposeControllers(): void {
     this.plugins.dispose()
     this.nativeUi.dispose()
+    this.modelAuth.dispose()
     this.pluginLogs.dispose()
     this.taskCenter.dispose()
     this.terminals.dispose()

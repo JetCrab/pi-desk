@@ -2,8 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
   L2PluginManagementDetail,
+  L2PluginManagementItem,
+  L2PluginManagementInstallRequest,
   L2PluginManagementSnapshot
 } from '@common/l2_biz/plugin/l2-plugin-management-contract'
+import type { L2PluginCatalogItem } from '@common/l2_biz/plugin/l2-plugin-catalog-contract'
 import {
   useL4PluginHost,
   useL4PluginRegistry
@@ -11,42 +14,38 @@ import {
 import type { L2PluginManagementControlAction } from './l2-plugin-management-controls'
 import type { L2PluginManagementBiz } from './l2-plugin-management-biz'
 
-type PluginManagementAction =
-  | { kind: 'add'; source: string }
+export type PluginManagementAction =
+  | { kind: 'add'; input: L2PluginManagementInstallRequest; package?: L2PluginCatalogItem }
   | { kind: 'update'; source: string }
   | { kind: 'del'; source: string }
+  | { kind: 'enable'; source: string }
+  | { kind: 'disable'; source: string }
   | { kind: 'reload'; mode?: 'normal' | 'basic' }
 
 interface PluginManagementOptions {
-  snapshot: L2PluginManagementSnapshot | null
   biz: L2PluginManagementBiz
   onSnapshot: (snapshot: L2PluginManagementSnapshot) => void
   onRestartScheduled: () => void
 }
 
-interface PluginManagementState {
-  source: string
-  setSource: (source: string) => void
-  loading: boolean
-  requests: ReadonlySet<string>
-  operation: string | null
-  confirmation: PluginManagementAction | null
-  setConfirmation: (action: PluginManagementAction | null) => void
-  error: string | null
-  detailSource: string | null
-  detail: L2PluginManagementDetail | null
-  detailLoading: boolean
-  detailError: string | null
-  selectedPending: boolean
-  pluginHost: ReturnType<typeof useL4PluginHost>
-  refresh: () => Promise<void>
-  execute: (action: PluginManagementAction) => Promise<void>
-  applyChanges: (sources?: string[]) => Promise<void>
-  refreshEntries: () => Promise<void>
-  loadDetail: (source: string) => Promise<void>
-  openDetail: (source: string) => void
-  closeDetail: () => void
-  handleControlAction: (action: L2PluginManagementControlAction) => void
+export function pluginNpmSpec(source: string): { name: string; version?: string } | null {
+  const spec = source.startsWith('npm:') ? source.slice(4) : source
+  const match = /^((?:@[a-z0-9_.-]+\/)?[a-z0-9][a-z0-9_.-]*)(?:@([^\s/]+))?$/i.exec(spec)
+  if (!match) return null
+  return { name: match[1]!, ...(match[2] ? { version: match[2] } : {}) }
+}
+
+export function pluginDisplayName(plugin: L2PluginManagementItem): string {
+  if (plugin.source.startsWith('npm:')) return pluginNpmSpec(plugin.source)?.name ?? plugin.source
+  return (
+    plugin.pluginName ??
+    (plugin.kind === 'extension' ? plugin.source.replaceAll('\\', '/').split('/').at(-1) : null) ??
+    plugin.source
+  )
+}
+
+export function pluginRequestKey(source: string): string {
+  return `source:${source.startsWith('npm:') ? (pluginNpmSpec(source)?.name ?? source) : source}`
 }
 
 export function pluginManagementActionLabel(action: PluginManagementAction): string {
@@ -57,13 +56,41 @@ export function pluginManagementActionLabel(action: PluginManagementAction): str
       return 'actionUpdate'
     case 'del':
       return 'actionDelete'
+    case 'enable':
+      return 'enable'
+    case 'disable':
+      return 'disable'
     case 'reload':
       return action.mode === 'normal' ? 'restartNormal' : 'actionReload'
   }
 }
 
+interface PluginManagementState {
+  loading: boolean
+  requests: ReadonlySet<string>
+  confirmation: PluginManagementAction | null
+  setConfirmation: (action: PluginManagementAction | null) => void
+  errors: Record<string, string>
+  detailSource: string | null
+  detail: L2PluginManagementDetail | null
+  detailLoading: boolean
+  detailError: string | null
+  pluginHost: ReturnType<typeof useL4PluginHost>
+  refresh: () => Promise<void>
+  execute: (action: PluginManagementAction) => Promise<void>
+  requestInstall: (input: L2PluginManagementInstallRequest, item?: L2PluginCatalogItem) => void
+  applyChanges: (sources?: string[]) => Promise<void>
+  loadDetail: (source: string) => Promise<void>
+  openDetail: (source: string) => void
+  closeDetail: () => void
+  handleControlAction: (
+    plugin: L2PluginManagementItem,
+    action: L2PluginManagementControlAction
+  ) => void
+  refreshEntries: () => Promise<void>
+}
+
 export function useL2PluginManagement({
-  snapshot,
   biz,
   onSnapshot,
   onRestartScheduled
@@ -71,51 +98,64 @@ export function useL2PluginManagement({
   const { t } = useTranslation('pluginManagement')
   const pluginHost = useL4PluginHost()
   useL4PluginRegistry()
-  const [source, setSource] = useState('')
   const [loading, setLoading] = useState(false)
   const [requests, setRequests] = useState<ReadonlySet<string>>(() => new Set())
-  const operation = requests.has('reload') ? t('actionReload') : null
-  const setRequest = (key: string, pending: boolean): void => {
-    setRequests((current) => {
-      const next = new Set(current)
-      if (pending) next.add(key)
-      else next.delete(key)
-      return next
-    })
-  }
+  const inFlight = useRef(new Set<string>())
   const [confirmation, setConfirmation] = useState<PluginManagementAction | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [errors, setErrors] = useState<Record<string, string>>({})
   const [detailSource, setDetailSource] = useState<string | null>(null)
   const [detail, setDetail] = useState<L2PluginManagementDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
-  const detailRequestRef = useRef(0)
+  const detailRequest = useRef(0)
+  const listRequest = useRef(0)
+  const mounted = useRef(true)
 
+  const setRequest = (key: string, pending: boolean): void => {
+    if (pending) inFlight.current.add(key)
+    else inFlight.current.delete(key)
+    if (mounted.current) setRequests(new Set(inFlight.current))
+  }
+  const setError = (key: string, message: string | null): void => {
+    if (!mounted.current) return
+    setErrors((current) => {
+      const next = { ...current }
+      if (message) next[key] = message
+      else delete next[key]
+      return next
+    })
+  }
+  const readSnapshot = async (checkUpdates = false): Promise<void> => {
+    const request = ++listRequest.current
+    const next = await biz.list(checkUpdates)
+    if (mounted.current && request === listRequest.current) onSnapshot(next)
+  }
   const refresh = async (): Promise<void> => {
     setLoading(true)
-    setError(null)
+    setError('list', null)
     try {
-      onSnapshot(await biz.list(true))
+      await readSnapshot(true)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t('updateCheckFailed'))
+      setError('list', cause instanceof Error ? cause.message : t('updateCheckFailed'))
     } finally {
-      setLoading(false)
+      if (mounted.current) setLoading(false)
     }
   }
-
   useEffect(() => {
+    mounted.current = true
     let active = true
+    const request = ++listRequest.current
     queueMicrotask(() => {
       if (!active) return
       setLoading(true)
-      setError(null)
       void biz
         .list(false)
         .then((next) => {
-          if (active) onSnapshot(next)
+          if (active && request === listRequest.current) onSnapshot(next)
         })
         .catch((cause: unknown) => {
-          if (active) setError(cause instanceof Error ? cause.message : t('updateCheckFailed'))
+          if (active)
+            setError('list', cause instanceof Error ? cause.message : t('updateCheckFailed'))
         })
         .finally(() => {
           if (active) setLoading(false)
@@ -123,173 +163,168 @@ export function useL2PluginManagement({
     })
     return () => {
       active = false
-      detailRequestRef.current += 1
+      mounted.current = false
+      detailRequest.current += 1
+      listRequest.current += 1
     }
   }, [biz, onSnapshot, t])
 
   const execute = async (action: PluginManagementAction): Promise<void> => {
-    const label = t(pluginManagementActionLabel(action))
     const key =
-      action.kind === 'reload' || action.kind === 'add' ? action.kind : `source:${action.source}`
-    if (requests.has(key)) return
+      action.kind === 'reload'
+        ? 'reload'
+        : pluginRequestKey(action.kind === 'add' ? action.input.source : action.source)
+    if (inFlight.current.has(key)) return
     setRequest(key, true)
     setConfirmation(null)
-    setError(null)
+    setError(key, null)
     try {
       const next =
         action.kind === 'add'
-          ? await biz.add(action.source)
+          ? await biz.add(action.input)
           : action.kind === 'update'
             ? await biz.update(action.source)
             : action.kind === 'del'
               ? await biz.del(action.source)
-              : await biz.reload(action.mode)
+              : action.kind === 'enable' || action.kind === 'disable'
+                ? await biz.setEnabled(action.source, action.kind === 'enable')
+                : await biz.reload(action.mode)
+      if (!mounted.current) return
+      listRequest.current += 1
       onSnapshot(next)
-      if (action.kind === 'add') setSource('')
-      if (action.kind === 'reload') {
-        onRestartScheduled()
-      } else {
-        onSnapshot(await biz.list(false))
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t('actionFailed', { action: label }))
-    } finally {
-      setRequest(key, false)
-    }
-  }
-
-  const applyChanges = async (sources?: string[]): Promise<void> => {
-    const key = sources ? `source:${sources[0]}` : 'apply'
-    if (requests.has(key)) return
-    setRequest(key, true)
-    setError(null)
-    try {
-      onSnapshot(await biz.apply(sources))
+      if (action.kind === 'reload') onRestartScheduled()
+      else await readSnapshot()
     } catch (cause) {
       setError(
-        cause instanceof Error ? cause.message : t('actionFailed', { action: t('applyChanges') })
+        key,
+        cause instanceof Error
+          ? cause.message
+          : t('actionFailed', { action: t(pluginManagementActionLabel(action)) })
       )
     } finally {
       setRequest(key, false)
     }
   }
-
-  const runBrowserRequest = async (
-    key: string,
-    fallback: string,
-    action: () => Promise<unknown>
-  ): Promise<void> => {
+  const requestInstall = (
+    input: L2PluginManagementInstallRequest,
+    item?: L2PluginCatalogItem
+  ): void => {
+    const action: PluginManagementAction = { kind: 'add', input, package: item }
+    if (item?.official === true) void execute(action)
+    else setConfirmation(action)
+  }
+  const applyChanges = async (sources?: string[]): Promise<void> => {
+    const key = sources?.[0] ? pluginRequestKey(sources[0]) : 'apply'
+    if (inFlight.current.has(key)) return
     setRequest(key, true)
-    setError(null)
+    setError(key, null)
     try {
-      await action()
+      const next = await biz.apply(sources)
+      if (mounted.current) {
+        listRequest.current += 1
+        onSnapshot(next)
+        await readSnapshot()
+      }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : fallback)
+      setError(
+        key,
+        cause instanceof Error ? cause.message : t('actionFailed', { action: t('reloadOne') })
+      )
     } finally {
       setRequest(key, false)
     }
   }
-
-  const retryBrowserEntry = (pluginName: string): Promise<void> =>
-    runBrowserRequest(`entry:${pluginName}`, t('retryFailed'), () =>
-      pluginHost.retryEntry(pluginName)
-    )
-
-  const refreshEntries = (): Promise<void> =>
-    runBrowserRequest('entries', t('refreshEntriesFailed'), () => pluginHost.refreshEntries())
-
-  const loadDetail = async (pluginSource: string): Promise<void> => {
-    const request = ++detailRequestRef.current
+  const runBrowserRequest = async (key: string, action: () => Promise<unknown>): Promise<void> => {
+    if (inFlight.current.has(key)) return
+    setRequest(key, true)
+    setError(key, null)
+    try {
+      await action()
+    } catch (cause) {
+      setError(key, cause instanceof Error ? cause.message : t('retryFailed'))
+    } finally {
+      setRequest(key, false)
+    }
+  }
+  const loadDetail = async (source: string): Promise<void> => {
+    const request = ++detailRequest.current
     setDetailLoading(true)
     setDetailError(null)
     try {
-      const next = await biz.get(pluginSource)
-      if (detailRequestRef.current === request) setDetail(next)
+      const next = await biz.get(source)
+      if (mounted.current && request === detailRequest.current) setDetail(next)
     } catch (cause) {
-      if (detailRequestRef.current === request) {
+      if (mounted.current && request === detailRequest.current)
         setDetailError(cause instanceof Error ? cause.message : t('detailFailed'))
-      }
     } finally {
-      if (detailRequestRef.current === request) setDetailLoading(false)
+      if (mounted.current && request === detailRequest.current) setDetailLoading(false)
     }
   }
-
-  const resetDetail = (pluginSource: string | null): void => {
-    detailRequestRef.current += 1
-    setDetailSource(pluginSource)
+  const closeDetail = (): void => {
+    detailRequest.current += 1
+    setDetailSource(null)
     setDetail(null)
     setDetailError(null)
     setDetailLoading(false)
   }
-
-  const openDetail = (pluginSource: string): void => {
-    resetDetail(pluginSource)
-    const plugin = snapshot?.plugins.find((item) => item.source === pluginSource)
-    if (
-      plugin &&
-      (plugin.capabilities.tools.length > 0 ||
-        plugin.capabilities.skills.length > 0 ||
-        plugin.capabilities.prompts.length > 0)
-    ) {
-      void loadDetail(pluginSource)
-    }
+  const openDetail = (source: string): void => {
+    setDetailSource(source)
+    setDetail(null)
+    void loadDetail(source)
   }
-
-  const closeDetail = (): void => resetDetail(null)
-  const selectedPlugin = detailSource
-    ? (snapshot?.plugins.find((plugin) => plugin.source === detailSource) ?? null)
-    : null
-  const selectedPending = Boolean(
-    selectedPlugin &&
-    (requests.has(`source:${selectedPlugin.source}`) ||
-      (selectedPlugin.operation && selectedPlugin.operation.phase !== 'failed'))
-  )
-  const handleControlAction = (action: L2PluginManagementControlAction): void => {
-    if (!selectedPlugin) return
+  const handleControlAction = (
+    plugin: L2PluginManagementItem,
+    action: L2PluginManagementControlAction
+  ): void => {
     switch (action) {
       case 'reload':
-        void applyChanges([selectedPlugin.source])
+        void applyChanges([plugin.source])
         break
       case 'update':
-        setConfirmation({ kind: 'update', source: selectedPlugin.source })
+        void execute({ kind: 'update', source: plugin.source })
         break
       case 'remove':
-        setConfirmation({ kind: 'del', source: selectedPlugin.source })
+        setConfirmation({ kind: 'del', source: plugin.source })
+        break
+      case 'enable':
+      case 'disable':
+        void execute({ kind: action, source: plugin.source })
         break
       case 'retry-browser':
-        if (selectedPlugin.pluginName) void retryBrowserEntry(selectedPlugin.pluginName)
+        if (plugin.pluginName)
+          void runBrowserRequest(`entry:${plugin.pluginName}`, () =>
+            pluginHost.retryEntry(plugin.pluginName!)
+          )
         break
       case 'retry': {
-        const retryAction = selectedPlugin.operation?.action
-        if (retryAction === 'apply') void applyChanges([selectedPlugin.source])
-        else if (retryAction) void execute({ kind: retryAction, source: selectedPlugin.source })
+        const action = plugin.operation?.action
+        if (action === 'apply') void applyChanges([plugin.source])
+        else if (action === 'add') requestInstall({ source: plugin.source })
+        else if (action) void execute({ kind: action, source: plugin.source })
         break
       }
     }
   }
-
   return {
-    source,
-    setSource,
     loading,
     requests,
-    operation,
     confirmation,
     setConfirmation,
-    error,
+    errors,
     detailSource,
     detail,
     detailLoading,
     detailError,
-    selectedPending,
     pluginHost,
     refresh,
     execute,
+    requestInstall,
     applyChanges,
-    refreshEntries,
     loadDetail,
     openDetail,
     closeDetail,
-    handleControlAction
+    handleControlAction,
+    refreshEntries: (): Promise<void> =>
+      runBrowserRequest('entries', () => pluginHost.refreshEntries())
   }
 }

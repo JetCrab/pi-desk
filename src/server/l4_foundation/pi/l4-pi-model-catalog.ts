@@ -9,6 +9,7 @@ import {
   resolveModelScopeWithDiagnostics,
   type AgentSession
 } from '@earendil-works/pi-coding-agent'
+import { filterL4CollectedModels } from '@server/l4_foundation/model-settings/l4-model-settings'
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
 import { getSupportedThinkingLevels, type Api, type Model } from '@earendil-works/pi-ai'
 
@@ -104,7 +105,9 @@ export async function readL4PiModelCatalog(
     : [...(await runtime.getAvailable())]
 
   const uniqueModels = new Map<string, Model<Api>>()
-  for (const model of models) uniqueModels.set(modelKey(model.provider, model.id), model)
+  for (const model of filterL4CollectedModels(models, runtime)) {
+    uniqueModels.set(modelKey(model.provider, model.id), model)
+  }
   const options = [...uniqueModels.values()].map((model) => toOption(model, runtime))
   const optionsByKey = new Map(
     options.map((option) => [modelKey(option.provider, option.modelId), option])

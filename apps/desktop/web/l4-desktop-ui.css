@@ -190,7 +190,7 @@ textarea:disabled {
   font-size: 1.125rem;
 }
 .control-content {
-  padding: clamp(24px, 7vh, 56px) 0 0;
+  padding: 24px 0 0;
 }
 .local-targets {
   display: grid;
@@ -344,6 +344,9 @@ textarea:disabled {
 }
 .access-address > button {
   flex: none;
+}
+.local-target[data-preparing='true'] > .target-heading {
+  grid-column: 1 / -1;
 }
 .local-target[data-preparing='true'] > .desktop-expansion:last-child {
   grid-row: 2;
@@ -573,9 +576,6 @@ textarea:disabled {
 .environment-panel {
   min-width: 0;
 }
-.install-detail {
-  margin-top: 12px;
-}
 .environment-panel[data-options-only='true'] .install-options {
   margin-top: 0;
 }
@@ -588,24 +588,93 @@ textarea:disabled {
   gap: 8px;
   margin-bottom: 8px;
 }
+.setup-caption,
+.setup-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.setup-caption h3 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.setup-caption > span {
+  font-size: 0.75rem;
+}
 .setup-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 28px;
   list-style: none;
   padding: 0;
-  margin: 0;
+  margin: 0 0 24px;
 }
 .setup-step {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  align-content: start;
+  gap: 10px;
+}
+.setup-step:not(:last-child)::after {
+  content: '→';
+  position: absolute;
+  right: -22px;
+  top: 0;
+  color: var(--muted-foreground);
+}
+.step-heading {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 36px;
-  border-bottom: 1px solid var(--border);
+}
+.step-heading strong {
+  font-weight: 500;
 }
 .step-state {
   color: var(--muted-foreground);
-  font-size: 0.75rem;
-  text-align: right;
   overflow-wrap: anywhere;
-  max-width: 70%;
+  min-height: 42px;
+}
+.setup-step[data-active='true'] .step-heading {
+  color: var(--foreground);
+}
+.setup-step[data-failed='true'] .step-state {
+  color: var(--destructive);
+}
+.step-bytes {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.setup-footer {
+  margin-bottom: 0;
+}
+.access-overview {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.access-overview .status-line {
+  margin: 0;
+}
+.access-page .page-error {
+  white-space: pre-wrap;
+}
+.access-page form {
+  padding-bottom: 16px;
 }
 .step-dot {
   width: 16px;
@@ -627,7 +696,7 @@ textarea:disabled {
   width: min(100%, 320px);
 }
 .setup-actions {
-  margin-top: 16px;
+  margin-top: 0;
 }
 .setup-actions:first-child {
   margin-top: 0;
@@ -747,10 +816,7 @@ textarea:disabled {
   text-decoration: underline;
   text-underline-offset: 4px;
 }
-.download-progress {
-  margin: 16px 0;
-}
-.download-progress progress {
+.step-progress progress {
   appearance: none;
   display: block;
   width: 100%;
@@ -771,17 +837,23 @@ progress::-webkit-progress-value {
 progress::-moz-progress-bar {
   background: var(--primary);
 }
-progress:indeterminate {
-  opacity: 0.6;
+progress:indeterminate::-webkit-progress-bar {
+  background: linear-gradient(
+    90deg,
+    var(--secondary) 0% 30%,
+    var(--primary) 50%,
+    var(--secondary) 70% 100%
+  );
+  background-size: 240% 100%;
+  animation: progress-wait 1800ms linear infinite;
 }
-.download-progress p {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 8px;
-  color: var(--muted-foreground);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
+@keyframes progress-wait {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
 }
 .desktop-settings {
   max-width: 688px;
@@ -987,6 +1059,16 @@ input[type='checkbox']:focus-visible {
   }
   .target-heading {
     gap: 12px;
+  }
+  .setup-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+  }
+  .setup-step::after {
+    display: none;
+  }
+  .control-content {
+    padding-top: 16px;
   }
   .device-icon {
     width: 52px;

@@ -34,7 +34,9 @@ export async function register(): Promise<void> {
   const manage = getL2WorkSessionManage()
   initializeL2PluginManagement({
     refreshPluginMessages: () => manage.refreshPluginMessages(),
-    runPluginRestart: (operation) => manage.runPluginRestart(operation)
+    runPluginRestart: (operation) => manage.runPluginRestart(operation),
+    runPluginChange: (operation, signal, onWaiting) =>
+      manage.runPluginChange(operation, signal, onWaiting)
   })
   registerL1WebAuthRuntime(getL1WebAuthRuntime())
   await initializeL4PiDeskCommands(executeL2PluginCommand)

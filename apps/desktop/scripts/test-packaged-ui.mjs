@@ -137,6 +137,7 @@ let child
 let exit
 let moved = false
 let passed = false
+let validationError
 let healthyPort = 0
 let sourcePort = 0
 const connections = []
@@ -153,13 +154,17 @@ async function until(probe, description, timeout = 30_000) {
   throw new Error(`等待超时：${description}`)
 }
 
+let lastDebugProbe
 async function targets() {
   try {
     const result = await fetch(`http://127.0.0.1:${debugPort}/json/list`, {
       signal: AbortSignal.timeout(1000)
     })
-    return await result.json()
-  } catch {
+    const value = await result.json()
+    lastDebugProbe = { status: result.status, value }
+    return value
+  } catch (error) {
+    lastDebugProbe = { error: String(error), cause: String(error.cause ?? '') }
     return []
   }
 }
@@ -217,22 +222,6 @@ async function connect(target) {
     async clearViewport() {
       await send('Emulation.clearDeviceMetricsOverride')
     },
-    async pressEnter() {
-      await send('Input.dispatchKeyEvent', {
-        type: 'keyDown',
-        key: 'Enter',
-        code: 'Enter',
-        text: '\r',
-        unmodifiedText: '\r',
-        windowsVirtualKeyCode: 13
-      })
-      await send('Input.dispatchKeyEvent', {
-        type: 'keyUp',
-        key: 'Enter',
-        code: 'Enter',
-        windowsVirtualKeyCode: 13
-      })
-    },
     async evaluate(expression) {
       const response = await send('Runtime.evaluate', {
         expression,
@@ -252,6 +241,9 @@ async function connect(target) {
       })()`)
       const result = await send('Page.captureScreenshot', { format: 'png' })
       await writeFile(join(root, name), Buffer.from(result.data, 'base64'))
+    },
+    async shutdown() {
+      await send('Browser.close')
     },
     close() {
       for (const request of pending.values()) {
@@ -325,7 +317,7 @@ function field(label, value) {
 
 function targetAction(url, action) {
   return `(() => {
-    const target = [...document.querySelectorAll('article')].find(item => [...item.querySelectorAll('h2, p')].some(text => text.textContent.trim() === ${JSON.stringify(url)}));
+    const target = [...document.querySelectorAll('article')].find(item => item.dataset.testid === ${JSON.stringify(url)});
     const summary = target?.querySelector('summary[aria-label]');
     if (summary && !summary.parentElement.open) summary.click();
     const button = [...(target?.querySelectorAll('button') ?? [])].find(item => item.textContent.trim() === ${JSON.stringify(action)});
@@ -373,17 +365,18 @@ function installLayoutFixture() {
     environment: {
       status: 'ready',
       step: '',
-      download: null,
       error: null,
       components: ['node', 'bash', 'pi'].map((name) => ({
         name,
         status: 'ready',
         version: '1.0.0',
         path: `C:/desktop-fixture/${name}`,
-        detail: null
+        detail: null,
+        download: null
       }))
     }
   }
+  let connection = { controlServerUrl: 'https://connect.example.test/', controlKey: 'fixture-key' }
   let firstRead = true
   let callbackId = 0
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} }
@@ -413,16 +406,37 @@ function installLayoutFixture() {
             ? {
                 url: args.url,
                 server: args.url === localUrl ? serverConfig : null,
-                tunnel: args.url === localUrl ? { enabled: true, publicPort: 19443 } : null
+                tunnel: state.targets.find((item) => item.url === args.url)?.tunnel
+                  ? {
+                      enabled: true,
+                      publicPort: state.targets.find((item) => item.url === args.url).tunnel
+                        .publicPort
+                    }
+                  : null
               }
             : null,
           defaultServer: serverConfig
         }
-      if (command === 'get_tunnel_connection')
-        return { controlServerUrl: 'https://connect.example.test/', controlKey: 'fixture-key' }
+      if (command === 'get_tunnel_connection') return structuredClone(connection)
+      if (command === 'apply_tunnel_connection_command') {
+        connection = args.value
+        return
+      }
       if (command === 'apply_target_command') {
-        const target = { url: args.value.url, server: null, tunnel: null }
+        if (window.desktopLayoutSaveError) throw new Error('这个访问端口已被占用')
         const index = state.targets.findIndex((item) => item.url === args.originalUrl)
+        const target = {
+          url: args.value.url,
+          server: state.targets[index]?.server ?? null,
+          tunnel: args.value.tunnel
+            ? {
+                status: 'stopped',
+                detail: '',
+                publicAddr: `connect.example.test:${args.value.tunnel.publicPort}`,
+                publicPort: args.value.tunnel.publicPort
+              }
+            : null
+        }
         if (index < 0) state.targets.push(target)
         else state.targets[index] = target
         return
@@ -431,12 +445,16 @@ function installLayoutFixture() {
       if (command === 'prepare_environment_command') {
         state.environment.status = 'installing'
         state.environment.step = '正在下载 Node.js'
-        state.environment.download = { received: 42_000_000, total: 80_000_000 }
+        state.environment.components[0].detail = '正在下载 Node.js'
+        state.environment.components[0].download = { received: 42_000_000, total: 80_000_000 }
         return
       }
       if (command === 'cancel_environment_command') {
         state.environment.status = 'required'
-        state.environment.download = null
+        state.environment.components.forEach((item) => {
+          item.download = null
+          item.detail = null
+        })
         return
       }
       if (command === 'check_environment_command') return
@@ -467,11 +485,6 @@ async function validateLayout(page) {
       `(() => { ${expression}; document.dispatchEvent(new Event('visibilitychange')); })()`
     )
   }
-  const expanded = (label) =>
-    page.evaluate(`(() => {
-    const button = [...document.querySelectorAll('button')].find(item => item.getAttribute('aria-label') === ${JSON.stringify(label)} || item.textContent.trim() === ${JSON.stringify(label)});
-    return button?.getAttribute('aria-expanded') === 'true';
-  })()`)
   await until(
     () =>
       page.evaluate(
@@ -494,7 +507,8 @@ async function validateLayout(page) {
   }
   assert.equal(
     await page.evaluate(`!!document.querySelector('summary[aria-label="桌面设置"]')`),
-    true
+    false,
+    '不再提供重复的全局设置菜单'
   )
   await page.screenshot('control-ready.png')
   await page.theme('dark')
@@ -507,28 +521,49 @@ async function validateLayout(page) {
   await page.viewport(960, 720)
   await page.theme('light')
 
+  await publish(`
+    window.desktopLayoutState.targets[0].server.version = null;
+    window.desktopLayoutState.targets[0].server.status = 'starting';
+    window.desktopLayoutState.targets[0].server.update = { status: 'installing', version: '1.0.0', error: null };
+  `)
+  await until(() => hasText('取消安装'), '已有 Pi 时首次服务安装直接显示步骤')
+  assert.equal(
+    await page.evaluate(`!!document.querySelector('progress[aria-label="Pi Desk安装进度"]')`),
+    true
+  )
+  assert.equal(await hasText('Node.js'), true)
+  await publish(`
+    window.desktopLayoutState.targets[0].server.version = '1.0.0';
+    window.desktopLayoutState.targets[0].server.status = 'running';
+    window.desktopLayoutState.targets[0].server.update.status = 'idle';
+  `)
+  await until(() => hasText('打开 Pi Desk'), '服务就绪后返回正常首页')
+
   await page.evaluate(click('在其他设备上使用'))
-  await until(() => expanded('在其他设备上使用'), '展开其他设备访问')
+  await until(() => hasText('连接这台电脑'), '进入其他设备访问页面')
   await page.evaluate(click('复制地址'))
   assert.equal(
     await page.evaluate('window.desktopLayoutCopied'),
     'http://connect.example.test:19443/'
   )
   await page.screenshot('control-access.png')
+  await page.evaluate(click('返回'))
+  await until(() => hasText('打开 Pi Desk'), '从访问页返回')
   await publish(
     `window.desktopLayoutState.targets[0].url = 'http://127.0.0.1:30333/workspace?view=files#readme'`
   )
-  await until(async () => !(await expanded('在其他设备上使用')), '切换连接后重新定位访问入口')
+  await until(() => hasText('打开 Pi Desk'), '切换连接后重新定位访问入口')
   await page.evaluate(click('在其他设备上使用'))
-  await until(() => expanded('在其他设备上使用'), '展开带路径连接的访问地址')
+  await until(() => hasText('连接这台电脑'), '进入带路径连接的访问页面')
   await page.evaluate(click('复制地址'))
   assert.equal(
     await page.evaluate('window.desktopLayoutCopied'),
     'http://connect.example.test:19443/workspace?view=files#readme',
     '外部地址保留原页面路径和参数'
   )
+  await page.evaluate(click('返回'))
   await publish(`window.desktopLayoutState.targets[0].url = ${JSON.stringify(localUrl)}`)
-  await until(async () => !(await expanded('在其他设备上使用')), '恢复本机连接')
+  await until(() => hasText('打开 Pi Desk'), '恢复本机连接')
   await publish(
     `window.desktopLayoutState.targets[0].server.status = 'failed'; window.desktopLayoutState.targets[0].server.detail = 'fixture-start-failed'`
   )
@@ -556,12 +591,40 @@ async function validateLayout(page) {
   assert.equal(await hasText('fixture-tunnel-failed'), false)
   assert.equal(await hasText('操作未完成'), false, '外部访问故障不干扰本机启动')
   await page.evaluate(click('在其他设备上使用'))
-  await until(() => hasText('开启访问'), '连接失败后可重试')
-  await page.evaluate(click('开启访问'))
+  await until(() => hasText('重新连接'), '连接失败后可重试')
+  assert.equal(await hasText('fixture-tunnel-failed'), true, '连接失败原因直接展示')
+  await page.evaluate(click('重新连接'))
   await until(() => hasText('关闭访问'), '重新开启访问')
   await page.evaluate(click('关闭访问'))
   await until(() => hasText('开启访问'), '关闭访问不停止本机服务')
-  await page.evaluate(click('在其他设备上使用'))
+  await page.evaluate(click('修改配置'))
+  await until(() => hasText('中转服务地址'), '访问配置位于同一页面')
+  await page.evaluate(field('访问端口', '19444'))
+  await page.screenshot('access-settings.png')
+  await page.evaluate(`window.desktopLayoutSaveError = true`)
+  await page.evaluate(click('保存并开启'))
+  await until(() => hasText('这个访问端口已被占用'), '保存失败就近说明原因')
+  assert.equal(
+    await page.evaluate(`document.querySelector('input[type="number"]').value`),
+    '19444',
+    '保存失败保留草稿'
+  )
+  assert.equal(
+    await page.evaluate(`window.desktopLayoutState.targets[0].tunnel.status`),
+    'stopped',
+    '保存失败不得开启连接'
+  )
+  await page.evaluate(`window.desktopLayoutSaveError = false`)
+  await page.evaluate(click('保存并开启'))
+  await until(() => hasText('connect.example.test:19444'), '保存后直接连接并显示地址')
+  assert.equal(
+    await page.evaluate(
+      `window.desktopLayoutCommands.some(item => item.command === 'apply_target_command' && item.args.value.server?.package.name === '@jetcrab/pi-desk')`
+    ),
+    true,
+    '访问配置不得覆盖本机服务'
+  )
+  await page.evaluate(click('返回'))
 
   await publish(`window.desktopLayoutState.targets[0].server.update.status = 'checking'`)
   await until(
@@ -583,7 +646,7 @@ async function validateLayout(page) {
   await page.evaluate(click('添加连接'))
   await page.evaluate(field('网页地址', 'https://new-computer.example.test/'))
   await publish(`window.desktopLayoutState.environment.status = 'checking'`)
-  await until(() => hasText('正在准备…'), '读取新的准备状态')
+  await until(() => hasText('正在检查组件…'), '读取新的准备状态')
   assert.equal(
     await page.evaluate(`document.querySelector('form[aria-label="添加地址"] input').value`),
     'https://new-computer.example.test/',
@@ -601,39 +664,63 @@ async function validateLayout(page) {
     true
   )
 
-  await page.evaluate(`document.querySelector('summary[aria-label="桌面设置"]').click()`)
-  await page.evaluate(click('这台电脑'))
-  await until(() => hasText('连接设置'), '从明确设置入口进入本机配置')
+  await page.evaluate(`document.querySelector('summary[aria-label="这台电脑的更多操作"]').click()`)
+  await page.evaluate(click('本机设置'))
+  await until(() => hasText('服务更新'), '从单一设置入口进入本机配置')
+  assert.equal(await hasText('通过公网端口访问'), false, '访问配置不再混入本机设置')
   await page.evaluate(click('返回'))
   await until(() => hasText('打开 Pi Desk'), '返回启动页')
 
   await publish(`
     window.desktopLayoutState.targets[0].server.needsSetup = true;
     window.desktopLayoutState.targets[0].server.status = 'stopped';
+    window.desktopLayoutState.targets[0].server.version = null;
+    window.desktopLayoutState.targets[0].tunnel = null;
     window.desktopLayoutState.environment.status = 'required';
     window.desktopLayoutState.environment.components.forEach(item => { item.status = 'missing'; item.version = null; item.path = null });
   `)
   await until(() => hasText('安装并打开'), '首次准备入口')
   await assertSetupFits(page, '安装并打开')
-  assert.equal(await hasText('Node.js'), false, '首次准备不要求用户理解组件名称')
+  assert.equal(await hasText('Node.js'), true, '首次准备直接列出需要安装的组件')
   await page.screenshot('environment-required.png')
   await page.evaluate(click('安装并打开'))
   await until(() => hasText('取消安装'), '准备中的取消入口')
   await assertSetupFits(page, '取消安装')
   assert.equal(
-    await page.evaluate(`document.querySelector('progress[aria-label="下载进度"]').value`),
+    await page.evaluate(`document.querySelector('progress[aria-label="Node.js下载进度"]').value`),
     53
   )
   await page.screenshot('environment-preparing.png')
+  await publish(`
+    window.desktopLayoutState.environment.components.forEach(item => { item.download = null; item.status = item.name === 'pi' ? 'missing' : 'ready'; item.detail = item.name === 'pi' ? '正在安装 Pi 1.1.0' : null });
+    window.desktopLayoutState.targets[0].server.update = { status: 'installing', version: '1.0.0', error: null };
+  `)
+  await until(() => hasText('正在安装 Pi 1.1.0'), 'Pi 与 Pi Desk 同时安装')
+  assert.equal(
+    await page.evaluate(
+      `!!document.querySelector('progress[aria-label="Pi安装进度"]') && !!document.querySelector('progress[aria-label="Pi Desk安装进度"]')`
+    ),
+    true
+  )
+  await page.screenshot('environment-parallel.png')
+  await page.evaluate(`document.documentElement.style.fontSize = '20px'`)
+  await assertSetupFits(page, '取消安装')
+  await page.screenshot('environment-parallel-large-text.png')
+  await page.evaluate(`document.documentElement.style.fontSize = ''`)
+  await page.theme('dark')
+  await page.screenshot('environment-parallel-dark.png')
+  await page.theme('light')
   await page.viewport(720, 560)
   await assertSetupFits(page, '取消安装')
+  await page.screenshot('environment-parallel-compact.png')
   await page.evaluate(click('取消安装'))
+  await publish(`window.desktopLayoutState.targets[0].server.update.status = 'idle'`)
   await until(() => hasText('安装并打开'), '取消后可重新准备')
   await publish(
     `window.desktopLayoutState.environment.status = 'failed'; window.desktopLayoutState.environment.error = 'fixture-download-failed'`
   )
   await until(() => hasText('重试安装'), '失败后的恢复入口')
-  assert.equal(await hasText('fixture-download-failed'), false, '错误技术详情默认收起')
+  assert.equal(await hasText('fixture-download-failed'), true, '失败原因无需展开即可看到')
   await page.viewport(960, 720)
   await page.screenshot('environment-error.png')
   await publish(
@@ -665,6 +752,9 @@ validation: try {
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-extensions',
+        '--disable-gpu',
+        '--disable-background-networking',
+        '--disable-sync',
         `--user-data-dir=${join(root, 'browser')}`,
         `--remote-debugging-port=${debugPort}`,
         'about:blank'
@@ -755,11 +845,10 @@ validation: try {
         status: 'required',
         step: '需要准备运行环境',
         error: null,
-        download: null,
         components: [
-          { name: 'node', status: 'missing', version: null, path: null, detail: null },
-          { name: 'pi', status: 'missing', version: null, path: null, detail: null },
-          { name: 'bash', status: 'missing', version: null, path: null, detail: null }
+          { name: 'node', status: 'missing', version: null, path: null, detail: null, download: null },
+          { name: 'pi', status: 'missing', version: null, path: null, detail: null, download: null },
+          { name: 'bash', status: 'missing', version: null, path: null, detail: null, download: null }
         ]
       }
     };
@@ -775,14 +864,15 @@ validation: try {
         window.desktopSetupFixture.environment.status = 'installing';
         window.desktopSetupFixture.environment.step = '正在下载 Node.js、Git Bash';
         for (const item of window.desktopSetupFixture.environment.components) item.detail = item.name === 'node' ? '正在下载 Node.js' : item.name === 'bash' ? '正在下载 Git Bash' : null;
-        window.desktopSetupFixture.environment.download = { received: 48318382, total: 90439680 };
+        window.desktopSetupFixture.environment.components[0].download = { received: 48318382, total: 90439680 };
+        window.desktopSetupFixture.environment.components[2].download = { received: 15000000, total: 64000000 };
         document.dispatchEvent(new Event('visibilitychange'));
         return response(null);
       }
       if (command === 'cancel_environment_command') {
         window.desktopSetupCancelled = true;
         window.desktopSetupFixture.environment.status = 'required';
-        window.desktopSetupFixture.environment.download = null;
+        window.desktopSetupFixture.environment.components.forEach(item => { item.download = null; item.detail = null; });
         return response(null);
       }
       return originalFetch(input, options);
@@ -866,7 +956,7 @@ validation: try {
   await until(
     () =>
       control.evaluate(
-        `document.body.innerText.includes('取消安装') && !!document.querySelector('progress[aria-label="下载进度"]')`
+        `document.body.innerText.includes('取消安装') && !!document.querySelector('progress[aria-label="Node.js下载进度"]')`
       ),
     '并行准备界面'
   )
@@ -889,21 +979,26 @@ validation: try {
   for (const text of ['正在检测', '未找到可用的', '运行环境目录', '返回地址列表']) {
     assert.equal(normalText.includes(text), false, `不应展示内部检查或页面跳转入口：${text}`)
   }
-  assert.ok(normalText.includes('正在下载所需组件'))
-  assert.equal(normalText.includes('正在下载 Node.js、Git Bash'), false)
-  await control.evaluate(`(() => {
-    const summary = [...document.querySelectorAll('summary')].find(item => item.textContent.trim() === '安装详情');
-    summary.click();
-  })()`)
+  assert.ok(normalText.includes('正在下载 Node.js'))
+  assert.ok(normalText.includes('正在下载 Git Bash'))
   assert.equal(
-    await control.evaluate(`document.body.innerText.includes('正在下载 Node.js、Git Bash')`),
-    true
-  )
-  assert.deepEqual(
     await control.evaluate(
-      `[...document.querySelectorAll('ol[aria-label="安装步骤"] li')].map(item => item.innerText.replace(/\\s+/g, ' ').trim())`
+      `[...document.querySelectorAll('summary')].some(item => item.textContent.trim() === '安装详情')`
     ),
-    ['Node.js 正在下载 Node.js', 'Git Bash 正在下载 Git Bash', 'Pi 等待安装', 'Pi Desk 等待启动']
+    false,
+    '必要进度不再折叠'
+  )
+  assert.equal(
+    await control.evaluate(
+      `document.querySelector('progress[aria-label="Node.js下载进度"]').value`
+    ),
+    53
+  )
+  assert.equal(
+    await control.evaluate(
+      `document.querySelector('progress[aria-label="Git Bash下载进度"]').value`
+    ),
+    23
   )
   for (const [name, label] of [
     ['node', 'Node.js'],
@@ -912,7 +1007,7 @@ validation: try {
   ]) {
     await control.evaluate(`(() => {
       const env = window.desktopSetupFixture.environment;
-      env.download = null;
+      env.components.forEach(item => { item.download = null; });
       env.step = ${JSON.stringify(`正在安装 ${label}`)};
       const order = ['node', 'bash', 'pi'];
       env.components.forEach(item => {
@@ -930,9 +1025,11 @@ validation: try {
       `${label} 顺序安装状态`
     )
     assert.equal(
-      await control.evaluate('!!document.querySelector("progress")'),
+      await control.evaluate(
+        `document.querySelector('progress[aria-label="${label}安装进度"]')?.hasAttribute('value')`
+      ),
       false,
-      '安装阶段不显示已完成的下载进度'
+      '无法量化的安装阶段不伪造百分比'
     )
     assert.equal(await control.evaluate('location.hash'), '', '安装状态不得切换页面')
     assert.equal(
@@ -948,21 +1045,16 @@ validation: try {
   await control.evaluate(`(() => {
     window.desktopSetupFixture.environment.status = 'failed';
     window.desktopSetupFixture.environment.error = '下载连接超时，请检查网络后重试。\\n' + '连接安装源时超时，未完成的下载已停止。\\n'.repeat(60);
-    window.desktopSetupFixture.environment.download = null;
+    window.desktopSetupFixture.environment.components.forEach(item => { item.download = null; item.detail = null; });
     document.dispatchEvent(new Event('visibilitychange'));
   })()`)
   await until(
     () => control.evaluate(`document.body.innerText.includes('重试安装')`),
     '只有错误时显示问题信息'
   )
-  await control.evaluate(`(() => {
-    const summary = [...document.querySelectorAll('summary')].find(item => item.textContent.trim() === '问题详情');
-    summary.focus();
-  })()`)
-  await control.pressEnter()
   await until(
     () => control.evaluate(`document.body.innerText.includes('下载连接超时，请检查网络后重试。')`),
-    '键盘展开错误详情',
+    '安装失败原因直接展示',
     5000
   )
   await assertSetupFits(control, '重试安装')
@@ -970,7 +1062,8 @@ validation: try {
   await control.evaluate(`(() => {
     window.desktopSetupFixture.environment.status = 'installing';
     window.desktopSetupFixture.environment.error = null;
-    window.desktopSetupFixture.environment.download = { received: 48318382, total: 90439680 };
+    window.desktopSetupFixture.environment.components[0].detail = '正在下载 Node.js';
+    window.desktopSetupFixture.environment.components[0].download = { received: 48318382, total: 90439680 };
     document.dispatchEvent(new Event('visibilitychange'));
   })()`)
   await until(
@@ -1196,7 +1289,7 @@ validation: try {
     break validation
   }
 
-  await control.evaluate(targetAction(managedUrl, '设置'))
+  await control.evaluate(targetAction(managedUrl, '本机设置'))
   await until(
     () => control.evaluate(`document.querySelector('textarea')?.value === 'node old-service.cjs'`),
     '已有服务设置读取'
@@ -1243,7 +1336,7 @@ validation: try {
   assert.equal(runtime.lastVersion, undefined, '更换包后不得沿用旧包版本')
   assert.equal(runtime.autoStart, false, '更换包不得改变明确停止状态')
 
-  await control.evaluate(targetAction(managedUrl, '设置'))
+  await control.evaluate(targetAction(managedUrl, '本机设置'))
   await until(
     () =>
       control.evaluate(
@@ -1352,6 +1445,10 @@ validation: try {
   assert.deepEqual(connections[0].errors, [], '控制页面不应出现 JavaScript 异常')
   passed = true
 } catch (error) {
+  validationError = error
+  console.error('验收首个失败：', error)
+  await writeFile(join(root, 'failure.txt'), error.stack ?? String(error))
+  await writeFile(join(root, 'debug-probe.json'), JSON.stringify(lastDebugProbe ?? null, null, 2))
   if (connections[0]) {
     await connections[0].screenshot('failure.png').catch(() => {})
     const state = await connections[0]
@@ -1364,14 +1461,54 @@ validation: try {
   console.error(`${layoutOnly ? '前端布局' : '原生页面'}验收失败，现场：${root}`)
   throw error
 } finally {
+  if (layoutOnly && connections[0]) {
+    await connections[0].shutdown().catch(() => {})
+    await Promise.race([exit, new Promise((done) => setTimeout(done, 5000))])
+  }
   for (const connection of connections) connection.close()
   try {
     if (child) {
       try {
         await stopE2eServerTree({ child, exit, port: debugPort, managed: false })
       } catch (error) {
-        // WebView2 的端口可能晚于桌面父进程释放，观察实际释放而不是固定等待。
-        if (error.code !== 'EADDRINUSE') throw error
+        // taskkill 可能因子进程已自行退出报错；只在父进程已退出时核对端口。
+        if (error.code !== 'EADDRINUSE') {
+          try {
+            await Promise.race([
+              exit,
+              new Promise((_, reject) => {
+                setTimeout(() => reject(error), 5000).unref()
+              })
+            ])
+          } catch (cleanupError) {
+            let exited = false
+            try {
+              process.kill(child.pid, 0)
+            } catch (probeError) {
+              exited = probeError.code === 'ESRCH'
+            }
+            await writeFile(
+              join(root, 'cleanup-state.json'),
+              JSON.stringify(
+                {
+                  pid: child.pid,
+                  exitCode: child.exitCode,
+                  signalCode: child.signalCode,
+                  exited,
+                  error: String(cleanupError)
+                },
+                null,
+                2
+              )
+            )
+            if (!exited) {
+              if (validationError) console.error('验收进程清理另有错误：', cleanupError)
+              throw validationError ?? cleanupError
+            }
+            child.stdout?.destroy()
+            child.stderr?.destroy()
+          }
+        }
         const deadline = Date.now() + 5000
         while (true) {
           try {
@@ -1384,6 +1521,9 @@ validation: try {
         }
       }
     } else await assertPortReleased(debugPort)
+    child?.stdout?.destroy()
+    child?.stderr?.destroy()
+    child?.unref()
   } finally {
     fixture.closeAllConnections()
     await new Promise((done) => fixture.close(done))
@@ -1417,10 +1557,10 @@ await writeFile(
           missingEnvironmentBlockedNpm: !setupOnly,
           manualSetupAndRemoteAccessVerified: !setupOnly,
           preparationFitsDefaultAndMinimumViewport: true,
-          preparationCurrentStatusAndKeyboardVerified: true,
-          preparationStepsOrderedAndHomeStable: true,
+          preparationCurrentStatusVisible: true,
+          perComponentProgressAndHomeStable: true,
           inlineAddressSavedAndReloaded: true,
-          preparationErrorOnlyDetailsAndCancelVerified: true,
+          preparationErrorVisibleAndCancelVerified: true,
           controlViewport: { width: 960, height: 720 },
           minimumViewport: { width: 720, height: 560 },
           preparationUiUsesIsolatedFixture: true,

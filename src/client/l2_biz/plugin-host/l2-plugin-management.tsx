@@ -1,43 +1,32 @@
 'use client'
 
-import {
-  AlertCircleIcon,
-  ChevronDownIcon,
-  LoaderCircleIcon,
-  PackagePlusIcon,
-  RefreshCwIcon,
-  RotateCcwIcon
-} from 'lucide-react'
+import { useState } from 'react'
+import { ChevronDownIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
-import type {
-  L2PluginManagementItem,
-  L2PluginManagementSnapshot
-} from '@common/l2_biz/plugin/l2-plugin-management-contract'
-import { cn } from '@client/l4_foundation/lib/l4-utils'
+import type { L2PluginCatalogItem } from '@common/l2_biz/plugin/l2-plugin-catalog-contract'
+import type { L2PluginManagementSnapshot } from '@common/l2_biz/plugin/l2-plugin-management-contract'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger
-} from '@client/l4_foundation/ui/shadcn/collapsible'
-import { Input } from '@client/l4_foundation/ui/shadcn/input'
-import {
-  L4AppDialogRoot,
-  L4AppDialogContent,
-  L4AppDialogHeader,
-  L4AppDialogTitle,
-  L4AppDialogDescription,
-  L4AppDialogFooter
-} from '@client/l4_foundation/ui/l4-app-dialog'
+import { Popover, PopoverContent, PopoverTrigger } from '@client/l4_foundation/ui/shadcn/popover'
 import { L2PluginCapabilityDetails } from './l2-plugin-capability-details'
-import { L2PluginManagementControls } from './l2-plugin-management-controls'
 import type { L2PluginManagementBiz } from './l2-plugin-management-biz'
 import {
-  pluginManagementActionLabel as actionLabel,
+  pluginDisplayName,
+  pluginNpmSpec,
+  pluginRequestKey,
   useL2PluginManagement
 } from './l2-use-plugin-management'
+import { useL2PluginCatalog } from './hooks/l2-use-plugin-catalog'
+import { useL2PluginDownloadSource } from './hooks/l2-use-plugin-download-source'
+import { useL2PluginDirectInstall } from './hooks/l2-use-plugin-direct-install'
+import { L2PluginDownloadSourceSelector } from './views/l2-plugin-download-source'
+import { L2PluginInstalledList } from './views/l2-plugin-installed-list'
+import { L2PluginCatalogSearch } from './views/l2-plugin-catalog-search'
+import { L2PluginCatalogDetailView } from './views/l2-plugin-catalog-detail'
+import { L2PluginDirectInstall } from './views/l2-plugin-direct-install'
+import { L2PluginManagementDialog } from './views/l2-plugin-management-dialog'
+import { L2PluginReadme } from './views/l2-plugin-readme'
 
 interface L2PluginManagementProps {
   basicMode?: boolean
@@ -45,22 +34,6 @@ interface L2PluginManagementProps {
   biz: L2PluginManagementBiz
   onSnapshot: (snapshot: L2PluginManagementSnapshot) => void
   onRestartScheduled: () => void
-}
-
-function pluginDisplayName(plugin: L2PluginManagementItem): string {
-  if (!plugin.source.startsWith('npm:')) {
-    if (plugin.pluginName) return plugin.pluginName
-    if (plugin.kind === 'extension') {
-      return plugin.source.replaceAll('\\', '/').split('/').at(-1) || plugin.source
-    }
-    return plugin.source
-  }
-  const spec = plugin.source.slice('npm:'.length)
-  const versionSeparator = spec.lastIndexOf('@')
-  if (spec.startsWith('@')) {
-    return versionSeparator > spec.indexOf('/') ? spec.slice(0, versionSeparator) : spec
-  }
-  return versionSeparator > 0 ? spec.slice(0, versionSeparator) : spec
 }
 
 export function L2PluginManagement({
@@ -72,340 +45,374 @@ export function L2PluginManagement({
 }: L2PluginManagementProps): React.JSX.Element {
   const { t } = useTranslation('pluginManagement')
   const { locale } = useL4Region()
-  const {
-    source,
-    setSource,
-    loading,
-    requests,
-    operation,
-    confirmation,
-    setConfirmation,
-    error,
-    detailSource,
-    detail,
-    detailLoading,
-    detailError,
-    selectedPending,
-    pluginHost,
-    refresh,
-    execute,
-    applyChanges,
-    refreshEntries,
-    loadDetail,
-    openDetail,
-    closeDetail,
-    handleControlAction
-  } = useL2PluginManagement({ snapshot, biz, onSnapshot, onRestartScheduled })
-
+  const [tab, setTab] = useState<'installed' | 'search'>('installed')
+  const [filter, setFilter] = useState('')
+  const management = useL2PluginManagement({ biz, onSnapshot, onRestartScheduled })
+  const catalog = useL2PluginCatalog(biz, tab === 'search')
+  const download = useL2PluginDownloadSource(biz)
+  const direct = useL2PluginDirectInstall(biz)
+  const disabled = basicMode || management.requests.has('reload')
   const browserErrors = new Map(
-    pluginHost.getFailedEntries().map((item) => [item.pluginName, item.error.message])
+    management.pluginHost.getFailedEntries().map((item) => [item.pluginName, item.error.message])
   )
-  const descriptorError = pluginHost.getEntryListError()
-  const browserContributionsByPlugin = new Map(
-    pluginHost
-      .getRegisteredBrowserDescriptors()
-      .map((descriptor) => [descriptor.pluginName, descriptor.contributions] as const)
+  const descriptorError = management.pluginHost.getEntryListError()
+  const selectedPlugin = snapshot?.plugins.find(
+    (plugin) => plugin.source === management.detailSource
   )
-
-  const confirmationDialog = confirmation ? (
-    <L4AppDialogRoot
-      open
-      onOpenChange={(open) => {
-        if (!open) setConfirmation(null)
-      }}
-    >
-      <L4AppDialogContent className="z-[130]">
-        <L4AppDialogHeader className="p-4 pr-12">
-          <L4AppDialogTitle>
-            {t('confirmAction', { action: t(actionLabel(confirmation)) })}
-          </L4AppDialogTitle>
-          <L4AppDialogDescription className="break-words">
-            {confirmation.kind === 'reload'
-              ? t(
-                  confirmation.mode === 'normal' ? 'restartNormalDescription' : 'restartDescription'
-                )
-              : confirmation.source}
-          </L4AppDialogDescription>
-        </L4AppDialogHeader>
-        <L4AppDialogFooter>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={operation !== null}
-            onClick={() => setConfirmation(null)}
-          >
-            {t('cancel')}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant={confirmation.kind === 'del' ? 'destructive' : 'default'}
-            disabled={operation !== null}
-            onClick={() => void execute(confirmation)}
-          >
-            {t(actionLabel(confirmation))}
-          </Button>
-        </L4AppDialogFooter>
-      </L4AppDialogContent>
-    </L4AppDialogRoot>
-  ) : null
-  const actionError = error ? (
-    <div role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-      {error}
-    </div>
-  ) : null
-
+  const catalogPlugin = catalog.selection
+    ? snapshot?.plugins.find(
+        (plugin) =>
+          plugin.source.startsWith('npm:') &&
+          pluginNpmSpec(plugin.source)?.name === catalog.selection?.name
+      )
+    : undefined
+  const catalogKey = catalog.selection ? pluginRequestKey(`npm:${catalog.selection.name}`) : ''
+  const directSource = direct.detail
+    ? `npm:${direct.detail.name}`
+    : direct.spec
+      ? `npm:${direct.spec.name}`
+      : direct.source.trim()
+  const directKey = pluginRequestKey(directSource)
+  const directPlugin = snapshot?.plugins.find(
+    (plugin) => pluginRequestKey(plugin.source) === directKey
+  )
+  const catalogPending =
+    management.requests.has(catalogKey) ||
+    Boolean(catalogPlugin?.operation && catalogPlugin.operation.phase !== 'failed')
+  const directPending =
+    management.requests.has(directKey) ||
+    Boolean(directPlugin?.operation && directPlugin.operation.phase !== 'failed')
+  const openCatalog = (item: L2PluginCatalogItem): void => {
+    management.closeDetail()
+    catalog.openDetail(item)
+  }
+  const openInstalled = (source: string): void => {
+    catalog.closeDetail()
+    management.openDetail(source)
+  }
+  const installCatalogItem = (item: L2PluginCatalogItem): void => {
+    void catalog.prepareInstall(item, (detail) =>
+      management.requestInstall(
+        { source: `npm:${detail.name}@${detail.version}`, registry: detail.registry },
+        detail
+      )
+    )
+  }
+  const closeDialog = (): void => {
+    if (management.confirmation) management.setConfirmation(null)
+    else {
+      management.closeDetail()
+      catalog.closeDetail()
+    }
+  }
+  const operationMessage = (phase?: string): string | null => (phase ? t(`phase_${phase}`) : null)
   return (
-    <div className="pi-desk-chat-scrollbar h-full overflow-y-auto">
-      <div className="space-y-6 p-4 sm:p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold">{t('title')}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">{t('description')}</p>
-          </div>
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
+      <header className="shrink-0 space-y-3 border-b p-4 sm:px-6">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-xl font-semibold">{t('title')}</h2>
           <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              disabled={basicMode || operation !== null || requests.has('apply')}
-              title={t('applyDescription')}
-              onClick={() => void applyChanges()}
-            >
-              {requests.has('apply') ? (
-                <LoaderCircleIcon className="size-4 animate-spin" />
-              ) : (
-                <RefreshCwIcon className="size-4" />
-              )}
-              {t('applyChanges')}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              aria-label={t('checkUpdates')}
-              title={t('checkingUpdates')}
-              disabled={loading || operation !== null}
-              onClick={() => void refresh()}
-            >
-              {loading ? (
-                <LoaderCircleIcon className="size-4 animate-spin" />
-              ) : (
-                <RefreshCwIcon className="size-4" />
-              )}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={operation !== null}
-              onClick={() =>
-                setConfirmation({ kind: 'reload', mode: basicMode ? 'normal' : undefined })
-              }
-            >
-              <RotateCcwIcon data-icon="inline-start" />
-              {basicMode
-                ? t('restartNormal')
-                : snapshot?.restartRequired
-                  ? t('restartApply')
-                  : t('actionReload')}
-            </Button>
+            <Popover>
+              <PopoverTrigger render={<Button size="sm" variant="outline" />}>
+                {t('downloadSource')}：
+                {download.loading && !download.settings
+                  ? t('loading')
+                  : t(`download_${download.settings?.downloadSource.mode ?? download.mode}`)}
+                <ChevronDownIcon className="size-4" />
+              </PopoverTrigger>
+              <PopoverContent align="end" positionerClassName="z-[150]">
+                <L2PluginDownloadSourceSelector
+                  id="plugin-default-download"
+                  mode={download.mode}
+                  registry={download.registry}
+                  savedRegistry={
+                    download.settings?.downloadSource.mode === 'custom'
+                      ? download.settings.downloadSource.registry
+                      : undefined
+                  }
+                  recommendedRegistry={download.settings?.recommendedRegistry}
+                  loading={download.loading}
+                  saving={download.saving}
+                  error={download.error}
+                  onMode={(mode) => {
+                    if (mode !== 'default') download.changeMode(mode)
+                  }}
+                  onRegistry={download.setRegistry}
+                  onSave={() => void download.save()}
+                  onRetry={() => void download.retry()}
+                />
+              </PopoverContent>
+            </Popover>
+            {basicMode || snapshot?.restartRequired ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={management.requests.has('reload')}
+                onClick={() =>
+                  management.setConfirmation({
+                    kind: 'reload',
+                    mode: basicMode ? 'normal' : undefined
+                  })
+                }
+              >
+                {t(basicMode ? 'restartNormal' : 'restartApply')}
+              </Button>
+            ) : null}
           </div>
         </div>
-
         {basicMode ? (
-          <p className="rounded-lg border bg-muted px-3 py-2 text-sm" role="status">
+          <p role="status" className="rounded-lg bg-muted p-3 text-sm">
             {t('basicModeNotice')}
           </p>
         ) : null}
-        <details className="border-b pb-4">
-          <summary className="cursor-pointer text-sm font-medium">{t('installPlugin')}</summary>
-          <label htmlFor="plugin-source" className="mt-3 block text-sm font-medium">
-            {t('source')}
-          </label>
-          <div className="mt-1 flex flex-wrap items-end gap-2">
-            <Input
-              id="plugin-source"
-              className="min-w-[12rem] flex-1"
-              value={source}
-              disabled={basicMode || operation !== null || requests.has('add')}
-              aria-label={t('source')}
-              placeholder={t('sourcePlaceholder')}
-              onChange={(event) => setSource(event.target.value)}
-            />
-            <Button
-              type="button"
-              className="sm:shrink-0"
-              disabled={basicMode || operation !== null || requests.has('add') || !source.trim()}
-              onClick={() => setConfirmation({ kind: 'add', source: source.trim() })}
-            >
-              <PackagePlusIcon data-icon="inline-start" />
-              {t('install')}
-            </Button>
-          </div>
-        </details>
-
         {snapshot?.restartRequired ? (
-          <div className="rounded-lg border bg-muted px-3 py-2 text-sm font-medium">
+          <p role="status" className="text-sm text-muted-foreground">
             {t('pendingRestart')}
-          </div>
+          </p>
         ) : null}
-
         {snapshot?.loadError || descriptorError ? (
-          <div className="rounded-lg border border-destructive/30 bg-muted p-3 text-sm text-destructive">
-            <div className="flex items-start gap-2">
-              <AlertCircleIcon className="mt-0.5 size-4 shrink-0" />
-              <div className="min-w-0 flex-1 space-y-1">
-                {snapshot?.loadError ? (
-                  <p>{selectL4LocalizedText(snapshot.loadError, locale)}</p>
-                ) : null}
-                {descriptorError ? <p>{descriptorError}</p> : null}
-              </div>
-              {descriptorError ? (
+          <div role="alert" className="max-h-32 space-y-1 overflow-y-auto text-sm text-destructive">
+            {snapshot?.loadError ? (
+              <p className="[overflow-wrap:anywhere]">
+                {selectL4LocalizedText(snapshot.loadError, locale)}
+              </p>
+            ) : null}
+            {descriptorError ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="min-w-0 [overflow-wrap:anywhere]">{descriptorError}</p>
                 <Button
-                  type="button"
                   size="sm"
                   variant="outline"
-                  disabled={operation !== null}
-                  onClick={() => void refreshEntries()}
+                  disabled={management.requests.has('entries')}
+                  onClick={() => void management.refreshEntries()}
                 >
                   {t('retry')}
                 </Button>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
-
-        {actionError}
-        {confirmationDialog}
-        {!confirmation && operation ? (
-          <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
-            <LoaderCircleIcon className="size-4 animate-spin" />
-            {operation}
-          </div>
+        {management.errors.reload || management.errors.entries ? (
+          <p role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
+            {management.errors.reload ?? management.errors.entries}
+          </p>
         ) : null}
-
-        <section aria-label={t('installed')}>
-          {loading && !snapshot ? (
-            <div className="flex min-h-32 items-center justify-center gap-2 text-sm text-muted-foreground">
-              <LoaderCircleIcon className="size-4 animate-spin" />
-              {t('loading')}
-            </div>
-          ) : snapshot?.plugins.length ? (
-            <div className="space-y-2">
-              {snapshot.plugins.map((plugin) => {
-                const displayName = pluginDisplayName(plugin)
-                const expanded = plugin.source === detailSource
-                const browserError = plugin.pluginName
-                  ? (browserErrors.get(plugin.pluginName) ?? null)
-                  : null
-                const failed =
-                  plugin.status === 'failed' ||
-                  plugin.operation?.phase === 'failed' ||
-                  browserError !== null
-                const errorMessage =
-                  (plugin.operation?.phase === 'failed' ? plugin.operation.message : null) ||
-                  (plugin.error ? selectL4LocalizedText(plugin.error.message, locale) : null) ||
-                  browserError ||
-                  (failed ? t('notLoaded') : null)
-                return (
-                  <Collapsible
-                    key={plugin.source}
-                    open={expanded}
-                    onOpenChange={(open) => {
-                      if (open) openDetail(plugin.source)
-                      else closeDetail()
-                    }}
-                    className={cn(
-                      'overflow-hidden rounded-lg border bg-card',
-                      failed && 'border-destructive'
-                    )}
-                  >
-                    <CollapsibleTrigger
-                      type="button"
-                      className="flex min-h-14 w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring active:bg-accent/80 disabled:pointer-events-none disabled:opacity-50"
-                      aria-label={t('viewDetails', { name: displayName })}
-                      disabled={operation !== null}
-                    >
-                      <span className="min-w-0 flex-1">
-                        <span className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                          <span className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">
-                            {displayName}
-                          </span>
-                          {plugin.version ? (
-                            <span className="shrink-0 text-xs text-muted-foreground">
-                              v{plugin.version}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span
-                          className={cn(
-                            'mt-1 block break-words text-sm leading-5 text-muted-foreground',
-                            expanded ? 'whitespace-pre-line' : 'line-clamp-1'
-                          )}
-                        >
-                          {plugin.description ?? t('noPluginDescription')}
-                        </span>
-                        {errorMessage ? (
-                          <span className="mt-1 block truncate text-sm text-destructive">
-                            {errorMessage}
-                          </span>
-                        ) : null}
-                      </span>
-                      <ChevronDownIcon
-                        aria-hidden="true"
-                        className={cn(
-                          'size-4 shrink-0 text-muted-foreground transition-transform',
-                          expanded && 'rotate-180'
-                        )}
-                      />
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      {expanded ? (
-                        <div className="space-y-4 border-t p-4">
-                          <L2PluginManagementControls
-                            plugin={plugin}
-                            displayName={displayName}
-                            browserError={browserError}
-                            disabled={operation !== null}
-                            pending={selectedPending}
-                            browserRetryPending={requests.has(`entry:${plugin.pluginName}`)}
-                            reloadDisabled={
-                              basicMode ||
-                              operation !== null ||
-                              requests.has(`source:${plugin.source}`) ||
-                              (selectedPending &&
-                                !(
-                                  plugin.operation?.phase === 'waiting' &&
-                                  plugin.operation.action !== 'apply'
-                                ))
-                            }
-                            onAction={handleControlAction}
-                          />
-                          <L2PluginCapabilityDetails
-                            plugin={plugin}
-                            detail={detail}
-                            detailLoading={detailLoading}
-                            detailError={detailError}
-                            browserContributions={
-                              plugin.pluginName
-                                ? (browserContributionsByPlugin.get(plugin.pluginName) ?? [])
-                                : []
-                            }
-                            onRetry={() => void loadDetail(plugin.source)}
-                          />
-                        </div>
-                      ) : null}
-                    </CollapsibleContent>
-                  </Collapsible>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="py-6 text-center text-sm text-muted-foreground">{t('empty')}</div>
-          )}
-        </section>
+      </header>
+      <div
+        role="tablist"
+        aria-label={t('title')}
+        className="flex shrink-0 gap-1 border-b px-4 pt-2 sm:px-6"
+      >
+        {(['installed', 'search'] as const).map((value) => (
+          <button
+            key={value}
+            id={`plugin-tab-${value}`}
+            type="button"
+            role="tab"
+            aria-selected={tab === value}
+            aria-controls={`plugin-panel-${value}`}
+            tabIndex={tab === value ? 0 : -1}
+            className={`min-h-9 border-b-2 px-3 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${tab === value ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:bg-accent'}`}
+            onClick={() => setTab(value)}
+            onKeyDown={(event) => {
+              if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+                event.preventDefault()
+                const next =
+                  event.key === 'Home'
+                    ? 'installed'
+                    : event.key === 'End'
+                      ? 'search'
+                      : tab === 'installed'
+                        ? 'search'
+                        : 'installed'
+                setTab(next)
+                document.getElementById(`plugin-tab-${next}`)?.focus()
+              }
+            }}
+          >
+            {t(value === 'installed' ? 'installedTab' : 'searchPlugins')}
+          </button>
+        ))}
       </div>
+      <div
+        id="plugin-panel-installed"
+        role="tabpanel"
+        aria-labelledby="plugin-tab-installed"
+        tabIndex={0}
+        hidden={tab !== 'installed'}
+        className={`pi-desk-chat-scrollbar min-h-0 flex-1 overflow-y-auto p-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:p-6 ${tab !== 'installed' ? 'hidden' : ''}`}
+      >
+        <div className="space-y-4">
+          {direct.open ? (
+            <L2PluginDirectInstall
+              source={direct.source}
+              isNpm={Boolean(direct.spec)}
+              detail={direct.detail}
+              loading={direct.loading}
+              pending={directPending}
+              disabled={disabled}
+              error={
+                direct.error ??
+                management.errors[directKey] ??
+                (directPlugin?.operation?.phase === 'failed'
+                  ? directPlugin.operation.message
+                  : null)
+              }
+              operationMessage={
+                directPending
+                  ? (operationMessage(directPlugin?.operation?.phase) ?? t('submitting'))
+                  : null
+              }
+              override={direct.override}
+              registry={direct.registry}
+              onSource={direct.changeSource}
+              onMode={direct.setOverride}
+              onRegistry={direct.setRegistry}
+              onRead={() => void direct.loadDetail()}
+              onVersion={(version) => void direct.loadDetail(version)}
+              onInstall={() => void direct.install(management.requestInstall)}
+              onClose={() => direct.setOpen(false)}
+            />
+          ) : null}
+          <L2PluginInstalledList
+            snapshot={snapshot}
+            loading={management.loading}
+            filter={filter}
+            disabled={disabled}
+            requests={management.requests}
+            errors={management.errors}
+            browserErrors={browserErrors}
+            onFilter={setFilter}
+            onDetail={openInstalled}
+            onAction={management.handleControlAction}
+            onDirectInstall={() => direct.setOpen(true)}
+            onRefresh={() => void management.refresh()}
+          />
+        </div>
+      </div>
+      <div
+        id="plugin-panel-search"
+        role="tabpanel"
+        aria-labelledby="plugin-tab-search"
+        tabIndex={0}
+        hidden={tab !== 'search'}
+        className={`pi-desk-chat-scrollbar min-h-0 flex-1 overflow-y-auto p-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:p-6 ${tab !== 'search' ? 'hidden' : ''}`}
+      >
+        <L2PluginCatalogSearch
+          query={catalog.query}
+          kind={catalog.kind}
+          searchSource={catalog.searchSource}
+          registry={catalog.registry}
+          items={catalog.items}
+          loading={catalog.loading}
+          error={catalog.error}
+          searched={catalog.searched}
+          hasMore={catalog.hasMore}
+          disabled={disabled}
+          snapshot={snapshot}
+          requests={management.requests}
+          preparing={catalog.preparing}
+          errors={management.errors}
+          installErrors={catalog.installErrors}
+          onQuery={catalog.setQuery}
+          onCompositionStart={catalog.beginComposition}
+          onCompositionEnd={catalog.endComposition}
+          onKind={catalog.setKind}
+          onSearchSource={catalog.setSearchSource}
+          onRegistry={catalog.setRegistry}
+          onDetail={openCatalog}
+          onInstall={installCatalogItem}
+          onUpdate={(source) => void management.execute({ kind: 'update', source })}
+          onMore={catalog.loadMore}
+          onRetry={catalog.retry}
+        />
+      </div>
+      <L2PluginManagementDialog
+        open={Boolean(management.confirmation || management.detailSource || catalog.selection)}
+        title={
+          selectedPlugin
+            ? pluginDisplayName(selectedPlugin)
+            : (catalog.selection?.name ?? t('details'))
+        }
+        confirmation={management.confirmation}
+        onClose={closeDialog}
+        onConfirm={(action) => void management.execute(action)}
+      >
+        {selectedPlugin ? (
+          <div className="min-w-0 space-y-5">
+            {management.detail?.readme ? (
+              <L2PluginReadme key={selectedPlugin.source} readme={management.detail.readme} />
+            ) : null}
+            <L2PluginCapabilityDetails
+              plugin={selectedPlugin}
+              detail={management.detail}
+              detailLoading={management.detailLoading}
+              detailError={management.detailError}
+              browserContributions={
+                selectedPlugin.pluginName
+                  ? (management.pluginHost
+                      .getRegisteredBrowserDescriptors()
+                      .find((descriptor) => descriptor.pluginName === selectedPlugin.pluginName)
+                      ?.contributions ?? [])
+                  : []
+              }
+              onRetry={() => void management.loadDetail(selectedPlugin.source)}
+            />
+          </div>
+        ) : catalog.selection ? (
+          catalog.detailLoading ? (
+            <p role="status" className="py-4 text-sm text-muted-foreground">
+              {t('loadingPackage')}
+            </p>
+          ) : catalog.detailError ? (
+            <div role="alert" className="space-y-2 text-sm">
+              <p className="text-destructive [overflow-wrap:anywhere]">{catalog.detailError}</p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void catalog.loadDetail(catalog.selection!)}
+              >
+                {t('retry')}
+              </Button>
+            </div>
+          ) : catalog.detail ? (
+            <L2PluginCatalogDetailView
+              detail={catalog.detail}
+              disabled={disabled}
+              pending={catalogPending}
+              installed={Boolean(
+                catalogPlugin &&
+                !(
+                  catalogPlugin.operation?.action === 'add' &&
+                  catalogPlugin.operation.phase === 'failed'
+                )
+              )}
+              installedVersion={catalogPlugin?.version ?? null}
+              updateAvailable={Boolean(catalogPlugin?.updateAvailable)}
+              error={
+                catalog.installErrors[catalog.detail.name] ??
+                management.errors[catalogKey] ??
+                (catalogPlugin?.operation?.phase === 'failed'
+                  ? catalogPlugin.operation.message
+                  : null)
+              }
+              operationMessage={operationMessage(catalogPlugin?.operation?.phase)}
+              downloadMode={catalog.downloadMode}
+              downloadRegistry={catalog.downloadRegistry}
+              onDownloadMode={catalog.setDownloadMode}
+              onDownloadRegistry={catalog.setDownloadRegistry}
+              onVersion={(version) => void catalog.loadDetail(catalog.selection!, version)}
+              onInstall={() => catalog.installDetail(management.requestInstall)}
+              onUpdate={() => {
+                if (catalogPlugin)
+                  void management.execute({ kind: 'update', source: catalogPlugin.source })
+              }}
+            />
+          ) : null
+        ) : management.detailSource ? (
+          <p className="text-sm text-muted-foreground">{t('pluginRemoved')}</p>
+        ) : null}
+      </L2PluginManagementDialog>
     </div>
   )
 }

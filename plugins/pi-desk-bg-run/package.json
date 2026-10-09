@@ -42,11 +42,19 @@
   },
   "keywords": [
     "pi-package",
+    "pi-desk-plugin",
     "background-task"
   ],
   "pi": {
     "extensions": [
       "./dist/index.js"
     ]
+  },
+  "piDesk": {
+    "i18n": {
+      "zh-CN": {
+        "description": "在后台运行命令行任务，并在 Pi Desk 任务中心查看进度与结果。"
+      }
+    }
   }
 }

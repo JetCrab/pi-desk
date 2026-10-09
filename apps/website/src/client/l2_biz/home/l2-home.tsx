@@ -15,7 +15,7 @@ export function Home({
       <section
         id="install"
         aria-label="安装与下载"
-        className="mx-auto grid min-h-[320px] max-w-6xl grid-cols-[minmax(0,1fr)_400px] items-center gap-12 px-6 py-10 md:min-h-[calc(48svh-72px)] max-md:grid-cols-1 max-md:justify-items-center max-md:gap-8 max-md:text-center max-sm:px-5"
+        className="mx-auto grid min-h-[320px] max-w-6xl grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] items-center gap-12 px-6 py-10 md:min-h-[calc(48svh-72px)] lg:grid-cols-[minmax(0,1fr)_480px] max-md:grid-cols-1 max-md:justify-items-center max-md:gap-8 max-md:text-center max-sm:px-5"
       >
         <div>
           <h1 className="text-[clamp(38px,4.5vw,60px)] leading-[1.15] font-semibold tracking-tight">
