@@ -69,8 +69,8 @@ jobs:
     env:
       # 系统环境测试共享 Windows 用户会话；用例内部的并发行为仍正常验证。
       RUST_TEST_THREADS: '1'
-      BUILD_PROFILE: ${{ github.ref == 'refs/heads/dev' && 'debug' || 'release' }}
-      RUST_CACHE_STAGE: ${{ github.workspace }}/temp/cache/rust/windows-${{ github.ref == 'refs/heads/dev' && 'debug' || 'release' }}
+      BUILD_PROFILE: release
+      RUST_CACHE_STAGE: ${{ github.workspace }}/temp/cache/rust/windows-release
       CARGO_TARGET_DIR: ${{ github.workspace }}/temp/build/desktop-ci/${{ github.run_id }}-${{ github.run_attempt }}
       PI_DESK_DESKTOP_WEB_DIST: ${{ github.workspace }}/temp/build/desktop-ci/${{ github.run_id }}-${{ github.run_attempt }}/web
       CLIENT_OUTPUT: ${{ github.workspace }}/temp/package/clients/windows/${{ github.run_id }}-${{ github.run_attempt }}
@@ -145,7 +145,6 @@ jobs:
         working-directory: apps/desktop
         run: |
           $buildArgs = @('exec', 'tauri', 'build', '--target', 'i686-pc-windows-msvc', '--bundles', 'nsis', '--config', "$env:CARGO_TARGET_DIR/tauri-ci.json")
-          if ($env:BUILD_PROFILE -eq 'debug') { $buildArgs += '--debug' }
           & pnpm @buildArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 隔离验证覆盖安装与正常退出

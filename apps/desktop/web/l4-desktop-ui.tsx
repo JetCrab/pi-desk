@@ -1,4 +1,5 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { getVersion } from '@tauri-apps/api/app'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 const paths = {
   arrow: 'M5 12h14m-6-6 6 6-6 6',
@@ -45,6 +46,16 @@ export function DesktopIcon({
 }
 
 export function DesktopHeader({ children }: { children?: ReactNode }): React.JSX.Element {
+  const [version, setVersion] = useState<string | null>(null)
+
+  useEffect(() => {
+    void getVersion()
+      .then(setVersion)
+      .catch((cause: unknown): void => {
+        console.error('读取桌面程序版本失败：', cause)
+      })
+  }, [])
+
   return (
     <header className="app-header">
       <div className="brand">
@@ -78,7 +89,7 @@ export function DesktopHeader({ children }: { children?: ReactNode }): React.JSX
             <path d="M256 300C256 317 246 327 232 327C220 327 211 322 207 314M256 300C256 317 266 327 280 327C292 327 301 322 305 314M101 298C116 293 132 292 146 292M110 327C123 318 135 312 148 310M411 298C396 293 380 292 366 292M402 327C389 318 377 312 364 310" />
           </g>
         </svg>
-        <span>Pi Desk</span>
+        <span>Pi Desk{version ? ` v${version}` : ''}</span>
       </div>
       <div className="header-actions">{children}</div>
     </header>

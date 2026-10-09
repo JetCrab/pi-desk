@@ -14,6 +14,9 @@ import {
 } from '../../../tests/l4-e2e-server-runtime.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+const desktopVersion = JSON.parse(
+  await readFile(join(projectRoot, 'apps/desktop/package.json'), 'utf8')
+).version
 const executable = resolve(process.argv[2] ?? '')
 const frontend = resolve(process.argv[3] ?? '')
 const identifier = 'com.jetcrab.desktop.ui-smoke'
@@ -327,7 +330,7 @@ function targetAction(url, action) {
   })()`
 }
 
-function installLayoutFixture() {
+function installLayoutFixture(desktopVersion) {
   const localUrl = 'http://127.0.0.1:30333/'
   const serverConfig = {
     startCommand: 'pi-desk --port {port}',
@@ -388,6 +391,7 @@ function installLayoutFixture() {
     async invoke(command, args = {}) {
       window.desktopLayoutCommands.push({ command, args })
       const state = window.desktopLayoutState
+      if (command === 'plugin:app|version') return desktopVersion
       if (command === 'plugin:event|listen') return 1
       if (command === 'plugin:event|unlisten') return
       if (command === 'get_control_state') {
@@ -491,6 +495,10 @@ async function validateLayout(page) {
         `!!window.desktopLayoutReady && !!document.querySelector('[aria-label="正在准备 Pi Desk"]')`
       ),
     '完整页面加载状态'
+  )
+  await until(
+    () => hasText(`Pi Desk v${desktopVersion}`),
+    '页头显示桌面自身版本，不使用托管服务版本'
   )
   await page.screenshot('control-loading.png')
   await page.evaluate('window.desktopLayoutReady()')
@@ -771,7 +779,10 @@ validation: try {
     const control = await connect(target)
     await control.viewport(960, 720)
     await control.theme('light')
-    await control.load(`${targetUrl}desktop/`, `(${installLayoutFixture.toString()})()`)
+    await control.load(
+      `${targetUrl}desktop/`,
+      `(${installLayoutFixture.toString()})(${JSON.stringify(desktopVersion)})`
+    )
     await validateLayout(control)
     assert.deepEqual(control.errors, [], '布局交互不应出现 JavaScript 异常')
     passed = true

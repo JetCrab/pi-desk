@@ -50,6 +50,17 @@ fn main() {
                 }
                 app.exit(0);
             } else {
+                if let Some(state) = app.try_state::<ShellState>() {
+                    logging::write(
+                        &state.log_path,
+                        "desktop-existing-instance",
+                        &format!(
+                            "version={} pid={}",
+                            app.package_info().version,
+                            std::process::id()
+                        ),
+                    );
+                }
                 let _ = runtime::open_control_window(app);
             }
         }))
@@ -119,8 +130,10 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
         &log_path,
         "desktop-start",
         &format!(
-            "version={} config={}",
-            env!("CARGO_PKG_VERSION"),
+            "version={} pid={} executable={:?} config={}",
+            app.package_info().version,
+            std::process::id(),
+            std::env::current_exe(),
             config_path.display()
         ),
     );

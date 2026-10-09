@@ -304,6 +304,31 @@ async function readTags(name) {
   return response.json()
 }
 
+export async function waitForDevelopmentTags(name, version) {
+  const deadline = Date.now() + 10 * 60_000
+  let nextLogAt = 0
+  while (true) {
+    const tags = await readTags(name)
+    assertDevelopmentTags(tags, name)
+    if (tags.dev === version) {
+      console.info(`开发标签校验通过：${name}@${version}`)
+      return
+    }
+    const now = Date.now()
+    if (now >= deadline) {
+      console.error(`等待开发标签同步超时（10 分钟）：${name}@${version}`)
+      assertDevelopmentTags(tags, name, version)
+    }
+    if (now >= nextLogAt) {
+      console.info(
+        `等待开发标签同步：${name}@${version}，当前 dev=${tags.dev ?? '未设置'}；每 5 秒检查，最多等待 10 分钟`
+      )
+      nextLogAt = now + 60_000
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5_000))
+  }
+}
+
 async function publish(entries, output) {
   for (const entry of entries) npmTagFor(process.env.GITHUB_REF, entry.manifest.version)
   assert.equal(process.env.GITHUB_REPOSITORY, 'JetCrab/pi-desk', '仓库与 npm 授权不匹配')
@@ -362,27 +387,23 @@ async function publish(entries, output) {
     for (const entry of entries) {
       if (existing.has(entry.manifest.name)) {
         console.info(`复用已验证发布：${entry.manifest.name}@${entry.manifest.version}`)
-        continue
-      }
-      console.info(`发布：${entry.manifest.name}@${entry.manifest.version}`)
-      run(
-        'npm',
-        [
-          'publish',
-          archivePath(entry, output),
-          '--ignore-scripts',
-          '--access=public',
-          `--tag=${npmTagFor(process.env.GITHUB_REF, entry.manifest.version)}`,
-          `--registry=${registry}`
-        ],
-        { env }
-      )
-      if (npmTagFor(process.env.GITHUB_REF, entry.manifest.version) === 'dev') {
-        assertDevelopmentTags(
-          await readTags(entry.manifest.name),
-          entry.manifest.name,
-          entry.manifest.version
+      } else {
+        console.info(`发布：${entry.manifest.name}@${entry.manifest.version}`)
+        run(
+          'npm',
+          [
+            'publish',
+            archivePath(entry, output),
+            '--ignore-scripts',
+            '--access=public',
+            `--tag=${npmTagFor(process.env.GITHUB_REF, entry.manifest.version)}`,
+            `--registry=${registry}`
+          ],
+          { env }
         )
+      }
+      if (npmTagFor(process.env.GITHUB_REF, entry.manifest.version) === 'dev') {
+        await waitForDevelopmentTags(entry.manifest.name, entry.manifest.version)
       }
     }
   } finally {

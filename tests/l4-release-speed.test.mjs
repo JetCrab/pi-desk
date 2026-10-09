@@ -222,7 +222,16 @@ test('客户端dev保留产物和核心运行检查，完整回归只在main', a
     new URL('../.github/workflows/build-clients.yml', import.meta.url),
     'utf8'
   )
-  assert.match(windows, /BUILD_PROFILE:.*'debug'.*'release'/)
+  assert.match(windows, /BUILD_PROFILE: release\n/)
+  assert.match(windows, /RUST_CACHE_STAGE:.*windows-release/)
+  assert.doesNotMatch(windows, /--debug/)
+  const macos = await readFile(
+    new URL('../.github/workflows/release-apple.yml', import.meta.url),
+    'utf8'
+  )
+  assert.match(macos, /BUILD_PROFILE: release\n/)
+  assert.match(macos, /RUST_CACHE_STAGE:.*macos-release/)
+  assert.doesNotMatch(macos, /--debug/)
   assert.match(windows, /name: 正式发布桌面 Rust 回归\n\s+if: github.ref == 'refs\/heads\/main'/)
   assert.match(
     windows,

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { terminateManagedTree } from '../../src/server/l4_foundation/process/l4-process-tree.js'
 
@@ -38,6 +38,13 @@ async function invoke(args) {
 }
 
 try {
+  const bytes = await readFile(executable)
+  const peHeader = bytes.readUInt32LE(0x3c)
+  assert.equal(
+    bytes.readUInt16LE(peHeader + 24 + 68),
+    2,
+    '桌面安装包必须使用 Windows GUI 子系统，不能携带调试控制台'
+  )
   const info = await invoke(['--tunnel-info'])
   assert.equal(info.error, null, info.stderr)
   assert.deepEqual(JSON.parse(info.stdout), { controlServerUrl: 'http://tunnel.example:7001' })
