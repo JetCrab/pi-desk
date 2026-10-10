@@ -1,0 +1,107 @@
+{
+  "tag": "v1.1.5",
+  "date": 1791625214131,
+  "source": {
+    "base": "1ab0199728371a3b86a5e41476fc9dc7c0dbf19c",
+    "head": "2c723842494b0b5e3d1341fcc2d6f81212f4d1ef"
+  },
+  "packages": [
+    {
+      "name": "@jetcrab/pi-desk-sdk",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk",
+      "version": "1.1.5"
+    },
+    {
+      "name": "@jetcrab/pi-desk-bg-run",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-ctx",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-deliverables",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-quota-viewer",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-remote-debug",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-subagent",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tibo-monitor",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tool-reason",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-usage",
+      "version": "1.1.1"
+    }
+  ],
+  "clients": [
+    {
+      "platform": "windows",
+      "version": "1.1.5",
+      "file": "PiDesk-Windows-x86-Setup.exe",
+      "sha256": "1e8ba93aa2294ae0108bb0f61def673e1792b2f6aa19a1e0592b1975a3f2a623"
+    },
+    {
+      "platform": "macos",
+      "version": "1.1.5",
+      "file": "PiDesk-macOS-universal.dmg",
+      "sha256": "ccc36768eaf9031ef8269e5149308af4662fbba5e45b4d44cf1066b196d6f79a"
+    },
+    {
+      "platform": "linux",
+      "version": "1.1.5",
+      "file": "PiDesk-Linux-x86_64.AppImage",
+      "sha256": "6f9fdd5a6179a296fddbdbafc404a73b0d3b6b2745cd9c6e6f2118e2fac0881c"
+    },
+    {
+      "platform": "android",
+      "version": "1.1.0",
+      "file": "PiDesk-Android.apk",
+      "sha256": "298cb6eef6229dbe7d39666f3cc74104ef0f88177ce90bd3361e76aa5d199972"
+    }
+  ],
+  "changes": {
+    "added": [
+      "Bundled Pi Desk documentation navigation, management-command and plugin-development guides, and a runnable local application example."
+    ],
+    "features": [
+      "Added persistent, unified desktop download-source settings with official, domestic-mirror and custom npm registry options for environment preparation and managed package downloads.",
+      "Added a local npm configuration mode for plugin downloads that preserves registry, scope and authentication settings for installation and preflight checks.",
+      "Added the `plugins reload` management command to reload installed plugin code without downloading packages, restarting the host or reloading existing Pi sessions."
+    ],
+    "changed": [
+      "Redesigned plugin management with status filters, dedicated detail views, clearer version and update indicators, automatic update checks outside basic mode, and an Update All action.",
+      "Plugin batch operations and targeted update checks now process large selections in chunks instead of imposing a 32-plugin selection limit.",
+      "Desktop managed-package version checks and installations now retry registry-related failures using the official registry and, when different, the local npm registry.",
+      "Pi Desk sessions now receive bundled-documentation guidance through the system prompt instead of the generated Pi Desk skill."
+    ],
+    "fixed": [
+      "Fixed mobile Back handling for the terminal, file preview and branch picker, and prevented hidden workbench content from responding while the sidebar is open.",
+      "Fixed Escape closing both the image viewer and the dialog underneath it.",
+      "Fixed chat scrolling away from the bottom when content rearranges without changing height.",
+      "Prevented stale project-model and MCP settings from being edited or saved while switching projects or refreshing configuration; switching MCP scopes now asks before discarding unsaved edits.",
+      "Fixed scoped plugin registry overrides affecting unrelated public dependencies, and aligned registry lookups with the npm configuration used for plugin installation."
+    ],
+    "breaking": [
+      "Legacy per-service desktop registry settings are no longer read or saved. Configure custom registries in the unified desktop download-source settings instead."
+    ],
+    "removed": []
+  }
+}
