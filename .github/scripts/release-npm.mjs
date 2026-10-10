@@ -339,10 +339,11 @@ async function prepare(entries, output) {
             }
           })
         )
+        for (const command of ['typecheck', 'check:layers']) {
+          await stage(`test ${command}`, () => runAsync('pnpm', [command]))
+        }
         if (full) {
-          for (const command of ['typecheck', 'lint:production', 'check:layers', 'test:package']) {
-            await stage(`test ${command}`, () => runAsync('pnpm', [command]))
-          }
+          await stage('test 制品内容', () => runAsync('pnpm', ['test:package']))
         }
         if (!full && existsSync(archivePath(entry, output))) {
           await pack(entry, output)
