@@ -67,7 +67,9 @@ export function L2WorkbenchSidebarLayout({
         >
           {sidebar}
         </div>
-        {children}
+        <div className="flex min-h-0 min-w-0 flex-1" inert={open || undefined}>
+          {children}
+        </div>
       </>
     )
   }

@@ -176,7 +176,7 @@ test('已知结果兼容旧空字段，保留未知版本、零插件及异常�
     mode: 'normal',
     cwd: 'C:/project',
     agentDir: 'C:/agent',
-    skillDirectory: 'C:/skills'
+    docsDirectory: 'C:/host/docs/pi-desk'
   }
   assert.equal(
     readL3ConversationPiDeskOutput('pideskInfo', JSON.stringify(environment))?.kind,
@@ -188,6 +188,18 @@ test('已知结果兼容旧空字段，保留未知版本、零插件及异常�
       JSON.stringify({ ...environment, newField: true })
     ),
     null
+  )
+  assert.equal(
+    readL3ConversationPiDeskOutput(
+      'pideskInfo',
+      JSON.stringify({
+        ...environment,
+        docsDirectory: undefined,
+        skillDirectory: 'C:/legacy-skills'
+      })
+    ),
+    null,
+    '旧信息保留原文，不伪造当前文档目录'
   )
 })
 

@@ -76,7 +76,7 @@ export const L3_CONVERSATION_LOCALE_MESSAGES = {
         mode: 'Mode',
         cwd: 'Project directory',
         agentDir: 'Pi directory',
-        skillDirectory: 'Skill directory'
+        docsDirectory: 'Documentation directory'
       },
       environment: { development: 'Development', production: 'Production' },
       mode: { basic: 'Basic mode', normal: 'Normal mode' },
@@ -221,7 +221,7 @@ export const L3_CONVERSATION_LOCALE_MESSAGES = {
         mode: '运行模式',
         cwd: '项目目录',
         agentDir: 'Pi 目录',
-        skillDirectory: 'Skill 目录'
+        docsDirectory: '文档目录'
       },
       environment: { development: '开发环境', production: '正式环境' },
       mode: { basic: '基础模式', normal: '正常模式' },

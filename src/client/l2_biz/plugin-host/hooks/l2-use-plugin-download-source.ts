@@ -21,7 +21,10 @@ interface PluginDownloadSourceState {
   retry: () => Promise<void>
 }
 
-export function useL2PluginDownloadSource(biz: L2PluginManagementBiz): PluginDownloadSourceState {
+export function useL2PluginDownloadSource(
+  biz: L2PluginManagementBiz,
+  onSaved: () => void
+): PluginDownloadSourceState {
   const { t } = useTranslation('pluginManagement')
   const [settings, setSettings] = useState<L2PluginCatalogSettings | null>(null)
   const [mode, setMode] = useState<L2PluginDownloadSource['mode']>('auto')
@@ -85,6 +88,7 @@ export function useL2PluginDownloadSource(biz: L2PluginManagementBiz): PluginDow
       if (mounted.current) {
         setSettings(next)
         setMode(next.downloadSource.mode)
+        onSaved()
       }
     } catch (cause) {
       failedRequest.current = 'save'

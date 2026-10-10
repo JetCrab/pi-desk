@@ -26,6 +26,7 @@ export type PluginManagementAction =
   | { kind: 'reload'; mode?: 'normal' | 'basic' }
 
 interface PluginManagementOptions {
+  basicMode?: boolean
   biz: L2PluginManagementBiz
   snapshot: L2PluginManagementSnapshot | null
   onSnapshot: (snapshot: L2PluginManagementSnapshot) => void
@@ -104,6 +105,7 @@ interface PluginManagementState {
 }
 
 export function useL2PluginManagement({
+  basicMode = false,
   biz,
   snapshot,
   onSnapshot,
@@ -172,21 +174,24 @@ export function useL2PluginManagement({
     const available = targets.filter((source) => !busySource(source))
     busy.forEach((source) => setError(pluginRequestKey(source), t('sourceBusy')))
     if (!available.length) return
-    if (busy.length && available.length > 32) {
-      setError('list', t('batchLimit'))
-      return
-    }
     const keys = available.map(pluginRequestKey)
     setRequest('check', true)
     keys.forEach((key) => setRequest(key, true))
     setLoading(true)
     setError('list', null)
     try {
-      await readSnapshot({
-        checkUpdates: true,
-        ...(sources || busy.length ? { sources: available } : {}),
-        ...(tag ? { tag } : {})
-      })
+      if (sources || busy.length) {
+        for (let offset = 0; offset < available.length; offset += 32) {
+          await readSnapshot({
+            checkUpdates: true,
+            sources: available.slice(offset, offset + 32),
+            ...(tag ? { tag } : {})
+          })
+          if (!mounted.current) break
+        }
+      } else {
+        await readSnapshot({ checkUpdates: true, ...(tag ? { tag } : {}) })
+      }
     } catch (cause) {
       setError('list', cause instanceof Error ? cause.message : t('updateCheckFailed'))
     } finally {
@@ -204,8 +209,21 @@ export function useL2PluginManagement({
       setLoading(true)
       void biz
         .list(false)
-        .then((next) => {
-          if (active && request === listRequest.current) onSnapshot(next)
+        .then(async (next) => {
+          if (!active || request !== listRequest.current) return
+          onSnapshot(next)
+          const unchecked = next.plugins.some(
+            (plugin) =>
+              plugin.kind === 'package' &&
+              /^(npm:|git:|https?:|git@)/.test(plugin.source) &&
+              plugin.updateAvailable === null &&
+              !plugin.updateError &&
+              !plugin.operation
+          )
+          if (!basicMode && unchecked) {
+            const checked = await biz.list(true)
+            if (active && request === listRequest.current) onSnapshot(checked)
+          }
         })
         .catch((cause: unknown) => {
           if (active)
@@ -221,7 +239,7 @@ export function useL2PluginManagement({
       detailRequest.current += 1
       listRequest.current += 1
     }
-  }, [biz, onSnapshot, t])
+  }, [biz, onSnapshot, t, basicMode])
 
   const executeBatch = async (input: L2PluginManagementBatchRequest): Promise<void> => {
     const sources = input.action === 'add' ? input.items.map((item) => item.source) : input.sources
@@ -236,19 +254,51 @@ export function useL2PluginManagement({
       setError(key, null)
     })
     setConfirmation(null)
+    let remaining = [...available]
     try {
-      const request =
-        input.action === 'add'
-          ? { ...input, items: input.items.filter((item) => available.includes(item.source)) }
-          : { ...input, sources: available }
-      const response = await biz.batch(request)
-      if (!mounted.current) return
-      listRequest.current += 1
-      onSnapshot(response.snapshot)
-      response.results.forEach((result) => setError(pluginRequestKey(result.source), result.error))
+      let current = await biz.list()
+      const deadline = Date.now() + 15 * 60_000
+      while (remaining.length) {
+        const pending = current.plugins.filter(
+          (plugin) => plugin.operation && plugin.operation.phase !== 'failed'
+        )
+        const capacity = input.action === 'tag' ? 32 : Math.max(0, 32 - pending.length)
+        if (!capacity) {
+          if (
+            pending.some((plugin) => plugin.operation?.phase === 'waiting') ||
+            Date.now() >= deadline
+          ) {
+            remaining.forEach((source) => setError(pluginRequestKey(source), t('batchWaiting')))
+            break
+          }
+          await new Promise<void>((resolve) => setTimeout(resolve, 750))
+          current = await biz.list()
+          if (mounted.current) {
+            listRequest.current += 1
+            onSnapshot(current)
+          }
+          continue
+        }
+        const chunk = remaining.slice(0, capacity)
+        const request =
+          input.action === 'add'
+            ? { ...input, items: input.items.filter((item) => chunk.includes(item.source)) }
+            : { ...input, sources: chunk }
+        const response = await biz.batch(request)
+        current = response.snapshot
+        if (mounted.current) {
+          listRequest.current += 1
+          onSnapshot(current)
+        }
+        response.results.forEach((result) =>
+          setError(pluginRequestKey(result.source), result.error)
+        )
+        chunk.forEach((source) => setRequest(pluginRequestKey(source), false))
+        remaining = remaining.slice(chunk.length)
+      }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : t('batchFailed')
-      keys.forEach((key) => setError(key, message))
+      remaining.forEach((source) => setError(pluginRequestKey(source), message))
     } finally {
       keys.forEach((key) => setRequest(key, false))
     }

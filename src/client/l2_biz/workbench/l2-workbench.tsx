@@ -1343,8 +1343,7 @@ export function L2Workbench({
         event.ctrlKey ||
         event.metaKey ||
         event.shiftKey ||
-        event.isComposing ||
-        branchPicker !== null
+        event.isComposing
       ) {
         return
       }
@@ -1356,8 +1355,26 @@ export function L2Workbench({
         return
       }
 
+      if (branchPicker !== null) return
       const workId = focusedWorkIdRef.current
       if (!workId) return
+
+      if (mobile) {
+        branchPickerShortcutLastEscapeRef.current = 0
+        const workspace = fileRuntime.getWorkspace(workId)
+        const column = document.querySelector(`[data-work-id="${CSS.escape(workId)}"]`)
+        // 手机返回可能落在 BODY；隐藏在终端或侧栏下的文件不能响应。
+        if (
+          workspace?.windowOpen &&
+          workspace.activePane === 'files' &&
+          column &&
+          !column.closest('[inert]')
+        ) {
+          event.preventDefault()
+          fileRuntime.hideWindow(workId)
+        }
+        return
+      }
 
       const now = Date.now()
       if (now - branchPickerShortcutLastEscapeRef.current >= BRANCH_PICKER_SHORTCUT_INTERVAL_MS) {
@@ -1372,7 +1389,7 @@ export function L2Workbench({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [branchPicker, closeMobileDrawer, mobile, openBranchPicker])
+  }, [branchPicker, closeMobileDrawer, fileRuntime, mobile, openBranchPicker])
 
   useEffect(
     () =>

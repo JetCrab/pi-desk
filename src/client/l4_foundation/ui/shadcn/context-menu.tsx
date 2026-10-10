@@ -34,6 +34,7 @@ function ContextMenuContent({
   alignOffset = 4,
   side = 'right',
   sideOffset = 0,
+  finalFocus = false,
   ...props
 }: ContextMenuPrimitive.Popup.Props &
   Pick<ContextMenuPrimitive.Positioner.Props, 'align' | 'alignOffset' | 'side' | 'sideOffset'>) {
@@ -48,6 +49,7 @@ function ContextMenuContent({
       >
         <ContextMenuPrimitive.Popup
           data-slot="context-menu-content"
+          finalFocus={finalFocus}
           className={cn(l4MenuPopupClassName, className)}
           {...props}
         />
@@ -134,10 +136,15 @@ function ContextMenuSubTrigger({
   )
 }
 
-function ContextMenuSubContent({ ...props }: React.ComponentProps<typeof ContextMenuContent>) {
+// 子菜单关闭时上级菜单仍打开，需保留其键盘导航焦点。
+function ContextMenuSubContent({
+  finalFocus = true,
+  ...props
+}: React.ComponentProps<typeof ContextMenuContent>) {
   return (
     <ContextMenuContent
       data-slot="context-menu-sub-content"
+      finalFocus={finalFocus}
       className="min-w-40"
       side="right"
       {...props}

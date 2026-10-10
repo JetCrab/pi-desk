@@ -39,6 +39,7 @@ let modelResponse
 let modelRequestCount = 0
 let modelError
 let serverOutput = ''
+const widthPerformance = []
 
 function send(delta, finishReason = null) {
   assert.ok(modelResponse, '模型请求尚未到达')
@@ -149,11 +150,114 @@ async function wheel(client, deltaY) {
   const { rect } = await evaluate(client, metrics)
   await client.send('Input.dispatchMouseEvent', {
     type: 'mouseWheel',
-    x: rect.x + rect.width / 2,
+    x: rect.x + 1,
     y: rect.y + rect.height - 50,
     deltaX: 0,
     deltaY
   })
+}
+
+async function renderingMetrics(client) {
+  const { metrics: values } = await client.send('Performance.getMetrics')
+  return Object.fromEntries(
+    values
+      .filter(({ name }) =>
+        [
+          'LayoutCount',
+          'RecalcStyleCount',
+          'LayoutDuration',
+          'RecalcStyleDuration',
+          'ScriptDuration'
+        ].includes(name)
+      )
+      .map(({ name, value }) => [name, value])
+  )
+}
+
+async function checkWidthSettled(client, label, baseline = null) {
+  await settle(client)
+  const before = await renderingMetrics(client)
+  const elapsed = await evaluate(
+    client,
+    `(async () => {
+      const start = performance.now();
+      do { await new Promise(requestAnimationFrame); } while (performance.now() - start < 1000);
+      return performance.now() - start;
+    })()`
+  )
+  const after = await renderingMetrics(client)
+  const delta = Object.fromEntries(
+    Object.keys(before).map((key) => [key, after[key] - before[key]])
+  )
+  const animations = await evaluate(
+    client,
+    `document.getAnimations().filter(animation => animation.playState === 'running').map(animation => ({
+      name: animation.animationName ?? null,
+      target: animation.effect?.target?.tagName,
+      className: animation.effect?.target?.className,
+      pseudoElement: animation.effect?.pseudoElement,
+      iterations: String(animation.effect?.getComputedTiming().iterations)
+    }))`
+  )
+  widthPerformance.push({ label, elapsed, delta, animations })
+  console.log(label, { elapsed, delta, animations })
+  assert.ok(delta.LayoutCount <= 1, `${label}仍在持续布局：${JSON.stringify(delta)}`)
+  if (baseline) {
+    assert.ok(
+      delta.RecalcStyleCount / elapsed <=
+        baseline.delta.RecalcStyleCount / baseline.elapsed + 0.003,
+      `${label}样式重算超过调整前基线：${JSON.stringify({ baseline, elapsed, delta })}`
+    )
+  }
+  return { elapsed, delta }
+}
+
+async function dragSidebar(client) {
+  const point = await evaluate(
+    client,
+    `(() => {
+      const handle = document.querySelector('[role="separator"][aria-label="调整工作会话列表宽度"]');
+      const rect = handle.getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`
+  )
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: point.x,
+    y: point.y,
+    button: 'left',
+    clickCount: 1
+  })
+  let x = point.x
+  const widths = []
+  try {
+    for (const target of [460, 230, point.x]) {
+      const from = x
+      for (let step = 1; step <= 12; step++) {
+        x = from + ((target - from) * step) / 12
+        await client.send('Input.dispatchMouseEvent', {
+          type: 'mouseMoved',
+          x,
+          y: point.y,
+          button: 'left',
+          buttons: 1
+        })
+        await evaluate(client, 'new Promise(requestAnimationFrame)')
+        widths.push((await evaluate(client, metrics)).rect.width)
+      }
+    }
+  } finally {
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x,
+      y: point.y,
+      button: 'left',
+      clickCount: 1
+    })
+  }
+  const range = { min: Math.min(...widths), max: Math.max(...widths), samples: widths.length }
+  assert.ok(range.max - range.min >= 100, `拖动未产生足够列宽变化：${JSON.stringify(range)}`)
+  return range
 }
 
 async function main() {
@@ -211,7 +315,8 @@ async function main() {
       'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
       cdpPort,
       join(runRoot, 'browser'),
-      '560,854'
+      '560,854',
+      ['--edge-skip-compat-layer-relaunch']
     )
     await waitForHttp(`http://127.0.0.1:${cdpPort}/json/version`, 20_000, 'Edge')
     client = await createCdpPage(cdpPort)
@@ -384,6 +489,66 @@ async function main() {
       return window.__tailSpaceSamples;
     })()`
     )
+    await navigate(client, `http://127.0.0.1:${appPort}/?chatScrollDebug=1`)
+    await waitFor(
+      client,
+      `document.querySelector('[role="log"]')?.innerText.includes('第 ${modelRequestCount} 次思考')`,
+      '重新进入仍在思考的会话'
+    )
+    await wheel(client, -100000)
+    await waitFor(client, `(${metrics})?.gap > 100`, '重新进入后上翻历史')
+    await wheel(client, 100000)
+    await waitFor(client, `(${metrics})?.gap <= 3`, '思考期间手动回到底部')
+    await settle(client)
+
+    // 消息收起与新项出现可能只重新分配高度，总高度不变时 ResizeObserver 不会通知。
+    await evaluate(
+      client,
+      `(() => {
+        const log = document.querySelector('[role="log"]');
+        const scroll = [...log.querySelectorAll('div')].find(element =>
+          ['auto', 'scroll'].includes(getComputedStyle(element).overflowY));
+        const content = scroll.firstElementChild;
+        const before = document.createElement('div');
+        const after = document.createElement('div');
+        before.style.height = '160px';
+        after.style.height = '0px';
+        before.style.flexShrink = after.style.flexShrink = '0';
+        content.prepend(before);
+        content.append(after);
+        window.__layoutProbe = { before, after };
+      })()`
+    )
+    await waitFor(client, `(${metrics})?.gap <= 3`, '布局变化前保持跟底')
+    await settle(client)
+    const beforeRedistribution = await evaluate(client, metrics)
+    await evaluate(
+      client,
+      `(() => {
+        const { before, after } = window.__layoutProbe;
+        before.style.height = '0px';
+        after.style.height = '160px';
+      })()`
+    )
+    await settle(client)
+    const afterRedistribution = await evaluate(client, metrics)
+    assert.equal(afterRedistribution.height, beforeRedistribution.height, '本用例需保持总高度不变')
+    console.log('总高度不变的内容换位', { beforeRedistribution, afterRedistribution })
+    send({ content: `${paragraphs}重新进入后思考结束检查点。\n\n` })
+    await waitFor(
+      client,
+      `document.querySelector('[role="log"]')?.innerText.includes('重新进入后思考结束检查点')`,
+      '重新进入后思考转正文'
+    )
+    await checkBottom(client, '重新进入并手动到底后思考结束')
+    await evaluate(
+      client,
+      `(() => {
+        window.__layoutProbe.before.remove();
+        window.__layoutProbe.after.remove();
+        delete window.__layoutProbe;
+      })()`
+    )
     assert.ok(tailSpaces.length > 0, '未采集到内容超过视口时的布局')
     assert.ok(
       Math.max(...tailSpaces) <= 2,
@@ -423,6 +588,62 @@ async function main() {
       '手动回底后追加正文'
     )
     await checkBottom(client, '手动回底后继续输出')
+    await client.send('Performance.enable')
+    const widthBaseline = await checkWidthSettled(client, '改变宽度前基线')
+    const widthStart = await renderingMetrics(client)
+    for (const width of [560, 460, 390, 520, mobile ? 390 : 560]) {
+      await setViewport(client, width, 854, mobile)
+      await checkBottom(client, `聊天宽度改为 ${width}px 后`)
+    }
+    const widthEnd = await renderingMetrics(client)
+    widthPerformance.push({ label: '连续改变窗口宽度', before: widthStart, after: widthEnd })
+    await checkWidthSettled(client, '窗口宽度停止变化后', widthBaseline)
+
+    if (!mobile) {
+      await setViewport(client, 1100, 854, false)
+      await waitFor(client, `(${metrics}) !== null`, '桌面聊天列加载')
+      await evaluate(client, `document.querySelector('[aria-label="显示工作会话菜单"]')?.click()`)
+      await waitFor(
+        client,
+        `(() => {
+          const handle = document.querySelector('[role="separator"][aria-label="调整工作会话列表宽度"]');
+          return handle && handle.getAttribute('aria-hidden') !== 'true' && handle.getBoundingClientRect().height > 0;
+        })()`,
+        '桌面侧栏分隔条可拖动'
+      )
+      await settle(client)
+      await wheel(client, 100000)
+      await waitFor(client, `(${metrics})?.gap <= 3`, '拖动前位于底部')
+      const dragBaseline = await checkWidthSettled(client, '分隔条拖动前基线')
+      const dragStart = await renderingMetrics(client)
+      const beforeDrag = await evaluate(client, metrics)
+      const dragWidths = await dragSidebar(client)
+      await checkBottom(client, '连续拖动聊天宽度后')
+      const dragEnd = await renderingMetrics(client)
+      widthPerformance.push({
+        label: '连续拖动侧栏分隔条',
+        before: dragStart,
+        after: dragEnd,
+        beforeDrag,
+        dragWidths
+      })
+      await checkWidthSettled(client, '分隔条停止拖动后', dragBaseline)
+
+      await wheel(client, -100000)
+      await waitFor(client, `(${metrics})?.gap > 100`, '拖动前阅读历史')
+      await dragSidebar(client)
+      await settle(client)
+      assert.ok((await evaluate(client, metrics)).gap > 100, '改变宽度把历史阅读拉回底部')
+      await checkWidthSettled(client, '历史阅读时停止拖动后', dragBaseline)
+      await wheel(client, 100000)
+      await waitFor(client, `(${metrics})?.gap <= 3`, '宽度检查后手动回底')
+      await setViewport(client, 560, 854, false)
+      await checkBottom(client, '恢复原聊天宽度后')
+    }
+    await writeFile(
+      join(runRoot, 'width-performance.json'),
+      JSON.stringify(widthPerformance, null, 2)
+    )
     await setViewport(client, mobile ? 390 : 560, 640, mobile)
     await checkBottom(client, '视口缩短后')
     await setViewport(client, mobile ? 390 : 560, 854, mobile)
@@ -467,6 +688,10 @@ async function main() {
       await writeFile(join(runRoot, 'failure.png'), await screenshot(client)).catch(() => undefined)
     }
     await writeFile(join(runRoot, 'server.log'), serverOutput)
+    await writeFile(
+      join(runRoot, 'width-performance.json'),
+      JSON.stringify(widthPerformance, null, 2)
+    )
     throw error
   } finally {
     modelResponse?.end()

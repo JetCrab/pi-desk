@@ -185,7 +185,6 @@ export function useL2PluginCatalog(
     const epoch = ++detailEpoch.current
     setDetailLoading(true)
     setDetailError(null)
-    setDetail(null)
     setInstallErrors((current) => {
       const next = { ...current }
       delete next[item.name]
@@ -203,6 +202,9 @@ export function useL2PluginCatalog(
   }
   const openDetail = (item: L2PluginCatalogItem): void => {
     setSelection(item)
+    setDetail(null)
+    setDownloadMode('default')
+    setDownloadRegistry('')
     void loadDetail(item)
   }
   const closeDetail = (): void => {

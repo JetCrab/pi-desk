@@ -27,6 +27,7 @@ export function L2McpSettingsEditor({
   local,
   inherited,
   pending,
+  saving,
   error,
   onDraft,
   onJson,
@@ -45,6 +46,7 @@ export function L2McpSettingsEditor({
   local: Record<string, L2McpServerConfig>
   inherited: Record<string, L2McpServerConfig>
   pending: boolean
+  saving: boolean
   error: { field: string; message: string } | null
   onDraft: (patch: Partial<L2McpDraft>) => void
   onJson: (text: string) => void
@@ -402,7 +404,7 @@ export function L2McpSettingsEditor({
               (!editor.preview || (collisions.length > 0 && !editor.overwrite)))
           }
         >
-          {t(check?.loading ? '正在测试连接…' : pending ? '保存中…' : '保存')}
+          {t(check?.loading ? '正在测试连接…' : saving ? '保存中…' : '保存')}
         </Button>
       </footer>
     </form>

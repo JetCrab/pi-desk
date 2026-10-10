@@ -28,23 +28,30 @@ export function L2PluginManagementChannel({
   const options = [
     ...(placeholder ? [{ value: '', label: placeholder }] : []),
     { value: 'latest', label: t('channelLatest') },
-    { value: 'dev', label: t('channelDev') }
+    { value: 'dev', label: t('channelDev') },
+    ...(value && !['latest', 'dev'].includes(value) ? [{ value, label: value }] : [])
   ]
   return (
     <Select
       value={value}
       items={options}
-      disabled={disabled}
+      onOpenChange={(open, details) => {
+        if (open && disabled) details.cancel()
+      }}
       onValueChange={(next) => {
-        if (next !== null) onChange(next)
+        if (next !== null && !disabled) onChange(next)
       }}
     >
-      <SelectTrigger aria-label={label} className="max-w-full">
+      <SelectTrigger
+        aria-label={label}
+        aria-disabled={disabled}
+        className="max-w-full aria-disabled:opacity-50"
+      >
         <SelectValue />
       </SelectTrigger>
       <SelectContent positionerClassName="z-[160]">
         {options.map((option) => (
-          <SelectItem key={option.value} value={option.value}>
+          <SelectItem key={option.value} value={option.value} disabled={disabled}>
             {option.label}
           </SelectItem>
         ))}

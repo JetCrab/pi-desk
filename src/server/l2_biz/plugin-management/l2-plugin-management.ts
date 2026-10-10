@@ -9,8 +9,8 @@ import {
 } from '@common/l4_foundation/locale/l4-localized-text'
 
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { copyFile, mkdir, open, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import {
   DefaultPackageManager,
   getAgentDir,
@@ -1009,6 +1009,25 @@ export class L2PluginManagement {
 
     console.info('[Pi Desk][PluginManagement] 开始在隔离 AgentDir 预检候选插件', { source })
     try {
+      // npm 解析结果没有 registry 表示本机模式，预检需保留完整项目配置而非单个源地址。
+      if (!registry && l2PluginNpmName(source)) {
+        for (const configPath of ['.npmrc', join('etc', 'npmrc')]) {
+          const target = join(stagingAgentDir, 'npm', configPath)
+          await mkdir(dirname(target), { recursive: true })
+          try {
+            await copyFile(join(this.agentDir, 'npm', configPath), target)
+            console.info('[Pi Desk][PluginManagement] 已为隔离预检继承本机 npm 配置', {
+              source,
+              configPath
+            })
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+              throw new L2PluginManagementInvalidPackageError(
+                `无法继承本机 npm 配置（${configPath}）：${errorMessage(error)}`
+              )
+          }
+        }
+      }
       await runL4PiPackageMaintenance({
         maintenance: { action: 'install', source, ...(registry ? { registry } : {}) },
         agentDir: stagingAgentDir,

@@ -29,7 +29,6 @@ export function L3ConversationCallSummary({
   const { t } = useTranslation('conversation')
   const [open, setOpen] = useState(false)
   const [hoverBlocked, setHoverBlocked] = useState(false)
-  const trigger = useRef<HTMLButtonElement>(null)
   const popup = useRef<HTMLDivElement>(null)
   const hoverPreview = useRef(false)
 
@@ -63,7 +62,6 @@ export function L3ConversationCallSummary({
       }}
     >
       <PopoverTrigger
-        ref={trigger}
         openOnHover={!hoverBlocked}
         delay={250}
         closeDelay={180}
@@ -77,7 +75,6 @@ export function L3ConversationCallSummary({
         align="start"
         side="top"
         initialFocus={() => (hoverPreview.current ? false : true)}
-        finalFocus={() => (hoverPreview.current ? false : trigger.current)}
         className={cn(styles.panel, 'w-[30rem] gap-0 p-2')}
       >
         <div className="flex shrink-0 items-center gap-2 border-b px-1 pb-1">

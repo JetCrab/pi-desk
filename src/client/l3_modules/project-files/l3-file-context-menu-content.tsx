@@ -19,6 +19,7 @@ export function L3FileContextMenuContent({ children }: { children: ReactNode }):
       >
         <ContextMenuPrimitive.Popup
           data-slot="context-menu-content"
+          finalFocus={false}
           className={cn(l4MenuPopupClassName, 'flex flex-col overflow-hidden p-0')}
         >
           <L4ScrollArea className="min-h-0" viewportClassName="p-1">

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { copyFile, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { copyFile, cp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
@@ -11,7 +11,7 @@ import { bundleL4ServerModule } from './l4-webpack-test-runtime.mjs'
 
 const execute = promisify(execFile)
 
-test('生产打包后按实际安装目录解析 SDK，支持普通安装和 pnpm 链接布局', async (context) => {
+test('系统导航指向主包文档与实际 SDK，从无关工作目录仍可读取', async (context) => {
   const id = `sdk-path-${randomUUID()}`
   const build = resolve('temp/build/pidesk-runtime', id)
   const run = resolve('temp/run/pidesk-runtime', id)
@@ -33,7 +33,9 @@ test('生产打包后按实际安装目录解析 SDK，支持普通安装和 pnp
           await writeFile(join(host, 'package.json'), JSON.stringify({ version: '1.2.3' }))
           await writeFile(join(sdk, 'package.json'), JSON.stringify(sdkManifest))
           await writeFile(join(sdk, 'dist/index.js'), 'export {}\n')
-          await copyFile('plugins/pi-desk-sdk/README.md', join(sdk, 'README.md'))
+          await cp('docs/pi-desk', join(host, 'docs/pi-desk'), { recursive: true })
+          const workspace = join(run, 'unrelated-workspace')
+          await mkdir(workspace, { recursive: true })
           if (linked) {
             await mkdir(join(host, 'node_modules/@jetcrab'), { recursive: true })
             await symlink(sdk, sdkLink, process.platform === 'win32' ? 'junction' : 'dir')
@@ -53,16 +55,25 @@ test('生产打包后按实际安装目录解析 SDK，支持普通安装和 pnp
               const commands = await import(${JSON.stringify(pathToFileURL(installedBundle).href)});
               try {
                 await commands.initializeL4PiDeskCommands(async () => ({ mode: 'sync', message: '' }), false);
-                const skill = commands.readL4PiDeskSkills()[0];
-                const text = await readFile(skill.filePath, 'utf8');
-                const readme = ${JSON.stringify(join(sdk, 'README.md').replaceAll('\\', '/'))};
-                assert.ok(text.includes(readme), '生成的 Skill 必须指向当前安装目录的 SDK 文档');
-                assert.match(await readFile(readme, 'utf8'), /Pi Desk/);
-                assert.ok(text.includes('公开类型声明'));
-                assert.ok(text.includes('先向用户取得对应版本的 UI 标准及分册'));
+                process.chdir(${JSON.stringify(workspace)});
+                const base = ['用户原有追加提示'];
+                const result = commands.appendL4PiDeskSystemPrompt(base);
+                assert.deepEqual(base, ['用户原有追加提示']);
+                assert.equal(result[0], base[0]);
+                const text = result[1];
+                const docs = ${JSON.stringify(join(host, 'docs/pi-desk').replaceAll('\\', '/'))};
+                const sdkTypes = ${JSON.stringify(join(sdk, 'dist').replaceAll('\\', '/'))};
+                assert.ok(text.includes(docs + '/README.md'));
+                assert.equal(text.split(docs + '/').length - 1, 1, '系统提示只提供一个文档入口');
+                assert.ok(text.includes(sdkTypes));
+                const index = await readFile(docs + '/README.md', 'utf8');
+                assert.ok(index.includes('(./commands.md)'));
+                assert.ok(index.includes('(./plugins.md)'));
+                assert.match(await readFile(docs + '/commands.md', 'utf8'), /mode: async/);
+                assert.match(await readFile(docs + '/plugins.md', 'utf8'), /Browser Entry/);
                 assert.equal(text.includes('PLUGIN-UI-STANDARD.md'), false);
-                assert.equal(skill.filePath, join(process.env.PI_CODING_AGENT_DIR, 'pi-desk/skills/pi-desk/SKILL.md'));
-                console.log('SDK 路径验证通过');
+                assert.equal(text.includes('/skills/'), false);
+                console.log('安装态文档导航验证通过');
               } finally {
                 commands.disposeL4PiDeskCommands();
               }
@@ -80,7 +91,7 @@ test('生产打包后按实际安装目录解析 SDK，支持普通安装和 pnp
               windowsHide: true
             }
           )
-          assert.match(result.stdout, /SDK 路径验证通过/)
+          assert.match(result.stdout, /安装态文档导航验证通过/)
         } catch (error) {
           passed = false
           throw error
@@ -96,7 +107,7 @@ test('生产打包后按实际安装目录解析 SDK，支持普通安装和 pnp
         [build, run, resolve(agent, '..')].map((path) => rm(path, { recursive: true, force: true }))
       )
     } else {
-      console.error(`SDK 路径回归失败，构建：${build}；运行目录：${run}`)
+      console.error(`安装态文档导航检查失败，构建：${build}；运行目录：${run}`)
     }
   }
 })

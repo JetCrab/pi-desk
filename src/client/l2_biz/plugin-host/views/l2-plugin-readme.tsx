@@ -8,6 +8,13 @@ import {
 } from '@common/l4_foundation/locale/l4-localized-text'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import { MessageResponse } from '@client/l4_foundation/ui/ai-elements/message'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@client/l4_foundation/ui/shadcn/select'
 
 export function L2PluginReadme({ readme }: { readme: L4LocalizedText | null }): React.JSX.Element {
   const { t } = useTranslation('pluginManagement')
@@ -26,21 +33,28 @@ export function L2PluginReadme({ readme }: { readme: L4LocalizedText | null }): 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">{t('readme')}</h3>
         {languages.length > 0 ? (
-          <label className="flex items-center gap-2 text-sm">
-            {t('readmeLanguage')}
-            <select
-              value={selected ?? ''}
-              onChange={(event) => setLanguage(event.target.value || null)}
-              className="min-h-8 rounded-lg border border-input bg-background px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="">{t('defaultLanguage')}</option>
-              {languages.map((key) => (
-                <option key={key} value={key}>
-                  {key.startsWith('zh') ? '中文' : 'English'}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="flex items-center gap-2 text-sm">
+            <span>{t('readmeLanguage')}</span>
+            <Select value={selected ?? ''} onValueChange={(value) => setLanguage(value || null)}>
+              <SelectTrigger aria-label={t('readmeLanguage')}>
+                <SelectValue>
+                  {selected
+                    ? selected.startsWith('zh')
+                      ? '中文'
+                      : 'English'
+                    : t('defaultLanguage')}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent positionerClassName="z-[160]">
+                <SelectItem value="">{t('defaultLanguage')}</SelectItem>
+                {languages.map((key) => (
+                  <SelectItem key={key} value={key}>
+                    {key.startsWith('zh') ? '中文' : 'English'}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         ) : null}
       </div>
       {content ? (

@@ -7,7 +7,7 @@ import {
   runDesktopAction,
   selectEnvironment
 } from '../l2-desktop-biz'
-import type { ControlState, TargetSnapshot } from '../l4-desktop-ipc'
+import { errorMessage, type ControlState, type TargetSnapshot } from '../l4-desktop-ipc'
 import type { EnvironmentViewAction, EnvironmentViewProps } from '../views/l2-environment-view'
 import { useDesktopAction } from './l2-use-desktop-action'
 import { useDownloadSource } from './l2-use-download-source'
@@ -20,7 +20,10 @@ export function useEnvironmentSetup(
   activeUrl: string | null
   showOptions: (url: string) => void
   onAction: (target: TargetSnapshot, input: EnvironmentViewAction) => void
-  view: Omit<EnvironmentViewProps, 'environment' | 'target' | 'optionsOpen' | 'mode' | 'onAction'>
+  view: Omit<
+    EnvironmentViewProps,
+    'environment' | 'target' | 'optionsOpen' | 'mode' | 'onAction' | 'onDownloadSettings'
+  >
 } {
   const [optionsUrl, setOptionsUrl] = useState<string | null>(null)
   const [activeUrl, setActiveUrl] = useState<string | null>(null)
@@ -29,10 +32,18 @@ export function useEnvironmentSetup(
   const [copyHint, setCopyHint] = useState('')
   const action = useDesktopAction(refresh)
   const cancellation = useDesktopAction(refresh)
-  const { downloadSource, selectDownloadSource, markStarted } = useDownloadSource(
+  const { downloadSource, loading, loadError } = useDownloadSource(
     Boolean(optionsUrl || state?.targets.some((target) => target.server?.needsSetup))
   )
-  const installCommand = piInstallCommand(downloadSource)
+  let installCommand = ''
+  let commandError = ''
+  if (downloadSource && !loading && !loadError) {
+    try {
+      installCommand = piInstallCommand(downloadSource)
+    } catch (cause: unknown) {
+      commandError = `无法生成安装命令：${errorMessage(cause)}`
+    }
+  }
 
   if (optionsUrl && state && !state.targets.some((target) => target.url === optionsUrl)) {
     setOptionsUrl(null)
@@ -56,10 +67,7 @@ export function useEnvironmentSetup(
   const onAction = (target: TargetSnapshot, input: EnvironmentViewAction): void => {
     if (!state) return
     setCopyHint('')
-    if (input.kind === 'download-source') {
-      selectDownloadSource(input.downloadSource)
-      setCopied('')
-    } else if (input.kind === 'options') {
+    if (input.kind === 'options') {
       setOptionsUrl(input.open ? target.url : null)
     } else if (input.kind === 'cancel') {
       void cancellation
@@ -73,6 +81,7 @@ export function useEnvironmentSetup(
         })
     } else if (input.kind === 'copy-error' || input.kind === 'copy-command') {
       const command = input.kind === 'copy-command'
+      if (command && !installCommand) return
       const text = command
         ? installCommand
         : action.error || state.environment.error || target.server?.detail || ''
@@ -87,14 +96,13 @@ export function useEnvironmentSetup(
     } else if (input.kind === 'check') {
       void action.run(() => runDesktopAction('check-environment'))
     } else {
-      markStarted()
       setActiveUrl(target.url)
       setOptionsUrl(null)
       setLaunching(true)
       void action
         .run(() =>
           input.kind === 'prepare'
-            ? prepareEnvironment(target.url, downloadSource)
+            ? prepareEnvironment(target.url)
             : runDesktopAction('open', target.url)
         )
         .then((accepted) => {
@@ -109,14 +117,13 @@ export function useEnvironmentSetup(
     showOptions,
     onAction,
     view: {
-      downloadSource,
       installCommand,
       launching,
       busy: action.busy,
       cancelling: cancellation.busy,
       error: action.error || cancellation.error,
       copied,
-      copyHint
+      copyHint: copyHint || commandError || (loadError ? `下载源读取失败：${loadError}` : '')
     }
   }
 }

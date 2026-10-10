@@ -3,6 +3,7 @@ use crate::{
     logging, process,
 };
 use semver::Version;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -10,6 +11,11 @@ use std::time::{Duration, Instant};
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
+const OFFICIAL_REGISTRY: &str = "https://registry.npmjs.org/";
+
+#[cfg(test)]
+#[path = "packages-source-tests.rs"]
+mod source_tests;
 
 pub(crate) fn quote(value: &str) -> String {
     #[cfg(windows)]
@@ -82,12 +88,203 @@ pub(crate) fn command_failure(output: &Output) -> String {
     )
 }
 
+fn package_scope(name: &str) -> Option<&str> {
+    if name.starts_with('@') {
+        name.split_once('/').map(|(scope, _)| scope)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn registry_arguments(name: &str, source: &str) -> String {
+    let mut arguments = format!(
+        " --registry {} --replace-registry-host=never",
+        quote(source)
+    );
+    if let Some(scope) = package_scope(name) {
+        arguments.push_str(&format!(
+            " {}",
+            quote(&format!("--{scope}:registry={source}"))
+        ));
+    }
+    arguments
+}
+
+#[cfg(test)]
 fn registry_argument(package: &PackageConfig) -> String {
-    package
-        .registry
-        .as_ref()
-        .map(|registry| format!(" --registry {}", quote(registry)))
-        .unwrap_or_default()
+    registry_arguments(
+        &package.name,
+        package.registry.as_deref().unwrap_or(OFFICIAL_REGISTRY),
+    )
+}
+
+fn normalize_registry(source: &str) -> Result<String, String> {
+    let mut url = url::Url::parse(source.trim()).map_err(|_| "npm 下载源地址无效".to_string())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("npm 下载源须为不含凭据、查询参数或片段的 HTTP(S) 地址".into());
+    }
+    let path = format!("{}/", url.path().trim_end_matches('/'));
+    url.set_path(&path);
+    Ok(url.to_string())
+}
+
+fn registry_failure(error: &str) -> bool {
+    let codes = error
+        .lines()
+        .filter_map(|line| {
+            let (_, detail) = line.split_once("npm ")?;
+            let mut words = detail.split_whitespace();
+            if !matches!(words.next()?, "error" | "ERR!") || words.next()? != "code" {
+                return None;
+            }
+            words.next()
+        })
+        .collect::<Vec<_>>();
+    !codes.is_empty()
+        && codes.iter().all(|code| {
+            matches!(
+                *code,
+                "ETARGET"
+                    | "E404"
+                    | "E401"
+                    | "E403"
+                    | "E429"
+                    | "E500"
+                    | "E502"
+                    | "E503"
+                    | "E504"
+                    | "ETIMEDOUT"
+                    | "ECONNRESET"
+                    | "ECONNREFUSED"
+                    | "ENOTFOUND"
+                    | "EAI_AGAIN"
+                    | "ESOCKETTIMEDOUT"
+                    | "ENETUNREACH"
+                    | "EHOSTUNREACH"
+            )
+        })
+}
+
+fn local_registry(
+    package: &PackageConfig,
+    log: &Path,
+    cancelled: &dyn Fn() -> bool,
+    npm: &str,
+    environment: &[(OsString, OsString)],
+) -> Result<String, String> {
+    // 进程模块会记录 stdout；只允许有效源地址进入日志，不输出 URL 内的凭据。
+    let filter = "let text='';process.stdin.on('data',data=>text+=data);process.stdin.on('end',()=>{const value=text.trim();if(!value||value==='undefined'||value==='null'){console.log('undefined');return;}try{const url=new URL(value);url.username='';url.password='';url.search='';url.hash='';console.log(url.href);}catch{process.exitCode=1;}});";
+    let read = |key: &str| {
+        run_with_environment(
+            &format!(
+                "{npm} config get {} --global --loglevel=silent | node -e {}",
+                quote(key),
+                quote(filter)
+            ),
+            None,
+            QUERY_TIMEOUT,
+            log,
+            cancelled,
+            environment,
+        )
+    };
+    if let Some(scope) = package_scope(&package.name) {
+        let source = read(&format!("{scope}:registry"))?;
+        if !source.is_empty() && source != "undefined" && source != "null" {
+            return normalize_registry(&source);
+        }
+    }
+    normalize_registry(&read("registry")?)
+}
+
+pub(crate) fn with_registry_fallback<T>(
+    package: &PackageConfig,
+    log: &Path,
+    cancelled: &dyn Fn() -> bool,
+    npm: &str,
+    environment: &[(OsString, OsString)],
+    mut operation: impl FnMut(&str) -> Result<T, String>,
+) -> Result<T, String> {
+    if cancelled() {
+        return Err("操作已取消".into());
+    }
+    let selected = normalize_registry(package.registry.as_deref().unwrap_or(OFFICIAL_REGISTRY))?;
+    let mut sources = vec![selected];
+    if sources[0] != OFFICIAL_REGISTRY {
+        sources.push(OFFICIAL_REGISTRY.into());
+    }
+    let mut failures = Vec::new();
+    let mut index = 0;
+    let mut checked_local = false;
+    loop {
+        if cancelled() {
+            return Err("操作已取消".into());
+        }
+        if index == sources.len() {
+            if checked_local {
+                break;
+            }
+            checked_local = true;
+            match local_registry(package, log, cancelled, npm, environment) {
+                Ok(source) if !sources.contains(&source) => sources.push(source),
+                Ok(_) => break,
+                Err(error) => {
+                    if cancelled() || error.contains("取消") {
+                        return Err("操作已取消".into());
+                    }
+                    logging::write(
+                        log,
+                        "package-registry-config-failed",
+                        &format!("读取本机 npm 下载源失败：{error}"),
+                    );
+                    failures.push(format!("本机 npm 下载源读取失败：{error}"));
+                    break;
+                }
+            }
+        }
+        if cancelled() {
+            return Err("操作已取消".into());
+        }
+        let source = &sources[index];
+        logging::write(
+            log,
+            "package-registry-attempt",
+            &format!("尝试 npm 下载源 package={} source={source}", package.name),
+        );
+        let result = operation(source);
+        if cancelled() {
+            return Err("操作已取消".into());
+        }
+        match result {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                if error.contains("取消") {
+                    return Err(error);
+                }
+                let retry = registry_failure(&error);
+                logging::write(
+                    log,
+                    "package-registry-failed",
+                    &format!("npm 下载源失败 source={source} 可切源={retry}"),
+                );
+                failures.push(format!("{source}：{error}"));
+                if !retry {
+                    break;
+                }
+            }
+        }
+        index += 1;
+    }
+    Err(format!(
+        "npm 操作失败，已尝试下载源：\n{}",
+        failures.join("\n")
+    ))
 }
 
 #[cfg(test)]
@@ -115,7 +312,7 @@ pub(crate) fn query_version_with_environment(
             package.name, package.channel
         ),
     );
-    let result = (|| {
+    let result = with_registry_fallback(package, log, cancelled, npm, environment, |source| {
         let tag = match package.channel {
             ReleaseChannel::Stable => "latest",
             ReleaseChannel::Dev => "dev",
@@ -124,7 +321,7 @@ pub(crate) fn query_version_with_environment(
             &format!(
                 "{npm} view {} version --json{}",
                 quote(&format!("{}@{tag}", package.name)),
-                registry_argument(package)
+                registry_arguments(&package.name, source)
             ),
             None,
             QUERY_TIMEOUT,
@@ -136,7 +333,7 @@ pub(crate) fn query_version_with_environment(
             serde_json::from_str(&output).map_err(|error| format!("npm 版本响应无效：{error}"))?;
         channel_version(package, &version)?;
         Ok(version)
-    })();
+    });
     logging::write(
         log,
         "package-query-end",
@@ -255,36 +452,32 @@ pub(crate) fn install_with_environment(
         return Ok(directory);
     }
     let directory = version_directory(base, package, version);
-    if directory.exists() {
-        fs::remove_dir_all(&directory)
-            .map_err(|error| format!("清理未完成的候选包失败：{error}"))?;
-    }
-    fs::create_dir_all(&directory).map_err(|error| format!("创建候选包目录失败：{error}"))?;
-    fs::write(directory.join("package.json"), "{\"private\":true}\n")
-        .map_err(|error| format!("创建候选包清单失败：{error}"))?;
     logging::write(
         log,
         "package-install-start",
         &format!("正在安装 npm 包 package={} version={version}", package.name),
     );
-    let result = run_with_environment(
-        &format!(
-            "{npm} install --omit=dev --save-exact --no-audit --no-fund --progress=false {}{}",
-            quote(&format!("{}@{version}", package.name)),
-            registry_argument(package)
-        ),
-        Some(&directory),
-        INSTALL_TIMEOUT,
-        log,
-        cancelled,
-        environment,
-    )
-    .and_then(|_| {
-        if cancelled() {
-            Err("操作已取消".into())
-        } else {
-            Ok(directory.clone())
+    let result = with_registry_fallback(package, log, cancelled, npm, environment, |source| {
+        if directory.exists() {
+            fs::remove_dir_all(&directory)
+                .map_err(|error| format!("清理未完成的候选包失败：{error}"))?;
         }
+        fs::create_dir_all(&directory).map_err(|error| format!("创建候选包目录失败：{error}"))?;
+        fs::write(directory.join("package.json"), "{\"private\":true}\n")
+            .map_err(|error| format!("创建候选包清单失败：{error}"))?;
+        run_with_environment(
+            &format!(
+                "{npm} install --omit=dev --save-exact --no-audit --no-fund --progress=false {}{}",
+                quote(&format!("{}@{version}", package.name)),
+                registry_arguments(&package.name, source)
+            ),
+            Some(&directory),
+            INSTALL_TIMEOUT,
+            log,
+            cancelled,
+            environment,
+        )?;
+        Ok(directory.clone())
     });
     logging::write(
         log,
@@ -296,7 +489,7 @@ pub(crate) fn install_with_environment(
             started.elapsed().as_millis()
         ),
     );
-    if result.is_err() {
+    if result.is_err() && directory.exists() {
         if let Err(error) = fs::remove_dir_all(&directory) {
             logging::write(
                 log,

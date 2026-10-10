@@ -61,7 +61,6 @@ pub(crate) struct EnvironmentSnapshot {
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 struct Choices {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     node: Option<PathBuf>,
@@ -69,11 +68,7 @@ struct Choices {
     pi: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     bash: Option<PathBuf>,
-    #[serde(
-        default,
-        rename = "downloadSource",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, rename = "download", skip_serializing_if = "Option::is_none")]
     download_source: Option<DownloadSource>,
 }
 
@@ -175,31 +170,35 @@ impl EnvironmentState {
     }
 
     pub(crate) async fn download_source(&self, lookup_url: &str, log: &Path) -> DownloadSource {
-        if cfg!(any(target_os = "macos", target_os = "linux")) {
-            return DownloadSource::Official;
-        }
-        if let Some(source) = self.data.lock().unwrap().choices.download_source {
+        if let Some(source) = self.data.lock().unwrap().choices.download_source.clone() {
             return source;
         }
-        let recommended = *self
+        let recommended = self
             .source_recommendation
             .get_or_init(|| environment_source::recommend(lookup_url, log))
-            .await;
+            .await
+            .clone();
         self.data
             .lock()
             .unwrap()
             .choices
             .download_source
+            .clone()
             .unwrap_or(recommended)
     }
 
     pub(crate) fn save_download_source(&self, source: DownloadSource) -> Result<(), String> {
+        let source = source.validated()?;
         let mut data = self.data.lock().unwrap();
         let mut choices = data.choices.clone();
         choices.download_source = Some(source);
         self.save_choices(&choices)?;
         data.choices = choices;
         Ok(())
+    }
+
+    pub(crate) fn package_source(&self, log: &Path) -> DownloadSource {
+        tauri::async_runtime::block_on(self.download_source(&environment_source::lookup_url(), log))
     }
 
     fn save_choices(&self, choices: &Choices) -> Result<(), String> {

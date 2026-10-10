@@ -37,7 +37,8 @@ export type EnvironmentComponent = {
   download: { received: number; total: number | null } | null
 }
 
-export type DownloadSource = 'official' | 'npmmirror'
+export type DownloadSource =
+  { mode: 'domestic' } | { mode: 'official' } | { mode: 'custom'; registry: string }
 
 export type EnvironmentSnapshot = {
   status: 'checking' | 'required' | 'ready' | 'installing' | 'failed'
@@ -65,7 +66,6 @@ export type ReleaseChannel = 'stable' | 'dev'
 
 export type PackageConfig = {
   name: string
-  registry: string | null
   startupUpdate: UpdatePolicy
   periodicUpdate: UpdatePolicy
   channel: ReleaseChannel
@@ -96,6 +96,10 @@ export function getControlState(): Promise<ControlState> {
 
 export function getEnvironmentDownloadSource(): Promise<DownloadSource> {
   return invoke<DownloadSource>('get_environment_download_source')
+}
+
+export function setEnvironmentDownloadSource(source: DownloadSource): Promise<void> {
+  return desktopCommand('set_environment_download_source_command', { source })
 }
 
 export function getTargetSettings(url: string | null): Promise<TargetSettings> {

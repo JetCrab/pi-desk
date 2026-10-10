@@ -39,7 +39,6 @@ import {
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { L4BrandIcon } from '@client/l4_foundation/ui/l4-brand-icon'
-import { useL4WindowReveal } from '@client/l4_foundation/ui/l4-window-reveal'
 import {
   Collapsible,
   CollapsibleContent,
@@ -241,8 +240,6 @@ export function L2Settings({
     activeSection.startsWith('plugin:') && !activePluginPage ? 'appearance' : activeSection
   const activeBuiltinSection = SETTINGS_SECTIONS.find((section) => section.id === effectiveSection)
   const ActiveBuiltinIcon = activeBuiltinSection?.icon
-  const contentRef = useRef<HTMLDivElement>(null)
-  useL4WindowReveal(contentRef, open && !activePluginPage ? effectiveSection : null)
 
   const runAfterGuard = useCallback(async (action: () => void): Promise<void> => {
     if (guardPendingRef.current) return
@@ -475,7 +472,7 @@ export function L2Settings({
               />
             </div>
           ) : effectiveSection === 'skills' ? (
-            <div ref={contentRef} className="min-h-0 flex-1 overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-hidden">
               {open && (
                 <L2SkillsSettings
                   projects={skillProjects}
@@ -485,7 +482,7 @@ export function L2Settings({
               )}
             </div>
           ) : effectiveSection === 'mcp-settings' ? (
-            <div ref={contentRef} className="min-h-0 min-w-0 flex-1 overflow-hidden">
+            <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
               {open && (
                 <ExternalSettingsSection
                   render={renderMcpSettings}
@@ -494,7 +491,7 @@ export function L2Settings({
               )}
             </div>
           ) : effectiveSection === 'capability-modes' ? (
-            <div ref={contentRef} className="min-h-0 min-w-0 flex-1 overflow-hidden">
+            <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
               {open && (
                 <ExternalSettingsSection
                   render={renderCapabilityModesSettings}
@@ -503,7 +500,7 @@ export function L2Settings({
               )}
             </div>
           ) : effectiveSection === 'models' ? (
-            <div ref={contentRef} className="min-h-0 flex-1 overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-hidden">
               {open && (
                 <L2ModelSettingsView
                   connectionReady={connectionReady}
@@ -513,12 +510,10 @@ export function L2Settings({
               )}
             </div>
           ) : effectiveSection === 'plugins' ? (
-            <div ref={contentRef} className="min-h-0 flex-1 overflow-hidden">
-              {renderPluginManagement()}
-            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">{renderPluginManagement()}</div>
           ) : (
             <L4AppDialogBody className="min-w-0 max-h-none">
-              <div ref={contentRef} className="p-4 sm:p-6">
+              <div className="p-4 sm:p-6">
                 {effectiveSection === 'appearance' ? (
                   <L2AppearanceSettings />
                 ) : effectiveSection === 'habits' ? (

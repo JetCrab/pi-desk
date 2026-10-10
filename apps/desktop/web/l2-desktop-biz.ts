@@ -44,19 +44,41 @@ export async function saveStartupPreference(preferences: StartupPreferences): Pr
   await desktopCommand('set_startup_preference_command', preferences)
 }
 
-export async function prepareEnvironment(
-  url: string,
-  downloadSource: DownloadSource
-): Promise<void> {
-  await desktopCommand('prepare_environment_command', { url, downloadSource })
+export async function prepareEnvironment(url: string): Promise<void> {
+  await desktopCommand('prepare_environment_command', { url })
+}
+
+export function normalizeDownloadRegistry(value: string): string {
+  const registry = value.trim()
+  let parsed: URL
+  try {
+    parsed = new URL(registry)
+  } catch {
+    throw new Error('请输入有效的 http:// 或 https:// 下载地址')
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('下载地址必须以 http:// 或 https:// 开头')
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('下载地址不能包含账号或密码')
+  }
+  if (registry.includes('?') || registry.includes('#')) {
+    throw new Error('下载地址不能包含查询参数或片段')
+  }
+  if (/[\s"'`$\\]/u.test(registry)) {
+    throw new Error('下载地址不能包含空格、引号或特殊字符')
+  }
+  return parsed.href
 }
 
 export function piInstallCommand(downloadSource: DownloadSource): string {
   const registry =
-    downloadSource === 'npmmirror'
-      ? 'https://mirrors.cloud.tencent.com/npm'
-      : 'https://registry.npmjs.org'
-  return `npm install -g --ignore-scripts --registry ${registry} @earendil-works/pi-coding-agent`
+    downloadSource.mode === 'custom'
+      ? normalizeDownloadRegistry(downloadSource.registry)
+      : downloadSource.mode === 'domestic'
+        ? 'https://mirrors.cloud.tencent.com/npm'
+        : 'https://registry.npmjs.org'
+  return `npm install -g --ignore-scripts --replace-registry-host=never --registry "${registry}" @earendil-works/pi-coding-agent`
 }
 
 export async function selectEnvironment(
@@ -100,7 +122,6 @@ export type SettingsDraft = {
   readyPath: string
   packageEnabled: boolean
   packageName: string
-  packageRegistry: string
   startupUpdate: UpdatePolicy
   periodicUpdate: UpdatePolicy
   channel: ReleaseChannel
@@ -117,7 +138,6 @@ export async function readDesktopSettings(originalUrl: string | null): Promise<S
     readyPath: server?.readyPath ?? '',
     packageEnabled: Boolean(server?.package),
     packageName: server?.package?.name ?? '',
-    packageRegistry: server?.package?.registry ?? '',
     startupUpdate: server?.package?.startupUpdate ?? 'check',
     periodicUpdate: server?.package?.periodicUpdate ?? 'none',
     channel: server?.package?.channel ?? 'stable'
@@ -139,7 +159,6 @@ export async function saveDesktopSettings(
           package: draft.packageEnabled
             ? {
                 name: draft.packageName,
-                registry: draft.packageRegistry.trim() || null,
                 startupUpdate: draft.startupUpdate,
                 periodicUpdate: draft.periodicUpdate,
                 channel: draft.channel

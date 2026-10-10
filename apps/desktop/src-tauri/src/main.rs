@@ -68,6 +68,7 @@ fn main() {
             get_control_state,
             set_startup_preference_command,
             get_environment_download_source,
+            set_environment_download_source_command,
             get_target_settings,
             apply_target_command,
             delete_target_command,
@@ -270,6 +271,18 @@ async fn get_environment_download_source(
 }
 
 #[tauri::command]
+async fn set_environment_download_source_command(
+    app: AppHandle,
+    window: Window,
+    source: environment_source::DownloadSource,
+) -> Result<(), String> {
+    run_command(app, window, "save-download-source", move |app| {
+        runtime::save_download_source(&app.state::<ShellState>(), source)
+    })
+    .await
+}
+
+#[tauri::command]
 fn get_target_settings(
     window: Window,
     state: State<'_, ShellState>,
@@ -420,10 +433,9 @@ async fn prepare_environment_command(
     app: AppHandle,
     window: Window,
     url: String,
-    download_source: environment_source::DownloadSource,
 ) -> Result<(), String> {
     run_command(app, window, "prepare-environment", move |app| {
-        runtime::prepare_environment(app, &url, download_source)
+        runtime::prepare_environment(app, &url)
     })
     .await
 }

@@ -76,7 +76,8 @@ export function L2ProjectModelDefaultSettings({
       description: model.provider
     })
   )
-  const formDisabled = state.projectLoading || state.projectRefreshing || state.saving
+  const formDisabled = !state.projectReady || state.saving
+  const displayedCwd = state.loadedCwd ?? state.cwd
 
   async function selectProject(cwd: string): Promise<void> {
     if (await state.selectProject(cwd)) setMobileDetail(true)
@@ -198,17 +199,19 @@ export function L2ProjectModelDefaultSettings({
               <div className="pi-desk-chat-scrollbar min-h-0 flex-1 overflow-y-auto p-4 @[48rem]/project-default:p-6">
                 <div className="max-w-[40rem] space-y-6">
                   <header className="space-y-1">
-                    <h3 className="break-all text-lg font-semibold">{projectName(state.cwd)}</h3>
-                    <p className="break-all text-sm text-muted-foreground">{state.cwd}</p>
-                    {state.projectLoading && !state.projectReady ? (
-                      <p
-                        role="status"
-                        className="flex items-center gap-2 text-xs text-muted-foreground"
-                      >
-                        <LoaderCircleIcon aria-hidden="true" className="size-3.5 animate-spin" />
-                        {t('projectLoading')}
-                      </p>
-                    ) : null}
+                    <h3 className="flex items-center gap-2 text-lg font-semibold">
+                      <span className="min-w-0 break-all">{projectName(displayedCwd)}</span>
+                      <span className="inline-flex size-4 shrink-0">
+                        {!state.projectReady && !state.projectError && (
+                          <LoaderCircleIcon
+                            role="status"
+                            aria-label={t('projectLoading')}
+                            className="size-4 animate-spin text-muted-foreground"
+                          />
+                        )}
+                      </span>
+                    </h3>
+                    <p className="break-all text-sm text-muted-foreground">{displayedCwd}</p>
                   </header>
 
                   {state.projectError ? (
@@ -221,11 +224,13 @@ export function L2ProjectModelDefaultSettings({
                         variant="outline"
                         size="sm"
                         onClick={state.retryProject}
+                        disabled={state.projectLoading || state.projectRefreshing}
                       >
                         {t('retry', { ns: 'common' })}
                       </Button>
                     </div>
-                  ) : !state.projectReady ? null : (
+                  ) : null}
+                  {state.loadedCwd !== null ? (
                     <fieldset disabled={formDisabled} className="min-w-0 space-y-6">
                       <div className="space-y-1">
                         <p className="text-sm font-medium">{t('projectDefaultSource')}</p>
@@ -289,6 +294,7 @@ export function L2ProjectModelDefaultSettings({
                                       type="button"
                                       variant="outline"
                                       size="xs"
+                                      disabled={formDisabled}
                                       className="h-auto min-h-7 max-w-full whitespace-normal text-left"
                                       onClick={(): void => state.applyPreset(preset)}
                                     >
@@ -309,7 +315,7 @@ export function L2ProjectModelDefaultSettings({
                         </div>
                       ) : null}
                     </fieldset>
-                  )}
+                  ) : null}
                 </div>
               </div>
               <div className="shrink-0 border-t px-4 py-3 @[48rem]/project-default:px-6">

@@ -118,13 +118,12 @@ fn runtime() -> tokio::runtime::Runtime {
         .unwrap()
 }
 
-#[cfg(windows)]
 #[test]
 fn saved_domestic_choice_uses_tencent_npm_without_changing_binary_mirrors() {
     let directory = Directory::new("domestic-source-compatibility");
     fs::write(
         directory.0.join("environment.json"),
-        r#"{"node":"C:/selected/node.exe","downloadSource":"npmmirror"}"#,
+        r#"{"node":"C:/selected/node.exe","download":{"mode":"domestic"}}"#,
     )
     .unwrap();
     let state = directory.state();
@@ -142,7 +141,10 @@ fn saved_domestic_choice_uses_tencent_npm_without_changing_binary_mirrors() {
         source.git_url("https://github.com/git-for-windows/git/releases/download/v2.51.0.windows.1/Git-2.51.0-64-bit.exe"),
         "https://registry.npmmirror.com/-/binary/git-for-windows/v2.51.0.windows.1/Git-2.51.0-64-bit.exe"
     );
-    assert_eq!(serde_json::to_string(&source).unwrap(), "\"npmmirror\"");
+    assert_eq!(
+        serde_json::to_value(&source).unwrap(),
+        serde_json::json!({"mode":"domestic"})
+    );
     assert_eq!(
         DownloadSource::Official.npm_registry(),
         "https://registry.npmjs.org"
@@ -209,7 +211,6 @@ fn country_lookup_timeout_is_bounded_and_defaults_to_official() {
     assert_eq!(server.requests.load(Ordering::Acquire), 1);
 }
 
-#[cfg(windows)]
 #[test]
 fn recommendation_is_cached_but_only_accepted_source_is_persisted() {
     let directory = Directory::new("source-cache");
@@ -228,7 +229,7 @@ fn recommendation_is_cached_but_only_accepted_source_is_persisted() {
     assert_eq!(server.requests.load(Ordering::Acquire), 1);
     let before: serde_json::Value = serde_json::from_slice(&fs::read(&choices).unwrap()).unwrap();
     assert!(
-        before.get("downloadSource").is_none(),
+        before.get("download").is_none(),
         "IP 推荐不能被当成用户选择保存"
     );
     state
@@ -237,7 +238,7 @@ fn recommendation_is_cached_but_only_accepted_source_is_persisted() {
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&choices).unwrap()).unwrap();
     assert_eq!(
         saved,
-        serde_json::json!({ "node": "C:/selected/node.exe", "downloadSource": "official" })
+        serde_json::json!({ "node": "C:/selected/node.exe", "download": {"mode":"official"} })
     );
     let reloaded = directory.state();
     assert_eq!(
@@ -251,25 +252,62 @@ fn recommendation_is_cached_but_only_accepted_source_is_persisted() {
     );
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn unix_uses_official_source_without_country_lookup_or_rewriting_choices() {
-    let directory = Directory::new("unix-official-source");
+fn old_source_is_ignored_without_losing_environment_paths() {
+    let directory = Directory::new("ignored-old-source");
     let choices = directory.0.join("environment.json");
-    let original = r#"{"downloadSource":"npmmirror"}"#;
+    let original =
+        r#"{"node":"C:/kept/node.exe","pi":"C:/kept/pi","downloadSource":"obsolete-value"}"#;
     fs::write(&choices, original).unwrap();
     let server = CountryServer::new(200, r#"{"success":true,"country_code":"CN"}"#, false);
-    let source = runtime().block_on(
-        directory
-            .state()
-            .download_source(&server.url(), &directory.0.join("desktop.log")),
+    let state = directory.state();
+    let source =
+        runtime().block_on(state.download_source(&server.url(), &directory.0.join("desktop.log")));
+    assert_eq!(source, DownloadSource::Domestic);
+    assert_eq!(server.requests.load(Ordering::Acquire), 1);
+    assert_eq!(fs::read_to_string(&choices).unwrap(), original);
+    state
+        .save_download_source(DownloadSource::Custom("https://example.test/npm".into()))
+        .unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(&choices).unwrap()).unwrap();
+    assert_eq!(saved["node"], "C:/kept/node.exe");
+    assert_eq!(saved["pi"], "C:/kept/pi");
+    assert!(saved.get("downloadSource").is_none());
+    assert_eq!(saved["download"]["mode"], "custom");
+    assert_eq!(
+        runtime().block_on(directory.state().download_source(
+            "http://127.0.0.1:1/must-not-query",
+            &directory.0.join("desktop.log")
+        )),
+        DownloadSource::Custom("https://example.test/npm".into())
     );
-    assert_eq!(source, DownloadSource::Official);
-    assert_eq!(server.requests.load(Ordering::Acquire), 0);
-    assert_eq!(fs::read_to_string(choices).unwrap(), original);
 }
 
-#[cfg(windows)]
+#[test]
+fn invalid_custom_source_does_not_replace_saved_choice() {
+    let directory = Directory::new("custom-validation");
+    let state = directory.state();
+    state
+        .save_download_source(DownloadSource::Domestic)
+        .unwrap();
+    let before = fs::read(directory.0.join("environment.json")).unwrap();
+    for value in [
+        "",
+        "file:///registry",
+        "https://user:password@example.com",
+        "https://example.com?token=a",
+        "https://example.com#fragment",
+    ] {
+        assert!(state
+            .save_download_source(DownloadSource::Custom(value.into()))
+            .is_err());
+        assert_eq!(
+            fs::read(directory.0.join("environment.json")).unwrap(),
+            before
+        );
+    }
+}
+
 #[test]
 fn accepted_source_wins_over_a_late_country_response() {
     let directory = Directory::new("source-late-response");

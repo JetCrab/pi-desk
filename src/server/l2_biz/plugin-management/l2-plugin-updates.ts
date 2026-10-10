@@ -11,7 +11,10 @@ import {
   l4PluginNpmName,
   l4PluginSourceIdentity
 } from '@common/l4_foundation/plugin/l4-plugin-package'
-import { readL4PiPluginUpdateTag } from '@server/l4_foundation/pi/l4-pi-plugin-preferences'
+import {
+  readL4PiPluginPreferences,
+  readL4PiPluginUpdateTag
+} from '@server/l4_foundation/pi/l4-pi-plugin-preferences'
 import {
   readL4PluginInstallRegistry,
   resolveL4PluginInstall
@@ -109,12 +112,23 @@ export class L2PluginUpdates {
           continue
         let key: string | null = null
         try {
-          const policy = await readL4PluginInstallRegistry(name, { agentDir: this.agentDir })
-          key = JSON.stringify([identity, tag, policy.registry, policy.fallback])
+          const downloadSource = readL4PiPluginPreferences(this.agentDir).downloadSource
+          const policy = await readL4PluginInstallRegistry(name, {
+            agentDir: this.agentDir,
+            downloadSource
+          })
+          key = JSON.stringify([
+            identity,
+            tag,
+            downloadSource.mode,
+            policy.registry,
+            policy.fallback
+          ])
           let value = this.cache.get(key)?.value
           if (check) {
             if (!source.path || !source.version) throw new Error('无法读取插件已安装版本')
             const resolved = await resolveL4PluginInstall(`npm:${name}@${tag}`, {
+              downloadSource,
               agentDir: this.agentDir,
               signal: this.signal,
               cache: false

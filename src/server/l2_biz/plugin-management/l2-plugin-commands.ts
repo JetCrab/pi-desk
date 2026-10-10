@@ -65,6 +65,12 @@ async function resolveTargets(
   const targets = new Map<string, CommandTarget>()
   for (const name of names) {
     const existing = findL2PluginCommandTarget(snapshot.plugins, name, agentDir)
+    if (command.action === 'reload') {
+      if (!existing) throw new Error(`插件不存在：${name}`)
+      if (existing.status === 'disabled') throw new Error(`插件已禁用，请先启用：${name}`)
+      targets.set(existing.source, { name, source: existing.source, local: false })
+      continue
+    }
     if (command.action === 'remove') {
       if (!existing) throw new Error(`插件不存在：${name}`)
       if (existing.kind !== 'package') {
@@ -102,6 +108,18 @@ async function acceptTargets(
   targets: CommandTarget[],
   management: CommandManagement
 ): Promise<CommandAcceptance[]> {
+  if (command.action === 'reload') {
+    const acceptances: CommandAcceptance[] = []
+    for (const target of targets) {
+      try {
+        await management.apply([target.source])
+        acceptances.push({ target, error: null })
+      } catch (error) {
+        acceptances.push({ target, error: failureMessage(error) })
+      }
+    }
+    return acceptances
+  }
   const results = new Map<string, string | null>()
   const packages = targets.filter((target) => !target.local)
   const locals = targets.filter((target) => target.local)
@@ -170,6 +188,7 @@ function completedResult(
   if (command.version && item.version !== command.version) {
     throw new Error(`实际版本 ${item.version ?? '未知'} 与目标版本 ${command.version} 不一致`)
   }
+  if (command.action === 'reload') return '成功：已重新加载本机代码，已有 Pi 会话保持不变'
   return target.local
     ? '成功：已加载当前代码，服务与界面已更新'
     : `成功：已安装${item.version ? ` ${item.version}` : ''}并完成宿主加载`
@@ -303,7 +322,8 @@ export async function executeL2PluginCommand(
   if (acceptedCount === 0) {
     throw new Error(acceptances.map(({ target, error }) => `${target.name}：${error}`).join('\n'))
   }
-  const action = command.action === 'remove' ? '卸载' : '安装'
+  const action =
+    command.action === 'remove' ? '卸载' : command.action === 'reload' ? '重载' : '安装'
   const description = `${action} ${targets.map((target) => target.name).join('、')}${command.version ? `@${command.version}` : command.tag ? `（渠道 ${command.tag}）` : ''}`
   console.info('[Pi Desk][Commands] 插件命令已接纳', {
     operation: description,

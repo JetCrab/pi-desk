@@ -2,14 +2,15 @@ import 'server-only'
 
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { promisify } from 'node:util'
+import { getAgentDir } from '@earendil-works/pi-coding-agent'
 
 const execute = promisify(execFile)
 type NpmConfig = Record<string, string>
-let cached: { cwd: string; expires: number; value: Promise<NpmConfig> } | undefined
+let cached: { cwd: string; prefix: string; expires: number; value: Promise<NpmConfig> } | undefined
 
 function npmCli(): string | undefined {
   const directories = [
@@ -49,17 +50,33 @@ async function readNpmrc(path: string, config: NpmConfig): Promise<void> {
   }
 }
 
-async function loadConfig(): Promise<NpmConfig> {
+function npmConfigPath(path: string, cwd: string): string {
+  const homePattern = process.platform === 'win32' ? /^~[\\/]/ : /^~\//
+  return homePattern.test(path) ? resolve(homedir(), path.slice(2)) : resolve(cwd, path)
+}
+
+async function loadConfig(cwd: string, installRoot: string): Promise<NpmConfig> {
+  const environment: NpmConfig = {}
+  // 与 npm loadEnv 一致：大小写统一后按环境枚举顺序覆盖，空值不参与配置。
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && value !== '' && /^npm_config_/i.test(key)) {
+      const original = key.slice(11)
+      const name = original.startsWith('//')
+        ? original
+        : original.replace(/(?!^)_/g, '-').toLowerCase()
+      environment[name] = expand(value)
+    }
+  }
   const cli = npmCli()
   let effective: Record<string, unknown> = {}
   if (cli) {
     try {
-      const result = await execute(process.execPath, [cli, 'config', 'list', '--json'], {
-        cwd: process.cwd(),
-        timeout: 4000,
-        maxBuffer: 512 * 1024,
-        windowsHide: true
-      })
+      await mkdir(cwd, { recursive: true })
+      const result = await execute(
+        process.execPath,
+        [cli, 'config', 'list', '--json', '--prefix', installRoot],
+        { cwd, timeout: 4000, maxBuffer: 512 * 1024, windowsHide: true }
+      )
       effective = JSON.parse(result.stdout) as Record<string, unknown>
     } catch {
       // 不输出 npm 的 stderr：其中可能包含注册表鉴权信息。
@@ -68,18 +85,25 @@ async function loadConfig(): Promise<NpmConfig> {
   }
   const config: NpmConfig = {}
   if (cli) await readNpmrc(resolve(dirname(cli), '../npmrc'), config)
-  const prefix = typeof effective.prefix === 'string' ? effective.prefix : dirname(process.execPath)
+  // npm 默认 globalconfig 同样受 CLI --prefix 影响，不能回退到 Node 安装目录。
   const globalPath =
-    typeof effective.globalconfig === 'string' ? effective.globalconfig : join(prefix, 'etc/npmrc')
+    typeof effective.globalconfig === 'string'
+      ? effective.globalconfig
+      : (environment.globalconfig ?? join(installRoot, 'etc/npmrc'))
   const userPath =
-    process.env.NPM_CONFIG_USERCONFIG ??
-    process.env.npm_config_userconfig ??
-    (typeof effective.userconfig === 'string' ? effective.userconfig : join(homedir(), '.npmrc'))
-  await readNpmrc(globalPath, config)
-  await readNpmrc(userPath, config)
-  const project =
-    typeof effective['local-prefix'] === 'string' ? effective['local-prefix'] : process.cwd()
-  await readNpmrc(join(project, '.npmrc'), config)
+    typeof effective.userconfig === 'string'
+      ? effective.userconfig
+      : (environment.userconfig ?? join(homedir(), '.npmrc'))
+  await readNpmrc(npmConfigPath(globalPath, cwd), config)
+  await readNpmrc(npmConfigPath(userPath, cwd), config)
+  // Pi user-scope 安装传入 --prefix，项目 npmrc 属于安装根，不属于应用或维护 cwd。
+  if (
+    effective.global !== true &&
+    environment.global !== 'true' &&
+    effective.location !== 'global' &&
+    environment.location !== 'global'
+  )
+    await readNpmrc(join(installRoot, '.npmrc'), config)
   for (const [key, value] of Object.entries(effective)) {
     if (
       typeof value === 'string' &&
@@ -88,23 +112,17 @@ async function loadConfig(): Promise<NpmConfig> {
     )
       config[key] = value
   }
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && /^npm_config_/i.test(key)) {
-      const original = key.slice(11)
-      const name = original.startsWith('//')
-        ? original
-        : original.replace(/(?!^)_/g, '-').toLowerCase()
-      config[name] = expand(value)
-    }
-  }
-  return config
+  return { ...config, ...environment }
 }
 
-export function readRegistryNpmConfig(): Promise<NpmConfig> {
-  const cwd = process.cwd()
-  if (!cached || cached.cwd !== cwd || cached.expires <= Date.now()) {
-    const value = loadConfig()
-    cached = { cwd, expires: Date.now() + 30_000, value }
+export function readRegistryNpmConfig(agentDir = getAgentDir()): Promise<NpmConfig> {
+  const cwd =
+    process.env.PI_DESK_PACKAGE_MAINTENANCE_CWD ??
+    join(agentDir, 'pi-desk', 'plugin-package-manager')
+  const prefix = join(agentDir, 'npm')
+  if (!cached || cached.cwd !== cwd || cached.prefix !== prefix || cached.expires <= Date.now()) {
+    const value = loadConfig(cwd, prefix)
+    cached = { cwd, prefix, expires: Date.now() + 30_000, value }
     void value.catch(() => {
       if (cached?.value === value) cached = undefined
     })

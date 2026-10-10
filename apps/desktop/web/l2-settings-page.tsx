@@ -3,6 +3,7 @@ import { useDesktopSettings } from './hooks/l2-use-desktop-settings'
 import { type ControlState, type ReleaseChannel, type UpdatePolicy } from './l4-desktop-ipc'
 import { DesktopHeader, DesktopIcon } from './l4-desktop-ui'
 import { ConfigurationPreferences } from './views/l2-startup-preference'
+import { DownloadSourceSettings } from './views/l2-download-source-settings'
 
 const updatePolicies = [
   { value: 'none', label: '无' },
@@ -96,7 +97,10 @@ export function SettingsPage({
         </div>
       )}
       {(global || props.localTarget) && (
-        <ConfigurationPreferences state={state} refresh={refresh} />
+        <>
+          <ConfigurationPreferences state={state} refresh={refresh} />
+          <DownloadSourceSettings />
+        </>
       )}
       {global && selected && (
         <div className="settings-target-heading">
@@ -323,29 +327,16 @@ function TargetSettingsForm({
                           管理服务安装包
                         </label>
                         {draft.packageEnabled && (
-                          <>
-                            <label className="field">
-                              包名
-                              <input
-                                required
-                                autoComplete="off"
-                                value={draft.packageName}
-                                disabled={disabled}
-                                onChange={(event) => patch({ packageName: event.target.value })}
-                              />
-                            </label>
-                            <label className="field">
-                              下载源
-                              <input
-                                type="url"
-                                autoComplete="off"
-                                placeholder="使用 npm 默认下载源"
-                                value={draft.packageRegistry}
-                                disabled={disabled}
-                                onChange={(event) => patch({ packageRegistry: event.target.value })}
-                              />
-                            </label>
-                          </>
+                          <label className="field">
+                            包名
+                            <input
+                              required
+                              autoComplete="off"
+                              value={draft.packageName}
+                              disabled={disabled}
+                              onChange={(event) => patch({ packageName: event.target.value })}
+                            />
+                          </label>
                         )}
                       </div>
                     )}

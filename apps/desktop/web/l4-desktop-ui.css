@@ -687,6 +687,22 @@ textarea:disabled {
   border: 1px solid currentColor;
   border-radius: 50%;
 }
+.download-source-settings {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.download-source-settings form {
+  gap: 12px;
+}
+.download-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
 .field.download-source {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;

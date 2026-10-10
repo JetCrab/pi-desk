@@ -29,6 +29,7 @@ function DropdownMenuContent({
   side = 'bottom',
   sideOffset = 4,
   className,
+  finalFocus = false,
   ...props
 }: MenuPrimitive.Popup.Props &
   Pick<MenuPrimitive.Positioner.Props, 'align' | 'alignOffset' | 'side' | 'sideOffset'>) {
@@ -43,6 +44,7 @@ function DropdownMenuContent({
       >
         <MenuPrimitive.Popup
           data-slot="dropdown-menu-content"
+          finalFocus={finalFocus}
           className={cn(l4MenuPopupClassName, className)}
           {...props}
         />
@@ -129,17 +131,20 @@ function DropdownMenuSubTrigger({
   )
 }
 
+// 子菜单关闭时上级菜单仍打开，需保留其键盘导航焦点。
 function DropdownMenuSubContent({
   align = 'start',
   alignOffset = -3,
   side = 'right',
   sideOffset = 0,
   className,
+  finalFocus = true,
   ...props
 }: React.ComponentProps<typeof DropdownMenuContent>) {
   return (
     <DropdownMenuContent
       data-slot="dropdown-menu-sub-content"
+      finalFocus={finalFocus}
       className={cn('w-auto min-w-40', className)}
       align={align}
       alignOffset={alignOffset}
