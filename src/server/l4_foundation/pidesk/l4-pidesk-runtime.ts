@@ -1,21 +1,14 @@
 import 'server-only'
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, readFile, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import {
-  defineTool,
-  getAgentDir,
-  getDocsPath,
-  loadSkillsFromDir,
-  truncateHead,
-  type Skill
-} from '@earendil-works/pi-coding-agent'
+import { defineTool, getAgentDir, truncateHead } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import { getL4PiDeskDataDir } from '@server/l4_foundation/pi/l4-pi-desk-data-dir'
 import { isL4PiDeskSafeMode } from '@server/l4_foundation/pi/l4-pi-desk-mode'
 import { parseL4PiDeskCommand, type L4PiDeskCommand } from './l4-pidesk-command'
-import { renderL4PiDeskPluginGuide, renderL4PiDeskSkill } from './l4-pidesk-skill-template'
+import { renderL4PiDeskSystemPrompt } from './l4-pidesk-system-prompt'
 
 export interface L4PiDeskCommandResult {
   mode: 'sync' | 'async'
@@ -36,7 +29,8 @@ export type L4PiDeskPluginCommandHandler = (
 
 interface CommandRuntime {
   handler: L4PiDeskPluginCommandHandler
-  skill: Skill
+  systemPrompt: string
+  docsDirectory: string
   version: string
   development: boolean
   agentDir: string
@@ -66,45 +60,37 @@ export async function initializeL4PiDeskCommands(
   const sdkRoot = dirname(
     dirname(createRequire(join(hostRoot, 'package.json')).resolve('@jetcrab/pi-desk-sdk'))
   )
-  const skillRoot = join(getL4PiDeskDataDir(), development ? 'dev-skills' : 'skills', 'pi-desk')
-  await mkdir(join(skillRoot, 'references'), { recursive: true })
-  await Promise.all([
-    writeFile(
-      join(skillRoot, 'SKILL.md'),
-      renderL4PiDeskSkill({
-        agentDir: portable(agentDir),
-        sdkRoot: portable(sdkRoot),
-        piDocs: portable(getDocsPath())
-      }),
-      'utf8'
-    ),
-    writeFile(
-      join(skillRoot, 'references', 'plugins.md'),
-      renderL4PiDeskPluginGuide(portable(agentDir)),
-      'utf8'
-    )
-  ])
-  const loaded = loadSkillsFromDir({ dir: skillRoot, source: 'pidesk' })
-  const skill = loaded.skills.find((item) => item.name === 'pi-desk')
-  if (!skill) throw new Error('Pi Desk Skill 生成后无法加载')
+  const docsDirectory = join(hostRoot, 'docs', 'pi-desk')
+  await Promise.all(
+    ['README.md', 'commands.md', 'plugins.md'].map((file) => access(join(docsDirectory, file)))
+  )
+  // 只清理当前环境曾生成的宿主 Skill，用户 Skills 和其他宿主环境保持不变。
+  await rm(join(getL4PiDeskDataDir(), development ? 'dev-skills' : 'skills', 'pi-desk'), {
+    recursive: true,
+    force: true
+  })
   const runtime: CommandRuntime = {
     handler,
-    skill,
+    docsDirectory,
+    systemPrompt: renderL4PiDeskSystemPrompt({
+      docsDirectory: portable(docsDirectory),
+      sdkRoot: portable(sdkRoot)
+    }),
     version: manifest.version,
     development,
     agentDir
   }
   globalThis.__piDeskCommandRuntime = runtime
-  console.info('[Pi Desk][Commands] 命令入口与 Skill 已准备完成', { skillPath: skill.filePath })
+  console.info('[Pi Desk][Commands] 命令入口与系统资料导航已准备完成', { docsDirectory })
 }
 
 export function disposeL4PiDeskCommands(): void {
   globalThis.__piDeskCommandRuntime = undefined
 }
 
-export function readL4PiDeskSkills(skills: readonly Skill[] = []): Skill[] {
-  const skill = globalThis.__piDeskCommandRuntime?.skill
-  return skill ? [...skills.filter((item) => item.name !== skill.name), skill] : [...skills]
+export function appendL4PiDeskSystemPrompt(prompts: readonly string[] = []): string[] {
+  const prompt = globalThis.__piDeskCommandRuntime?.systemPrompt
+  return prompt ? [...prompts, prompt] : [...prompts]
 }
 
 export async function executeL4PiDeskCommand(
@@ -126,7 +112,7 @@ export async function executeL4PiDeskCommand(
         mode: isL4PiDeskSafeMode() ? 'basic' : 'normal',
         cwd: context.cwd,
         agentDir: runtime.agentDir,
-        skillDirectory: runtime.skill.baseDir
+        docsDirectory: runtime.docsDirectory
       })
     }
   }

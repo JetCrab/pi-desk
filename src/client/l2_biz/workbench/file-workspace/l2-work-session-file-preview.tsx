@@ -36,6 +36,10 @@ export function L2WorkSessionFilePreview({
   useSyncExternalStore(runtime.subscribe, runtime.getRevision, runtime.getRevision)
   const workSession = workSessions.find((item) => item.workId === runtime.getExpandedWorkId())
   if (!workSession) return null
+  const closePreview = (): void => {
+    if (mobile) runtime.hideWindow(workSession.workId)
+    else runtime.collapseExpandedWindow()
+  }
   const switchToChat = (): void => {
     const input = document.querySelector<HTMLElement>(
       `[data-work-id="${CSS.escape(workSession.workId)}"] textarea`
@@ -49,7 +53,7 @@ export function L2WorkSessionFilePreview({
     <L4AppDialogRoot
       open
       onOpenChange={(open) => {
-        if (!open) runtime.collapseExpandedWindow()
+        if (!open) closePreview()
       }}
     >
       <L4AppDialogContent
@@ -103,7 +107,7 @@ export function L2WorkSessionFilePreview({
           onSwitchPane={switchToChat}
           onOpenTerminal={onOpenTerminal}
           onHide={() => runtime.hideWindow(workSession.workId)}
-          onExpand={() => runtime.collapseExpandedWindow()}
+          onExpand={closePreview}
         />
       </L4AppDialogContent>
     </L4AppDialogRoot>

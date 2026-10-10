@@ -17,6 +17,7 @@ import {
   L4_PLUGIN_OFFICIAL_NAMES,
   L4PluginRegistryError,
   searchL4PluginCatalog,
+  readL4PluginInstallRegistry,
   resolveL4PluginInstall,
   type L4RegistryPackage
 } from '@server/l4_foundation/pi/l4-pi-plugin-registry'
@@ -181,15 +182,21 @@ export class L2PluginCatalog {
   }
 
   async get(request: L2PluginCatalogGetRequest): Promise<L2PluginCatalogDetail> {
-    const resolved = request.registry
+    const downloadSource = readL4PiPluginPreferences().downloadSource
+    const registry =
+      downloadSource.mode === 'local'
+        ? (await readL4PluginInstallRegistry(request.name, { downloadSource })).registry
+        : request.registry
+    const resolved = registry
       ? null
       : await resolveL4PluginInstall(
-          `npm:${request.name}${request.version ? `@${request.version}` : ''}`
+          `npm:${request.name}${request.version ? `@${request.version}` : ''}`,
+          { downloadSource }
         )
     const detail = await getL4PluginCatalogDetail(
       request.name,
       resolved ? resolved.source.slice(resolved.source.lastIndexOf('@') + 1) : request.version,
-      request.registry ?? resolved?.registry
+      registry ?? resolved?.registry
     )
     const manifest = detail.manifest
     return {
@@ -211,9 +218,13 @@ export class L2PluginCatalog {
   }
 
   async getSettings(): Promise<L2PluginCatalogSettings> {
+    const downloadSource = readL4PiPluginPreferences().downloadSource
     return {
-      downloadSource: readL4PiPluginPreferences().downloadSource,
-      recommendedRegistry: await getL4PluginRecommendedRegistry()
+      downloadSource,
+      recommendedRegistry:
+        downloadSource.mode === 'local'
+          ? L4_PLUGIN_OFFICIAL_REGISTRY
+          : await getL4PluginRecommendedRegistry()
     }
   }
 

@@ -2,7 +2,7 @@ import 'server-only'
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readL4PiDeskSkills } from '@server/l4_foundation/pidesk/l4-pidesk-runtime'
+import { appendL4PiDeskSystemPrompt } from '@server/l4_foundation/pidesk/l4-pidesk-runtime'
 import {
   CONFIG_DIR_NAME,
   createExtensionRuntime,
@@ -38,7 +38,7 @@ class BasicResourceLoader implements ResourceLoader {
   }
 
   getSkills(): ReturnType<ResourceLoader['getSkills']> {
-    return { skills: readL4PiDeskSkills(), diagnostics: [] }
+    return { skills: [], diagnostics: [] }
   }
 
   getPrompts(): ReturnType<ResourceLoader['getPrompts']> {
@@ -62,7 +62,7 @@ class BasicResourceLoader implements ResourceLoader {
   }
 
   getAppendSystemPrompt(): string[] {
-    return this.appendPrompt ? [this.appendPrompt.content] : []
+    return appendL4PiDeskSystemPrompt(this.appendPrompt ? [this.appendPrompt.content] : [])
   }
 
   getAppendSystemPromptSources(): Array<{ path: string }> {

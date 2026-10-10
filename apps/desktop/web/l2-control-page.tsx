@@ -545,6 +545,9 @@ export function ControlPage({
                         mode={preparing ? 'prepare' : 'options'}
                         optionsOpen={setup.optionsUrl === target.url}
                         onAction={(input) => setup.onAction(target, input)}
+                        onDownloadSettings={() =>
+                          navigate(`#/settings?url=${encodeURIComponent(target.url)}`)
+                        }
                       />
                     }
                   />

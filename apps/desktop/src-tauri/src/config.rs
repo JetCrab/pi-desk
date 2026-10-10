@@ -15,7 +15,6 @@ const DEFAULT_COMMAND: &str =
 #[cfg(not(windows))]
 const DEFAULT_COMMAND: &str = "node_modules/.bin/pi-desk start -H 127.0.0.1 -p {port} --no-open";
 const DEFAULT_PACKAGE: &str = "@jetcrab/pi-desk";
-const DEFAULT_REGISTRY: &str = "https://registry.npmjs.org";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,7 +69,8 @@ pub enum ReleaseChannel {
 #[serde(rename_all = "camelCase", from = "PackageConfigInput")]
 pub struct PackageConfig {
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // 仅供 npm 操作注入统一源，旧服务配置中的 registry 不再读取或写入。
+    #[serde(skip)]
     pub registry: Option<String>,
     pub startup_update: UpdatePolicy,
     pub periodic_update: UpdatePolicy,
@@ -81,7 +81,6 @@ pub struct PackageConfig {
 #[serde(rename_all = "camelCase")]
 struct PackageConfigInput {
     name: String,
-    registry: Option<String>,
     #[serde(default, deserialize_with = "deserialize_present")]
     startup_update: Option<UpdatePolicy>,
     #[serde(default, deserialize_with = "deserialize_present")]
@@ -118,7 +117,7 @@ impl From<PackageConfigInput> for PackageConfig {
         };
         Self {
             name: input.name,
-            registry: input.registry,
+            registry: None,
             startup_update: input
                 .startup_update
                 .or_else(|| input.auto_update_on_start.map(legacy_policy))
@@ -170,7 +169,7 @@ pub fn default_server_config() -> ServerConfig {
         ready_path: "/api/health".to_string(),
         package: Some(PackageConfig {
             name: DEFAULT_PACKAGE.to_string(),
-            registry: Some(DEFAULT_REGISTRY.to_string()),
+            registry: None,
             startup_update: UpdatePolicy::Check,
             periodic_update: UpdatePolicy::None,
             channel: ReleaseChannel::Stable,
@@ -292,22 +291,9 @@ fn normalize_package(config: PackageConfig) -> Result<PackageConfig, String> {
         return Err("npm 包名无效".to_string());
     }
 
-    let registry = match config.registry {
-        Some(registry) if !registry.trim().is_empty() => {
-            let value = normalize_web_url(&registry)?;
-            let value = value.trim_end_matches('/');
-            let value = if name == DEFAULT_PACKAGE && value == "https://registry.npmmirror.com" {
-                crate::environment_source::DownloadSource::Domestic.npm_registry()
-            } else {
-                value
-            };
-            Some(value.to_string())
-        }
-        _ => None,
-    };
     Ok(PackageConfig {
         name,
-        registry,
+        registry: None,
         startup_update: config.startup_update,
         periodic_update: config.periodic_update,
         channel: config.channel,
@@ -526,7 +512,7 @@ mod tests {
     };
 
     #[test]
-    fn loads_legacy_domestic_registry_as_tencent_only_for_pi_desk() {
+    fn ignores_old_registry_without_losing_server_settings() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -539,59 +525,29 @@ mod tests {
             ));
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("config.json");
-        for (name, registry, expected) in [
-            (
-                "@jetcrab/pi-desk",
-                "https://registry.npmmirror.com/",
-                "https://mirrors.cloud.tencent.com/npm",
-            ),
-            (
-                "@jetcrab/pi-desk",
-                "https://registry.npmjs.org",
-                "https://registry.npmjs.org",
-            ),
-            (
-                "@jetcrab/pi-desk",
-                "https://registry.example.com",
-                "https://registry.example.com",
-            ),
-            (
-                "example-service",
-                "https://registry.npmmirror.com",
-                "https://registry.npmmirror.com",
-            ),
+        for registry in [
+            serde_json::json!("https://registry.npm.taobao.org"),
+            serde_json::json!(42),
+            serde_json::Value::Null,
         ] {
-            let mut config = DesktopConfig::default();
-            let package = config.targets[0]
-                .server
-                .as_mut()
-                .unwrap()
-                .package
-                .as_mut()
-                .unwrap();
-            package.name = name.into();
-            package.registry = Some(registry.into());
-            fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+            let original = DesktopConfig::default();
+            let mut value = serde_json::to_value(&original).unwrap();
+            value["targets"][0]["server"]["package"]["registry"] = registry;
+            fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
             let loaded = load(&path).unwrap();
+            let server = loaded.config.targets[0].server.as_ref().unwrap();
+            assert!(server.package.as_ref().unwrap().registry.is_none());
             assert_eq!(
-                loaded.config.targets[0]
-                    .server
-                    .as_ref()
-                    .unwrap()
-                    .package
-                    .as_ref()
-                    .unwrap()
-                    .registry
-                    .as_deref(),
-                Some(expected)
+                server.start_command,
+                original.targets[0].server.as_ref().unwrap().start_command
             );
+            assert_eq!(loaded.config.targets[0].url, "http://127.0.0.1:30333/");
             save(&path, &loaded.config).unwrap();
             let saved: serde_json::Value =
                 serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-            assert_eq!(
-                saved["targets"][0]["server"]["package"]["registry"],
-                expected
-            );
+            assert!(saved["targets"][0]["server"]["package"]
+                .get("registry")
+                .is_none());
         }
         fs::remove_dir_all(directory).unwrap();
     }

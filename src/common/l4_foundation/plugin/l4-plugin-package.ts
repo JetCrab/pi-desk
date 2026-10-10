@@ -25,6 +25,7 @@ export const L4PluginRegistrySchema = z
   }, '插件源必须是 HTTP 或 HTTPS 仓库地址')
 export const L4PluginDownloadSourceSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('auto') }).strict(),
+  z.object({ mode: z.literal('local') }).strict(),
   z.object({ mode: z.literal('official') }).strict(),
   z.object({ mode: z.literal('domestic') }).strict(),
   z.object({ mode: z.literal('custom'), registry: L4PluginRegistrySchema }).strict()

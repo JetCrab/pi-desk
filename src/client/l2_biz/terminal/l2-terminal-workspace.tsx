@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useSyncExternalStore, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { LoaderCircleIcon, TerminalIcon } from 'lucide-react'
 import { preloadL4TerminalRenderer } from '@client/l4_foundation/terminal/l4-terminal-renderer'
@@ -51,12 +51,46 @@ export function L2TerminalWorkspace({
   } = useL2TerminalLayout(biz, mobile, expanded)
   const selected = state.terminals.find((item) => item.terminalId === state.selectedId)
   const chatHidden = expanded && (mobile || maximized)
+  const handleSystemBack = useCallback(
+    (event: KeyboardEvent): void => {
+      // Android 通过合成 Escape 请求返回；真实键盘 Escape 仍交给 Shell。
+      if (
+        !mobile ||
+        !expanded ||
+        event.isTrusted ||
+        event.key !== 'Escape' ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        root.current?.closest('[inert]')
+      )
+        return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      collapse()
+    },
+    [collapse, expanded, mobile, root]
+  )
+  useEffect(() => {
+    if (!mobile || !expanded) return
+    // 失焦时等菜单、弹窗先消费，再收起终端。
+    window.addEventListener('keydown', handleSystemBack)
+    return () => window.removeEventListener('keydown', handleSystemBack)
+  }, [expanded, handleSystemBack, mobile])
 
   return (
     <div
       ref={root}
       className={cn('relative flex size-full min-h-0 min-w-0', right ? 'flex-row' : 'flex-col')}
       data-terminal-dock={mobile ? 'mobile' : preferences.dock}
+      onKeyDownCapture={(event) => {
+        if (event.target instanceof Node && event.currentTarget.contains(event.target)) {
+          handleSystemBack(event.nativeEvent)
+        }
+      }}
     >
       <ResizablePanelGroup
         orientation={right ? 'horizontal' : 'vertical'}

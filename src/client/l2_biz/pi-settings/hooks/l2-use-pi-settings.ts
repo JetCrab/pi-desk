@@ -40,6 +40,8 @@ function errorMessage(cause: unknown): string {
 
 export interface L2PiSettingsController {
   cwd: string | null
+  displayCwd: string | null
+  ready: boolean
   mcp: L2McpSettings | null
   editor: L2McpEditor | null
   setEditor: Dispatch<SetStateAction<L2McpEditor | null>>
@@ -54,7 +56,7 @@ export interface L2PiSettingsController {
   dialog: React.JSX.Element | null
   retry(): void
   navigate(action: () => void): Promise<void>
-  setCwd(cwd: string | null): void
+  setCwd(cwd: string | null): Promise<void>
   startManual(name: string | null, config?: L2McpServerConfig): void
   startInherited(name: string, config: L2McpServerConfig): void
   updateDraft(patch: Partial<L2McpDraft>): void
@@ -74,7 +76,9 @@ export function useL2PiSettings(
   const biz = useMemo(() => createL2PiSettingsBiz(clientId), [clientId])
   const { confirm, dialog } = useL4ConfirmDialog()
   const [cwd, setCwdState] = useState<string | null>(null)
-  const [mcp, setMcp] = useState<L2McpSettings | null>(null)
+  const [snapshot, setSnapshot] = useState<{ cwd: string | null; data: L2McpSettings } | null>(null)
+  const mcp = snapshot?.data ?? null
+  const displayCwd = snapshot ? snapshot.cwd : cwd
   const [editor, setEditor] = useState<L2McpEditor | null>(null)
   const [loading, setLoading] = useState(true)
   const [pending, setPending] = useState(false)
@@ -96,9 +100,11 @@ export function useL2PiSettings(
     confirmRef.current = confirm
     textRef.current = t
   }, [confirm, t])
+  const ready = snapshot !== null && snapshot.cwd === cwd && !loading && !loadError
   const dirty =
-    (editor?.kind === 'manual' && JSON.stringify(editor.draft) !== editor.initial) ||
-    (editor?.kind === 'json' && Boolean(editor.text))
+    ready &&
+    ((editor?.kind === 'manual' && JSON.stringify(editor.draft) !== editor.initial) ||
+      (editor?.kind === 'json' && Boolean(editor.text)))
 
   const discard = useCallback((): void => {
     setEditor(null)
@@ -113,9 +119,8 @@ export function useL2PiSettings(
       description: textRef.current('当前修改尚未保存。放弃后将保留已保存的配置。'),
       confirmLabel: textRef.current('放弃修改')
     })
-    if (leave) discard()
     return leave
-  }, [dirty, discard, pending, check?.loading])
+  }, [dirty, pending, check?.loading])
 
   useEffect(() => {
     onBeforeLeaveChange(beforeLeave)
@@ -123,14 +128,21 @@ export function useL2PiSettings(
   }, [beforeLeave, onBeforeLeaveChange])
 
   const load = useCallback(
-    async (signal: AbortSignal, currentEpoch: number): Promise<void> => {
+    async (signal: AbortSignal, currentEpoch: number, resetEditor = false): Promise<boolean> => {
       setLoading(true)
       setLoadError(null)
       try {
         const result = await biz.getMcp(cwd, signal)
-        if (!signal.aborted && epoch.current === currentEpoch) setMcp(result)
+        if (signal.aborted || epoch.current !== currentEpoch) return false
+        setSnapshot({ cwd, data: result })
+        if (resetEditor) setEditor(null)
+        return true
       } catch (cause) {
-        if (!signal.aborted && epoch.current === currentEpoch) setLoadError(errorMessage(cause))
+        if (!signal.aborted && epoch.current === currentEpoch) {
+          console.warn('[Pi Desk][MCP] 读取配置失败', { cwd, message: errorMessage(cause) })
+          setLoadError(errorMessage(cause))
+        }
+        return false
       } finally {
         if (!signal.aborted && epoch.current === currentEpoch) setLoading(false)
       }
@@ -142,12 +154,13 @@ export function useL2PiSettings(
     const current = new AbortController()
     controller.current = current
     const currentEpoch = ++epoch.current
-    void load(current.signal, currentEpoch)
+    void load(current.signal, currentEpoch, true)
     return () => current.abort()
   }, [load])
 
   const retry = (): void => {
-    if (controller.current) void load(controller.current.signal, epoch.current)
+    if (controller.current)
+      void load(controller.current.signal, epoch.current, snapshot?.cwd !== cwd)
   }
 
   const navigate = async (action: () => void): Promise<void> => {
@@ -158,8 +171,11 @@ export function useL2PiSettings(
     }
   }
 
-  const setCwd = (next: string | null): void => {
-    setMcp(null)
+  const setCwd = async (next: string | null): Promise<void> => {
+    if (next === cwd || !(await beforeLeave())) return
+    controller.current?.abort()
+    setError(null)
+    setNotice(null)
     setCheck(null)
     setLoadError(null)
     setLoading(true)
@@ -209,7 +225,7 @@ export function useL2PiSettings(
     onSaved: () => void
   ): Promise<boolean> => {
     const signal = controller.current?.signal
-    if (!signal || pending || check?.loading) return false
+    if (!signal || !ready || pending || check?.loading) return false
     const currentEpoch = epoch.current
     setPending(true)
     setError(null)
@@ -220,10 +236,8 @@ export function useL2PiSettings(
       onSaved()
       setCheck(null)
       setNotice('已保存。新会话使用新配置；已有会话需重载 Pi 配置。')
-      // 写入已经成功；重新读取失败时禁止继续以旧列表覆盖配置。
-      setMcp(null)
-      await load(signal, currentEpoch)
-      return !signal.aborted && epoch.current === currentEpoch
+      // 保留展示快照；重新读取完成前由 ready 阻止旧配置参与下一次写入。
+      return await load(signal, currentEpoch)
     } catch (cause) {
       if (!signal.aborted && epoch.current === currentEpoch)
         setError({
@@ -237,7 +251,7 @@ export function useL2PiSettings(
   }
 
   const saveEditor = async (testConnection = false): Promise<void> => {
-    if (!editor || !mcp || pending || check?.loading) return
+    if (!editor || !mcp || !ready || pending || check?.loading) return
     if (
       testConnection &&
       (editor.kind !== 'manual' || !editor.draft.enabled || mcp.projectTrusted === false)
@@ -288,7 +302,7 @@ export function useL2PiSettings(
   }
 
   const remove = async (name: string): Promise<void> => {
-    if (!mcp || !Object.hasOwn(mcp.local, name)) return
+    if (!mcp || !ready || pending || !Object.hasOwn(mcp.local, name)) return
     const restore = cwd !== null && Object.hasOwn(mcp.inherited, name)
     if (
       !(await confirmRef.current({
@@ -333,7 +347,7 @@ export function useL2PiSettings(
           config: shorthand ? { ...inherited, ...local } : (local ?? inherited),
           local: local ?? null,
           source:
-            cwd === null
+            displayCwd === null
               ? '全局'
               : local
                 ? shorthand
@@ -350,6 +364,8 @@ export function useL2PiSettings(
 
   return {
     cwd,
+    displayCwd,
+    ready,
     mcp,
     editor,
     setEditor,

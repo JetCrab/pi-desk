@@ -68,14 +68,16 @@ function L4AppDialogContent({
   children,
   showCloseButton = true,
   finalFocus = false,
+  backdropClassName,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
+  backdropClassName?: string
 }): React.JSX.Element {
   const { t } = useTranslation('common')
   return (
     <L4AppDialogPortal>
-      <L4AppDialogBackdrop />
+      <L4AppDialogBackdrop className={backdropClassName} forceRender={Boolean(backdropClassName)} />
       <DialogPrimitive.Popup
         data-slot="app-dialog-content"
         finalFocus={finalFocus}

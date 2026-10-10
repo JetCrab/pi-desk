@@ -28,7 +28,7 @@ export function L2McpSettingsList({
               disabled={pending}
               onClick={() => onSelect(row)}
               className={cn(
-                'flex w-full min-w-0 cursor-pointer items-center gap-3 p-4 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-50',
+                'flex w-full min-w-0 cursor-pointer items-center gap-3 p-4 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default',
                 selectedName === row.name && 'bg-accent'
               )}
             >

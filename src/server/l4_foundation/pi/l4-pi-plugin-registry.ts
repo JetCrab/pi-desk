@@ -102,16 +102,25 @@ export async function readL4PluginInstallRegistry(
   name: string,
   options: { downloadSource?: L4PluginDownloadSource; registry?: string; agentDir?: string }
 ): Promise<{ registry: string; fallback: boolean }> {
+  const preferences = readL4PiPluginPreferences(options.agentDir)
+  const source = options.downloadSource ?? preferences.downloadSource
+  if (source.mode === 'local') {
+    const config = await readRegistryNpmConfig(options.agentDir)
+    const scoped = name.startsWith('@') ? config[`${name.split('/')[0]}:registry`] : undefined
+    return {
+      registry: normalizeRegistry(scoped || config.registry || L4_PLUGIN_OFFICIAL_REGISTRY),
+      fallback: false
+    }
+  }
   if (options.registry) {
     const registry = normalizeRegistry(options.registry)
     if (![L4_PLUGIN_OFFICIAL_REGISTRY, L4_PLUGIN_DOMESTIC_REGISTRY].includes(registry))
       return { registry, fallback: false }
   }
-  const preferences = readL4PiPluginPreferences(options.agentDir)
   const saved = preferences.registries[`npm:${name}`]
   if (saved) return { registry: normalizeRegistry(saved), fallback: false }
   if (name.startsWith('@')) {
-    const config = await readRegistryNpmConfig()
+    const config = await readRegistryNpmConfig(options.agentDir)
     const scoped = config[`${name.split('/')[0]}:registry`]
     if (scoped) {
       const registry = normalizeRegistry(scoped)
@@ -119,7 +128,6 @@ export async function readL4PluginInstallRegistry(
         return { registry, fallback: false }
     }
   }
-  const source = options.downloadSource ?? preferences.downloadSource
   if (source.mode === 'custom')
     return { registry: normalizeRegistry(source.registry), fallback: false }
   if (source.mode === 'official') return { registry: L4_PLUGIN_OFFICIAL_REGISTRY, fallback: false }
@@ -145,7 +153,9 @@ export async function resolveL4PluginInstall(
   const selector = match[2] ?? 'latest'
   if (selector.length > 128 || !/^[a-zA-Z0-9._+-]+$/.test(selector))
     throw new L4PluginRegistryError('npm 插件版本或标签无效', 400)
-  const selected = await readL4PluginInstallRegistry(name, options)
+  const downloadSource =
+    options.downloadSource ?? readL4PiPluginPreferences(options.agentDir).downloadSource
+  const selected = await readL4PluginInstallRegistry(name, { ...options, downloadSource })
   let registry = selected.registry
   let target = selector
   let version: string
@@ -172,18 +182,23 @@ export async function resolveL4PluginInstall(
     version = chooseVersion(metadata, target)
     validManifest(registryObject(metadata.versions)[version], name, version)
   }
-  return { source: `npm:${name}@${version}`, registry }
+  // 本机源仅供版本查询，安装必须继续沿用 npm 配置，也不能保存为逐包仓库归属。
+  return {
+    source: `npm:${name}@${version}`,
+    ...(downloadSource.mode === 'local' ? {} : { registry })
+  }
 }
 
 async function readInstallMetadata(
   url: URL,
-  options: { signal?: AbortSignal; cache?: boolean }
+  options: { signal?: AbortSignal; cache?: boolean; agentDir?: string }
 ): Promise<Record<string, unknown>> {
-  if (options.cache !== false) return fetchRegistryJson(url, options.signal)
+  if (options.cache !== false) return fetchRegistryJson(url, options.signal, options.agentDir)
   const body = await fetchRegistryBytes(url, {
     limit: 8 * 1024 * 1024,
     signal: options.signal,
-    cache: false
+    cache: false,
+    agentDir: options.agentDir
   })
   try {
     const parsed: unknown = JSON.parse(body.toString('utf8'))

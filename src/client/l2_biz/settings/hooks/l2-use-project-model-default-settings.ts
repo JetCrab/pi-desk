@@ -24,6 +24,7 @@ import {
 interface ProjectModelDefaultSettingsState {
   directories: L2PiDirectoryListResponse['directories']
   cwd: string
+  loadedCwd: string | null
   models: L2ModelOption[]
   selection: L2ModelSelection | null
   fixed: boolean
@@ -66,9 +67,11 @@ export function useL2ProjectModelDefaultSettings(
   const [projectError, setProjectError] = useState<string | null>(null)
   const [directoryAttempt, setDirectoryAttempt] = useState(0)
   const [projectAttempt, setProjectAttempt] = useState(0)
-  const projectReady = loadedCwd === cwd && projectError === null
+  const projectReady =
+    loadedCwd === cwd && projectError === null && !projectLoading && !projectRefreshing
   const projectDraftDirtyRef = useRef(false)
   const projectCwdRef = useRef('')
+  const projectRequestRef = useRef(0)
   const markDraftDirty = useCallback(
     (dirty: boolean): void => {
       projectDraftDirtyRef.current = dirty
@@ -137,12 +140,16 @@ export function useL2ProjectModelDefaultSettings(
 
   useEffect(() => {
     let disposed = false
+    const request = ++projectRequestRef.current
+    function isCurrent(): boolean {
+      return !disposed && request === projectRequestRef.current
+    }
     const projectChanged = projectCwdRef.current !== cwd
     projectCwdRef.current = cwd
     if (projectChanged) markDraftDirty(false)
     if (!cwd) {
       queueMicrotask((): void => {
-        if (disposed) return
+        if (!isCurrent()) return
         setModels([])
         setSelection(null)
         setFixed(false)
@@ -158,18 +165,13 @@ export function useL2ProjectModelDefaultSettings(
 
     const cached = readL2ProjectModelDefaultCache(cwd)
     queueMicrotask((): void => {
-      if (disposed) return
+      if (!isCurrent()) return
       setProjectError(null)
       // 同一项目重试或后台刷新时，缓存和远端结果都不能替换未保存草稿。
       if (!projectDraftDirtyRef.current) {
         if (cached) {
           applyProjectResult(cached)
           setLoadedCwd(cwd)
-        } else {
-          setModels([])
-          setSelection(null)
-          setFixed(false)
-          setLoadedCwd(null)
         }
       }
       setProjectLoading(!cached && !projectDraftDirtyRef.current)
@@ -179,17 +181,17 @@ export function useL2ProjectModelDefaultSettings(
     void (async (): Promise<void> => {
       try {
         const result = await biz.getProjectDefault(cwd)
-        if (disposed) return
+        if (!isCurrent()) return
         if (!projectDraftDirtyRef.current) applyProjectResult(result)
         setLoadedCwd(cwd)
       } catch (error) {
-        if (!disposed) {
+        if (isCurrent()) {
           const message = error instanceof Error ? error.message : t('projectDefaultFailed')
           console.warn('[Pi Desk][ProjectModelDefault] 读取项目模型配置失败', { cwd, message })
           setProjectError(message)
         }
       } finally {
-        if (!disposed) {
+        if (isCurrent()) {
           setProjectLoading(false)
           setProjectRefreshing(false)
         }
@@ -213,16 +215,20 @@ export function useL2ProjectModelDefaultSettings(
     ) {
       return false
     }
+    projectRequestRef.current += 1
+    setProjectRefreshing(true)
     setCwd(nextCwd)
     return true
   }
 
   function changeFixed(value: boolean): void {
+    if (!projectReady || saving) return
     markDraftDirty(true)
     setFixed(value)
   }
 
   function selectModel(model: L2ModelOption): void {
+    if (!projectReady || saving) return
     markDraftDirty(true)
     setSelection({
       provider: model.provider,
@@ -232,6 +238,7 @@ export function useL2ProjectModelDefaultSettings(
   }
 
   function selectThinking(value: string): void {
+    if (!projectReady || saving) return
     const model = models.find(
       (item): boolean => item.provider === selection?.provider && item.modelId === selection.modelId
     )
@@ -242,6 +249,7 @@ export function useL2ProjectModelDefaultSettings(
   }
 
   function applyPreset(preset: L2ModelPreset): void {
+    if (!projectReady || saving) return
     markDraftDirty(true)
     setSelection({
       provider: preset.provider,
@@ -255,6 +263,8 @@ export function useL2ProjectModelDefaultSettings(
   }
 
   function retryProject(): void {
+    projectRequestRef.current += 1
+    setProjectRefreshing(true)
     setProjectAttempt((attempt): number => attempt + 1)
   }
 
@@ -289,6 +299,7 @@ export function useL2ProjectModelDefaultSettings(
   return {
     directories,
     cwd,
+    loadedCwd,
     models,
     selection,
     fixed,

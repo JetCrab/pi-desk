@@ -1,37 +1,49 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { errorMessage, getEnvironmentDownloadSource, type DownloadSource } from '../l4-desktop-ipc'
 
-export function useDownloadSource(enabled: boolean): {
-  downloadSource: DownloadSource
-  selectDownloadSource: (source: DownloadSource) => void
-  markStarted: () => void
+export function useDownloadSource(enabled = true): {
+  downloadSource: DownloadSource | null
+  loading: boolean
+  loadError: string
+  reload: () => void
+  updateDownloadSource: (source: DownloadSource) => void
 } {
-  const [downloadSource, setDownloadSource] = useState<DownloadSource>('official')
-  const recommendationBlocked = useRef(false)
+  const [downloadSource, setDownloadSource] = useState<DownloadSource | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [revision, setRevision] = useState(0)
 
   useEffect(() => {
     if (!enabled) return
     let active = true
     void getEnvironmentDownloadSource().then(
       (source) => {
-        if (active && !recommendationBlocked.current) setDownloadSource(source)
+        if (!active) return
+        setDownloadSource(source)
+        setLoading(false)
       },
       (cause: unknown) => {
-        if (active) console.error('读取下载源推荐失败，保留当前选择：', errorMessage(cause))
+        if (!active) return
+        const message = errorMessage(cause)
+        console.error('读取下载源失败：', message)
+        setLoadError(message)
+        setLoading(false)
       }
     )
     return () => {
       active = false
     }
-  }, [enabled])
+  }, [enabled, revision])
 
-  const selectDownloadSource = (source: DownloadSource): void => {
-    recommendationBlocked.current = true
-    setDownloadSource(source)
+  return {
+    downloadSource,
+    loading,
+    loadError,
+    reload: () => {
+      setLoading(true)
+      setLoadError('')
+      setRevision((value) => value + 1)
+    },
+    updateDownloadSource: setDownloadSource
   }
-  const markStarted = (): void => {
-    recommendationBlocked.current = true
-  }
-
-  return { downloadSource, selectDownloadSource, markStarted }
 }

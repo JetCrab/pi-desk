@@ -517,6 +517,38 @@ export function L2WorkbenchBranchPicker({
     if (childIndex >= 0) selectIndex(childIndex)
   }, [rows, selectIndex, selectedRow])
 
+  const handleEscape = useCallback((): void => {
+    if (confirmation) onCancelRunning()
+    else if (query) {
+      setQuery('')
+      setFoldedEntryIds(new Set())
+      scrollListTo(0)
+    } else requestClose(true)
+  }, [confirmation, onCancelRunning, query, requestClose, scrollListTo])
+
+  useEffect(() => {
+    if (!mobile || !present) return
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (
+        event.key !== 'Escape' ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.repeat ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        panelRef.current?.closest('[inert]')
+      )
+        return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      handleEscape()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleEscape, mobile, present])
+
   const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
     if (event.nativeEvent.isComposing) return
     event.stopPropagation()
@@ -561,11 +593,7 @@ export function L2WorkbenchBranchPicker({
         return
       case 'Escape':
         event.preventDefault()
-        if (query) {
-          setQuery('')
-          setFoldedEntryIds(new Set())
-          scrollListTo(0)
-        } else requestClose(true)
+        handleEscape()
         return
     }
   }

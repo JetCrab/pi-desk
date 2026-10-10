@@ -15,7 +15,7 @@ import {
 import type { CapabilityMode } from '@jetcrab/pi-desk-sdk/capabilities'
 import {
   createL4PiDeskTool,
-  readL4PiDeskSkills,
+  appendL4PiDeskSystemPrompt,
   type L4PiDeskCommandResult
 } from '@server/l4_foundation/pidesk/l4-pidesk-runtime'
 import { L4PiCapabilityRuntime } from './l4-pi-capability-runtime'
@@ -313,10 +313,7 @@ export class L4PiSessionInitialization {
         : await this.options.resources.createServices(
             this.options.cwd,
             {
-              skillsOverride: (loaded) => ({
-                ...loaded,
-                skills: readL4PiDeskSkills(loaded.skills)
-              }),
+              appendSystemPromptOverride: appendL4PiDeskSystemPrompt,
               eventBus: this.capabilities.eventBus(this.plugins.eventBus),
               extensionsOverride: (loaded) => {
                 if (!this.active) {

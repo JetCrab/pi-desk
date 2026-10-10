@@ -209,6 +209,26 @@ export function L4ImageViewer(props: L4ImageViewerProps): React.JSX.Element | nu
     let viewer: L4ViewerRuntime | null = null
     let resizeFrame = 0
     let resizeObserver: ResizeObserver | null = null
+    const handleEscape = (event: KeyboardEvent): void => {
+      if (
+        event.key !== 'Escape' ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        !viewer?.fulled
+      )
+        return
+      // Viewer.js 自身关闭时不 preventDefault，且会与下层弹窗同时响应。
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      if (!event.repeat) {
+        viewerRoot(instanceClass)?.querySelector<HTMLElement>('.viewer-button')?.click()
+      }
+    }
+    window.addEventListener('keydown', handleEscape, true)
     const initialize = (): void => {
       if (disposed) return
       const initialIndex = initialIndexRef.current
@@ -299,6 +319,7 @@ export function L4ImageViewer(props: L4ImageViewerProps): React.JSX.Element | nu
 
     return () => {
       disposed = true
+      window.removeEventListener('keydown', handleEscape, true)
       resizeObserver?.disconnect()
       cancelAnimationFrame(resizeFrame)
       if (viewerRef.current === viewer) viewerRef.current = null

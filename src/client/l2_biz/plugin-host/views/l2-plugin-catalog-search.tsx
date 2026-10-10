@@ -10,6 +10,13 @@ import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@client/l4_foundation/ui/shadcn/select'
 import { pluginNpmSpec, pluginRequestKey } from '../l2-use-plugin-management'
 
 interface CatalogSearchProps {
@@ -39,6 +46,7 @@ interface CatalogSearchProps {
   onUpdate: (source: string) => void
   onMore: () => void
   onRetry: () => void
+  onDirectInstall: () => void
 }
 
 export function L2PluginCatalogSearch(props: CatalogSearchProps): React.JSX.Element {
@@ -51,7 +59,7 @@ export function L2PluginCatalogSearch(props: CatalogSearchProps): React.JSX.Elem
   )
   return (
     <section className="min-w-0 space-y-4" aria-label={t('searchPlugins')}>
-      <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
         <label htmlFor="plugin-catalog-query" className="sr-only">
           {t('searchPlugins')}
         </label>
@@ -59,40 +67,61 @@ export function L2PluginCatalogSearch(props: CatalogSearchProps): React.JSX.Elem
           id="plugin-catalog-query"
           value={props.query}
           placeholder={t('searchPlaceholder')}
+          className="min-w-40 flex-1 basis-56"
           maxLength={200}
           onChange={(event) => props.onQuery(event.target.value)}
           onCompositionStart={props.onCompositionStart}
           onCompositionEnd={props.onCompositionEnd}
         />
-        <div className="flex flex-wrap gap-3">
-          <label className="flex items-center gap-2 text-sm">
-            {t('searchSource')}
-            <select
-              value={props.searchSource}
-              onChange={(event) => props.onSearchSource(event.target.value as 'public' | 'custom')}
-              className="min-h-8 rounded-lg border border-input bg-background px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="public">{t('publicNpm')}</option>
-              <option value="custom">{t('customSearchSource')}</option>
-            </select>
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            {t('pluginKind')}
-            <select
-              value={props.kind}
-              onChange={(event) => props.onKind(event.target.value as CatalogSearchProps['kind'])}
-              className="min-h-8 rounded-lg border border-input bg-background px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {(['all', 'desk', 'pi'] as const).map((kind) => (
-                <option key={kind} value={kind}>
-                  {t(`kind_${kind}`)}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+        <Select
+          value={props.searchSource}
+          items={[
+            { value: 'public', label: t('publicNpm') },
+            { value: 'custom', label: t('customSearchSource') }
+          ]}
+          onValueChange={(value) => {
+            if (value) props.onSearchSource(value)
+          }}
+        >
+          <SelectTrigger aria-label={t('searchSource')}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent positionerClassName="z-[160]">
+            <SelectItem value="public">{t('publicNpm')}</SelectItem>
+            <SelectItem value="custom">{t('customSearchSource')}</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={props.kind}
+          items={(['all', 'desk', 'pi'] as const).map((value) => ({
+            value,
+            label: t(`kind_${value}`)
+          }))}
+          onValueChange={(value) => {
+            if (value) props.onKind(value)
+          }}
+        >
+          <SelectTrigger aria-label={t('pluginKind')}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent positionerClassName="z-[160]">
+            {(['all', 'desk', 'pi'] as const).map((value) => (
+              <SelectItem key={value} value={value}>
+                {t(`kind_${value}`)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={props.disabled}
+          onClick={props.onDirectInstall}
+        >
+          {t('directInstall')}
+        </Button>
         {props.searchSource === 'custom' ? (
-          <div className="space-y-1">
+          <div className="w-full space-y-1">
             <label htmlFor="plugin-search-registry" className="block text-sm">
               {t('searchRegistryUrl')}
             </label>
@@ -115,7 +144,7 @@ export function L2PluginCatalogSearch(props: CatalogSearchProps): React.JSX.Elem
         </div>
       ) : null}
       {props.items.length ? (
-        <div className="divide-y rounded-lg border bg-card">
+        <div className="@container/catalog divide-y rounded-lg border bg-card">
           {props.items.map((item) => {
             const plugin = installed.get(item.name)
             const key = pluginRequestKey(`npm:${item.name}`)
@@ -129,32 +158,42 @@ export function L2PluginCatalogSearch(props: CatalogSearchProps): React.JSX.Elem
               props.errors[key] ??
               (plugin?.error ? selectL4LocalizedText(plugin.error.message, locale) : null)
             return (
-              <article key={item.name} className="min-w-0 space-y-2 p-4">
-                <div className="flex flex-wrap items-baseline gap-2">
-                  <Button
-                    variant="link"
-                    className="h-auto min-w-0 max-w-full p-0 text-left text-sm font-semibold whitespace-normal [overflow-wrap:anywhere]"
-                    onClick={() => props.onDetail(item)}
-                  >
-                    {item.name}
-                  </Button>
-                  <span className="text-xs text-muted-foreground">v{item.version}</span>
-                  {item.official ? (
-                    <span className="rounded-md bg-secondary px-1.5 py-0.5 text-xs text-secondary-foreground">
-                      {t('official')}
+              <article
+                key={item.name}
+                aria-label={item.name}
+                className="grid min-w-0 gap-x-4 gap-y-2 px-4 py-3 @xl/catalog:grid-cols-[minmax(0,1fr)_auto]"
+              >
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="link"
+                      className="h-auto min-h-8 min-w-0 max-w-full p-0 text-left text-sm font-semibold whitespace-normal no-underline hover:underline [overflow-wrap:anywhere]"
+                      onClick={() => props.onDetail(item)}
+                    >
+                      {item.name}
+                    </Button>
+                    <span className="text-xs text-muted-foreground">
+                      v{healthy && plugin.version ? plugin.version : item.version}
                     </span>
-                  ) : null}
-                  <span className="text-xs text-muted-foreground">{t(`kind_${item.kind}`)}</span>
+                    {healthy && plugin.updateAvailable ? (
+                      <span className="rounded-md bg-status-success/10 px-2 py-0.5 text-xs font-medium text-status-success">
+                        {plugin.availableVersion
+                          ? t('newVersion', { version: plugin.availableVersion })
+                          : t('updateAvailable')}
+                      </span>
+                    ) : null}
+                    <span className="text-xs text-muted-foreground">{t(`kind_${item.kind}`)}</span>
+                    {item.publisher ? (
+                      <span className="text-xs text-muted-foreground">{item.publisher}</span>
+                    ) : null}
+                  </div>
+                  <p className="line-clamp-2 text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                    {description
+                      ? selectL4LocalizedText(description, locale)
+                      : t('noPluginDescription')}
+                  </p>
                 </div>
-                <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">
-                  {description
-                    ? selectL4LocalizedText(description, locale)
-                    : t('noPluginDescription')}
-                </p>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                    {item.publisher ?? t('unknownPublisher')}
-                  </span>
+                <div className="flex min-h-8 items-center self-start @xl/catalog:justify-end">
                   {pending ? (
                     <span role="status" className="text-sm text-muted-foreground">
                       {unfinished
@@ -189,12 +228,18 @@ export function L2PluginCatalogSearch(props: CatalogSearchProps): React.JSX.Elem
                   )}
                 </div>
                 {error ? (
-                  <p role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
+                  <p
+                    role="alert"
+                    className="text-sm text-destructive [overflow-wrap:anywhere] @xl/catalog:col-span-2"
+                  >
                     {error}
                   </p>
                 ) : null}
                 {plugin?.operation?.phase === 'failed' && plugin.operation.message ? (
-                  <p role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
+                  <p
+                    role="alert"
+                    className="text-sm text-destructive [overflow-wrap:anywhere] @xl/catalog:col-span-2"
+                  >
                     {plugin.operation.message}
                   </p>
                 ) : null}

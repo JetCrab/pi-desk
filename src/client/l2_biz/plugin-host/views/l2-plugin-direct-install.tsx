@@ -1,6 +1,12 @@
 'use client'
 
 import { useTranslation } from 'react-i18next'
+import { ChevronDownIcon } from 'lucide-react'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger
+} from '@client/l4_foundation/ui/shadcn/collapsible'
 import type {
   L2PluginCatalogDetail,
   L2PluginDownloadSource
@@ -61,69 +67,95 @@ export function L2PluginDirectInstall(props: DirectInstallProps): React.JSX.Elem
         id="plugin-direct-source"
         value={props.source}
         placeholder={t('batchSourcePlaceholder')}
-        rows={3}
+        rows={2}
+        disabled={props.pending}
         onChange={(event) => props.onSource(event.target.value)}
       />
       {props.isNpm || props.multiple ? (
-        <>
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span>{t('installChannel')}</span>
-            <L2PluginManagementChannel
-              value={props.tag}
-              label={t('installChannel')}
-              placeholder={t('defaultChannel')}
-              onChange={props.onTag}
-            />
-          </div>
-          {props.isNpm ? (
-            <Button size="sm" variant="outline" disabled={props.loading} onClick={props.onRead}>
-              {t(props.loading ? 'loadingPackage' : 'readPackage')}
-            </Button>
-          ) : null}
-          {props.detail ? (
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
-                {props.detail.name}
-              </span>
-              <Select
-                value={props.selectedVersion}
-                disabled={props.loading}
-                items={[
-                  { value: '', label: t('automaticVersion') },
-                  ...[...new Set([props.detail.version, ...props.detail.versions])].map(
-                    (version) => ({ value: version, label: version })
-                  )
-                ]}
-                onValueChange={(version) => {
-                  if (version !== null) props.onVersion(version)
-                }}
-              >
-                <SelectTrigger aria-label={t('version')} className="max-w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent positionerClassName="z-[160]">
-                  <SelectItem value="">{t('automaticVersion')}</SelectItem>
-                  {[...new Set([props.detail.version, ...props.detail.versions])].map((version) => (
-                    <SelectItem key={version} value={version}>
-                      {version}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <span className="text-xs text-muted-foreground">
-                {t('targetVersion', { version: props.detail.version })}
-              </span>
+        <Collapsible>
+          <CollapsibleTrigger className="group flex min-h-8 items-center gap-2 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {t('advancedOptions')}
+            <ChevronDownIcon className="size-4 transition-transform group-aria-expanded:rotate-180" />
+          </CollapsibleTrigger>
+          <CollapsibleContent keepMounted className="hidden data-open:block">
+            <div className="space-y-3 pt-2">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span>{t('installChannel')}</span>
+                <L2PluginManagementChannel
+                  value={props.tag}
+                  label={t('installChannel')}
+                  placeholder={t('defaultChannel')}
+                  disabled={props.pending}
+                  onChange={props.onTag}
+                />
+              </div>
+              {props.isNpm ? (
+                <Button size="sm" variant="outline" disabled={props.loading} onClick={props.onRead}>
+                  {t(props.loading ? 'loadingPackage' : 'readPackage')}
+                </Button>
+              ) : null}
+              {props.detail ? (
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
+                    {props.detail.name}
+                  </span>
+                  <Select
+                    value={props.selectedVersion}
+                    onOpenChange={(open, details) => {
+                      if (open && (props.loading || props.pending)) details.cancel()
+                    }}
+                    items={[
+                      { value: '', label: t('automaticVersion') },
+                      ...[...new Set([props.detail.version, ...props.detail.versions])].map(
+                        (version) => ({ value: version, label: version })
+                      )
+                    ]}
+                    onValueChange={(version) => {
+                      if (version !== null && !props.loading && !props.pending)
+                        props.onVersion(version)
+                    }}
+                  >
+                    <SelectTrigger
+                      aria-label={t('version')}
+                      aria-disabled={props.loading || props.pending}
+                      className="max-w-full"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent positionerClassName="z-[160]">
+                      <SelectItem value="" disabled={props.loading || props.pending}>
+                        {t('automaticVersion')}
+                      </SelectItem>
+                      {[...new Set([props.detail.version, ...props.detail.versions])].map(
+                        (version) => (
+                          <SelectItem
+                            key={version}
+                            value={version}
+                            disabled={props.loading || props.pending}
+                          >
+                            {version}
+                          </SelectItem>
+                        )
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <span className="text-xs text-muted-foreground">
+                    {t('targetVersion', { version: props.detail.version })}
+                  </span>
+                </div>
+              ) : null}
+              <L2PluginDownloadSourceSelector
+                id="plugin-direct-download"
+                mode={props.override}
+                registry={props.registry}
+                override
+                saving={props.pending}
+                onMode={props.onMode}
+                onRegistry={props.onRegistry}
+              />
             </div>
-          ) : null}
-          <L2PluginDownloadSourceSelector
-            id="plugin-direct-download"
-            mode={props.override}
-            registry={props.registry}
-            override
-            onMode={props.onMode}
-            onRegistry={props.onRegistry}
-          />
-        </>
+          </CollapsibleContent>
+        </Collapsible>
       ) : null}
       {props.error ? (
         <p

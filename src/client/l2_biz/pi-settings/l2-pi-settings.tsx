@@ -1,6 +1,6 @@
 'use client'
 
-import { PlusIcon } from 'lucide-react'
+import { LoaderCircleIcon, PlusIcon } from 'lucide-react'
 import { useId, useMemo } from 'react'
 import type { BrowserBeforeLeaveHandler } from '@jetcrab/pi-desk-sdk/browser'
 import { useL4AppSocket } from '@client/l4_foundation/realtime/app-socket/l4-app-socket'
@@ -43,14 +43,12 @@ export function L2PiSettings({
     )
   }, [projects, focusedCwd])
   const scopeLabel =
-    state.cwd === null
+    state.displayCwd === null
       ? t('全局')
-      : `${scopeOptions.find((project) => project.cwd === state.cwd)?.projectName ?? t('当前项目')} · ${state.cwd}`
+      : `${scopeOptions.find((project) => project.cwd === state.displayCwd)?.projectName ?? t('当前项目')} · ${state.displayCwd}`
   const editing = Boolean(state.editor && state.mcp)
-  const empty = Boolean(
-    state.mcp && !state.loading && !state.loadError && !editing && state.rows.length === 0
-  )
   const busy = state.pending || Boolean(state.check?.loading)
+  const disabled = busy || !state.ready
   const selectedName = state.editor?.kind === 'manual' ? state.editor.draft.originalName : null
   const addManually = (): void => {
     void state.navigate(() => state.startManual(null))
@@ -64,35 +62,30 @@ export function L2PiSettings({
   return (
     <section aria-label="MCP" className="@container/mcp flex h-full min-h-0 min-w-0 flex-col">
       {state.dialog}
-      <header
-        className={cn(
-          'grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b p-4',
-          !empty && '@min-[40rem]/mcp:grid-cols-[auto_minmax(0,1fr)_auto]'
-        )}
-      >
-        <h2 className="text-xl font-semibold">MCP</h2>
-        {!empty && (
-          <div className="col-start-2 flex flex-wrap justify-end gap-2 @min-[40rem]/mcp:col-start-3 @min-[40rem]/mcp:self-end">
-            <Button disabled={busy || state.loading || !state.mcp} onClick={addManually}>
-              <PlusIcon aria-hidden="true" />
-              {t('添加服务')}
-            </Button>
-            <Button
-              variant="outline"
-              disabled={busy || state.loading || !state.mcp}
-              onClick={importJson}
-            >
-              {t('导入 JSON')}
-            </Button>
-          </div>
-        )}
+      <header className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b p-4 @min-[40rem]/mcp:grid-cols-[auto_minmax(0,1fr)_auto]">
+        <h2 className="flex items-center gap-2 text-xl font-semibold">
+          MCP
+          <span className="inline-flex size-4">
+            {state.loading && (
+              <LoaderCircleIcon
+                role="status"
+                aria-label={t('正在读取配置…')}
+                className="size-4 animate-spin text-muted-foreground"
+              />
+            )}
+          </span>
+        </h2>
+        <div className="col-start-2 flex flex-wrap justify-end gap-2 @min-[40rem]/mcp:col-start-3 @min-[40rem]/mcp:self-end">
+          <Button disabled={disabled} onClick={addManually}>
+            <PlusIcon aria-hidden="true" />
+            {t('添加服务')}
+          </Button>
+          <Button variant="outline" disabled={disabled} onClick={importJson}>
+            {t('导入 JSON')}
+          </Button>
+        </div>
         {/* Select 尾随隐藏输入，space-y 会给选择框追加底部间距；并排工具栏中需清除。 */}
-        <div
-          className={cn(
-            'col-span-2 row-start-2 w-full @min-[40rem]/mcp:col-span-1 @min-[40rem]/mcp:col-start-2 @min-[40rem]/mcp:row-start-1 @min-[40rem]/mcp:max-w-80 @min-[40rem]/mcp:justify-self-end @min-[40rem]/mcp:[&_[data-slot=select-trigger]]:mb-0',
-            empty && '@min-[40rem]/mcp:w-56'
-          )}
-        >
+        <div className="col-span-2 row-start-2 w-full @min-[40rem]/mcp:col-span-1 @min-[40rem]/mcp:col-start-2 @min-[40rem]/mcp:row-start-1 @min-[40rem]/mcp:max-w-80 @min-[40rem]/mcp:justify-self-end @min-[40rem]/mcp:[&_[data-slot=select-trigger]]:mb-0">
           <L2PiSettingsSelect
             id={`${id}-scope`}
             label={t('配置范围')}
@@ -106,8 +99,7 @@ export function L2PiSettings({
               }))
             ]}
             onChange={(value) => {
-              if (value !== (state.cwd ?? ''))
-                void state.navigate(() => state.setCwd(value || null))
+              void state.setCwd(value || null)
             }}
           />
         </div>
@@ -132,19 +124,20 @@ export function L2PiSettings({
           ))}
         </div>
       )}
-      {state.loadError ? (
+      {state.loadError && (
         <div className="space-y-3 p-4">
           <L2PiSettingsError message={state.loadError} />
           <Button variant="outline" onClick={state.retry} disabled={state.loading}>
             {t('重试')}
           </Button>
         </div>
-      ) : state.loading && !editing ? (
+      )}
+      {state.loading && !state.mcp ? (
         <p role="status" className="p-4 text-sm text-muted-foreground">
           {t('正在读取配置…')}
         </p>
       ) : state.mcp ? (
-        <div className="flex min-h-0 min-w-0 flex-1">
+        <div aria-busy={state.loading} className="flex min-h-0 min-w-0 flex-1">
           {state.editor?.kind !== 'json' && state.rows.length > 0 && (
             <div
               className={cn(
@@ -162,7 +155,7 @@ export function L2PiSettings({
               <L2McpSettingsList
                 rows={state.rows}
                 selectedName={selectedName}
-                pending={busy}
+                pending={disabled}
                 onSelect={(row) => {
                   if (selectedName === row.name) return
                   void state.navigate(() =>
@@ -179,11 +172,12 @@ export function L2PiSettings({
               key={state.editor.kind === 'manual' ? (selectedName ?? 'new') : 'json'}
               editor={state.editor}
               scopeLabel={scopeLabel}
-              project={state.cwd !== null}
+              project={state.displayCwd !== null}
               projectTrusted={state.mcp.projectTrusted}
               local={state.mcp.local}
               inherited={state.mcp.inherited}
-              pending={busy}
+              pending={disabled}
+              saving={state.pending}
               error={state.error}
               check={state.check?.name === selectedName ? state.check : null}
               onDraft={state.updateDraft}
@@ -200,7 +194,7 @@ export function L2PiSettings({
               onDismissCheck={state.dismissCheck}
             />
           ) : state.rows.length === 0 ? (
-            <L2McpSettingsEmpty pending={busy} onAdd={addManually} onImport={importJson} />
+            <L2McpSettingsEmpty pending={disabled} onAdd={addManually} onImport={importJson} />
           ) : null}
         </div>
       ) : null}

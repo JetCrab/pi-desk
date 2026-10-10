@@ -396,14 +396,20 @@ function ToolParameters({ tool }: { tool: L2PluginManagementToolDetail }): React
         ) : (
           <p className="text-xs text-muted-foreground">{t('noArguments')}</p>
         )}
-        <details className="mt-3">
-          <summary className="cursor-pointer text-sm text-muted-foreground">
+        <Collapsible className="mt-3">
+          <CollapsibleTrigger className="group flex min-h-8 cursor-pointer items-center gap-2 text-sm text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <ChevronRightIcon
+              aria-hidden="true"
+              className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+            />
             {t('rawSchema')}
-          </summary>
-          <pre className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-muted p-3 font-mono text-sm leading-[1.6]">
-            {JSON.stringify(tool.parameters, null, 2)}
-          </pre>
-        </details>
+          </CollapsibleTrigger>
+          <CollapsibleContent keepMounted>
+            <pre className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-muted p-3 font-mono text-sm leading-[1.6]">
+              {JSON.stringify(tool.parameters, null, 2)}
+            </pre>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
     </div>
   )
@@ -416,9 +422,13 @@ function ToolsSection({ detail }: { detail: L2PluginManagementDetail }): React.J
     <Section title={t('toolCapabilities')} description={t('toolDescription')}>
       <div className="space-y-2">
         {detail.tools.map((tool, index) => (
-          <details key={`${tool.name}:${index}`} className="border-b py-3 last:border-b-0">
-            <summary className="cursor-pointer text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <div className="inline-flex min-w-0 flex-wrap items-center gap-2">
+          <Collapsible key={`${tool.name}:${index}`} className="border-b py-3 last:border-b-0">
+            <CollapsibleTrigger className="group w-full cursor-pointer text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <ChevronRightIcon
+                aria-hidden="true"
+                className="mr-2 inline-block size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+              />
+              <span className="inline-flex min-w-0 flex-wrap items-center gap-2">
                 <code className="font-semibold">{tool.name}</code>
                 {tool.label && tool.label !== tool.name ? (
                   <span className="text-xs text-muted-foreground">{tool.label}</span>
@@ -429,34 +439,36 @@ function ToolsSection({ detail }: { detail: L2PluginManagementDetail }): React.J
                     {t('overridesBuiltin')}
                   </span>
                 ) : null}
-              </div>
-              <p className="mt-1.5 break-words text-sm leading-5 text-muted-foreground">
+              </span>
+              <span className="mt-1.5 block break-words text-sm leading-5 text-muted-foreground">
                 {tool.description || t('noDescription')}
-              </p>
-            </summary>
-            <ToolParameters tool={tool} />
-            {tool.promptSnippet || tool.promptGuidelines.length > 0 ? (
-              <div className="mt-3 space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-xs font-medium">{t('systemPrompts')}</p>
-                  {tool.state !== 'active' ? (
-                    <span className="text-sm text-muted-foreground">{t('inactivePrompt')}</span>
+              </span>
+            </CollapsibleTrigger>
+            <CollapsibleContent keepMounted>
+              <ToolParameters tool={tool} />
+              {tool.promptSnippet || tool.promptGuidelines.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-xs font-medium">{t('systemPrompts')}</p>
+                    {tool.state !== 'active' ? (
+                      <span className="text-sm text-muted-foreground">{t('inactivePrompt')}</span>
+                    ) : null}
+                  </div>
+                  {tool.promptSnippet ? (
+                    <PromptTextBlock title="Available tools" text={tool.promptSnippet} />
+                  ) : null}
+                  {tool.promptGuidelines.length > 0 ? (
+                    <PromptTextBlock
+                      title={`Guidelines · ${tool.promptGuidelines.length}`}
+                      text={tool.promptGuidelines
+                        .map((guideline, guidelineIndex) => `${guidelineIndex + 1}. ${guideline}`)
+                        .join('\n\n')}
+                    />
                   ) : null}
                 </div>
-                {tool.promptSnippet ? (
-                  <PromptTextBlock title="Available tools" text={tool.promptSnippet} />
-                ) : null}
-                {tool.promptGuidelines.length > 0 ? (
-                  <PromptTextBlock
-                    title={`Guidelines · ${tool.promptGuidelines.length}`}
-                    text={tool.promptGuidelines
-                      .map((guideline, guidelineIndex) => `${guidelineIndex + 1}. ${guideline}`)
-                      .join('\n\n')}
-                  />
-                ) : null}
-              </div>
-            ) : null}
-          </details>
+              ) : null}
+            </CollapsibleContent>
+          </Collapsible>
         ))}
       </div>
     </Section>
@@ -474,11 +486,15 @@ function ResourceContent({
 }): React.JSX.Element {
   const { t } = useTranslation('pluginManagement')
   return (
-    <details className="mt-3">
-      <summary className="cursor-pointer py-2 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring">
+    <Collapsible className="mt-3">
+      <CollapsibleTrigger className="group flex min-h-8 w-full cursor-pointer items-center gap-2 py-2 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <ChevronRightIcon
+          aria-hidden="true"
+          className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+        />
         {title}
-      </summary>
-      <div className="border-t">
+      </CollapsibleTrigger>
+      <CollapsibleContent keepMounted className="border-t">
         <div className="flex justify-end px-2 pt-1">
           <CopyTextButton text={content} label={t('copyNamed', { name: title })} />
         </div>
@@ -486,8 +502,8 @@ function ResourceContent({
           {content}
         </pre>
         {truncated ? <p className="py-2 text-sm text-status-warning">{t('truncated')}</p> : null}
-      </div>
-    </details>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 

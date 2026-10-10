@@ -21,15 +21,15 @@ const desktopVersion = JSON.parse(
 const executable = resolve(process.argv[2] ?? '')
 const frontend = resolve(process.argv[3] ?? '')
 const identifier = 'com.jetcrab.desktop.ui-smoke'
-const setupOnly = process.argv.includes('--setup-only')
-const layoutOnly = process.argv.includes('--layout-only')
+const nativeDownloadOnly = process.argv.includes('--source-settings-only')
+const setupOnly = process.argv.includes('--setup-only') || nativeDownloadOnly
+const downloadSourceOnly = process.argv.includes('--download-source-only')
+const layoutOnly = process.argv.includes('--layout-only') || downloadSourceOnly
 const startupOnly = process.argv.includes('--startup-only')
 const sourceScenario =
   process.argv.find((value) => value.startsWith('--source-scenario='))?.split('=')[1] ?? 'china'
 assert.ok(
-  ['china', 'foreign', 'failure', 'timeout', 'late-selection', 'late-start'].includes(
-    sourceScenario
-  ),
+  ['china', 'foreign', 'failure', 'timeout'].includes(sourceScenario),
   '未知的安装源验收场景'
 )
 assert.equal(process.platform, 'win32', '原生窗口验收仅支持 Windows')
@@ -61,7 +61,6 @@ async function listen(server) {
 }
 
 let countryRequests = 0
-let releaseCountry
 let pendingCountry
 let updateVersion = '1.0.0'
 let updateFailure = false
@@ -112,10 +111,8 @@ const fixture = createServer((request, response) => {
         JSON.stringify({ success: true, country_code: sourceScenario === 'foreign' ? 'US' : 'CN' })
       )
     }
-    if (sourceScenario === 'timeout' || sourceScenario.startsWith('late-')) {
-      pendingCountry = response
-      releaseCountry = reply
-    } else reply()
+    if (sourceScenario === 'timeout') pendingCountry = response
+    else reply()
     return
   }
   response.writeHead(request.url === '/health-unavailable' ? 503 : 200, {
@@ -301,8 +298,7 @@ async function assertSetupFits(page, action) {
 
 function sourceField(value) {
   return `(() => {
-    const label = [...document.querySelectorAll('label')].find(item => item.textContent.trim().startsWith('下载源'));
-    const select = label?.querySelector('select');
+    const select = document.querySelector('[data-testid="download-source-select"]');
     if (!select || select.disabled) throw new Error('下载源不可选');
     select.focus();
     Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, ${JSON.stringify(value)});
@@ -313,8 +309,7 @@ function sourceField(value) {
 
 function sourceValue() {
   return `(() => {
-    const label = [...document.querySelectorAll('label')].find(item => item.textContent.trim().startsWith('下载源'));
-    const select = label?.querySelector('select');
+    const select = document.querySelector('[data-testid="download-source-select"]');
     return select ? { value: select.value, disabled: select.disabled } : null;
   })()`
 }
@@ -433,7 +428,13 @@ function installLayoutFixture(desktopVersion) {
         Object.assign(state, args)
         return
       }
-      if (command === 'get_environment_download_source') return 'official'
+      if (command === 'get_environment_download_source')
+        return structuredClone(window.desktopDownloadSource ?? { mode: 'domestic' })
+      if (command === 'set_environment_download_source_command') {
+        if (window.desktopDownloadSaveError) throw new Error('保存 fixture 失败')
+        window.desktopDownloadSource = structuredClone(args.source)
+        return
+      }
       if (command === 'get_target_settings')
         return {
           target: args.url
@@ -508,6 +509,100 @@ function installLayoutFixture(desktopVersion) {
       }
     }
   })
+}
+
+async function validateDownloadSources(page) {
+  await until(
+    () => page.evaluate('typeof window.desktopLayoutReady === "function"'),
+    '控制状态已请求'
+  )
+  await page.evaluate(
+    'window.desktopLayoutState.hideOnStartup = false; window.desktopLayoutReady()'
+  )
+  await page.evaluate("location.hash='#/settings'")
+  await until(async () => (await page.evaluate(sourceValue()))?.value === 'domestic', '默认国内源')
+  assert.equal(
+    await page.evaluate('document.querySelectorAll("[data-testid=download-source-select]").length'),
+    1
+  )
+  await page.evaluate(sourceField('custom'))
+  await page.evaluate(field('自定义下载地址', 'file:///invalid'))
+  await page.evaluate(click('保存下载源'))
+  await until(
+    () => page.evaluate('!!document.querySelector("#download-source-error")'),
+    '非法地址提示'
+  )
+  assert.equal(
+    await page.evaluate(
+      'window.desktopLayoutCommands.some(x=>x.command === "set_environment_download_source_command")'
+    ),
+    false
+  )
+  await page.evaluate(field('自定义下载地址', 'https://custom.example/npm/'))
+  await page.evaluate('window.desktopDownloadSaveError=true')
+  await page.evaluate(click('保存下载源'))
+  await until(
+    () =>
+      page.evaluate(
+        'document.querySelector("#download-source-error")?.textContent.includes("fixture")'
+      ),
+    '保存失败保留草稿'
+  )
+  assert.equal(
+    await page.evaluate('document.querySelector("[data-testid=download-source-registry]").value'),
+    'https://custom.example/npm/'
+  )
+  await page.evaluate('window.desktopDownloadSaveError=false')
+  await page.evaluate(click('保存下载源'))
+  await until(
+    () => page.evaluate('document.body.innerText.includes("下载源已保存")'),
+    '自定义源保存'
+  )
+  assert.deepEqual(await page.evaluate('window.desktopDownloadSource'), {
+    mode: 'custom',
+    registry: 'https://custom.example/npm/'
+  })
+  await page.screenshot('download-source-custom-light.png')
+  await page.theme('dark')
+  await page.viewport(720, 560)
+  assert.equal(await page.evaluate('document.documentElement.scrollWidth > innerWidth'), false)
+  await page.screenshot('download-source-custom-dark-compact.png')
+  await page.evaluate("location.hash=''")
+  await page.evaluate("location.hash='#/settings'")
+  await until(
+    async () => (await page.evaluate(sourceValue()))?.value === 'custom',
+    '重新打开读取已保存配置'
+  )
+  await page.evaluate(sourceField('official'))
+  await page.evaluate(click('保存下载源'))
+  await until(
+    () => page.evaluate('window.desktopDownloadSource?.mode === "official"'),
+    '官方源保存'
+  )
+  assert.equal(
+    await page.evaluate('document.querySelector("[data-testid=download-source-registry]")'),
+    null
+  )
+  await page.evaluate(
+    `window.desktopLayoutState.environment.status='required'; window.desktopLayoutState.targets[0].server.needsSetup=true; window.desktopLayoutState.targets[0].server.status='stopped'; location.hash=''; document.dispatchEvent(new Event('visibilitychange'))`
+  )
+  await until(
+    () => page.evaluate('!!document.querySelector("[data-testid=environment-download-settings]")'),
+    '首次准备入口可访问同一设置'
+  )
+  assert.equal(
+    await page.evaluate('document.querySelectorAll("[data-testid=download-source-select]").length'),
+    0
+  )
+  await page.evaluate(click('下载设置'))
+  await until(
+    async () => (await page.evaluate(sourceValue()))?.value === 'official',
+    '安装入口进入统一设置'
+  )
+  assert.equal(
+    await page.evaluate('document.querySelectorAll("[data-testid=download-source-select]").length'),
+    1
+  )
 }
 
 async function validateLayout(page) {
@@ -865,7 +960,6 @@ async function prepareStartupFixture() {
             readyPath: '/',
             package: {
               name: 'desktop-startup-fixture',
-              registry: targetUrl,
               startupUpdate: 'check',
               periodicUpdate: 'none',
               channel: 'stable'
@@ -879,6 +973,10 @@ async function prepareStartupFixture() {
   await writeFile(
     join(root, 'runtime.json'),
     JSON.stringify({ targets: { [url]: { lastVersion: '1.0.0', autoStart: true } } })
+  )
+  await writeFile(
+    join(root, 'environment.json'),
+    JSON.stringify({ download: { mode: 'custom', registry: targetUrl } })
   )
   holdUpdate = true
 }
@@ -1147,6 +1245,7 @@ validation: try {
       executable,
       [
         '--headless=new',
+        '--edge-skip-compat-layer-relaunch',
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-extensions',
@@ -1173,7 +1272,8 @@ validation: try {
       `${targetUrl}desktop/`,
       `(${installLayoutFixture.toString()})(${JSON.stringify(desktopVersion)})`
     )
-    await validateLayout(control)
+    if (downloadSourceOnly) await validateDownloadSources(control)
+    else await validateLayout(control)
     assert.deepEqual(control.errors, [], '布局交互不应出现 JavaScript 异常')
     passed = true
     break validation
@@ -1229,9 +1329,9 @@ validation: try {
     '缺少 Node/npm 时进入环境门禁'
   )
   const invalidSource = await control.evaluate(
-    `window.__TAURI_INTERNALS__.invoke('prepare_environment_command', { url: ${JSON.stringify(managedUrl)}, downloadSource: 'invalid' }).then(() => null, error => String(error))`
+    `window.__TAURI_INTERNALS__.invoke('set_environment_download_source_command', { source: { mode: 'invalid' } }).then(() => null, error => String(error))`
   )
-  assert.ok(invalidSource, '原生安装入口必须拒绝未支持的源')
+  assert.ok(invalidSource, '原生保存入口必须拒绝未支持的源')
   await control.evaluate(`(async () => {
     const original = window.__TAURI_INTERNALS__.invoke;
     const state = await original('get_control_state');
@@ -1284,71 +1384,72 @@ validation: try {
   assert.equal(await control.evaluate('location.hash'), '', '检查结果不得驱动页面跳转')
   assert.equal(
     await control.evaluate(
-      `!!document.querySelector('article[aria-label=${JSON.stringify(targetUrl)}]')`
+      `!!document.querySelector('article[data-testid=${JSON.stringify(targetUrl)}]')`
     ),
     true,
     '缺少环境时仍然显示其他地址'
   )
   await control.screenshot('environment-required.png')
-  await control.evaluate(
-    `(() => { const summary = [...document.querySelectorAll('summary')].find(item => item.textContent.trim() === '安装选项'); summary.click(); })()`
+  assert.equal(await control.evaluate(sourceValue()), null, '准备页不提供下载源选择器')
+  const defaultSource = { mode: sourceScenario === 'china' ? 'domestic' : 'official' }
+  assert.deepEqual(
+    await control.evaluate(`window.__TAURI_INTERNALS__.invoke('get_environment_download_source')`),
+    defaultSource,
+    '按国家代码或查询失败设置默认源'
   )
-  await until(() => control.evaluate(sourceValue()), '安装选项可选择下载源')
-  let expectedSource = sourceScenario === 'china' ? 'npmmirror' : 'official'
-  if (sourceScenario.startsWith('late-')) {
-    await until(() => countryRequests === 1, '异步 IP 查询正在等待结果', 5000)
-    assert.deepEqual(await control.evaluate(sourceValue()), { value: 'official', disabled: false })
-    if (sourceScenario === 'late-selection') {
-      await control.evaluate(sourceField('npmmirror'))
-      await control.evaluate(sourceField('official'))
-      releaseCountry()
-      assert.equal(
-        await control.evaluate(
-          `window.__TAURI_INTERNALS__.invoke('get_environment_download_source')`
-        ),
-        'npmmirror'
-      )
-      await control.evaluate(
-        `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`
-      )
-      assert.deepEqual(
-        await control.evaluate(sourceValue()),
-        { value: 'official', disabled: false },
-        '晚到的推荐不能覆盖手动选择'
-      )
-    }
-  } else {
-    assert.equal(
-      await control.evaluate(
-        `window.__TAURI_INTERNALS__.invoke('get_environment_download_source')`
+  const servicesBeforeSave = JSON.parse(await readFile(join(root, 'config.json'), 'utf8'))
+  await control.evaluate(click('下载设置'))
+  await until(
+    () =>
+      control.evaluate(
+        `location.hash === ${JSON.stringify(`#/settings?url=${encodeURIComponent(managedUrl)}`)}`
       ),
-      expectedSource
-    )
-    await until(
-      async () => (await control.evaluate(sourceValue()))?.value === expectedSource,
-      '按国家代码设置默认源',
-      5000
-    )
-  }
+    '准备入口跳转统一设置并保留本机地址'
+  )
+  await until(
+    async () => (await control.evaluate(sourceValue()))?.value === defaultSource.mode,
+    '统一设置读取默认源',
+    5000
+  )
+  assert.equal(
+    await control.evaluate(
+      'document.querySelectorAll("[data-testid=download-source-select]").length'
+    ),
+    1,
+    '统一设置只提供一个下载源选择器'
+  )
+  const expectedSource = { mode: defaultSource.mode === 'domestic' ? 'official' : 'domestic' }
+  await control.evaluate(sourceField(expectedSource.mode))
+  await control.evaluate(click('保存下载源'))
+  await until(
+    () => control.evaluate('document.body.innerText.includes("下载源已保存")'),
+    '设置页保存用户选择'
+  )
+  assert.deepEqual(
+    JSON.parse(await readFile(join(root, 'environment.json'), 'utf8')),
+    { download: expectedSource },
+    '保存动作持久化唯一下载源对象'
+  )
+  assert.deepEqual(
+    JSON.parse(await readFile(join(root, 'config.json'), 'utf8')),
+    servicesBeforeSave,
+    '保存统一下载源不改写服务配置'
+  )
+  assert.deepEqual(
+    await control.evaluate(`window.__TAURI_INTERNALS__.invoke('get_environment_download_source')`),
+    expectedSource,
+    '用户保存的选择优先于 IP 默认值'
+  )
+  await control.evaluate(click('返回'))
+  await until(
+    () =>
+      control.evaluate('location.hash === "#/" && document.body.innerText.includes("安装并打开")'),
+    '保存后返回准备页'
+  )
   await assertSetupFits(control, '安装并打开')
   await control.evaluate(click('安装并打开'))
-  await until(() => control.evaluate('!!window.desktopSetupPreparedArgs'), '提交当前下载源')
-  assert.deepEqual(await control.evaluate('window.desktopSetupPreparedArgs'), {
-    url: managedUrl,
-    downloadSource: expectedSource
-  })
-  if (sourceScenario === 'late-start') {
-    releaseCountry()
-    assert.equal(
-      await control.evaluate(
-        `window.__TAURI_INTERNALS__.invoke('get_environment_download_source')`
-      ),
-      'npmmirror'
-    )
-    await control.evaluate(
-      `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`
-    )
-  }
+  await until(() => control.evaluate('!!window.desktopSetupPreparedArgs'), '提交准备请求')
+  assert.deepEqual(await control.evaluate('window.desktopSetupPreparedArgs'), { url: managedUrl })
   await until(
     () =>
       control.evaluate(
@@ -1357,7 +1458,13 @@ validation: try {
     '并行准备界面'
   )
   await assertSetupFits(control, '取消安装')
-  assert.equal(await control.evaluate(sourceValue()), null, '安装开始后隐藏修改源的入口')
+  assert.equal(
+    await control.evaluate(
+      '!!document.querySelector("[data-testid=environment-download-settings]")'
+    ),
+    false,
+    '安装开始后隐藏修改源的入口'
+  )
   assert.equal(countryRequests, 1, 'IP 推荐每次进程只查询一次')
   assert.equal(
     await control.evaluate(`document.body.innerText.includes('连接已有 Pi Desk')`),
@@ -1371,6 +1478,22 @@ validation: try {
   await control.viewport(720, 560)
   await assertSetupFits(control, '取消安装')
   await control.screenshot('environment-preparing-compact.png')
+  if (nativeDownloadOnly) {
+    await control.evaluate(click('取消安装'))
+    await until(
+      () =>
+        control.evaluate(
+          'window.desktopSetupCancelled && document.body.innerText.includes("安装并打开")'
+        ),
+      '取消不改变已保存下载源'
+    )
+    assert.deepEqual(JSON.parse(await readFile(join(root, 'environment.json'), 'utf8')), {
+      download: expectedSource
+    })
+    assert.deepEqual(control.errors, [], '下载源交互不应出现脚本错误')
+    passed = true
+    break validation
+  }
   const normalText = await control.evaluate('document.body.innerText')
   for (const text of ['正在检测', '未找到可用的', '运行环境目录', '返回地址列表']) {
     assert.equal(normalText.includes(text), false, `不应展示内部检查或页面跳转入口：${text}`)
@@ -1427,7 +1550,7 @@ validation: try {
       false,
       '无法量化的安装阶段不伪造百分比'
     )
-    assert.equal(await control.evaluate('location.hash'), '', '安装状态不得切换页面')
+    assert.equal(await control.evaluate('location.hash'), '#/', '安装状态不得切换页面')
     assert.equal(
       await control.evaluate(
         `[...document.querySelectorAll('ol[aria-label="安装步骤"] li')].filter(item => item.innerText.includes('正在安装')).length`
@@ -1495,7 +1618,7 @@ validation: try {
       () => control.evaluate(`document.body.innerText.includes(${JSON.stringify(text)})`),
       `${status} 状态在原区域显示`
     )
-    assert.equal(await control.evaluate('location.hash'), '', '环境检查和结果不得跳页')
+    assert.equal(await control.evaluate('location.hash'), '#/', '环境检查和结果不得跳页')
     assert.equal(
       await control.evaluate('document.querySelector("input")?.value'),
       draftUrl,
@@ -1522,23 +1645,57 @@ validation: try {
   await control.evaluate(
     `(() => { const summary = [...document.querySelectorAll('summary')].find(item => item.textContent.trim() === '安装选项'); if (!summary.parentElement.open) summary.click(); })()`
   )
-  await until(() => control.evaluate(sourceValue()), '安装选项展开')
+  await until(
+    () => control.evaluate('!!document.querySelector("details[name=environment-component]")'),
+    '安装选项展开'
+  )
+  assert.equal(await control.evaluate(sourceValue()), null, '安装选项不提供下载源选择器')
   await control.evaluate(`(() => {
-    const summary = [...document.querySelectorAll('summary')].find(item => item.textContent.includes('Pi') && !item.textContent.includes('Git Bash'));
-    if (!summary.parentElement.open) summary.click();
     const clipboard = navigator.clipboard;
     window.desktopOriginalClipboardWrite = clipboard.writeText;
     clipboard.writeText = async text => { window.desktopCopiedInstallCommand = text; };
   })()`)
-  for (const [source, registry] of [
-    ['npmmirror', 'https://mirrors.cloud.tencent.com/npm'],
+  const manualSources = [
+    ['domestic', 'https://mirrors.cloud.tencent.com/npm'],
     ['official', 'https://registry.npmjs.org']
-  ]) {
+  ]
+  if (expectedSource.mode === 'domestic') manualSources.reverse()
+  for (const [source, registry] of manualSources) {
+    await control.evaluate(click('下载设置'))
+    await until(async () => {
+      const select = await control.evaluate(sourceValue())
+      return select && !select.disabled
+    }, '手动安装进入统一下载设置并读取已保存的源')
     await control.evaluate(sourceField(source))
-    const command = `npm install -g --ignore-scripts --registry ${registry} @earendil-works/pi-coding-agent`
+    await control.evaluate(click('保存下载源'))
+    await until(
+      () => control.evaluate('document.body.innerText.includes("下载源已保存")'),
+      '手动安装源已保存'
+    )
+    await control.evaluate(click('返回'))
+    await until(
+      () =>
+        control.evaluate(
+          'location.hash === "#/" && document.body.innerText.includes("安装并打开")'
+        ),
+      '返回手动安装选项'
+    )
+    await control.evaluate(`(() => {
+      const options = [...document.querySelectorAll('summary')].find(item => item.textContent.trim() === '安装选项');
+      if (!options.parentElement.open) options.click();
+    })()`)
+    await until(
+      () => control.evaluate('!!document.querySelector("details[name=environment-component]")'),
+      '返回后安装选项展开'
+    )
+    await control.evaluate(`(() => {
+      const summary = [...document.querySelectorAll('details[name="environment-component"] summary')].find(item => item.textContent.includes('Pi') && !item.textContent.includes('Git Bash'));
+      if (!summary.parentElement.open) summary.click();
+    })()`)
+    const command = `npm install -g --ignore-scripts --replace-registry-host=never --registry "${registry}" @earendil-works/pi-coding-agent`
     await until(
       () => control.evaluate(`document.body.innerText.includes(${JSON.stringify(command)})`),
-      '手动安装显示所选源'
+      '手动安装显示已保存的源'
     )
     await control.evaluate(click('复制安装命令'))
     await until(
@@ -1582,23 +1739,32 @@ validation: try {
   await control.evaluate(
     `window.__TAURI_INTERNALS__.invoke('apply_target_command', ${JSON.stringify({ originalUrl: null, value: { url: sourceUrl, server: { startCommand: `"${process.execPath}" "${sourceEntry}" {port}`, readyPath: '/', package: null }, tunnel: null } })})`
   )
+  const sourceChoicesBeforePrepare = JSON.parse(
+    await readFile(join(root, 'environment.json'), 'utf8')
+  )
+  assert.deepEqual(sourceChoicesBeforePrepare, { download: expectedSource })
+  const servicesBeforePrepare = JSON.parse(await readFile(join(root, 'config.json'), 'utf8'))
   await control.evaluate(
-    `window.__TAURI_INTERNALS__.invoke('prepare_environment_command', ${JSON.stringify({ url: sourceUrl, downloadSource: expectedSource })})`
+    `window.__TAURI_INTERNALS__.invoke('prepare_environment_command', ${JSON.stringify({ url: sourceUrl })})`
   )
   await until(
     () =>
       control.evaluate(
         `window.__TAURI_INTERNALS__.invoke('get_control_state').then(state => state.targets.some(target => target.url === ${JSON.stringify(sourceUrl)} && target.server.status === 'running') && state.environment.status !== 'installing')`
       ),
-    '原生准备入口完成并保存选定源'
+    '原生准备入口完成并使用已保存的源'
   )
-  const savedSource = JSON.parse(await readFile(join(root, 'environment.json'), 'utf8'))
   assert.deepEqual(
-    savedSource,
-    { downloadSource: expectedSource },
-    '只保存开始时接受的下载源，不记录IP或推荐状态'
+    JSON.parse(await readFile(join(root, 'environment.json'), 'utf8')),
+    sourceChoicesBeforePrepare,
+    '准备动作不重新保存或改变下载源'
   )
-  assert.equal(
+  assert.deepEqual(
+    JSON.parse(await readFile(join(root, 'config.json'), 'utf8')),
+    servicesBeforePrepare,
+    '准备动作不改写服务配置'
+  )
+  assert.deepEqual(
     await control.evaluate(`window.__TAURI_INTERNALS__.invoke('get_environment_download_source')`),
     expectedSource
   )
@@ -1629,7 +1795,7 @@ validation: try {
   await until(
     () =>
       control.evaluate(
-        `!location.hash && !!document.querySelector('form[aria-label="添加地址"] input')`
+        `location.hash === '#/' && !!document.querySelector('form[aria-label="添加地址"] input')`
       ),
     '设置页交互'
   )
@@ -1639,7 +1805,7 @@ validation: try {
   await until(
     () =>
       control.evaluate(
-        `!location.hash && document.body.innerText.includes(${JSON.stringify(addedUrl)})`
+        `location.hash === '#/' && document.body.innerText.includes(${JSON.stringify(addedUrl)})`
       ),
     '新增网址保存'
   )
@@ -1678,7 +1844,7 @@ validation: try {
   const editedTargets = JSON.parse(await readFile(join(root, 'config.json'), 'utf8')).targets
   assert.ok(editedTargets.some((target) => target.url === editedUrl && !target.server))
   assert.ok(!editedTargets.some((target) => target.url === addedUrl))
-  assert.equal(await control.evaluate('location.hash'), '', '地址添加编辑不进入设置页')
+  assert.equal(await control.evaluate('location.hash'), '#/', '地址添加编辑不进入设置页')
   if (setupOnly) {
     assert.deepEqual(control.errors, [], '安装和行内编辑不应出现 JavaScript 异常')
     passed = true
@@ -1699,7 +1865,6 @@ validation: try {
   await control.evaluate(field('启动命令', startCommand))
   await control.evaluate(field('就绪路径', '/health-unavailable'))
   await control.evaluate(field('包名', '@desktop/new-service'))
-  await control.evaluate(field('下载源', targetUrl))
   await control.evaluate(field('启动自动更新', true))
   await control.evaluate(`window.updateWarning = null; window.previousConfirm = window.confirm;
     window.confirm = (message) => { window.updateWarning = message; return true; }`)
@@ -1722,7 +1887,6 @@ validation: try {
     readyPath: '/health-unavailable',
     package: {
       name: '@desktop/new-service',
-      registry: targetUrl.slice(0, -1),
       startupUpdate: 'update',
       periodicUpdate: 'update',
       channel: 'stable'
@@ -1945,41 +2109,51 @@ await writeFile(
           minimumViewport: { width: 720, height: 560 },
           portsReleased: true
         }
-      : startupOnly
+      : nativeDownloadOnly
         ? {
             passed,
-            scope: 'desktop-startup-window-flow',
-            portsReleased: true,
-            startupCheckNonBlocking: true,
-            preferencesPersisted: true,
-            remoteAndLocalWindowSwitching: true,
-            updateWakeAndQuietFailure: true
-          }
-        : {
-            passed,
-            frontendDirectoryAbsent: true,
-            controlAndBrowserVerified: !setupOnly,
-            settingsSavedAndReloaded: !setupOnly,
-            missingEnvironmentBlockedNpm: !setupOnly,
-            manualSetupAndRemoteAccessVerified: !setupOnly,
-            preparationFitsDefaultAndMinimumViewport: true,
-            preparationCurrentStatusVisible: true,
-            perComponentProgressAndHomeStable: true,
-            inlineAddressSavedAndReloaded: true,
-            preparationErrorVisibleAndCancelVerified: true,
-            controlViewport: { width: 960, height: 720 },
-            minimumViewport: { width: 720, height: 560 },
-            preparationUiUsesIsolatedFixture: true,
+            scope: 'desktop-download-source-native',
             sourceScenario,
-            countryRecommendationVerified: true,
-            sourceSelectableBeforeStartAndFixedAfterStart: true,
-            selectedSourceSavedThroughNativeCommand: true,
-            manualInstallCommandMatchesSource: true,
-            activeRuntimeProtected: !setupOnly,
-            shellArchitecture: 'ia32',
-            childArchitecture: process.arch,
+            sourcePersisted: true,
+            duplicateSettingRemoved: true,
+            preparationOnlyUsesUrl: true,
             portsReleased: true
-          },
+          }
+        : startupOnly
+          ? {
+              passed,
+              scope: 'desktop-startup-window-flow',
+              portsReleased: true,
+              startupCheckNonBlocking: true,
+              preferencesPersisted: true,
+              remoteAndLocalWindowSwitching: true,
+              updateWakeAndQuietFailure: true
+            }
+          : {
+              passed,
+              frontendDirectoryAbsent: true,
+              controlAndBrowserVerified: !setupOnly,
+              settingsSavedAndReloaded: !setupOnly,
+              missingEnvironmentBlockedNpm: !setupOnly,
+              manualSetupAndRemoteAccessVerified: !setupOnly,
+              preparationFitsDefaultAndMinimumViewport: true,
+              preparationCurrentStatusVisible: true,
+              perComponentProgressAndHomeStable: true,
+              inlineAddressSavedAndReloaded: true,
+              preparationErrorVisibleAndCancelVerified: true,
+              controlViewport: { width: 960, height: 720 },
+              minimumViewport: { width: 720, height: 560 },
+              preparationUiUsesIsolatedFixture: true,
+              sourceScenario,
+              countryRecommendationVerified: true,
+              sourceSelectedAndSavedInUnifiedSettings: true,
+              selectedSourceSavedThroughNativeCommand: true,
+              manualInstallCommandMatchesSource: true,
+              activeRuntimeProtected: !setupOnly,
+              shellArchitecture: 'ia32',
+              childArchitecture: process.arch,
+              portsReleased: true
+            },
     null,
     2
   )

@@ -188,6 +188,10 @@ class ManagementFixture {
   }
   async apply(sources?: readonly string[]): Promise<L2PluginManagementSnapshot> {
     this.calls.push(['apply', sources])
+    for (const source of sources ?? []) {
+      const error = this.rejected.get(source)
+      if (error) throw new Error(error)
+    }
     return this.state
   }
   async reinstall(
@@ -427,6 +431,138 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
           ),
         /不支持卸载裸扩展/
       )
+    })
+
+    await t.test('重载 npm 和本地来源只应用已安装代码，保留版本且同来源去重', async () => {
+      const management = new ManagementFixture()
+      const npmSource = management.state.plugins[0].source
+      management.state.plugins[0].pluginName = 'fixture-plugin'
+      const local = join(agentDir, 'extensions', 'reload-local')
+      management.state.plugins.push({
+        ...snapshot(local).plugins[0],
+        kind: 'extension',
+        version: null,
+        status: 'available'
+      })
+      const notice = notificationContext(root)
+      const result = await execute(
+        {
+          kind: 'plugins',
+          action: 'reload',
+          names: ['@fixture/plugin', 'fixture-plugin', 'reload-local']
+        },
+        notice.context,
+        management,
+        agentDir
+      )
+      assert.equal(result.mode, 'async')
+      assert.match(result.message, /重载.*已被接纳/)
+      assert.equal(notice.messages.length, 0)
+      assert.deepEqual(management.calls, [
+        ['apply', [npmSource]],
+        ['apply', [local]],
+        ['wait', [npmSource]],
+        ['wait', [local]]
+      ])
+      management.finish()
+      await notice.notification
+      assert.equal(notice.messages.length, 1)
+      assert.match(notice.messages[0], /成功：已重新加载本机代码/)
+      assert.doesNotMatch(notice.messages[0], /已安装|重装|已重启/)
+      assert.equal(management.state.plugins[0].source, npmSource)
+      assert.equal(management.state.plugins[0].version, '1.0.0')
+    })
+
+    await t.test('重载逐项报告拒绝和加载失败，其他目标完成后才汇总', async () => {
+      const management = new ManagementFixture()
+      const sources = ['one', 'two', 'three'].map((name) => `npm:@fixture/${name}@1.0.0`)
+      management.state.plugins = sources.map((source) => snapshot(source).plugins[0])
+      management.rejected.set(sources[2], '该来源已有未完成操作')
+      let finishSecond!: () => void
+      management.waiting.set(
+        sources[1],
+        new Promise<void>((done) => {
+          finishSecond = done
+        })
+      )
+      const notice = notificationContext(root)
+      const result = await execute(
+        {
+          kind: 'plugins',
+          action: 'reload',
+          names: ['@fixture/one', '@fixture/two', '@fixture/three']
+        },
+        notice.context,
+        management,
+        agentDir
+      )
+      assert.match(result.message, /2\/3/)
+      management.fail('候选插件预检失败')
+      await new Promise<void>((done) => setImmediate(done))
+      assert.equal(notice.messages.length, 0)
+      finishSecond()
+      await notice.notification
+      assert.equal(notice.messages.length, 1)
+      assert.match(notice.messages[0], /@fixture\/one：失败.*候选插件预检失败/)
+      assert.match(notice.messages[0], /@fixture\/two：成功.*重新加载/)
+      assert.match(notice.messages[0], /@fixture\/three：未接纳.*已有未完成操作/)
+      assert.ok(management.calls.every(([method]) => method === 'apply' || method === 'wait'))
+    })
+
+    await t.test('未知、重名或禁用来源不触发重载，全部拒绝不承诺通知', async () => {
+      for (const scenario of ['unknown', 'ambiguous', 'disabled', 'rejected']) {
+        const management = new ManagementFixture()
+        const notice = notificationContext(root)
+        const source = management.state.plugins[0].source
+        if (scenario === 'unknown') management.state.plugins = []
+        if (scenario === 'ambiguous')
+          management.state.plugins.push(snapshot('npm:@fixture/plugin@2.0.0').plugins[0])
+        if (scenario === 'disabled') management.state.plugins[0].status = 'disabled'
+        if (scenario === 'rejected') management.rejected.set(source, '插件管理正在关闭')
+        await assert.rejects(
+          execute(
+            { kind: 'plugins', action: 'reload', name: '@fixture/plugin' },
+            notice.context,
+            management,
+            agentDir
+          ),
+          scenario === 'unknown'
+            ? /不存在/
+            : scenario === 'ambiguous'
+              ? /多个来源/
+              : scenario === 'disabled'
+                ? /禁用/
+                : /正在关闭/
+        )
+        assert.deepEqual(management.calls, scenario === 'rejected' ? [['apply', [source]]] : [])
+        assert.equal(notice.messages.length, 0)
+      }
+    })
+
+    await t.test('重载完成时检查加载错误，会话关闭不再投递通知', async () => {
+      for (const scenario of ['failed', 'closed']) {
+        const management = new ManagementFixture()
+        const notice = notificationContext(root)
+        await execute(
+          { kind: 'plugins', action: 'reload', name: '@fixture/plugin' },
+          notice.context,
+          management,
+          agentDir
+        )
+        if (scenario === 'failed') {
+          management.state.plugins[0].error = { phase: 'setup', message: '新版入口加载失败' }
+          management.state.plugins[0].status = 'failed'
+          management.finish()
+          await notice.notification
+          assert.match(notice.messages[0], /失败.*新版入口加载失败/)
+          assert.doesNotMatch(notice.messages[0], /成功：/)
+        } else {
+          notice.controller.abort()
+          management.finish()
+          await new Promise<void>((done) => setImmediate(done))
+          assert.equal(notice.messages.length, 0)
+        }
+      }
     })
 
     await t.test('卸载复用 del，确认来源移除后才通知完成', async () => {

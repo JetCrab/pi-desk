@@ -26,10 +26,11 @@ export async function fetchRegistryBytes(
     timeout?: number
     cache?: boolean
     auth?: boolean
+    agentDir?: string
   }
 ): Promise<Buffer> {
   options.signal?.throwIfAborted()
-  const config = options.auth === false ? {} : await readRegistryNpmConfig()
+  const config = options.auth === false ? {} : await readRegistryNpmConfig(options.agentDir)
   const authorization = registryAuth(url, config)
   const key = `${url.href}:${options.limit}:${createHash('sha256')
     .update(authorization ?? '')
@@ -133,9 +134,10 @@ export async function fetchRegistryBytes(
 
 export async function fetchRegistryJson(
   url: URL,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  agentDir?: string
 ): Promise<Record<string, unknown>> {
-  const body = await fetchRegistryBytes(url, { limit: 8 * 1024 * 1024, signal })
+  const body = await fetchRegistryBytes(url, { limit: 8 * 1024 * 1024, signal, agentDir })
   try {
     const parsed: unknown = JSON.parse(body.toString('utf8'))
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid')

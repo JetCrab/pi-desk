@@ -1,6 +1,6 @@
 import 'server-only'
 
-export type L4PiDeskPluginAction = 'list' | 'show' | 'install' | 'remove'
+export type L4PiDeskPluginAction = 'list' | 'show' | 'install' | 'reload' | 'remove'
 
 export type L4PiDeskCommand =
   | { kind: 'help'; message: string }
@@ -53,6 +53,13 @@ const definitions: readonly CommandDefinition[] = [
     scope: 'required',
     version: true,
     tag: true
+  },
+  {
+    path: ['plugins', 'reload'],
+    description:
+      '重新加载一个或多个已安装插件；不下载、不重启宿主，不重载已有 Pi 会话；完成后向本会话汇总结果',
+    name: 'multiple',
+    scope: 'required'
   },
   {
     path: ['plugins', 'remove'],

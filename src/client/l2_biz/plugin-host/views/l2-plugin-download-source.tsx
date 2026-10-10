@@ -4,6 +4,13 @@ import { useTranslation } from 'react-i18next'
 import type { L2PluginDownloadSource } from '@common/l2_biz/plugin/l2-plugin-catalog-contract'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@client/l4_foundation/ui/shadcn/select'
 
 interface DownloadSourceProps {
   id: string
@@ -43,35 +50,42 @@ export function L2PluginDownloadSourceSelector({
       : mode === 'official'
         ? 'https://registry.npmjs.org'
         : mode === 'domestic'
-          ? 'https://registry.npmmirror.com'
+          ? 'https://mirrors.cloud.tencent.com/npm'
           : mode === 'custom'
             ? (savedRegistry ?? registry)
             : null
+  const options = [
+    ...(override ? [{ value: 'default' as const, label: t('useDefaultSource') }] : []),
+    ...(['local', 'auto', 'domestic', 'official', 'custom'] as const).map((value) => ({
+      value,
+      label: t(`download_${value}`)
+    }))
+  ]
   return (
-    <div className="min-w-0 space-y-2 text-sm">
+    <div className="min-w-0 space-y-3 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <label htmlFor={id} className="font-medium">
           {t(override ? 'installDownloadSource' : 'downloadSource')}
         </label>
-        <select
-          id={id}
+        <Select
           value={mode}
-          disabled={saving}
-          onChange={(event) => onMode(event.target.value as DownloadSourceProps['mode'])}
-          className="min-h-8 max-w-full rounded-lg border border-input bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          items={options}
+          disabled={loading}
+          onValueChange={(value) => {
+            if (value && !saving) onMode(value)
+          }}
         >
-          {override ? <option value="default">{t('useDefaultSource')}</option> : null}
-          {(['auto', 'domestic', 'official', 'custom'] as const).map((value) => (
-            <option key={value} value={value}>
-              {t(`download_${value}`)}
-            </option>
-          ))}
-        </select>
-        {loading ? (
-          <span role="status" className="text-muted-foreground">
-            {t('recommending')}
-          </span>
-        ) : null}
+          <SelectTrigger id={id} className="max-w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent positionerClassName="z-[160]">
+            {options.map((option) => (
+              <SelectItem key={option.value} value={option.value} disabled={saving}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {saving ? (
           <span role="status" className="text-muted-foreground">
             {t('saving')}
@@ -90,6 +104,7 @@ export function L2PluginDownloadSourceSelector({
               value={registry}
               placeholder="https://registry.example.com"
               className="min-w-0 flex-1 basis-48"
+              disabled={saving}
               onChange={(event) => onRegistry(event.target.value)}
             />
             {onSave ? (
@@ -99,14 +114,8 @@ export function L2PluginDownloadSourceSelector({
             ) : null}
           </div>
         </div>
-      ) : null}
-      {!override ? (
-        <details>
-          <summary className="cursor-pointer py-1 text-muted-foreground">
-            {t('sourceDetails')}
-          </summary>
-          <p className="mt-1 break-all text-muted-foreground">{resolved ?? t('recommending')}</p>
-        </details>
+      ) : !override && resolved ? (
+        <p className="break-all text-xs text-muted-foreground">{resolved}</p>
       ) : null}
       {error ? (
         <div role="alert" className="flex flex-wrap items-center gap-2 text-destructive">

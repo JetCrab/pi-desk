@@ -18,137 +18,115 @@ import {
 } from '../l2-use-plugin-management'
 
 interface ManagementDialogProps {
-  open: boolean
-  title: string
   confirmation: PluginManagementAction | null
   onClose: () => void
   onConfirm: (action: PluginManagementAction) => void
-  children: React.ReactNode
 }
 
 export function L2PluginManagementDialog({
-  open,
-  title,
   confirmation,
   onClose,
-  onConfirm,
-  children
+  onConfirm
 }: ManagementDialogProps): React.JSX.Element {
   const { t } = useTranslation('pluginManagement')
   const action = confirmation ? t(pluginManagementActionLabel(confirmation)) : null
+  const removing =
+    confirmation?.kind === 'del' ||
+    (confirmation?.kind === 'batch' && confirmation.input.action === 'del')
+  const installing =
+    confirmation?.kind === 'add' ||
+    (confirmation?.kind === 'batch' && confirmation.input.action === 'add')
   return (
     <L4AppDialogRoot
-      open={open}
+      open={Boolean(confirmation)}
       onOpenChange={(value) => {
         if (!value) onClose()
       }}
     >
-      <L4AppDialogContent
-        finalFocus
-        className={confirmation ? 'max-w-lg' : 'h-[min(85dvh,52rem)] max-w-3xl'}
-      >
+      <L4AppDialogContent className="z-[150] max-w-lg" backdropClassName="z-[140]">
         <L4AppDialogHeader className="p-4 pr-12">
-          <L4AppDialogTitle className="min-w-0 [overflow-wrap:anywhere]">
-            {confirmation ? t('confirmAction', { action }) : title}
-          </L4AppDialogTitle>
+          <L4AppDialogTitle>{t('confirmAction', { action })}</L4AppDialogTitle>
           <L4AppDialogDescription>
-            {confirmation
-              ? confirmation.kind === 'del' ||
-                (confirmation.kind === 'batch' && confirmation.input.action === 'del')
-                ? t('removeDescription')
-                : confirmation.kind === 'add' ||
-                    (confirmation.kind === 'batch' && confirmation.input.action === 'add')
-                  ? t('thirdPartyDescription')
-                  : confirmation.kind === 'reload'
-                    ? t(
-                        confirmation.mode === 'normal'
-                          ? 'restartNormalDescription'
-                          : 'restartDescription'
-                      )
-                    : t('confirmChange')
-              : t('pluginDetails')}
+            {removing
+              ? t('removeDescription')
+              : installing
+                ? t('thirdPartyDescription')
+                : confirmation?.kind === 'reload'
+                  ? t(
+                      confirmation.mode === 'normal'
+                        ? 'restartNormalDescription'
+                        : 'restartDescription'
+                    )
+                  : t('confirmChange')}
           </L4AppDialogDescription>
         </L4AppDialogHeader>
         <L4AppDialogBody className="min-h-0">
           <div className="min-w-0 p-4 pt-0">
-            {confirmation ? (
-              confirmation.kind === 'batch' ? (
-                <ul className="space-y-2 text-sm">
-                  {(confirmation.input.action === 'add'
-                    ? confirmation.input.items.map((item) => item.source)
-                    : confirmation.input.sources
-                  ).map((source) => (
-                    <li key={source} className="font-medium [overflow-wrap:anywhere]">
-                      {source}
-                    </li>
-                  ))}
-                </ul>
-              ) : confirmation.kind === 'add' ? (
-                <dl className="space-y-3 text-sm">
-                  <div>
-                    <dt className="text-muted-foreground">{t('packageName')}</dt>
-                    <dd className="mt-1 font-medium [overflow-wrap:anywhere]">
-                      {confirmation.package?.name ?? confirmation.input.source}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-muted-foreground">{t('version')}</dt>
-                    <dd className="[overflow-wrap:anywhere]">
-                      {confirmation.package?.version ??
-                        pluginNpmSpec(confirmation.input.source)?.version ??
-                        t('fromSource')}
-                    </dd>
-                  </div>
-                  {confirmation.input.tag ? (
-                    <div>
-                      <dt className="text-muted-foreground">{t('installChannel')}</dt>
-                      <dd>{confirmation.input.tag}</dd>
-                    </div>
-                  ) : null}
-                  <div>
-                    <dt className="text-muted-foreground">{t('publisher')}</dt>
-                    <dd className="[overflow-wrap:anywhere]">
-                      {confirmation.package?.publisher ?? t('unknownPublisher')}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-muted-foreground">{t('source')}</dt>
-                    <dd className="[overflow-wrap:anywhere]">
-                      {confirmation.input.registry ??
-                        confirmation.package?.registry ??
-                        confirmation.input.source}
-                    </dd>
-                  </div>
-                </dl>
-              ) : confirmation.kind !== 'reload' ? (
-                <p className="text-sm font-medium [overflow-wrap:anywhere]">
-                  {confirmation.source}
-                </p>
-              ) : null
-            ) : (
-              children
-            )}
+            {confirmation?.kind === 'batch' ? (
+              <ul className="space-y-2 text-sm">
+                {(confirmation.input.action === 'add'
+                  ? confirmation.input.items.map((item) => item.source)
+                  : confirmation.input.sources
+                ).map((source) => (
+                  <li key={source} className="font-medium [overflow-wrap:anywhere]">
+                    {source.startsWith('npm:') ? (pluginNpmSpec(source)?.name ?? source) : source}
+                  </li>
+                ))}
+              </ul>
+            ) : confirmation?.kind === 'add' ? (
+              <dl className="space-y-3 text-sm">
+                <div>
+                  <dt className="text-muted-foreground">{t('packageName')}</dt>
+                  <dd className="mt-1 font-medium [overflow-wrap:anywhere]">
+                    {confirmation.package?.name ?? confirmation.input.source}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">{t('version')}</dt>
+                  <dd className="[overflow-wrap:anywhere]">
+                    {confirmation.package?.version ??
+                      pluginNpmSpec(confirmation.input.source)?.version ??
+                      t('fromSource')}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">{t('publisher')}</dt>
+                  <dd className="[overflow-wrap:anywhere]">
+                    {confirmation.package?.publisher ?? t('unknownPublisher')}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">{t('source')}</dt>
+                  <dd className="[overflow-wrap:anywhere]">
+                    {confirmation.input.registry ??
+                      confirmation.package?.registry ??
+                      confirmation.input.source}
+                  </dd>
+                </div>
+              </dl>
+            ) : confirmation && confirmation.kind !== 'reload' ? (
+              <p className="text-sm font-medium [overflow-wrap:anywhere]">
+                {confirmation.source.startsWith('npm:')
+                  ? (pluginNpmSpec(confirmation.source)?.name ?? confirmation.source)
+                  : confirmation.source}
+              </p>
+            ) : null}
           </div>
         </L4AppDialogBody>
-        {confirmation ? (
-          <L4AppDialogFooter>
-            <Button size="sm" variant="outline" onClick={onClose}>
-              {t('cancel')}
-            </Button>
-            <Button
-              size="sm"
-              variant={
-                confirmation.kind === 'del' ||
-                (confirmation.kind === 'batch' && confirmation.input.action === 'del')
-                  ? 'destructive'
-                  : 'default'
-              }
-              onClick={() => onConfirm(confirmation)}
-            >
-              {action}
-            </Button>
-          </L4AppDialogFooter>
-        ) : null}
+        <L4AppDialogFooter>
+          <Button size="sm" variant="outline" onClick={onClose}>
+            {t('cancel')}
+          </Button>
+          <Button
+            size="sm"
+            variant={removing ? 'destructive' : 'default'}
+            onClick={() => {
+              if (confirmation) onConfirm(confirmation)
+            }}
+          >
+            {action}
+          </Button>
+        </L4AppDialogFooter>
       </L4AppDialogContent>
     </L4AppDialogRoot>
   )

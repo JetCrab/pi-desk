@@ -32,6 +32,49 @@ const eslintConfig = defineConfig([
       '@typescript-eslint/no-require-imports': 'off'
     }
   },
+  {
+    files: ['src/client/l2_biz/plugin-host/**/*.tsx'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'JSXOpeningElement[name.name=/^(select|option)$/]',
+          message: '插件宿主业务请选择 shadcn/select 入口的 Select、SelectItem 等统一组件。'
+        },
+        {
+          selector: 'JSXOpeningElement[name.name=/^(details|summary)$/]',
+          message:
+            '插件宿主业务请使用 shadcn/collapsible 入口的 Collapsible、CollapsibleTrigger、CollapsibleContent。'
+        },
+        {
+          selector: 'JSXOpeningElement[name.name="input"]',
+          message:
+            '插件宿主业务请根据输入用途使用 shadcn/input、shadcn/checkbox 或 shadcn/switch 入口的统一组件。'
+        },
+        {
+          selector: 'JSXOpeningElement[name.name="textarea"]',
+          message: '插件宿主业务请使用 shadcn/textarea 入口的 Textarea 统一组件。'
+        },
+        {
+          selector: 'JSXOpeningElement[name.name="button"]',
+          message:
+            '插件宿主业务请使用 shadcn/button 入口的 Button；折叠、选择等操作请使用对应统一组件的 Trigger。'
+        }
+      ],
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@base-ui/react', '@base-ui/react/**'],
+              message:
+                '插件宿主业务禁止直接导入 Base UI，请使用 @client/l4_foundation/ui/shadcn 下对应用途的统一组件入口。'
+            }
+          ]
+        }
+      ]
+    }
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

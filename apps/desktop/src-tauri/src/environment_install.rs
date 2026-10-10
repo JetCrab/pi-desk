@@ -242,7 +242,8 @@ pub(crate) fn prepare(
         cancelled,
         |cancelled| {
             if needs_node {
-                let node = download_node(state, &client, &work.0, download_source, cancelled, log)?;
+                let node =
+                    download_node(state, &client, &work.0, &download_source, cancelled, log)?;
                 let installed = install_node(state, &work.0.join(&node.file), cancelled, log)?;
                 let actual_version = state.probe(Component::Node, &installed, cancelled, log)?;
                 if actual_version != node.version {
@@ -257,14 +258,14 @@ pub(crate) fn prepare(
         |cancelled| {
             if needs_bash {
                 let installer =
-                    download_bash(state, &client, &work.0, download_source, cancelled, log)?;
+                    download_bash(state, &client, &work.0, &download_source, cancelled, log)?;
                 install_bash(state, &installer, cancelled, log)?;
             }
             Ok(())
         },
         |cancelled| {
             if install_pi {
-                prepare_pi(state, &work.0, download_source, cancelled, log)?;
+                prepare_pi(state, &work.0, &download_source, cancelled, log)?;
             }
             Ok(())
         },
@@ -295,7 +296,7 @@ pub(crate) fn prepare(
 pub(crate) fn prepare(
     state: &EnvironmentState,
     server: &ServerConfig,
-    _download_source: DownloadSource,
+    download_source: DownloadSource,
     cancelled: &(dyn Fn() -> bool + Sync),
     log: &Path,
     service: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> Result<(), String> + Send,
@@ -368,14 +369,8 @@ pub(crate) fn prepare(
         cancelled,
         |cancelled| {
             if state.component_path(Component::Node).is_none() || (needs_pi && node_old) {
-                let node = download_node(
-                    state,
-                    &client()?,
-                    &work.0,
-                    DownloadSource::Official,
-                    cancelled,
-                    log,
-                )?;
+                let node =
+                    download_node(state, &client()?, &work.0, &download_source, cancelled, log)?;
                 let extracted = work.0.join("node");
                 fs::create_dir_all(&extracted).map_err(|error| error.to_string())?;
                 state.set_component_step(Component::Node, "正在解压并校验 Node.js");
@@ -426,7 +421,7 @@ pub(crate) fn prepare(
         |_| Ok(()),
         |cancelled| {
             if needs_pi && state.component_path(Component::Pi).is_none() {
-                prepare_pi(state, &work.0, DownloadSource::Official, cancelled, log)?;
+                prepare_pi(state, &work.0, &download_source, cancelled, log)?;
             }
             Ok(())
         },
@@ -498,7 +493,7 @@ fn download_node(
     state: &EnvironmentState,
     client: &reqwest::Client,
     work: &Path,
-    download_source: DownloadSource,
+    download_source: &DownloadSource,
     cancelled: &(dyn Fn() -> bool + Sync),
     log: &Path,
 ) -> Result<NodeDownload, String> {
@@ -590,7 +585,7 @@ fn download_bash(
     state: &EnvironmentState,
     client: &reqwest::Client,
     work: &Path,
-    download_source: DownloadSource,
+    download_source: &DownloadSource,
     cancelled: &dyn Fn() -> bool,
     log: &Path,
 ) -> Result<PathBuf, String> {
@@ -657,7 +652,7 @@ mod tests;
 fn prepare_pi(
     state: &EnvironmentState,
     work: &Path,
-    download_source: DownloadSource,
+    download_source: &DownloadSource,
     cancelled: &dyn Fn() -> bool,
     log: &Path,
 ) -> Result<(), String> {
@@ -702,23 +697,34 @@ fn prepare_pi(
         ),
     );
     let installing = std::time::Instant::now();
-    let installation = state.run_node(
-        &[
-            &npm.to_string_lossy(),
-            "install",
-            "-g",
-            "--ignore-scripts",
-            "--no-audit",
-            "--no-fund",
-            "--progress=false",
-            "--registry",
-            download_source.npm_registry(),
-            &format!("{}@{version}", environment::PI_PACKAGE),
-        ],
-        Some(work),
-        Duration::from_secs(600),
-        cancelled,
+    let installation = packages::with_registry_fallback(
+        &package,
         log,
+        cancelled,
+        &state.npm_command()?,
+        &state.child_environment(),
+        |source| {
+            state.run_node(
+                &[
+                    &npm.to_string_lossy(),
+                    "install",
+                    "-g",
+                    "--ignore-scripts",
+                    "--no-audit",
+                    "--no-fund",
+                    "--progress=false",
+                    "--registry",
+                    source,
+                    "--replace-registry-host=never",
+                    &format!("--@earendil-works:registry={source}"),
+                    &format!("{}@{version}", environment::PI_PACKAGE),
+                ],
+                Some(work),
+                Duration::from_secs(600),
+                cancelled,
+                log,
+            )
+        },
     );
     logging::write(
         log,

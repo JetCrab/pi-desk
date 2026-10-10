@@ -1,9 +1,4 @@
-import type {
-  DownloadSource,
-  EnvironmentComponent,
-  EnvironmentSnapshot,
-  TargetSnapshot
-} from '../l4-desktop-ipc'
+import type { EnvironmentComponent, EnvironmentSnapshot, TargetSnapshot } from '../l4-desktop-ipc'
 import { DesktopError, DesktopIcon } from '../l4-desktop-ui'
 
 const isWindows = /Windows/u.test(navigator.userAgent)
@@ -17,7 +12,6 @@ const componentOrder = ['node', 'bash', 'pi'] as const
 export type EnvironmentViewAction =
   | { kind: 'prepare' | 'check' | 'cancel' | 'open' | 'copy-error' | 'copy-command' }
   | { kind: 'options'; open: boolean }
-  | { kind: 'download-source'; downloadSource: DownloadSource }
   | { kind: 'select'; component: EnvironmentComponent['name']; archive: boolean }
   | { kind: 'help'; component: EnvironmentComponent['name'] }
 
@@ -86,7 +80,7 @@ export type EnvironmentViewProps = {
   target: TargetSnapshot
   optionsOpen: boolean
   mode: 'prepare' | 'options'
-  downloadSource: DownloadSource
+  onDownloadSettings: () => void
   installCommand: string
   launching: boolean
   busy: boolean
@@ -102,7 +96,7 @@ export function EnvironmentView({
   target,
   optionsOpen,
   mode,
-  downloadSource,
+  onDownloadSettings,
   installCommand,
   launching,
   busy,
@@ -141,23 +135,16 @@ export function EnvironmentView({
             : working
               ? '等待 Node.js 就绪'
               : '待安装'
-  const source = (
-    <label className="field download-source">
-      下载源
-      <select
-        value={downloadSource}
-        disabled={locked}
-        onChange={(event) =>
-          onAction({
-            kind: 'download-source',
-            downloadSource: event.target.value as DownloadSource
-          })
-        }
-      >
-        {isWindows && <option value="npmmirror">国内镜像</option>}
-        <option value="official">官方源</option>
-      </select>
-    </label>
+  const downloadSettings = (
+    <button
+      type="button"
+      className="quiet link-button"
+      data-testid="environment-download-settings"
+      disabled={locked}
+      onClick={onDownloadSettings}
+    >
+      下载设置
+    </button>
   )
 
   return (
@@ -226,7 +213,7 @@ export function EnvironmentView({
       )}
       {!optionsOnly && (
         <div className="setup-footer">
-          {!working && source}
+          {!working && downloadSettings}
           <div className="actions setup-actions">
             {working ? (
               <button
@@ -271,7 +258,7 @@ export function EnvironmentView({
             安装选项
           </summary>
           <div className="details-body">
-            {optionsOnly && source}
+            {optionsOnly && downloadSettings}
             <div className="components">
               {components.map((component) => (
                 <details className="component" name="environment-component" key={component.name}>
@@ -287,12 +274,14 @@ export function EnvironmentView({
                       <p className="component-problem">{component.detail}</p>
                     )}
                     {component.path && <p className="path-text">{component.path}</p>}
-                    {component.name === 'pi' && <p className="code-line">{installCommand}</p>}
+                    {component.name === 'pi' && installCommand && (
+                      <p className="code-line">{installCommand}</p>
+                    )}
                     <div className="actions">
                       {component.name === 'pi' ? (
                         <button
                           type="button"
-                          disabled={locked}
+                          disabled={locked || !installCommand}
                           onClick={() => onAction({ kind: 'copy-command' })}
                         >
                           <DesktopIcon name="copy" />

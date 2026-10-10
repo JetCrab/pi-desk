@@ -40,10 +40,10 @@ function settled(worker: L4PiChatWorker): Promise<void> {
 }
 
 test(
-  '宿主生成 Skill，真实工具异步返回，重载后结果进入历史并唤醒模型',
+  '普通与基础会话的系统导航不受 Skills 筛选影响，重载不重复且保留异步通知',
   { timeout: 70_000 },
   async () => {
-    const root = resolve('temp/pi/l4-pidesk-runtime', `skill-and-notification-${randomUUID()}`)
+    const root = resolve('temp/pi/l4-pidesk-runtime', `system-navigation-${randomUUID()}`)
     const agentDir = join(root, 'agent')
     const cwd = join(root, 'project')
     const saved = {
@@ -122,6 +122,17 @@ test(
         packages: []
       })
       await writeFile(join(agentDir, 'settings.json'), settingsText)
+      await writeFile(join(agentDir, 'APPEND_SYSTEM.md'), '用户原有追加提示')
+      const devSkillPath = join(agentDir, 'pi-desk', 'dev-skills', 'pi-desk', 'SKILL.md')
+      const prodSkillPath = join(agentDir, 'pi-desk', 'skills', 'pi-desk', 'SKILL.md')
+      const userSkillPath = join(agentDir, 'skills', 'user-skill', 'SKILL.md')
+      for (const path of [devSkillPath, prodSkillPath, userSkillPath]) {
+        await mkdir(dirname(path), { recursive: true })
+      }
+      await writeFile(devSkillPath, '旧开发环境宿主指引')
+      await writeFile(prodSkillPath, '旧正式环境宿主指引')
+      const userSkill = '---\nname: user-skill\ndescription: 测试用户自己的 Skill\n---\n用户说明'
+      await writeFile(userSkillPath, userSkill)
       await writeFile(
         join(agentDir, 'models.json'),
         JSON.stringify({
@@ -153,18 +164,13 @@ test(
         notify = context.notify
         return { mode: 'async', message: '本次安装已接纳，完成后通知。' }
       }, true)
-      const devSkillPath = join(agentDir, 'pi-desk', 'dev-skills', 'pi-desk', 'SKILL.md')
-      const devText = await readFile(devSkillPath, 'utf8')
-      assert.match(devText, /references\/plugins.md/)
-      assert.match(devText, /"session", "reload"/)
-      assert.match(devText, /更多 → 重载 Pi 配置/)
-      assert.match(devText, /缓存失效/)
-      assert.match(devText, /不会自动下载插件新版本/)
-      assert.ok(devText.includes(agentDir.replaceAll('\\', '/')))
-      assert.match(
-        await readFile(join(dirname(devSkillPath), 'references', 'plugins.md'), 'utf8'),
-        /--version/
-      )
+      await assert.rejects(readFile(devSkillPath), { code: 'ENOENT' })
+      assert.equal(await readFile(prodSkillPath, 'utf8'), '旧正式环境宿主指引')
+      assert.equal(await readFile(userSkillPath, 'utf8'), userSkill)
+      const navigation = commands.appendL4PiDeskSystemPrompt()[0]
+      const docsDirectory = resolve('docs/pi-desk')
+      assert.ok(navigation.includes(docsDirectory.replaceAll('\\', '/')))
+      assert.equal(navigation.includes('/skills/'), false)
       assert.equal(await readFile(join(agentDir, 'settings.json'), 'utf8'), settingsText)
       const info = await commands.executeL4PiDeskCommand(['info'], {
         cwd,
@@ -175,6 +181,8 @@ test(
       assert.equal(info.message.includes('\n'), false)
       assert.equal(JSON.parse(info.message).cwd, cwd)
       assert.equal(JSON.parse(info.message).agentDir, agentDir)
+      assert.equal(JSON.parse(info.message).docsDirectory, docsDirectory)
+      assert.equal('skillDirectory' in JSON.parse(info.message), false)
 
       const [{ SessionManager }, { L4PiChatWorker: Worker }] = await Promise.all([
         jiti.import<typeof import('@earendil-works/pi-coding-agent')>(
@@ -185,7 +193,10 @@ test(
         )
       ])
       const manager = SessionManager.create(cwd, join(agentDir, 'sessions'))
-      worker = new Worker(cwd, manager)
+      worker = new Worker(cwd, manager, undefined, {
+        mode: () => 'no-skills',
+        rules: () => ({ name: '禁用 Skills', skills: { allow: [] } })
+      })
       const events: L4PiChatWorkerEvent[] = []
       worker.subscribe((event) => events.push(event))
       await worker.getRuntime()
@@ -193,13 +204,21 @@ test(
       assert.equal(tools.find((tool) => tool.name === 'pidesk')?.description, 'Pi Desk 命令入口。')
       assert.equal(tools.find((tool) => tool.name === 'pidesk')?.exposure, 'model-only')
       const skillCommands = await worker.listNativeCommands()
-      assert.equal(skillCommands.filter((command) => command.name === 'skill:pi-desk').length, 1)
+      assert.equal(
+        skillCommands.some((command) => command.name.startsWith('skill:')),
+        false
+      )
+      const initialPrompt = (await worker.readModelContext()).systemPrompt
+      assert.ok(initialPrompt.includes(navigation))
+      assert.match(initialPrompt, /用户原有追加提示/)
 
       const firstSettled = settled(worker)
       await worker.send({ text: '安装 fixture 插件', images: [], mode: 'auto' })
       await firstSettled
       assert.ok(notify)
       assert.equal(bodies.length, 2)
+      assert.match(bodies[0], /Pi Desk 资料/)
+      assert.match(bodies[0], /用户原有追加提示/)
       const receipt = manager
         .getEntries()
         .find(
@@ -225,8 +244,10 @@ test(
       assert.equal(
         (await worker.listNativeCommands()).filter((command) => command.name === 'skill:pi-desk')
           .length,
-        1
+        0
       )
+      const reloadedPrompt = (await worker.readModelContext()).systemPrompt
+      assert.equal(reloadedPrompt.split('Pi Desk 资料').length - 1, 1)
       const completed = settled(worker)
       await notify('fixture 已安装 1.2.3，并完成加载。')
       await completed
@@ -253,17 +274,21 @@ test(
         async () => ({ mode: 'sync', message: 'fixture' }),
         false
       )
-      const prodSkillPath = join(agentDir, 'pi-desk', 'skills', 'pi-desk', 'SKILL.md')
-      assert.match(await readFile(prodSkillPath, 'utf8'), /# Pi Desk/)
-      assert.equal(await readFile(devSkillPath, 'utf8'), devText)
-      assert.equal(commands.readL4PiDeskSkills()[0].filePath, prodSkillPath)
+      await assert.rejects(readFile(prodSkillPath), { code: 'ENOENT' })
+      await assert.rejects(readFile(devSkillPath), { code: 'ENOENT' })
+      assert.equal(await readFile(userSkillPath, 'utf8'), userSkill)
+      assert.equal(commands.appendL4PiDeskSystemPrompt()[0], navigation)
       basic = new Worker(cwd, SessionManager.create(cwd, join(agentDir, 'sessions')))
       await basic.reload('basic')
       assert.equal((await basic.getRuntime()).extensionMode, 'basic')
       assert.ok((await basic.listNativeTools()).some((tool) => tool.name === 'pidesk'))
-      assert.ok(
-        (await basic.listNativeCommands()).some((command) => command.name === 'skill:pi-desk')
+      assert.equal(
+        (await basic.listNativeCommands()).some((command) => command.name === 'skill:pi-desk'),
+        false
       )
+      const basicPrompt = (await basic.readModelContext()).systemPrompt
+      assert.ok(basicPrompt.includes(navigation))
+      assert.match(basicPrompt, /用户原有追加提示/)
       await basic.dispose()
       basic = undefined
       delete process.env.PI_DESK_SAFE_MODE
@@ -273,7 +298,7 @@ test(
       assert.equal(bodies.length, 3)
       assert.doesNotMatch(await readFile(sessionFile, 'utf8'), /失效会话不应收到/)
       commands.disposeL4PiDeskCommands()
-      assert.equal(commands.readL4PiDeskSkills().length, 0)
+      assert.deepEqual(commands.appendL4PiDeskSystemPrompt(['保留原有提示']), ['保留原有提示'])
       assert.equal(
         commands.createL4PiDeskTool(async () => ({ mode: 'sync', message: '' })),
         null

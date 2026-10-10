@@ -6,34 +6,55 @@ use std::time::Duration;
 const IP_LOOKUP_URL: &str = "https://ipwho.is/?fields=success,country_code";
 const IP_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "mode", content = "registry", rename_all = "lowercase")]
 pub(crate) enum DownloadSource {
     #[default]
     Official,
-    // 保留已有环境配置和 IPC 的选择值，国内源按组件使用对应镜像。
-    #[serde(rename = "npmmirror")]
     Domestic,
+    Custom(String),
 }
 
 impl DownloadSource {
-    pub(crate) fn node_base(self) -> &'static str {
+    pub(crate) fn validated(self) -> Result<Self, String> {
+        if let Self::Custom(value) = self {
+            let value = value.trim();
+            if value.len() > 2048 {
+                return Err("下载源地址过长".into());
+            }
+            let url = url::Url::parse(value).map_err(|_| "请输入有效的下载源地址")?;
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err("下载源必须是 HTTP/HTTPS 地址，不能包含账号、密码或查询参数".into());
+            }
+            return Ok(Self::Custom(url.to_string()));
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn node_base(&self) -> &'static str {
         match self {
-            Self::Official => "https://nodejs.org/dist/",
+            Self::Official | Self::Custom(_) => "https://nodejs.org/dist/",
             Self::Domestic => "https://npmmirror.com/mirrors/node/",
         }
     }
 
-    pub(crate) fn npm_registry(self) -> &'static str {
+    pub(crate) fn npm_registry(&self) -> &str {
         match self {
             Self::Official => "https://registry.npmjs.org",
             Self::Domestic => "https://mirrors.cloud.tencent.com/npm",
+            Self::Custom(registry) => registry,
         }
     }
 
-    pub(crate) fn git_url(self, official_url: &str) -> String {
+    pub(crate) fn git_url(&self, official_url: &str) -> String {
         match self {
-            Self::Official => official_url.into(),
+            Self::Official | Self::Custom(_) => official_url.into(),
             Self::Domestic => official_url.replace(
                 "https://github.com/git-for-windows/git/releases/download/",
                 "https://registry.npmmirror.com/-/binary/git-for-windows/",

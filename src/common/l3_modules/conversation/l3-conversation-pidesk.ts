@@ -179,7 +179,7 @@ const infoSchema = z
     mode: z.enum(['basic', 'normal']),
     cwd: z.string(),
     agentDir: z.string(),
-    skillDirectory: z.string()
+    docsDirectory: z.string()
   })
   .strict()
 

@@ -727,14 +727,12 @@ pub(crate) fn check_environment(app: &AppHandle, auto_start: bool) -> Result<(),
     )
 }
 
-pub(crate) fn prepare_environment(
-    app: &AppHandle,
-    url: &str,
-    download_source: DownloadSource,
-) -> Result<(), String> {
+pub(crate) fn prepare_environment(app: &AppHandle, url: &str) -> Result<(), String> {
+    let state = app.state::<ShellState>();
+    let source = state.environment.package_source(&state.log_path);
     begin_environment_operation(
         app,
-        EnvironmentOperation::Prepare(config::normalize_target_url(url)?, download_source),
+        EnvironmentOperation::Prepare(config::normalize_target_url(url)?, source),
     )
 }
 
@@ -784,36 +782,34 @@ pub(crate) fn open_install_help(component: Component) -> Result<(), String> {
     webbrowser::open(url).map_err(|error| format!("打开官方安装页面失败：{error}"))
 }
 
-fn save_preparation_source(
+pub(crate) fn save_download_source(
     state: &ShellState,
-    url: &str,
     source: DownloadSource,
 ) -> Result<(), String> {
-    configured_server(state, url)?;
-    let mut config = state.config()?;
-    if let Some(package) = config
-        .targets
-        .iter_mut()
-        .find(|target| target.url == url)
-        .and_then(|target| target.server.as_mut())
-        .and_then(|server| server.package.as_mut())
-        .filter(|package| package.name == "@jetcrab/pi-desk")
-    {
-        // 安装选项只替换内置公共源，保留用户为服务配置的自定义仓库。
-        if package.registry.as_deref().is_none_or(|registry| {
-            matches!(
-                registry.trim_end_matches('/'),
-                "https://registry.npmjs.org"
-                    | "https://registry.npmmirror.com"
-                    | "https://mirrors.cloud.tencent.com/npm"
-            )
-        }) {
-            package.registry = Some(source.npm_registry().into());
-            save_config(state, config)?;
-            write_shell_log(state, "environment-package-source", source.npm_registry());
-        }
+    state.environment.save_download_source(source)?;
+    write_shell_log(
+        state,
+        "download-source-saved",
+        "已保存统一下载源，下次下载立即生效",
+    );
+    Ok(())
+}
+
+fn package_with_source(
+    state: &ShellState,
+    package: &config::PackageConfig,
+) -> config::PackageConfig {
+    let mut package = package.clone();
+    if package.registry.is_none() {
+        package.registry = Some(
+            state
+                .environment
+                .package_source(&state.log_path)
+                .npm_registry()
+                .into(),
+        );
     }
-    state.environment.save_download_source(source)
+    package
 }
 
 fn begin_environment_operation(
@@ -849,9 +845,6 @@ fn begin_environment_operation(
         && runtimes.values().any(|runtime| runtime.child.is_some())
     {
         return Err("请先停止本机服务，再安装或更换运行环境；已运行的服务不会被自动中断".into());
-    }
-    if let EnvironmentOperation::Prepare(url, download_source) = &operation {
-        save_preparation_source(&state, url, *download_source)?;
     }
     let previous = state.environment.snapshot();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -1515,7 +1508,7 @@ fn select_package(
     {
         set_update(state, url, "checking", None, None);
         match packages::query_version_with_environment(
-            package,
+            &package_with_source(state, package),
             &state.log_path,
             cancelled,
             &state
@@ -1589,7 +1582,7 @@ fn install_selected_package(
     );
     packages::install_with_environment(
         &package_directory(state, url)?,
-        package,
+        &package_with_source(state, package),
         &selection.version,
         &state.log_path,
         cancelled,
@@ -2656,117 +2649,34 @@ mod tests {
     }
 
     #[test]
-    fn preparation_source_is_saved_for_pi_desk_without_overwriting_custom_registries() {
-        use super::save_preparation_source;
+    fn saved_source_applies_to_next_operation_without_rewriting_services() {
+        use super::{package_with_source, save_download_source};
         use crate::environment_source::DownloadSource;
-
-        let directory = test_directory("preparation-package-source");
+        let directory = test_directory("shared-package-source");
         let config_path = directory.join("config.json");
-        let url = "http://127.0.0.1:30333";
-        for (name, registry, expected) in [
-            (
-                "@jetcrab/pi-desk",
-                None,
-                "https://mirrors.cloud.tencent.com/npm",
-            ),
-            (
-                "@jetcrab/pi-desk",
-                Some("https://registry.npmjs.org/"),
-                "https://mirrors.cloud.tencent.com/npm",
-            ),
-            (
-                "@jetcrab/pi-desk",
-                Some("https://registry.npmmirror.com"),
-                "https://mirrors.cloud.tencent.com/npm",
-            ),
-            (
-                "@jetcrab/pi-desk",
-                Some("https://mirrors.cloud.tencent.com/npm/"),
-                "https://mirrors.cloud.tencent.com/npm",
-            ),
-            (
-                "@jetcrab/pi-desk",
-                Some("https://registry.example.com"),
-                "https://registry.example.com",
-            ),
-            (
-                "example-service",
-                Some("https://registry.npmjs.org"),
-                "https://registry.npmjs.org",
-            ),
+        let config = DesktopConfig::default();
+        crate::config::save(&config_path, &config).unwrap();
+        let original = fs::read(&config_path).unwrap();
+        let state = ShellState::new(
+            config,
+            RuntimeInfo::default(),
+            config_path.clone(),
+            directory.join("runtime.json"),
+            directory.join("logs/desktop.log"),
+        );
+        let package = default_server_config().package.unwrap();
+        for source in [
+            DownloadSource::Domestic,
+            DownloadSource::Official,
+            DownloadSource::Custom("https://custom.example/npm".into()),
         ] {
-            let mut config = DesktopConfig::default();
-            let package = config.targets[0]
-                .server
-                .as_mut()
-                .unwrap()
-                .package
-                .as_mut()
-                .unwrap();
-            package.name = name.into();
-            package.registry = registry.map(String::from);
-            let untouched = TargetConfig {
-                url: "http://127.0.0.1:30334".into(),
-                server: Some(default_server_config()),
-                tunnel: None,
-            };
-            config.targets.push(untouched);
-            crate::config::save(&config_path, &config).unwrap();
-            let state = ShellState::new(
-                config,
-                RuntimeInfo::default(),
-                config_path.clone(),
-                directory.join("runtime.json"),
-                directory.join("logs/desktop.log"),
-            );
-            save_preparation_source(&state, url, DownloadSource::Domestic).unwrap();
-            for saved in [
-                state.config().unwrap(),
-                serde_json::from_slice::<DesktopConfig>(&fs::read(&config_path).unwrap()).unwrap(),
-            ] {
-                assert_eq!(
-                    saved.targets[0]
-                        .server
-                        .as_ref()
-                        .unwrap()
-                        .package
-                        .as_ref()
-                        .unwrap()
-                        .registry
-                        .as_deref(),
-                    Some(expected)
-                );
-                assert_eq!(
-                    saved.targets[1]
-                        .server
-                        .as_ref()
-                        .unwrap()
-                        .package
-                        .as_ref()
-                        .unwrap()
-                        .registry
-                        .as_deref(),
-                    Some("https://registry.npmjs.org")
-                );
-            }
-            save_preparation_source(&state, url, DownloadSource::Official).unwrap();
-            let expected = if expected == "https://mirrors.cloud.tencent.com/npm" {
-                "https://registry.npmjs.org"
-            } else {
-                expected
-            };
+            let expected = source.npm_registry().to_string();
+            save_download_source(&state, source).unwrap();
             assert_eq!(
-                state.config().unwrap().targets[0]
-                    .server
-                    .as_ref()
-                    .unwrap()
-                    .package
-                    .as_ref()
-                    .unwrap()
-                    .registry
-                    .as_deref(),
-                Some(expected)
+                package_with_source(&state, &package).registry.as_deref(),
+                Some(expected.as_str())
             );
+            assert_eq!(fs::read(&config_path).unwrap(), original);
         }
         fs::remove_dir_all(directory).unwrap();
     }

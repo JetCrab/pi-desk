@@ -64,7 +64,7 @@ export function L2WorkbenchChatViewportManager({
   onSaveSnapshot,
   onClearSnapshot
 }: L2WorkbenchChatViewportManagerProps): null {
-  const { scrollRef, scrollToBottom, state, stopScroll } = useStickToBottomContext()
+  const { isAtBottom, scrollRef, scrollToBottom, state, stopScroll } = useStickToBottomContext()
   const positioningRef = useRef(false)
   const initializedRef = useRef(false)
   const positionedUserAnchorRef = useRef<string | null>(null)
@@ -72,6 +72,19 @@ export function L2WorkbenchChatViewportManager({
   const entrySnapshotRef = useRef(running ? entrySnapshot : null)
   const suspendedSnapshotRef = useRef<L2WorkbenchChatViewportSnapshot | null>(null)
   const suspendedScrollTopRef = useRef<number | null>(null)
+
+  useLayoutEffect(() => {
+    const scrollElement = scrollRef.current
+    if (!scrollElement || !visible || !isAtBottom) return
+
+    // 同高度的内容换位不会触发 ResizeObserver，浏览器锚定产生的上移会被误判为用户上翻。
+    const previousOverflowAnchor = scrollElement.style.overflowAnchor
+    scrollElement.style.overflowAnchor = 'none'
+    logL3ConversationScroll('viewport:anchor-lock', scrollElement)
+    return () => {
+      scrollElement.style.overflowAnchor = previousOverflowAnchor
+    }
+  }, [isAtBottom, scrollRef, visible])
 
   useLayoutEffect(() => {
     const scrollElement = scrollRef.current

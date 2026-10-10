@@ -64,23 +64,16 @@ async function main(): Promise<void> {
   if (!source || source.length > 2048) throw new Error('插件维护来源无效')
   const registry = process.argv[4] ? L4PluginRegistrySchema.parse(process.argv[4]) : undefined
   const scope = /^npm:(@[^/]+)\//.exec(source)?.[1]
+  // scoped 源只覆盖对应 scope，公共依赖继续使用原有默认源。
+  const registryKey = scope ? `npm_config_${scope}:registry` : 'npm_config_registry'
   const inheritedEnvironment = { ...process.env }
   if (registry) {
     // Windows 子进程的环境名不区分大小写，不能同时保留两种拼写。
-    const replaced = new Set([
-      'npm_config_registry',
-      ...(scope ? [`npm_config_${scope}:registry`.toLowerCase()] : [])
-    ])
     for (const key of Object.keys(inheritedEnvironment)) {
-      if (replaced.has(key.toLowerCase())) delete inheritedEnvironment[key]
+      if (key.toLowerCase() === registryKey.toLowerCase()) delete inheritedEnvironment[key]
     }
   }
-  const registryEnvironment: Record<string, string> = registry
-    ? {
-        npm_config_registry: registry,
-        ...(scope ? { [`npm_config_${scope}:registry`]: registry } : {})
-      }
-    : {}
+  const registryEnvironment: Record<string, string> = registry ? { [registryKey]: registry } : {}
 
   const configuredAgentDir = process.env.PI_CODING_AGENT_DIR
   const agentDir =
