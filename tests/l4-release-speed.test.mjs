@@ -6,11 +6,11 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { parse } from 'yaml'
 import { clientPlatforms } from '../.github/scripts/release-record.mjs'
-import { selectCiChecks } from '../.github/scripts/select-ci-checks.mjs'
+import { selectCiChecks, selectPluginChecks } from '../.github/scripts/select-ci-checks.mjs'
 import { transferRustCache } from '../.github/scripts/rust-cache.mjs'
 import { npmValidationMode } from '../.github/scripts/release-npm.mjs'
 
-test('dev只检查相关组件，README不触发构建类检查，main保留完整检查', () => {
+test('双渠道只检查相关组件，无基线时保留完整功能检查', () => {
   assert.deepEqual(selectCiChecks(['README.md'], false), {
     full: false,
     web: false,
@@ -27,6 +27,105 @@ test('dev只检查相关组件，README不触发构建类检查，main保留完�
   assert.equal(plugin.web, false)
   assert.equal(plugin.website, false)
   assert.ok(Object.values(selectCiChecks([], true)).every(Boolean))
+  assert.equal(selectCiChecks(['tests/l2-chat-state.test.ts'], false).web, true)
+  assert.equal(
+    selectCiChecks(['docs/pi-desk/examples/local-application/pi-desk.ts'], false).pidesk,
+    true
+  )
+  assert.deepEqual(selectPluginChecks(['plugins/pi-desk-usage/README.md']), [])
+  assert.deepEqual(selectPluginChecks(['plugins/pi-desk-usage/src/index.ts']), ['pi-desk-usage'])
+  assert.deepEqual(
+    selectPluginChecks(['plugins/pi-desk-sdk/src/browser.ts'], false, ['pi-desk-usage']),
+    ['pi-desk-sdk', 'pi-desk-usage']
+  )
+})
+
+test('main和dev不按分支强制全仓库检查，已打包插件不再安排重复任务', async (t) => {
+  const parent = resolve('temp/run/release-checks')
+  await mkdir(parent, { recursive: true })
+  const root = await mkdtemp(join(parent, 'check-selection-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const git = (...args) =>
+    execFileSync('git', args, {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    }).trim()
+  git('init', '-b', 'dev')
+  git('config', 'user.name', 'Fixture')
+  git('config', 'user.email', 'fixture@example.invalid')
+  git('config', 'core.hooksPath', 'no-hooks')
+  git('config', 'commit.gpgSign', 'false')
+  for (const [name, dependencies] of [
+    ['pi-desk-sdk', {}],
+    ['pi-desk-usage', { '@jetcrab/pi-desk-sdk': '^1.0.0' }],
+    ['pi-desk-independent', {}]
+  ]) {
+    const directory = join(root, 'plugins', name)
+    await mkdir(directory, { recursive: true })
+    await writeFile(join(directory, 'package.json'), JSON.stringify({ name, dependencies }))
+  }
+  git('add', '.')
+  git('commit', '-m', 'fixture baseline')
+  const base = git('rev-parse', 'HEAD')
+  await writeFile(join(root, 'plugins/pi-desk-sdk/feature.ts'), 'export const feature = true\n')
+  git('add', '.')
+  git('commit', '-m', 'fixture SDK change')
+  const head = git('rev-parse', 'HEAD')
+  const command = resolve('.github/scripts/select-ci-checks.mjs')
+  for (const ref of ['refs/heads/dev', 'refs/heads/main', 'refs/pull/1/merge']) {
+    const output = join(root, 'selection.txt')
+    await writeFile(output, '')
+    execFileSync(process.execPath, [command], {
+      cwd: root,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        GITHUB_REF: ref,
+        GITHUB_BASE_REF: 'main',
+        CHECK_BASE: base,
+        CHECK_HEAD: head,
+        CHECK_BUILT_PACKAGES: '["pi-desk-sdk"]',
+        GITHUB_OUTPUT: output
+      }
+    })
+    const values = Object.fromEntries(
+      (await readFile(output, 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)])
+    )
+    assert.equal(values.full, 'false')
+    assert.equal(values.web, 'true')
+    assert.equal(values.website, 'false')
+    assert.equal(values.agent, 'false')
+    assert.deepEqual(JSON.parse(values.plugins), ['pi-desk-usage'])
+  }
+})
+
+test('发布不执行排版或Lint，功能与制品检查在两条渠道均保留', async () => {
+  const checks = parse(await readFile('.github/workflows/check.yml', 'utf8'))
+  const source = await readFile('.github/scripts/release-npm.mjs', 'utf8')
+  const steps = Object.values(checks.jobs).flatMap((job) => job.steps ?? [])
+  assert.ok(steps.every((step) => !/format:check|typecheck:tests/.test(step.run ?? '')))
+  for (const step of steps.filter((step) => /\b(?:lint|eslint)\b/.test(step.run ?? ''))) {
+    assert.ok(step.if.includes("github.event_name == 'pull_request'"))
+  }
+  const production = checks.jobs.web.steps.find((step) => step.run?.includes('pnpm typecheck'))
+  assert.match(production.if, /!contains\(fromJSON\(inputs.built_packages/)
+  assert.match(production.run, /check:layers/)
+  const host = source.slice(
+    source.indexOf('if (entry.directory === projectRoot) {'),
+    source.indexOf('const host = entries.find')
+  )
+  assert.doesNotMatch(host, /lint|format|typecheck:tests/)
+  assert.match(host, /\['typecheck', 'check:layers'\]/)
+  assert.ok(
+    host.indexOf("['typecheck', 'check:layers']") < host.indexOf('if (full)'),
+    'dev也必须执行主程序类型和依赖分层检查'
+  )
+  assert.match(host, /\['test:package'\]/)
+  assert.ok(checks.jobs.web.steps.some((step) => step.run?.includes('tests/l2-chat-state.test.ts')))
 })
 
 test('npm验证模式仅由受信任分支决定', () => {
@@ -197,6 +296,15 @@ test('正式批次去重源码命令验收，但保留同批安装态两平台�
   const checks = await read('check')
   const npm = await read('release-npm')
   assert.equal(main.jobs.checks.with.built_packages, '${{ needs.prepare.outputs.npm }}')
+  assert.equal(main.jobs.checks.with.base_sha, '${{ needs.prepare.outputs.check_base }}')
+  assert.equal(main.jobs.prepare.permissions.actions, 'read')
+  assert.equal(main.jobs.assemble.steps[0].with.ref, '${{ github.sha }}')
+  assert.equal(checks.jobs.changes.steps[0].with.ref, '${{ github.sha }}')
+  assert.equal(checks.jobs.core.steps[0].with.ref, '${{ github.sha }}')
+  assert.equal(checks.jobs.web.steps[0].with.ref, '${{ inputs.source_sha || github.sha }}')
+  const dev = await read('release-dev')
+  assert.equal(dev.jobs.checks.with.base_sha, '${{ needs.plan.outputs.check_base }}')
+  assert.equal(dev.jobs.checks.with.built_packages, '${{ needs.plan.outputs.packages }}')
   assert.match(checks.jobs.pidesk.if, /!contains\(fromJSON\(inputs.built_packages/)
   assert.deepEqual(npm.jobs['installed-commands'].strategy.matrix.os, [
     'ubuntu-latest',

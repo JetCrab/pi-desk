@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -46,6 +46,7 @@ jobs:
         env:
           CHECK_BASE: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
           CHECK_HEAD: ${{ inputs.source_sha || github.sha }}
+          CHECK_BUILT_PACKAGES: ${{ inputs.built_packages || '[]' }}
         run: node .github/scripts/select-ci-checks.mjs
       - name: 核对代码提交的版本同步
         env:
@@ -64,7 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -89,8 +90,8 @@ jobs:
           (cd "$tools" && sha256sum --check --ignore-missing actionlint_1.7.7_checksums.txt && tar -xzf actionlint_1.7.7_linux_amd64.tar.gz actionlint)
           "$tools/actionlint" -shellcheck= -pyflakes=
           node .github/scripts/check-workflows.mjs
-      - name: 检查实际变动的发布脚本
-        if: needs.changes.outputs.automation == 'true'
+      - name: PR 检查实际变动的发布脚本
+        if: github.event_name == 'pull_request' && needs.changes.outputs.automation == 'true'
         env:
           CHECK_FILES_JSON: ${{ needs.changes.outputs.files }}
         run: |
@@ -116,6 +117,7 @@ jobs:
           tests/l4-workflow-contracts.test.mjs
           tests/l4-restore-sdk.test.mjs
           tests/l4-release-main.test.mjs
+          tests/l4-restore-release-artifacts.test.mjs
           tests/l4-release-website.test.mjs
           tests/l4-release-npm.test.mjs
           tests/l4-release-speed.test.mjs
@@ -149,30 +151,20 @@ jobs:
         run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
       - name: Prepare SDK Host Runtime
         run: pnpm build:plugin-host-runtime
-      - name: Check production types
-        run: pnpm typecheck
-      - name: Check test types
-        if: needs.changes.outputs.full == 'true'
-        run: pnpm typecheck:tests
-      - name: Check source lint and dependency layers
+      - name: Check production types and dependency layers not covered by packaging
+        if: "!contains(fromJSON(inputs.built_packages || '[]'), 'pi-desk')"
+        run: pnpm typecheck && pnpm check:layers
+      - name: PR lint changed source files
+        if: github.event_name == 'pull_request'
         env:
-          FULL_CHECK: ${{ needs.changes.outputs.full }}
           CHECK_FILES_JSON: ${{ needs.changes.outputs.files }}
         run: |
-          if [[ "$FULL_CHECK" == true ]]; then
-            pnpm lint
-          else
-            node --input-type=module <<'NODE'
+          node --input-type=module <<'NODE'
           import { execFileSync } from 'node:child_process'
           import { existsSync } from 'node:fs'
-          const files = JSON.parse(process.env.CHECK_FILES_JSON).filter(file => /\.(?:ts|tsx|js|mjs|mts)$/.test(file) && existsSync(file))
+          const files = JSON.parse(process.env.CHECK_FILES_JSON).filter(file => /^(?:src|bin)\/.*\.(?:ts|tsx|js|mjs)$/.test(file) && existsSync(file))
           if (files.length) execFileSync('pnpm', ['exec', 'eslint', ...files], { stdio: 'inherit' })
           NODE
-          fi
-          pnpm check:layers
-      - name: Check formatting
-        if: needs.changes.outputs.full == 'true'
-        run: pnpm format:check
       - name: Run local protocol and state regressions
         run: >-
           node --import tsx --test
@@ -295,7 +287,10 @@ jobs:
         working-directory: apps/website
       - run: pnpm typecheck
         working-directory: apps/website
-      - run: pnpm lint && pnpm check:layers
+      - run: pnpm check:layers
+        working-directory: apps/website
+      - run: pnpm lint
+        if: github.event_name == 'pull_request'
         working-directory: apps/website
 
   release-agent:

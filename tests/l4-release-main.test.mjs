@@ -22,7 +22,11 @@ import {
   prepareWebsiteBatch
 } from '../.github/scripts/release-main.mjs'
 import { sha256 } from '../.github/scripts/release-github.mjs'
-import { validateRecord, changeSections } from '../.github/scripts/release-record.mjs'
+import {
+  validateRecord,
+  changeSections,
+  clientPlatforms
+} from '../.github/scripts/release-record.mjs'
 import { packageClient } from '../.github/scripts/pack-client.mjs'
 import { readPublishedVersions } from '../.github/scripts/prepare-dev-release.mjs'
 import { prepareCommitVersions, validateVersions } from '../.github/scripts/commit-versions.mjs'
@@ -153,6 +157,7 @@ function githubFixture(releases) {
     },
     request: async (path, options = {}) => {
       calls.push({ path, ...options })
+      if (path.startsWith('/actions/workflows/')) return { workflow_runs: [] }
       if (path === '/git/ref/heads/release-data')
         return branch ? { object: { sha: 'data-head' } } : null
       if (path.startsWith('/contents/releases/')) {
@@ -577,6 +582,7 @@ test('正式准备固定已提交版本，重跑不新增提交或推进失败�
   assert.equal(first.outputs.docker, true)
   assert.equal(repo.git('rev-parse', 'origin/main'), first.outputs.sha)
   assert.equal(first.plan.record.source.base, null)
+  assert.equal(first.outputs.check_base, '0'.repeat(40))
   assert.equal(
     first.plan.record.packages.find((item) => item.name === '@jetcrab/pi-desk').version,
     '1.1.0'
@@ -589,6 +595,16 @@ test('正式准备固定已提交版本，重跑不新增提交或推进失败�
   assert.deepEqual(again.plan, first.plan)
   assert.equal(again.outputs.sha, first.outputs.sha)
   assert.equal(releases.length, 1)
+  const previous = completed(first.plan.record)
+  await saveReleaseRecord(github, previous)
+  releases[0].draft = false
+  releases[0].published_at = '2026-10-01T00:00:00Z'
+  await repo.pkg('pi-desk', '1.1.1')
+  await repo.save('src/feature.ts', 'export const feature = true')
+  const next = await prepareBatch(repo.root, { github, source: repo.commit(), output })
+  assert.equal(next.outputs.check_base, source)
+  const retry = await prepareBatch(repo.root, { github, source: next.outputs.sha, output })
+  assert.equal(retry.outputs.check_base, source, '草稿重试继续原计划的成功基线')
 })
 
 test('正式tag独立递增且不复用失败批次占用的版本', () => {
@@ -648,6 +664,7 @@ test('修复调度后续跑原草稿，源码和版本不变且不接受已公�
     output: join(repo.root, 'temp/resume')
   })
   assert.equal(result.outputs.sha, repo.head)
+  assert.equal(repo.git('rev-parse', 'HEAD'), current, '调度保持当前修复源码，产品源码仍由计划固定')
   assert.equal(result.outputs.tag, plan.record.tag)
   assert.deepEqual(result.plan, plan)
   assert.equal(
@@ -690,6 +707,39 @@ test('只重部署最新官网，不创建新Release或重发产品', async (t) 
     prepareWebsiteBatch({ github, tag: 'v0.9.0', source: repo.head, output: repo.root }),
     /不能回退/
   )
+})
+
+test('恢复到草稿的客户端不重新构建，汇总核对并复用原字节', async (t) => {
+  const repo = await fixture(t)
+  const plan = createReleasePlan(repo.root, { head: repo.head })
+  const release = draft(plan.record)
+  const github = githubFixture([release])
+  await github.putAsset(release, 'plan.json', Buffer.from(JSON.stringify(plan)))
+  await github.putAsset(release, 'changes.json', Buffer.from(JSON.stringify(plan.record.changes)))
+  for (const item of plan.clients) {
+    const names = {
+      windows: 'PiDesk-Windows-x86-Setup.exe',
+      macos: 'PiDesk-macOS-universal.dmg',
+      linux: 'PiDesk-Linux-x86_64.AppImage',
+      android: 'PiDesk-Android.apk'
+    }
+    await github.putAsset(release, names[item.platform], Buffer.from(item.platform))
+  }
+  const prepared = await prepareBatch(repo.root, {
+    github,
+    source: repo.head,
+    output: join(repo.root, 'temp/plan')
+  })
+  for (const platform of clientPlatforms) assert.equal(prepared.outputs[platform], false)
+  const record = await assembleBatch({
+    github,
+    release,
+    plan,
+    directory: join(repo.root, 'never-built')
+  })
+  assert.equal(record.clients.length, 4)
+  for (const client of record.clients)
+    assert.equal(client.sha256, sha256(Buffer.from(client.platform)))
 })
 
 test('发布自动创建固定提交tag，不移动已有不同提交的tag', async (t) => {

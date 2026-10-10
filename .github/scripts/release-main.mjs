@@ -13,6 +13,7 @@ import {
 } from './release-record.mjs'
 import { loadReleaseRecord, saveReleaseRecord } from './release-metadata.mjs'
 import { renderReleaseNotes, validateChanges } from './release-notes.mjs'
+import { restoreReleaseArtifacts } from './restore-release-artifacts.mjs'
 
 const jsonBytes = (value) => Buffer.from(JSON.stringify(value, null, 2) + '\n')
 const archiveName = (item) => `${item.name.slice(1).replace('/', '-')}-${item.version}.tgz`
@@ -38,7 +39,6 @@ export async function prepareBatch(root, { github, source, output }) {
   const releases = await github.releases()
   const latest = latestSuccessfulRelease(releases)
   const previous = latest ? await loadReleaseRecord(github, latest.tag_name) : null
-  git(root, 'checkout', '--detach', source)
   await validateVersions(root, { base: previous?.source.head ?? null, head: source })
   const head = source
   let release = releases.find(
@@ -87,6 +87,7 @@ export async function prepareBatch(root, { github, source, output }) {
   const tag = plan.record.tag
   const values = {
     sha: head,
+    check_base: plan.record.source.base ?? '0000000000000000000000000000000000000000',
     tag,
     published: !release.draft,
     deploy: release.draft || latestSuccessfulRelease(releases)?.tag_name === tag,
@@ -95,11 +96,14 @@ export async function prepareBatch(root, { github, source, output }) {
     notes_ready: notesReady,
     tunnel: plan.tunnel,
     docker: plan.npm.includes('pi-desk'),
-    windows:
-      !clientsReady && plan.clients.some((item) => item.platform === 'windows' && item.build),
-    macos: !clientsReady && plan.clients.some((item) => item.platform === 'macos' && item.build),
-    linux: !clientsReady && plan.clients.some((item) => item.platform === 'linux' && item.build),
-    android: !clientsReady && plan.clients.some((item) => item.platform === 'android' && item.build)
+    ...Object.fromEntries(
+      clientPlatforms.map((platform) => [
+        platform,
+        !clientsReady &&
+          plan.clients.some((item) => item.platform === platform && item.build) &&
+          !release.assets.some((asset) => asset.name === clientFilename(platform))
+      ])
+    )
   }
   return { plan, release, outputs: values }
 }
@@ -114,6 +118,14 @@ export async function prepareResumeBatch(root, { github, tag, source, output }) 
   assert.equal(plan.record.tag, tag)
   assert.equal(release.target_commitish, plan.record.source.head, '草稿源码与固定计划不一致')
   git(root, 'merge-base', '--is-ancestor', plan.record.source.head, source)
+  await restoreReleaseArtifacts({
+    github,
+    release,
+    plan,
+    runId: process.env.GITHUB_RUN_ID,
+    repository: process.env.GITHUB_REPOSITORY,
+    directory: output
+  })
   const result = await prepareBatch(root, { github, source: plan.record.source.head, output })
   assert.equal(result.outputs.tag, tag, '续跑不能重新分配批次')
   return result
@@ -176,7 +188,13 @@ export async function assembleBatch({ github, release, plan, directory }) {
   const clients = []
   for (const item of plan.clients) {
     let bytes, file, hash
-    if (item.build) {
+    const saved = release.assets.find((entry) => entry.name === clientFilename(item.platform))
+    if (item.build && saved) {
+      file = saved.name
+      bytes = await github.asset(release, file)
+      hash = sha256(bytes)
+      if (saved.digest) assert.equal(saved.digest, `sha256:${hash}`, '草稿附件摘要不匹配')
+    } else if (item.build) {
       const entries = await readdir(directory)
       const folder = entries.find((name) => name.startsWith(`client-${item.platform}-`))
       assert.ok(folder, `缺少 ${item.platform} 构建制品`)
@@ -189,13 +207,6 @@ export async function assembleBatch({ github, release, plan, directory }) {
       hash = manifest.sha256
       bytes = await readFile(join(root, names[0]))
       assert.equal(sha256(bytes), hash, `${item.platform} 安装包摘要不匹配`)
-      const saved = release.assets.find((entry) => entry.name === file)
-      if (saved) {
-        // 同一固定源码批次里已上传的文件优先，避免签名时间戳导致重建摘要变化。
-        bytes = await github.asset(release, file)
-        hash = sha256(bytes)
-        if (saved.digest) assert.equal(saved.digest, `sha256:${hash}`, '草稿附件摘要不匹配')
-      }
     } else {
       const previous = (await github.releases()).find(
         (entry) => entry.tag_name === item.reuse.tag && !entry.draft && !entry.prerelease
