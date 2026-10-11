@@ -170,7 +170,7 @@ pub(crate) fn install_node(
     state.check_components(&[Component::Node], cancelled, log)?;
     state
         .component_path(Component::Node)
-        .ok_or_else(|| "Node.js 安装后仍不可用，请检查安装日志或选择已安装的 node.exe".into())
+        .ok_or_else(|| "Node.js 安装后仍不可用，请检查安装日志或选择已有 Node.js 安装目录".into())
 }
 
 #[cfg(not(windows))]
@@ -658,10 +658,7 @@ fn prepare_pi(
 ) -> Result<(), String> {
     let started = std::time::Instant::now();
     state.set_component_step(Component::Pi, "正在查询 Pi 最新正式版本");
-    let node = state
-        .component_path(Component::Node)
-        .ok_or("Node.js 尚未就绪")?;
-    let npm = environment::npm_cli(&node).ok_or("npm 尚未就绪")?;
+    let npm = state.npm_command()?;
     let package = PackageConfig {
         name: environment::PI_PACKAGE.into(),
         registry: Some(download_source.npm_registry().into()),
@@ -673,11 +670,11 @@ fn prepare_pi(
         &package,
         log,
         cancelled,
-        &state.npm_command()?,
+        &npm,
         &state.child_environment(),
     )?;
-    let root = state.run_node(
-        &[&npm.to_string_lossy(), "root", "-g"],
+    let root = state.run_npm(
+        &["root", "-g"],
         Some(work),
         Duration::from_secs(10),
         cancelled,
@@ -701,12 +698,11 @@ fn prepare_pi(
         &package,
         log,
         cancelled,
-        &state.npm_command()?,
+        &npm,
         &state.child_environment(),
         |source| {
-            state.run_node(
+            state.run_npm(
                 &[
-                    &npm.to_string_lossy(),
                     "install",
                     "-g",
                     "--ignore-scripts",

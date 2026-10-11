@@ -1,11 +1,37 @@
 'use client'
 
 import { PreviewCard as PreviewCardPrimitive } from '@base-ui/react/preview-card'
+import { useRef } from 'react'
 
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 
-function HoverCard({ ...props }: PreviewCardPrimitive.Root.Props) {
-  return <PreviewCardPrimitive.Root data-slot="hover-card" {...props} />
+function HoverCard({ onOpenChange, ...props }: PreviewCardPrimitive.Root.Props): React.JSX.Element {
+  const triggerRef = useRef<Element | null>(null)
+
+  return (
+    <PreviewCardPrimitive.Root
+      data-slot="hover-card"
+      {...props}
+      onOpenChange={(open, eventDetails) => {
+        onOpenChange?.(open, eventDetails)
+        if (eventDetails.isCanceled) return
+        if (open) {
+          triggerRef.current = eventDetails.trigger ?? null
+          return
+        }
+        const trigger = triggerRef.current
+        triggerRef.current = null
+        // PreviewCard 打开时不转移焦点，Esc 关闭需释放仍停留在触发器上的焦点。
+        if (
+          eventDetails.reason === 'escape-key' &&
+          trigger instanceof HTMLElement &&
+          trigger.ownerDocument.activeElement === trigger
+        ) {
+          trigger.blur()
+        }
+      }}
+    />
+  )
 }
 
 function HoverCardTrigger({ ...props }: PreviewCardPrimitive.Trigger.Props) {

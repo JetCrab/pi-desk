@@ -168,7 +168,15 @@ fn real_npm_installs_from_fallback_registry_when_mirror_lacks_version() {
         &|| false,
     )
     .unwrap();
-    let npm = crate::environment::npm_cli(Path::new(&node)).unwrap();
+    let parent = Path::new(&node).parent().unwrap();
+    let npm = [
+        parent.join("node_modules/npm/bin/npm-cli.js"),
+        parent.join("../lib/node_modules/npm/bin/npm-cli.js"),
+        parent.join("../share/nodejs/npm/bin/npm-cli.js"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .expect("npm fixture 需要本机 npm-cli.js");
     let proxy = f.0.join("npm-local-proxy.cjs");
     fs::write(&proxy, format!(r#"
 const cp = require('node:child_process');

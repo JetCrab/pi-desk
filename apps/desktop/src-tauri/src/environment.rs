@@ -621,7 +621,7 @@ impl EnvironmentState {
         log: &Path,
     ) -> Result<String, String> {
         let node = self.component_path(Component::Node).ok_or_else(|| {
-            "请先准备 Node.js 和 npm，或选择有效的 Node.js 可执行文件".to_string()
+            "请先下载准备 Node.js 和 npm，或选择已有 Node.js 安装目录".to_string()
         })?;
         let output = process::run_program(
             &node,
@@ -639,18 +639,56 @@ impl EnvironmentState {
     }
 
     pub(crate) fn npm_command(&self) -> Result<String, String> {
-        let node = self
-            .component_path(Component::Node)
-            .ok_or_else(|| "请先准备 Node.js 和 npm".to_string())?;
-        let npm = npm_cli(&node).ok_or_else(|| {
-            "Node.js 目录缺少 npm，请选择包含 npm 的完整 Node.js 环境".to_string()
-        })?;
+        self.component_path(Component::Node)
+            .ok_or("请先下载准备 Node.js，或选择已有 Node.js 目录")?;
+        Ok("npm".into())
+    }
+
+    pub(crate) fn run_npm(
+        &self,
+        arguments: &[&str],
+        cwd: Option<&Path>,
+        timeout: Duration,
+        cancelled: &dyn Fn() -> bool,
+        log: &Path,
+    ) -> Result<String, String> {
         let command = format!(
             "{} {}",
-            packages::quote(&node.to_string_lossy()),
-            packages::quote(&npm.to_string_lossy())
+            self.npm_command()?,
+            arguments
+                .iter()
+                .map(|argument| packages::quote(argument))
+                .collect::<Vec<_>>()
+                .join(" ")
         );
-        Ok(command)
+        let output = process::run_capture_with_environment(
+            &command,
+            cwd,
+            timeout,
+            log,
+            cancelled,
+            &self.child_environment(),
+        )?;
+        if !output.status.success() {
+            return Err(packages::command_failure(&output));
+        }
+        Ok(process::decode_output(&output.stdout).trim().to_string())
+    }
+
+    fn node_environment(&self, node: &Path) -> ProcessEnvironment {
+        let mut environment = self.child_environment();
+        let (_, path) = environment
+            .iter_mut()
+            .find(|(key, _)| key == "PATH")
+            .unwrap();
+        let mut paths = node
+            .parent()
+            .map(Path::to_path_buf)
+            .into_iter()
+            .collect::<Vec<_>>();
+        paths.extend(std::env::split_paths(path));
+        *path = std::env::join_paths(paths).unwrap_or_else(|_| path.clone());
+        environment
     }
 
     pub(crate) fn check(&self, cancelled: &dyn Fn() -> bool, log: &Path) -> Result<(), String> {
@@ -760,16 +798,14 @@ impl EnvironmentState {
                         #[cfg(unix)]
                         pi_candidates.push(parent.join("../lib/node_modules").join(PI_PACKAGE));
                     }
-                    if let Some(cli) = npm_cli(&node) {
-                        if let Ok(output) = self.run_node(
-                            &[&cli.to_string_lossy(), "root", "-g"],
-                            Some(&self.root),
-                            Duration::from_secs(10),
-                            cancelled,
-                            log,
-                        ) {
-                            pi_candidates.push(PathBuf::from(output).join(PI_PACKAGE));
-                        }
+                    if let Ok(output) = self.run_npm(
+                        &["root", "-g"],
+                        Some(&self.root),
+                        Duration::from_secs(10),
+                        cancelled,
+                        log,
+                    ) {
+                        pi_candidates.push(PathBuf::from(output).join(PI_PACKAGE));
                     }
                 }
                 if include_system {
@@ -967,7 +1003,11 @@ impl EnvironmentState {
             status: "missing".into(),
             version: None,
             path: None,
-            detail: Some(format!("未找到可用的 {}", component.name())),
+            detail: Some(if component == Component::Node {
+                "当前应用环境未找到可执行的 Node.js".into()
+            } else {
+                format!("未找到可用的 {}", component.name())
+            }),
             download: None,
         };
         for path in paths {
@@ -1075,6 +1115,11 @@ impl EnvironmentState {
             }
             return Ok(version.into());
         }
+        let environment = if component == Component::Node {
+            self.node_environment(path)
+        } else {
+            self.child_environment()
+        };
         let output = process::run_program(
             path,
             &["--version"],
@@ -1082,7 +1127,7 @@ impl EnvironmentState {
             Duration::from_secs(10),
             log,
             cancelled,
-            &self.child_environment(),
+            &environment,
         )?;
         if !output.status.success() {
             return Err(packages::command_failure(&output));
@@ -1091,19 +1136,17 @@ impl EnvironmentState {
         if component == Component::Node {
             semver::Version::parse(text.trim_start_matches('v'))
                 .map_err(|_| "Node.js 版本响应无效")?;
-            let npm = npm_cli(path).ok_or("此 Node.js 环境缺少 npm，请选择完整 Node.js 环境")?;
-            let npm_output = process::run_program(
-                path,
-                &[&npm.to_string_lossy(), "--version"],
-                None,
+            let npm_output = process::run_capture_with_environment(
+                "npm --version",
+                Some(&self.root),
                 Duration::from_secs(10),
                 log,
                 cancelled,
-                &self.child_environment(),
+                &environment,
             )?;
             if !npm_output.status.success() {
                 return Err(format!(
-                    "npm 不可用：{}",
+                    "Node.js 可执行，但当前环境无法执行 npm；请下载准备或选择含 npm 的已有 Node.js 目录：{}",
                     packages::command_failure(&npm_output)
                 ));
             }
@@ -1208,28 +1251,26 @@ impl EnvironmentState {
         #[cfg(windows)]
         let title = match (component, archive) {
             (Component::Node, true) => "选择 Node.js MSI 安装包",
-            (Component::Node, false) => "选择 node.exe",
+            (Component::Node, false) => "选择已有 Node.js 目录",
             (Component::Pi, _) => "选择 Pi package.json 或 CLI 入口",
             (Component::Bash, _) => "选择 bash.exe",
         };
         #[cfg(target_os = "macos")]
         let selected = crate::environment_dialog::pick_directory("选择运行环境目录", cancelled);
         #[cfg(target_os = "linux")]
-        let selected = if component == Component::Pi {
+        let selected = if component == Component::Node {
+            crate::environment_dialog::pick_directory("选择已有 Node.js 目录", cancelled)
+        } else if component == Component::Pi {
             crate::environment_dialog::pick_directory("选择 Pi 安装目录", cancelled)
         } else {
-            crate::environment_dialog::pick_file(
-                if component == Component::Node {
-                    "选择 Node.js 可执行文件"
-                } else {
-                    "选择 Bash 可执行文件"
-                },
-                &[],
-                cancelled,
-            )
+            crate::environment_dialog::pick_file("选择 Bash 可执行文件", &[], cancelled)
         };
         #[cfg(windows)]
-        let selected = crate::environment_dialog::pick_file(title, &filter, cancelled);
+        let selected = if component == Component::Node && !archive {
+            crate::environment_dialog::pick_directory(title, cancelled)
+        } else {
+            crate::environment_dialog::pick_file(title, &filter, cancelled)
+        };
         #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         let selected = crate::environment_dialog::pick_file("选择运行环境", &[], cancelled);
         let Some(mut path) = selected else {
@@ -1238,17 +1279,15 @@ impl EnvironmentState {
         if cancelled() {
             return Err("操作已取消".into());
         }
+        if component == Component::Node && !archive {
+            path = node_in_directory(&path)?;
+        }
         #[cfg(target_os = "macos")]
-        if component != Component::Pi {
-            let executable = if component == Component::Node {
-                "node"
-            } else {
-                "bash"
-            };
-            path = [path.join(executable), path.join("bin").join(executable)]
+        if component == Component::Bash {
+            path = [path.join("bash"), path.join("bin/bash")]
                 .into_iter()
                 .find(|path| path.is_file())
-                .ok_or_else(|| format!("所选目录中没有 {executable} 或 bin/{executable}"))?;
+                .ok_or("所选目录中没有 bash 或 bin/bash")?;
         }
         if archive {
             self.set_phase("installing", "正在安装 Node.js", None);
@@ -1261,7 +1300,10 @@ impl EnvironmentState {
         if self.is_private_path(&path) {
             return Err("请选择常规安装的组件，旧桌面私有环境不会加入全局 PATH".into());
         }
-        path = fs::canonicalize(&path).map_err(|error| format!("所选路径无效：{error}"))?;
+        // Node 命令入口的目录参与 npm 查找，不能解析符号链接后丢失这个目录。
+        if component != Component::Node {
+            path = fs::canonicalize(&path).map_err(|error| format!("所选路径无效：{error}"))?;
+        }
         self.probe(component, &path, cancelled, log)?;
         let mut data = self.data.lock().unwrap();
         let mut choices = data.choices.clone();
@@ -1373,15 +1415,17 @@ fn pi_runtime_check_script(directory: &Path) -> PathBuf {
     current
 }
 
-pub(crate) fn npm_cli(node: &Path) -> Option<PathBuf> {
-    let parent = node.parent()?;
+fn node_in_directory(directory: &Path) -> Result<PathBuf, String> {
+    let executable = if cfg!(windows) { "node.exe" } else { "node" };
     [
-        parent.join("node_modules/npm/bin/npm-cli.js"),
-        parent.join("../lib/node_modules/npm/bin/npm-cli.js"),
-        parent.join("../share/nodejs/npm/bin/npm-cli.js"),
+        directory.join(executable),
+        directory.join("bin").join(executable),
     ]
     .into_iter()
     .find(|path| path.is_file())
+    .ok_or_else(|| {
+        format!("所选目录中没有 {executable} 或 bin/{executable}，请选择已有 Node.js 安装目录")
+    })
 }
 
 fn pi_root(path: &Path) -> Option<PathBuf> {
@@ -1546,8 +1590,13 @@ fn refreshed_path(log: &Path, cancelled: &dyn Fn() -> bool, include_current: boo
                     "environment-path-refresh",
                     "已读取 Windows 注册表 PATH",
                 );
-                paths.extend(std::env::split_paths(&current));
-                return std::env::join_paths(paths).unwrap_or(current);
+                let mut current_paths = if include_current {
+                    std::env::split_paths(&current).collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                current_paths.append(&mut paths);
+                return std::env::join_paths(current_paths).unwrap_or(current);
             }
             Err(error) => {
                 logging::write(log, "environment-path-refresh-failed", &error);
@@ -1557,15 +1606,15 @@ fn refreshed_path(log: &Path, cancelled: &dyn Fn() -> bool, include_current: boo
     #[cfg(not(windows))]
     {
         let _ = (log, cancelled);
-        let mut paths = vec![
+        let mut paths = std::env::split_paths(&current).collect::<Vec<_>>();
+        paths.extend([
             PathBuf::from("/usr/local/bin"),
             PathBuf::from("/opt/homebrew/bin"),
             PathBuf::from("/usr/bin"),
             PathBuf::from("/bin"),
             PathBuf::from("/usr/sbin"),
             PathBuf::from("/sbin"),
-        ];
-        paths.extend(std::env::split_paths(&current));
+        ]);
         return std::env::join_paths(paths).unwrap_or(current);
     }
     #[cfg(windows)]

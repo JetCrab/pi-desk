@@ -654,9 +654,6 @@ textarea:disabled {
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
-.setup-footer {
-  margin-bottom: 0;
-}
 .access-overview {
   display: grid;
   gap: 16px;

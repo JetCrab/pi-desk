@@ -4,6 +4,7 @@ use reqwest::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT
 use reqwest::{Client, Response, StatusCode};
 use sha2::{Digest, Sha256};
 use std::cell::Cell;
+use std::error::Error;
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -166,7 +167,7 @@ impl Download<'_> {
         }
         let response = cancellable(request.send(), self.cancelled)
             .await?
-            .map_err(network_failure)?;
+            .map_err(|error| network_failure(error, self.log))?;
         let status = response.status();
         if status == StatusCode::REQUEST_TIMEOUT
             || status == StatusCode::TOO_MANY_REQUESTS
@@ -198,7 +199,9 @@ impl Download<'_> {
                 let mut received = 0;
                 while let Some(chunk) = cancellable(response.chunk(), self.cancelled)
                     .await?
-                    .map_err(network_failure)?
+                    .map_err(|error| {
+                        network_failure(error.with_url(response.url().clone()), self.log)
+                    })?
                 {
                     received += chunk.len() as u64;
                     if received > 1 {
@@ -315,7 +318,7 @@ impl Download<'_> {
     ) -> Result<(), Failure> {
         while let Some(chunk) = cancellable(response.chunk(), self.cancelled)
             .await?
-            .map_err(network_failure)?
+            .map_err(|error| network_failure(error.with_url(response.url().clone()), self.log))?
         {
             check_cancelled(self.cancelled)?;
             let next = *offset + chunk.len() as u64;
@@ -382,14 +385,66 @@ impl Failure {
     }
 }
 
-fn network_failure(error: reqwest::Error) -> Failure {
+fn network_failure(error: reqwest::Error, log: &Path) -> Failure {
+    let stage = if error.is_connect() {
+        "建立连接"
+    } else if error.is_body() || error.is_decode() {
+        "接收数据"
+    } else if error.is_request() {
+        "发送请求或等待响应"
+    } else {
+        "网络请求"
+    };
+    let mut detail = format!(
+        "下载网络错误：url={} 阶段={stage} timeout={} is_connect={} is_request={} is_body={} is_decode={}\nerror: {error}",
+        error.url().map(|url| url.as_str()).unwrap_or("未知"),
+        error.is_timeout(),
+        error.is_connect(),
+        error.is_request(),
+        error.is_body(),
+        error.is_decode(),
+    );
+    let mut source = error.source();
+    let mut depth = 1;
+    while let Some(cause) = source {
+        detail.push_str(&format!("\nsource[{depth}]: {cause}"));
+        source = cause.source();
+        depth += 1;
+    }
+    logging::write(log, "environment-download-network-failed", &detail);
+
+    let target = error.url().and_then(|url| {
+        let host = url.host_str()?;
+        Some(match url.port_or_known_default() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_string(),
+        })
+    });
+    let reason = if error.is_timeout() {
+        if error.is_connect() {
+            "下载连接超时"
+        } else {
+            "下载请求或数据接收超时"
+        }
+    } else if error.is_connect() {
+        "下载连接失败"
+    } else if error.is_body() || error.is_decode() {
+        "下载数据接收失败"
+    } else {
+        "下载网络请求失败"
+    };
+    let server = target
+        .map(|target| format!("（{target}）"))
+        .unwrap_or_default();
+    let message = format!(
+        "{reason}{server}。请检查网络或代理，也可在下载设置中切换下载源，或选择已有运行环境。"
+    );
     // 响应头到达前断连属于 Request；chunk 读取错误也可能属于 Decode，均非内容解析错误。
     let retryable = error.is_connect()
         || error.is_request()
         || error.is_timeout()
         || error.is_body()
         || error.is_decode();
-    let message = format!("下载网络请求失败：{error}");
     if retryable {
         Failure::Retry(message)
     } else {

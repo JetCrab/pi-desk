@@ -581,6 +581,51 @@ fn cancellation_stops_transient_failure_retries_promptly() {
 }
 
 #[test]
+fn connection_failure_logs_the_error_chain_and_offers_recovery() {
+    use std::error::Error;
+
+    let directory = Directory::new("connection-diagnostics");
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let url = format!("http://{address}/node.tar.gz");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime.block_on(async {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(&url)
+            .send()
+            .await
+            .unwrap_err()
+    });
+    let mut causes = Vec::new();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        causes.push(cause.to_string());
+        source = cause.source();
+    }
+    assert!(!causes.is_empty(), "必须真实产生连接错误链");
+    let log = directory.0.join("desktop.log");
+    let message = super::network_failure(error, &log).message();
+    assert!(message.contains(&address.to_string()), "{message}");
+    assert!(message.contains("连接"), "{message}");
+    assert!(message.contains("下载设置"), "{message}");
+    let recorded = fs::read_to_string(log).unwrap();
+    assert!(recorded.contains(&url), "{recorded}");
+    for cause in causes {
+        assert!(
+            recorded.contains(&cause),
+            "丢失底层原因 {cause}：{recorded}"
+        );
+    }
+}
+
+#[test]
 fn unavailable_server_eventually_fails_instead_of_retrying_forever() {
     let directory = Directory::new("bounded-retries");
     let server = Server::new(Mode::Unavailable, 0);

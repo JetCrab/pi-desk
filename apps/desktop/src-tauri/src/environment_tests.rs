@@ -54,18 +54,103 @@ fn generic_server() -> ServerConfig {
 }
 
 #[test]
-fn npm_cli_accepts_linux_distribution_layout() {
-    let directory = TestDirectory::new("linux-npm-layout");
-    let node = directory.0.join("usr/bin/node");
-    let cli = directory.0.join("usr/share/nodejs/npm/bin/npm-cli.js");
-    fs::create_dir_all(node.parent().unwrap()).unwrap();
-    fs::create_dir_all(cli.parent().unwrap()).unwrap();
-    fs::write(&node, "").unwrap();
-    fs::write(&cli, "").unwrap();
-    let found = npm_cli(&node).expect("应识别发行版提供的 npm-cli.js");
-    assert_eq!(
-        fs::canonicalize(found).unwrap(),
-        fs::canonicalize(cli).unwrap()
+fn node_commands_are_reused_without_adjacent_npm_layout() {
+    let directory = TestDirectory::new("command-discovery");
+    let state = directory.state();
+    fs::create_dir_all(&state.root).unwrap();
+    let log = directory.0.join("desktop.log");
+    let output = process::run_capture(
+        "node -p process.execPath",
+        None,
+        Duration::from_secs(10),
+        &log,
+        &|| false,
+    )
+    .unwrap();
+    assert!(output.status.success());
+    let installed = process::decode_output(&output.stdout).trim().to_string();
+    let node_directory = directory.0.join("custom-node/bin");
+    let npm_directory = directory.0.join("separate-npm/bin");
+    fs::create_dir_all(&node_directory).unwrap();
+    fs::create_dir_all(&npm_directory).unwrap();
+    let node = node_directory.join(if cfg!(windows) { "node.exe" } else { "node" });
+    fs::copy(installed, &node).unwrap();
+    let global = directory.0.join("global-packages");
+    let script = npm_directory.join("npm-fixture.cjs");
+    fs::write(
+        &script,
+        format!(
+            "const args = process.argv.slice(2);\nconsole.log(args[0] === '--version' ? '10.9.2' : {});\n",
+            serde_json::to_string(&global.to_string_lossy()).unwrap()
+        ),
+    )
+    .unwrap();
+    #[cfg(windows)]
+    fs::write(
+        npm_directory.join("npm.cmd"),
+        format!(
+            "@echo off\r\nnode {} %*\r\n",
+            packages::quote(&script.to_string_lossy())
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let command = npm_directory.join("npm");
+        fs::write(
+            &command,
+            format!(
+                "#!/bin/sh\nexec node {} \"$@\"\n",
+                packages::quote(&script.to_string_lossy())
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(command, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let search = std::env::join_paths([&node_directory, &npm_directory]).unwrap();
+    state
+        .check_in_path(&[Component::Node], search, false, None, &|| false, &log)
+        .unwrap();
+    assert_eq!(state.component_path(Component::Node), Some(node.clone()));
+    assert!(!node_directory.join("node_modules/npm").exists());
+    let actual = state
+        .run_npm(
+            &["root", "-g"],
+            Some(&state.root),
+            Duration::from_secs(10),
+            &|| false,
+            &log,
+        )
+        .unwrap();
+    assert_eq!(PathBuf::from(actual), global);
+}
+
+#[test]
+fn selected_node_directory_accepts_the_installation_root_or_bin() {
+    let directory = TestDirectory::new("node-directory-choice");
+    let root = directory.0.join("custom-install");
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let node = bin.join(if cfg!(windows) { "node.exe" } else { "node" });
+    fs::write(&node, "fixture").unwrap();
+    assert_eq!(node_in_directory(&root).unwrap(), node);
+    assert_eq!(node_in_directory(&bin).unwrap(), node);
+    assert!(node_in_directory(&directory.0)
+        .unwrap_err()
+        .contains("请选择已有 Node.js 安装目录"));
+}
+
+#[test]
+fn discovery_preserves_the_application_command_path_priority() {
+    let directory = TestDirectory::new("path-priority");
+    let current = std::env::var_os("PATH").unwrap();
+    let refreshed = refreshed_path(&directory.0.join("desktop.log"), &|| false, true);
+    let original = std::env::split_paths(&current).collect::<Vec<_>>();
+    let actual = std::env::split_paths(&refreshed).collect::<Vec<_>>();
+    assert!(
+        actual.starts_with(&original),
+        "应先沿用应用实际命令 PATH，不能被标准目录覆盖"
     );
 }
 

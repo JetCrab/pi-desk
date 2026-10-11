@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useRef } from 'react'
-import { useStickToBottomContext } from 'use-stick-to-bottom'
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
+import { useStickToBottomContext, type StickToBottomState } from 'use-stick-to-bottom'
 import {
   L3_CONVERSATION_TOP_GUTTER_PX,
   clearL3ConversationTailSpacer,
@@ -14,6 +14,24 @@ import type { L2WorkbenchChatViewportSnapshot } from '../l2-workbench-chat'
 
 const BOTTOM_THRESHOLD_PX = 2
 
+function subscribePageVisibility(listener: () => void): () => void {
+  document.addEventListener('visibilitychange', listener)
+  return () => document.removeEventListener('visibilitychange', listener)
+}
+
+function pageIsVisible(): boolean {
+  return document.visibilityState === 'visible'
+}
+
+function serverPageIsVisible(): boolean {
+  return true
+}
+
+function markProgrammaticScroll(scrollState: StickToBottomState, scrollElement: HTMLElement): void {
+  // 库的命令式 setter 同时标记程序滚动，避免把锚点定位误判为手动回底。
+  scrollState.scrollTop = scrollElement.scrollTop
+}
+
 interface L2WorkbenchChatViewportManagerProps {
   visible?: boolean
   running: boolean
@@ -21,6 +39,7 @@ interface L2WorkbenchChatViewportManagerProps {
   containsTail: boolean
   latestUserAnchor: string | null
   entrySnapshot: L2WorkbenchChatViewportSnapshot | null
+  onResetToTail: () => void
   onSaveSnapshot: (snapshot: L2WorkbenchChatViewportSnapshot) => void
   onClearSnapshot: () => void
 }
@@ -61,10 +80,17 @@ export function L2WorkbenchChatViewportManager({
   containsTail,
   latestUserAnchor,
   entrySnapshot,
+  onResetToTail,
   onSaveSnapshot,
   onClearSnapshot
 }: L2WorkbenchChatViewportManagerProps): null {
   const { isAtBottom, scrollRef, scrollToBottom, state, stopScroll } = useStickToBottomContext()
+  const pageVisible = useSyncExternalStore(
+    subscribePageVisibility,
+    pageIsVisible,
+    serverPageIsVisible
+  )
+  const previousPageVisibleRef = useRef(pageVisible)
   const positioningRef = useRef(false)
   const initializedRef = useRef(false)
   const positionedUserAnchorRef = useRef<string | null>(null)
@@ -98,6 +124,14 @@ export function L2WorkbenchChatViewportManager({
       return
     }
     if (suspendedScrollTopRef.current === null) return
+    if (!running) {
+      initializedRef.current = false
+      entrySnapshotRef.current = null
+      suspendedSnapshotRef.current = null
+      suspendedScrollTopRef.current = null
+      logL3ConversationScroll('viewport:reenter-ended', scrollElement)
+      return
+    }
     stopScroll()
     const snapshot = suspendedSnapshotRef.current
     const target = snapshot
@@ -106,21 +140,31 @@ export function L2WorkbenchChatViewportManager({
     if (snapshot && target)
       positionL3ConversationMessage(scrollElement, target, snapshot.offset, containsTail)
     else scrollElement.scrollTop = suspendedScrollTopRef.current
-    // 隐藏期间的新消息不能覆盖用户离开前的阅读位置。
+    // 仍在运行时，隐藏期间的新消息不能覆盖离开前的阅读位置。
     initializedRef.current = true
     positionedUserAnchorRef.current = latestUserAnchor
     suspendedSnapshotRef.current = null
     suspendedScrollTopRef.current = null
-  }, [containsTail, latestUserAnchor, scrollRef, stopScroll, visible])
+  }, [containsTail, latestUserAnchor, running, scrollRef, stopScroll, visible])
 
   useLayoutEffect(() => {
-    if (!ready || !visible) return
+    const returnedToPage = pageVisible && !previousPageVisibleRef.current
+    previousPageVisibleRef.current = pageVisible
+    if (returnedToPage && visible && !running) {
+      initializedRef.current = false
+      entrySnapshotRef.current = null
+    }
+    if (!ready || !visible || !pageVisible) return
     if (!running) onClearSnapshot()
 
     const initializing = !initializedRef.current
     const hasNewUser =
       latestUserAnchor !== null && latestUserAnchor !== positionedUserAnchorRef.current
     if (!initializing && !hasNewUser) return
+    if (initializing && !running && !containsTail) {
+      onResetToTail()
+      return
+    }
 
     const currentScrollElement = scrollRef.current
     if (hasNewUser) {
@@ -130,6 +174,7 @@ export function L2WorkbenchChatViewportManager({
 
     let positionFrame: number | null = null
     let releaseFrame: number | null = null
+    let releaseEntryAnchor: (() => void) | null = null
     positioningRef.current = true
 
     const position = (): void => {
@@ -148,7 +193,7 @@ export function L2WorkbenchChatViewportManager({
 
       let target: HTMLElement | null = null
       let targetOffset = L3_CONVERSATION_TOP_GUTTER_PX
-      const snapshot = initializing ? entrySnapshotRef.current : null
+      const snapshot = initializing && running ? entrySnapshotRef.current : null
       if (snapshot) {
         const savedTarget = findL3ConversationMessage(
           scrollElement,
@@ -201,10 +246,34 @@ export function L2WorkbenchChatViewportManager({
       initializedRef.current = true
       positionedUserAnchorRef.current = latestUserAnchor
       entrySnapshotRef.current = null
+      if (initializing && !running && target) {
+        // 首屏的懒布局仍会改变高度；用户开始操作后立即交还阅读位置。
+        const entryTarget = target
+        markProgrammaticScroll(state, scrollElement)
+        const observer = new ResizeObserver(() => {
+          stopScroll()
+          positionL3ConversationMessage(scrollElement, entryTarget, targetOffset, containsTail)
+          markProgrammaticScroll(state, scrollElement)
+        })
+        observer.observe(scrollElement)
+        if (scrollElement.firstElementChild) observer.observe(scrollElement.firstElementChild)
+        const interactionElement = scrollElement.parentElement!
+        const events = ['wheel', 'touchstart', 'pointerdown', 'keydown', 'click'] as const
+        const release = (): void => {
+          observer.disconnect()
+          for (const event of events) interactionElement.removeEventListener(event, release, true)
+          releaseEntryAnchor = null
+          positioningRef.current = false
+        }
+        for (const event of events) {
+          interactionElement.addEventListener(event, release, { passive: true, capture: true })
+        }
+        releaseEntryAnchor = release
+      }
       releaseFrame = window.requestAnimationFrame(() => {
         if (followAfterPosition) void scrollToBottom({ animation: 'instant' })
         else if (target) stopScroll()
-        positioningRef.current = false
+        positioningRef.current = releaseEntryAnchor !== null
       })
     }
 
@@ -215,15 +284,20 @@ export function L2WorkbenchChatViewportManager({
     return () => {
       if (positionFrame !== null) window.cancelAnimationFrame(positionFrame)
       if (releaseFrame !== null) window.cancelAnimationFrame(releaseFrame)
+      releaseEntryAnchor?.()
+      positioningRef.current = false
     }
   }, [
     containsTail,
     latestUserAnchor,
     onClearSnapshot,
+    onResetToTail,
+    pageVisible,
     ready,
     running,
     scrollRef,
     scrollToBottom,
+    state,
     stopScroll,
     visible
   ])

@@ -11,6 +11,22 @@ pub(crate) fn pick_file(
     } else {
         dialog.add_filter("运行环境", extensions)
     };
+    pick(cancelled, || dialog.pick_file())
+}
+
+pub(crate) fn pick_directory(
+    title: &str,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Option<PathBuf> {
+    pick(cancelled, || {
+        rfd::FileDialog::new().set_title(title).pick_folder()
+    })
+}
+
+fn pick(
+    cancelled: &(dyn Fn() -> bool + Sync),
+    choose: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
     #[cfg(windows)]
     {
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,7 +59,7 @@ pub(crate) fn pick_file(
             if cancelled() {
                 None
             } else {
-                dialog.pick_file()
+                choose()
             }
         })
     }
@@ -52,20 +68,9 @@ pub(crate) fn pick_file(
         if cancelled() {
             None
         } else {
-            dialog.pick_file()
+            choose()
         }
     }
-}
-
-#[cfg(unix)]
-pub(crate) fn pick_directory(
-    title: &str,
-    cancelled: &(dyn Fn() -> bool + Sync),
-) -> Option<PathBuf> {
-    if cancelled() {
-        return None;
-    }
-    rfd::FileDialog::new().set_title(title).pick_folder()
 }
 
 #[cfg(windows)]

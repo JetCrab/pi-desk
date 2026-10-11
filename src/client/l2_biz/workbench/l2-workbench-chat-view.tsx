@@ -134,7 +134,7 @@ function L2WorkbenchChatViewComponent({
           turns={turns}
           active={visible}
           focusTurnIdentity={latestUserTurn?.identity ?? null}
-          initialAnchor={entrySnapshot?.messageId ?? null}
+          initialAnchor={viewportRunning ? (entrySnapshot?.messageId ?? null) : null}
         >
           {(turnWindow) => (
             <>
@@ -146,6 +146,7 @@ function L2WorkbenchChatViewComponent({
                 containsTail={turnWindow.containsTail}
                 latestUserAnchor={latestUserAnchor}
                 entrySnapshot={entrySnapshot}
+                onResetToTail={turnWindow.resetToTail}
                 onSaveSnapshot={saveViewportSnapshot}
                 onClearSnapshot={clearViewportSnapshot}
               />
