@@ -57,9 +57,23 @@ jobs:
             node .github/scripts/commit-versions.mjs check "$CHECK_BASE" "$CHECK_HEAD"
           fi
 
+  public-boundary:
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - run: node --test tests/l4-public-boundary.test.mjs
+
   core:
     needs: changes
-    if: needs.changes.outputs.automation == 'true' || (needs.changes.outputs.full != 'true' && needs.changes.outputs.web == 'true')
+    if: needs.changes.outputs.automation == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -101,8 +115,6 @@ jobs:
           const files = JSON.parse(process.env.CHECK_FILES_JSON).filter(file => /\.github\/.*\.(?:js|mjs)$/.test(file) && existsSync(file))
           if (files.length) execFileSync('pnpm', ['exec', 'eslint', '--no-ignore', ...files], { stdio: 'inherit' })
           NODE
-      - name: 源码公开边界
-        run: node --test tests/l4-public-boundary.test.mjs
       - name: 发布流程核心回归
         if: needs.changes.outputs.automation == 'true'
         run: >-
@@ -169,7 +181,6 @@ jobs:
         run: >-
           node --import tsx --test
           tests/l4-api-request.test.ts
-          tests/l4-public-boundary.test.mjs
           tests/l2-chat-state.test.ts
           tests/l2-task-center-state.test.ts
           tests/l2-work-session-update.test.ts

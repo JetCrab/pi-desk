@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { parse } from 'yaml'
 import { lockDependencyContent } from '../.github/scripts/release-dependencies.mjs'
 
 const lock = `lockfileVersion: '9.0'
@@ -41,20 +42,27 @@ test('锁文件变化仅影响实际使用该依赖的包并包含传递依赖',
 })
 
 test('dev只保留统一入口，内部复用不取消连续批次', async () => {
-  const read = (name) =>
-    readFile(new URL(`../.github/workflows/${name}.yml`, import.meta.url), 'utf8')
+  const read = async (name) =>
+    parse(await readFile(new URL(`../.github/workflows/${name}.yml`, import.meta.url), 'utf8'))
   const dev = await read('release-dev')
-  assert.match(dev, /branches: \[dev\]/)
-  assert.match(dev, /cancel-in-progress: false/)
-  assert.match(dev, /source_sha: \$\{\{ github.sha \}\}/)
-  assert.match(dev, /release-dev\.mjs prepare/)
-  assert.match(dev, /release-dev\.mjs complete/)
+  assert.deepEqual(dev.on.push.branches, ['dev'])
+  assert.equal(dev.concurrency['cancel-in-progress'], false)
+  assert.equal(dev.jobs['npm-build'].with.source_sha, '${{ github.sha }}')
+  for (const command of ['prepare', 'complete']) {
+    assert.ok(
+      Object.values(dev.jobs).some((job) =>
+        job.steps?.some((step) =>
+          new RegExp(`release-dev\\.mjs\\s+${command}\\b`).test(step.run ?? '')
+        )
+      )
+    )
+  }
   const checks = await read('check')
-  assert.doesNotMatch(checks.split('\npermissions:')[0], /\n  push:/)
-  assert.match(checks, /pull_request:/)
+  assert.equal(Object.hasOwn(checks.on, 'push'), false)
+  assert.ok(Object.hasOwn(checks.on, 'pull_request'))
   const npm = await read('release-npm')
-  assert.doesNotMatch(npm.split('\npermissions:')[0], /\n  push:|\n  workflow_dispatch:/)
-  assert.match(npm, /matrix:\n\s+os: \[ubuntu-latest, windows-latest\]/)
-  await assert.rejects(read('build-dev-clients'), { code: 'ENOENT' })
-  await assert.rejects(read('release-clients'), { code: 'ENOENT' })
+  assert.equal(Object.hasOwn(npm.on, 'push'), false)
+  assert.equal(Object.hasOwn(npm.on, 'workflow_dispatch'), false)
+  for (const os of ['ubuntu-latest', 'windows-latest'])
+    assert.ok(npm.jobs['installed-commands'].strategy.matrix.os.includes(os))
 })

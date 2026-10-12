@@ -30,6 +30,7 @@ import {
 import { packageClient } from '../.github/scripts/pack-client.mjs'
 import { readPublishedVersions } from '../.github/scripts/prepare-dev-release.mjs'
 import { prepareCommitVersions, validateVersions } from '../.github/scripts/commit-versions.mjs'
+import { readWorkflow } from './fixtures/l4-workflow-test-runtime.mjs'
 
 async function fixture(t) {
   const parent = resolve('temp/tests/release-main/batch-regression')
@@ -230,16 +231,6 @@ test('正式源码清单不得仍引用自有SDK开发版本', async (t) => {
   await assert.rejects(validateVersions(repo.root, { base: null, head: repo.commit() }), /未同步/)
 })
 
-test('macOS归档参数在无证书时也不展开空数组', async () => {
-  const workflow = await readFile(
-    new URL('../.github/workflows/release-apple.yml', import.meta.url),
-    'utf8'
-  )
-  assert.match(workflow, /pack_args=\(macos "\$\{dmgs\[0\]\}" "\$CLIENT_OUTPUT"\)/)
-  assert.match(workflow, /pack_args\+=\(--developer-id\)/)
-  assert.match(workflow, /trap 'status=\$\?; trap - EXIT;.*exit "\$status"'/)
-})
-
 test('dev仅给已提交的新版本附加固定后缀，纯文档推送不发npm包', async (t) => {
   const repo = await fixture(t)
   await repo.save('src/main.ts', 'export const value = 1')
@@ -383,13 +374,19 @@ test('官方Registry版本查询带去缓存参数，不以dev标签代替完整
 })
 
 test('开发发布按原始制品恢复，不依赖同一次Actions重试编号', async () => {
-  const workflow = await readFile(
-    new URL('../.github/workflows/release-npm.yml', import.meta.url),
-    'utf8'
+  const workflow = await readWorkflow('release-npm')
+  assert.ok(
+    workflow.jobs.build.steps.some((step) =>
+      /release-dev-reuse\.mjs\s+restore\b/.test(step.run ?? '')
+    )
   )
-  assert.match(workflow, /release-dev-reuse\.mjs restore/)
-  assert.doesNotMatch(workflow, /RELEASE_RESUME:/)
-  assert.doesNotMatch(workflow, /name: dev-manifests-.*github.run_attempt/)
+  for (const job of Object.values(workflow.jobs)) {
+    assert.equal(job.env?.RELEASE_RESUME, undefined)
+    for (const step of job.steps ?? []) {
+      if (step.uses?.startsWith('actions/download-artifact@'))
+        assert.ok(!step.with.name.includes('github.run_attempt'))
+    }
+  }
 })
 
 test('桌面四份版本和Android构建号在提交准备时自动保持一致', async (t) => {

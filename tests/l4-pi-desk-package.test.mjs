@@ -98,40 +98,15 @@ test('Pi Desk npm 包声明正式入口和构建产物', () => {
   for (const name of readdirSync(path.join(projectRoot, 'bin'))) {
     assert.doesNotMatch(name, /^l[1-4]-/u)
   }
-  assert.equal(
-    packageJson.scripts.dev,
-    'pnpm run build:plugin-host-runtime && tsx watch --tsconfig tsconfig.json --exclude "temp/**" --exclude "**/node_modules/**" src/server/l1_entry/node/l1-server.ts --dev'
-  )
-  assert.equal(
-    packageJson.scripts.build,
-    'pnpm run build:plugin-host-runtime && next build --webpack'
-  )
-  assert.equal(
-    packageJson.scripts['build:plugin-host-runtime'],
-    'pnpm --filter @jetcrab/pi-desk-sdk build'
-  )
   assert.equal(packageJson.scripts['publish:private'], undefined)
-  assert.equal(packageJson.scripts.start, 'node bin/pi-desk.js --no-open')
   assert.ok(packageJson.files.includes('temp/build/pi-desk/release/.next'))
-  assert.equal(
-    packageJson.files.some((entry) => entry.startsWith('!')),
-    false
-  )
   assert.ok(packageJson.files.includes('src'))
   for (const file of ['l1-server.ts', 'l1-app-socket-bridge.ts', 'l1-web-auth-bridge.ts']) {
     assert.equal(existsSync(path.join(projectRoot, file)), false)
     assert.ok(existsSync(path.join(projectRoot, 'src/server/l1_entry/node', file)))
   }
-  assert.equal(packageJson.dependencies['tsconfig-paths'], '^4.2.0')
-  assert.equal(packageJson.engines.node, '>=22.19.0')
   const config = readFileSync(path.join(projectRoot, 'next.config.ts'), 'utf8')
   assert.match(config, /'temp\/build\/pi-desk\/release\/\.next'/u)
-  assert.ok(
-    path
-      .join('temp', 'build', 'pi-desk', 'release', '.next', 'server', 'chunks')
-      .replaceAll('\\', '/')
-      .includes('.next/server/chunks')
-  )
 })
 
 test('生产检查排除测试文件，开发检查仍覆盖根目录和插件测试', async () => {

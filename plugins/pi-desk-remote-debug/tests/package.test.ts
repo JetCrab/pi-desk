@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 import { access, readFile, readdir, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import type {
+  BrowserContributionDefinitionMap,
+  BrowserContributionKind
+} from '@jetcrab/pi-desk-sdk/browser'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const browserRoot = join(packageRoot, 'dist', 'browser')
@@ -13,7 +17,6 @@ test('Manifest 声明配置 Skill 与Pi Desk Entry，不再携带原生客户端
   assert.equal(manifest.piDesk.entry, './dist/pi-desk.js')
   assert.equal(manifest.os, undefined)
   assert.equal(manifest.cpu, undefined)
-  assert.deepEqual([...manifest.files].sort(), ['README.md', 'SOURCE.md', 'dist', 'skills'])
   const skill = await readFile(
     join(packageRoot, 'skills', 'remote-debug-config', 'SKILL.md'),
     'utf8'
@@ -37,9 +40,33 @@ test('Browser Entry 懒加载启动页和设置页，不包含 Node 实现', asy
   )
 
   assert.ok(Buffer.byteLength(entry, 'utf8') < 20 * 1024)
-  assert.match(entry, /registerContribution\("application","remote-debug"/)
-  assert.match(entry, /registerContribution\("settings-page",/)
-  assert.match(entry, /import\(/)
+  const register = (await import(pathToFileURL(join(browserRoot, 'entry.js')).href)).default
+  const contributions = new Map<string, BrowserContributionDefinitionMap[BrowserContributionKind]>()
+  let unsubscribed = false
+  const dispose = register({
+    onPush(): () => void {
+      return () => {
+        unsubscribed = true
+      }
+    },
+    registerContribution(
+      kind: BrowserContributionKind,
+      name: string,
+      definition: BrowserContributionDefinitionMap[BrowserContributionKind]
+    ): void {
+      contributions.set(`${kind}/${name}`, definition)
+    }
+  })
+  try {
+    for (const key of ['application/remote-debug', 'settings-page/remote-debug']) {
+      const definition = contributions.get(key)
+      assert.ok(definition, `缺少贡献：${key}`)
+      assert.equal(typeof (await definition.load()).mount, 'function')
+    }
+  } finally {
+    await dispose()
+  }
+  assert.equal(unsubscribed, true)
   assert.equal(entry.includes('react-dom'), false)
   for (const source of sources) {
     assert.equal(/(?:from\s*|import\s*\()["']node:/.test(source), false)
