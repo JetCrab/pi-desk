@@ -15,7 +15,7 @@ const { parseL4PiDeskCommand: parse } = jiti(
 ) as typeof import('../src/server/l4_foundation/pidesk/l4-pidesk-command')
 
 test('统一文档中的命令示例可执行，并区分插件维护与主动会话重载', () => {
-  const guide = readFileSync(new URL('../docs/pi-desk/commands.md', import.meta.url), 'utf8')
+  const guide = readFileSync(new URL('../docs/commands.md', import.meta.url), 'utf8')
   const commands = [...guide.matchAll(/`(\["plugins"[^\n]*?\])`/g)].map((match) => {
     const args: unknown = JSON.parse(match[1])
     assert.ok(Array.isArray(args) && args.every((argument) => typeof argument === 'string'))

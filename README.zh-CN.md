@@ -23,11 +23,11 @@ Pi 负责代理运行，Pi Desk 提供围绕它的工作界面。核心保持轻
 ## 界面演示
 
 <p>
-  <a href="./docs/images/client-overview.webp">
-    <img src="./docs/images/client-overview.webp" alt="文件预览" width="300" />
+  <a href="./docs/doc_asset/client-overview.webp">
+    <img src="./docs/doc_asset/client-overview.webp" alt="文件预览" width="300" />
   </a>
-  <a href="./docs/images/multi-window.webp">
-    <img src="./docs/images/multi-window.webp" alt="多窗口会话" width="300" />
+  <a href="./docs/doc_asset/multi-window.webp">
+    <img src="./docs/doc_asset/multi-window.webp" alt="多窗口会话" width="300" />
   </a>
 </p>
 

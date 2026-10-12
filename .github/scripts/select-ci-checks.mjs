@@ -29,7 +29,7 @@ export function selectCiChecks(paths, full) {
     pidesk:
       full ||
       paths.some((path) =>
-        /^(?:src\/|bin\/|plugins\/pi-desk-sdk\/|package\.json$|pnpm-|next\.config|tsconfig|docs\/pi-desk\/examples\/|tests\/(?:l[124]-pidesk(?:-|\.)|l2-plugin-command|l4-(?:e2e-server|browser-cdp)-runtime)|\.github\/(?:scripts\/(?:select-ci-checks|release-npm|verify-npm-install)\.mjs$|workflows\/(?:check|release-npm)\.yml$))/.test(
+        /^(?:src\/|bin\/|plugins\/pi-desk-sdk\/|package\.json$|pnpm-|next\.config|tsconfig|docs\/examples\/|tests\/(?:l[124]-pidesk(?:-|\.)|l2-plugin-command|l4-(?:e2e-server|browser-cdp)-runtime)|\.github\/(?:scripts\/(?:select-ci-checks|release-npm|verify-npm-install)\.mjs$|workflows\/(?:check|release-npm)\.yml$))/.test(
           path
         )
       ),

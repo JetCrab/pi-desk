@@ -24,7 +24,8 @@ const identifier = 'com.jetcrab.desktop.ui-smoke'
 const nativeDownloadOnly = process.argv.includes('--source-settings-only')
 const setupOnly = process.argv.includes('--setup-only') || nativeDownloadOnly
 const downloadSourceOnly = process.argv.includes('--download-source-only')
-const layoutOnly = process.argv.includes('--layout-only') || downloadSourceOnly
+const environmentOnly = process.argv.includes('--environment-only')
+const layoutOnly = process.argv.includes('--layout-only') || downloadSourceOnly || environmentOnly
 const startupOnly = process.argv.includes('--startup-only')
 const sourceScenario =
   process.argv.find((value) => value.startsWith('--source-scenario='))?.split('=')[1] ?? 'china'
@@ -492,7 +493,8 @@ function installLayoutFixture(desktopVersion) {
         })
         return
       }
-      if (command === 'check_environment_command') return
+      if (command === 'check_environment_command' || command === 'select_environment_command')
+        return
       if (command === 'stop_tunnel_command' || command === 'start_tunnel_command') {
         state.targets.find((item) => item.url === args.url).tunnel.status =
           command === 'start_tunnel_command' ? 'listening' : 'stopped'
@@ -603,6 +605,105 @@ async function validateDownloadSources(page) {
     await page.evaluate('document.querySelectorAll("[data-testid=download-source-select]").length'),
     1
   )
+}
+
+async function validateEnvironmentChoices(page) {
+  const choose = '选择已有 Node.js 目录'
+  const publish = async (expression) => {
+    await page.evaluate(
+      `(() => { ${expression}; document.dispatchEvent(new Event('visibilitychange')); })()`
+    )
+  }
+  await until(
+    () => page.evaluate('typeof window.desktopLayoutReady === "function"'),
+    '环境状态读取'
+  )
+  await page.evaluate(`(() => {
+    const state = window.desktopLayoutState;
+    state.hideOnStartup = false;
+    state.targets[0].server.status = 'stopped';
+    state.targets[0].server.needsSetup = true;
+    state.targets[0].server.version = null;
+    state.targets[0].tunnel = null;
+    state.environment.status = 'required';
+    state.environment.components.forEach(item => { item.status = 'missing'; item.version = null; item.path = null; });
+    state.environment.components[0].detail = '当前应用环境未找到可执行的 Node.js';
+    window.desktopLayoutReady();
+  })()`)
+  await until(() => page.evaluate(`document.body.innerText.includes('安装并打开')`), '下载准备入口')
+  assert.equal(
+    await page.evaluate(
+      `window.desktopLayoutCommands.some(item => item.command === 'prepare_environment_command')`
+    ),
+    false,
+    '检测缺环境不能自动下载安装'
+  )
+  for (const [theme, width, height, name] of [
+    ['light', 960, 720, 'environment-required-light.png'],
+    ['dark', 720, 560, 'environment-required-dark-compact.png'],
+    ['light', 400, 640, 'environment-required-narrow.png']
+  ]) {
+    await page.theme(theme)
+    await page.viewport(width, height)
+    await page.screenshot(name)
+    await assertSetupFits(page, choose)
+    await assertSetupFits(page, '安装并打开')
+  }
+  await page.evaluate(click(choose))
+  await until(
+    () =>
+      page.evaluate(
+        `window.desktopLayoutCommands.some(item => item.command === 'select_environment_command')`
+      ),
+    '直接选择已有 Node 目录'
+  )
+  assert.deepEqual(
+    await page.evaluate(
+      `window.desktopLayoutCommands.find(item => item.command === 'select_environment_command').args`
+    ),
+    { component: 'node', archive: false }
+  )
+  await assertSetupFits(page, '安装并打开')
+  await publish(
+    `window.desktopLayoutState.environment.components[0].status = 'ready'; window.desktopLayoutState.environment.components[0].detail = null`
+  )
+  await until(
+    () =>
+      page.evaluate(
+        `![...document.querySelectorAll('button')].some(item => item.textContent.trim() === ${JSON.stringify(choose)} && item.checkVisibility())`
+      ),
+    '已有可用 Node 时不再突出更换入口'
+  )
+  await page.evaluate(click('安装并打开'))
+  await until(
+    () => page.evaluate(`document.body.innerText.includes('取消安装')`),
+    '用户主动开始下载准备'
+  )
+  await page.evaluate(click('取消安装'))
+  await until(
+    () => page.evaluate(`document.body.innerText.includes('安装并打开')`),
+    '取消后可继续准备'
+  )
+  await publish(`
+    window.desktopLayoutState.environment.status = 'failed';
+    window.desktopLayoutState.environment.components[0].status = 'missing';
+    window.desktopLayoutState.environment.error = '下载连接失败（nodejs.org:443）。请检查网络或代理，也可在下载设置中切换下载源，或选择已有运行环境。';
+  `)
+  await until(
+    () => page.evaluate(`document.body.innerText.includes('重试安装')`),
+    '下载失败后的恢复操作'
+  )
+  await assertSetupFits(page, choose)
+  await assertSetupFits(page, '重试安装')
+  assert.equal(
+    await page.evaluate(
+      `document.querySelector('[role="alert"]')?.innerText.includes('nodejs.org:443')`
+    ),
+    true,
+    '错误信息保留失败目标和可操作提示'
+  )
+  await page.viewport(960, 720)
+  await page.screenshot('environment-download-error.png')
 }
 
 async function validateLayout(page) {
@@ -1273,6 +1374,7 @@ validation: try {
       `(${installLayoutFixture.toString()})(${JSON.stringify(desktopVersion)})`
     )
     if (downloadSourceOnly) await validateDownloadSources(control)
+    else if (environmentOnly) await validateEnvironmentChoices(control)
     else await validateLayout(control)
     assert.deepEqual(control.errors, [], '布局交互不应出现 JavaScript 异常')
     passed = true
@@ -2103,7 +2205,7 @@ await writeFile(
     layoutOnly
       ? {
           passed,
-          scope: 'desktop-web-layout',
+          scope: environmentOnly ? 'desktop-environment-choices' : 'desktop-web-layout',
           mockedNativeIpc: true,
           controlViewport: { width: 960, height: 720 },
           minimumViewport: { width: 720, height: 560 },

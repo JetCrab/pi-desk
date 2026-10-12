@@ -60,7 +60,7 @@ export async function initializeL4PiDeskCommands(
   const sdkRoot = dirname(
     dirname(createRequire(join(hostRoot, 'package.json')).resolve('@jetcrab/pi-desk-sdk'))
   )
-  const docsDirectory = join(hostRoot, 'docs', 'pi-desk')
+  const docsDirectory = join(hostRoot, 'docs')
   await Promise.all(
     ['README.md', 'commands.md', 'plugins.md'].map((file) => access(join(docsDirectory, file)))
   )

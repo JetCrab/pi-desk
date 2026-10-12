@@ -131,6 +131,38 @@ export function getL3GitChangeBadge(change: L4GitFileChange): string {
   return '?'
 }
 
+export function getL3GitChangeClass(change: L4GitFileChange): string {
+  const badge = getL3GitChangeBadge(change)
+  if (badge === 'D') return 'text-muted-foreground'
+  if (badge === '?') return 'text-red-600 dark:text-red-400'
+  if (badge === 'A') return 'text-emerald-600 dark:text-emerald-400'
+  if (badge === '!') return 'text-violet-600 dark:text-violet-400'
+  return 'text-blue-600 dark:text-blue-400'
+}
+
+export function findL3GitFile(
+  cwd: string,
+  path: string,
+  repositories: readonly L4GitRepository[]
+): { repository: L4GitRepository; path: string; change: L4GitFileChange | undefined } | null {
+  if (/^(?:[a-z]:|\/|\\\\)/i.test(path)) return null
+  const windows = /^[a-z]:[\\/]/i.test(cwd) || cwd.startsWith('\\\\')
+  const key = (value: string): string => (windows ? value.toLowerCase() : value)
+  const repository = [...repositories]
+    .sort((left, right) => right.root.length - left.root.length)
+    .find((item) => !item.root || key(path).startsWith(`${key(item.root)}/`))
+  if (!repository) return null
+  const relative = repository.root ? path.slice(repository.root.length + 1) : path
+  return {
+    repository,
+    path: relative,
+    change:
+      repository.state === 'ready'
+        ? repository.changes.find((item) => key(item.path) === key(relative))
+        : undefined
+  }
+}
+
 export function listL3GitProjectChanges(
   repositories: readonly L4GitRepository[]
 ): L3GitProjectChange[] {

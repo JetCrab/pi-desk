@@ -1,0 +1,225 @@
+.effect,
+.principle,
+.config {
+  margin: 24px 0;
+  color: var(--foreground);
+  line-height: 1.6;
+}
+.effect {
+  margin-top: 0;
+  padding-top: 18px;
+  border-block: 1px solid var(--border);
+}
+.title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.title > span,
+.note {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 400;
+}
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-block: 20px;
+}
+.kpis > div {
+  display: grid;
+  gap: 4px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+.kpis strong {
+  font-size: 23px;
+  line-height: 1.4;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.kpis span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.effectCharts {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 24px;
+}
+.sectionTitle {
+  font-size: 14px;
+  font-weight: 500;
+}
+.chart {
+  margin-top: 8px;
+}
+.chartScale,
+.chartLabels {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.chartSvg {
+  display: block;
+  width: 100%;
+  height: 130px;
+  margin-block: 6px;
+  overflow: visible;
+}
+.chartGrid {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.chartArea {
+  fill: var(--accent);
+}
+.chartLine {
+  fill: none;
+  stroke: var(--foreground);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.chartPoint {
+  fill: var(--foreground);
+}
+.distribution {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+.distribution > div {
+  display: grid;
+  gap: 6px;
+}
+.distribution > div > span {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+.distribution > div strong {
+  font-weight: 500;
+}
+.distribution i {
+  display: block;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--foreground);
+}
+.distribution > div:nth-of-type(2) i {
+  background: var(--muted-foreground);
+}
+.distribution small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.note {
+  padding-block: 14px;
+  font-size: 13px;
+}
+.principle {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--muted);
+}
+.principle > div {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  text-align: center;
+}
+.principle strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.principle span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.principle > svg {
+  color: var(--muted-foreground);
+}
+.config {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.config .title {
+  padding: 14px 16px;
+  background: var(--muted);
+}
+.filterRow {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+}
+.filterRow > strong {
+  padding-top: 5px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chips > span {
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.chips > span[data-active='true'] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.config .note {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+@media (max-width: 640px) {
+  .effectCharts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+  .distribution {
+    gap: 10px;
+  }
+  .kpis {
+    gap: 8px;
+  }
+  .kpis strong {
+    font-size: 21px;
+  }
+  .filterRow {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding: 12px;
+  }
+  .principle {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+  .principle strong {
+    font-size: 13px;
+  }
+}

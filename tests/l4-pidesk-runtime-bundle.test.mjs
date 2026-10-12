@@ -33,7 +33,7 @@ test('系统导航指向主包文档与实际 SDK，从无关工作目录仍可�
           await writeFile(join(host, 'package.json'), JSON.stringify({ version: '1.2.3' }))
           await writeFile(join(sdk, 'package.json'), JSON.stringify(sdkManifest))
           await writeFile(join(sdk, 'dist/index.js'), 'export {}\n')
-          await cp('docs/pi-desk', join(host, 'docs/pi-desk'), { recursive: true })
+          await cp('docs', join(host, 'docs'), { recursive: true })
           const workspace = join(run, 'unrelated-workspace')
           await mkdir(workspace, { recursive: true })
           if (linked) {
@@ -61,7 +61,7 @@ test('系统导航指向主包文档与实际 SDK，从无关工作目录仍可�
                 assert.deepEqual(base, ['用户原有追加提示']);
                 assert.equal(result[0], base[0]);
                 const text = result[1];
-                const docs = ${JSON.stringify(join(host, 'docs/pi-desk').replaceAll('\\', '/'))};
+                const docs = ${JSON.stringify(join(host, 'docs').replaceAll('\\', '/'))};
                 const sdkTypes = ${JSON.stringify(join(sdk, 'dist').replaceAll('\\', '/'))};
                 assert.ok(text.includes(docs + '/README.md'));
                 assert.equal(text.split(docs + '/').length - 1, 1, '系统提示只提供一个文档入口');

@@ -120,6 +120,9 @@ export function EnvironmentView({
   const components = componentOrder.flatMap((name) =>
     environment.components.filter((item) => item.name === name)
   )
+  const nodeNeedsSetup = components.some(
+    (component) => component.name === 'node' && (component.status !== 'ready' || component.detail)
+  )
   const update = target.server?.update
   const packageReady = update?.status === 'installed' || Boolean(target.server?.version)
   const packageActive = working && ['checking', 'installing'].includes(update?.status ?? '')
@@ -163,6 +166,64 @@ export function EnvironmentView({
             </h3>
             {working && <span className="muted">完成后自动打开</span>}
           </div>
+          <div className="setup-footer">
+            {!working && downloadSettings}
+            <div className="actions setup-actions">
+              {working ? (
+                <button
+                  type="button"
+                  className="quiet"
+                  disabled={cancelling || launching}
+                  onClick={() => onAction({ kind: 'cancel' })}
+                >
+                  {cancelling ? '正在取消…' : '取消安装'}
+                </button>
+              ) : (
+                <>
+                  {!canOpen && nodeNeedsSetup && (
+                    <button
+                      type="button"
+                      disabled={locked}
+                      onClick={() =>
+                        onAction({ kind: 'select', component: 'node', archive: false })
+                      }
+                    >
+                      <DesktopIcon name="folder" />
+                      选择已有 Node.js 目录
+                    </button>
+                  )}
+                  <button
+                    className="primary forward"
+                    type="button"
+                    disabled={locked}
+                    onClick={() => onAction({ kind: canOpen ? 'open' : 'prepare' })}
+                  >
+                    {checking
+                      ? '请稍候…'
+                      : canOpen
+                        ? '打开 Pi Desk'
+                        : failure
+                          ? '重试安装'
+                          : '安装并打开'}
+                    {!checking && <DesktopIcon name="arrow" />}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+      {failure && (
+        <DesktopError
+          title="安装未完成"
+          detail={failure}
+          expanded
+          onCopy={() => onAction({ kind: 'copy-error' })}
+          copied={copied === 'error'}
+        />
+      )}
+      {!optionsOnly && (
+        <>
           <ol className="setup-steps" aria-label="安装步骤">
             {components.map((component) => {
               const ready = component.status === 'ready' && !component.detail
@@ -201,48 +262,6 @@ export function EnvironmentView({
             </p>
           )}
         </>
-      )}
-      {failure && (
-        <DesktopError
-          title="安装未完成"
-          detail={failure}
-          expanded
-          onCopy={() => onAction({ kind: 'copy-error' })}
-          copied={copied === 'error'}
-        />
-      )}
-      {!optionsOnly && (
-        <div className="setup-footer">
-          {!working && downloadSettings}
-          <div className="actions setup-actions">
-            {working ? (
-              <button
-                type="button"
-                className="quiet"
-                disabled={cancelling || launching}
-                onClick={() => onAction({ kind: 'cancel' })}
-              >
-                {cancelling ? '正在取消…' : '取消安装'}
-              </button>
-            ) : (
-              <button
-                className="primary forward"
-                type="button"
-                disabled={locked}
-                onClick={() => onAction({ kind: canOpen ? 'open' : 'prepare' })}
-              >
-                {checking
-                  ? '请稍候…'
-                  : canOpen
-                    ? '打开 Pi Desk'
-                    : failure
-                      ? '重试安装'
-                      : '安装并打开'}
-                {!checking && <DesktopIcon name="arrow" />}
-              </button>
-            )}
-          </div>
-        </div>
       )}
       {!working && (
         <details
@@ -306,7 +325,7 @@ export function EnvironmentView({
                         }
                       >
                         <DesktopIcon name="folder" />
-                        选择已安装的位置
+                        {component.name === 'node' ? '选择已有 Node.js 目录' : '选择已安装的位置'}
                       </button>
                       {component.name === 'node' && isWindows && (
                         <button

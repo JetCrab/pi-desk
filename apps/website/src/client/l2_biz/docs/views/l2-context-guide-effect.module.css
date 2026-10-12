@@ -1,0 +1,302 @@
+.effect {
+  container-type: inline-size;
+  margin: 24px 0 28px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--foreground);
+  background: var(--card);
+  overflow: hidden;
+  line-height: 1.5;
+}
+.heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.eyebrow {
+  display: block;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.title {
+  display: block;
+  margin-top: 5px;
+  font-size: 21px;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+}
+.difference {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: var(--muted);
+  font-size: 12px;
+}
+.difference strong {
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.comparison {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 28px;
+  margin-top: 27px;
+}
+.before,
+.after {
+  min-width: 0;
+}
+.stateHeading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.stateHeading > span:first-child {
+  font-size: 14px;
+  font-weight: 500;
+}
+.stateHeading strong {
+  font-size: 32px;
+  line-height: 1.2;
+  letter-spacing: -0.05em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.before .stateHeading strong {
+  color: var(--muted-foreground);
+}
+.stateHeading small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.meter {
+  display: flex;
+  height: 12px;
+  margin: 12px 0 20px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--muted);
+}
+.meter > span {
+  height: 100%;
+  flex-shrink: 0;
+  border-right: 2px solid var(--card);
+}
+.keptMeter {
+  width: 20%;
+  background: var(--foreground);
+}
+.beforeProcessMeter {
+  width: 66.6667%;
+  background: var(--muted-foreground);
+}
+.afterProcessMeter {
+  width: 3.3333%;
+  background: var(--muted-foreground);
+}
+.recentMeter {
+  width: 13.3333%;
+  background: color-mix(in oklab, var(--foreground), transparent 60%);
+}
+.contents {
+  display: grid;
+  gap: 8px;
+}
+.kept,
+.recent,
+.summary,
+.oldProcess > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.kept,
+.recent,
+.summary {
+  min-height: 39px;
+  padding: 9px 10px;
+  font-size: 12px;
+}
+.kept {
+  border-left: 2px solid var(--foreground);
+  background: var(--muted);
+}
+.recent {
+  border-left: 2px solid var(--muted-foreground);
+  background: var(--muted);
+}
+.summary {
+  border: 1px dashed var(--muted-foreground);
+  border-radius: 5px;
+  background: var(--background);
+}
+.contents svg {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+.contents small {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.oldProcess {
+  min-height: 127px;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 5px;
+  background: var(--muted);
+  font-size: 12px;
+}
+.stack {
+  display: grid;
+  gap: 5px;
+  padding-top: 13px;
+}
+.stack > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--card);
+}
+.stack i {
+  display: block;
+  width: 48%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+}
+.stack i:last-child {
+  width: 23%;
+}
+.reclaimed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 79px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.8;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 7px,
+    color-mix(in oklab, var(--foreground), transparent 97%) 7px,
+    color-mix(in oklab, var(--foreground), transparent 97%) 8px
+  );
+}
+.reclaimed strong {
+  color: var(--foreground);
+  font-weight: 500;
+}
+.preserved {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  margin-top: 23px;
+  padding-top: 17px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.preserved span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.caption {
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--muted-foreground);
+}
+@container (max-width:540px) {
+  .heading {
+    align-items: flex-start;
+  }
+  .title {
+    font-size: 18px;
+  }
+  .difference {
+    gap: 3px;
+    padding: 6px;
+    font-size: 11px;
+  }
+  .difference svg {
+    width: 16px;
+  }
+  .difference strong {
+    font-size: 15px;
+  }
+  .comparison {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 22px;
+    margin-top: 23px;
+  }
+  .after {
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+  }
+  .stateHeading strong {
+    font-size: 29px;
+  }
+  .meter {
+    margin: 10px 0 14px;
+  }
+  .contents {
+    gap: 6px;
+  }
+  .kept,
+  .recent,
+  .summary {
+    min-height: 33px;
+    padding: 6px 9px;
+  }
+  .oldProcess {
+    min-height: 66px;
+    padding: 8px 9px;
+  }
+  .stack {
+    padding-top: 9px;
+  }
+  .stack > span:not(:first-child) {
+    display: none;
+  }
+  .reclaimed {
+    min-height: 55px;
+  }
+  .reclaimed br {
+    display: none;
+  }
+  .reclaimed strong {
+    margin-left: 6px;
+  }
+  .preserved {
+    gap: 7px;
+    margin-top: 19px;
+    padding-top: 13px;
+    flex-direction: column;
+  }
+}
+@media (max-width: 640px) {
+  .effect {
+    padding: 18px 14px;
+  }
+  .heading {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+}

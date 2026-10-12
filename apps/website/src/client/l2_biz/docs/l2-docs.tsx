@@ -7,8 +7,28 @@ import {
   CollapsibleTrigger
 } from '@client/l4_foundation/ui/shadcn/collapsible'
 import { documents, type DocumentContent, type DocumentPath } from '@common/l2_biz/docs/l2-docs'
+import { ContextGuide } from './views/l2-context-guide'
+import { BackgroundTasksGuide } from './views/l2-background-tasks-guide'
+import { SubagentsGuide } from './views/l2-subagents-guide'
+import { DeliverablesGuide } from './views/l2-deliverables-guide'
+import { UsageGuide } from './views/l2-usage-guide'
+import { QuotaGuide } from './views/l2-quota-guide'
+import { TiboGuide } from './views/l2-tibo-guide'
+import { ToolReasonGuide } from './views/l2-tool-reason-guide'
+import { RemoteDebugGuide } from './views/l2-remote-debug-guide'
 
 const paths = Object.keys(documents) as DocumentPath[]
+const guideViews: Partial<Record<DocumentPath, (props: { html: string }) => ReactElement>> = {
+  '/docs/background-tasks/': BackgroundTasksGuide,
+  '/docs/subagents/': SubagentsGuide,
+  '/docs/deliverables/': DeliverablesGuide,
+  '/docs/usage/': UsageGuide,
+  '/docs/context/': ContextGuide,
+  '/docs/quota/': QuotaGuide,
+  '/docs/tibo/': TiboGuide,
+  '/docs/tool-reason/': ToolReasonGuide,
+  '/docs/remote-debug/': RemoteDebugGuide
+}
 
 export function Docs({
   path,
@@ -22,6 +42,7 @@ export function Docs({
   const previous = paths[index - 1]
   const next = paths[index + 1]
   const hasTableOfContents = content.headings.length > 2
+  const Guide = guideViews[path]
   return (
     <div
       className={`grid min-w-0 items-start gap-10 ${hasTableOfContents ? 'xl:grid-cols-[minmax(0,1fr)_168px]' : ''}`}
@@ -36,7 +57,7 @@ export function Docs({
           </h1>
           <p className="mt-3 text-base leading-7 text-muted-foreground">{document.description}</p>
         </header>
-        {hasTableOfContents ? (
+        {hasTableOfContents && !Guide ? (
           <Collapsible className="mb-8 border-y border-border py-2 xl:hidden">
             <CollapsibleTrigger className="group flex min-h-8 w-full items-center justify-between text-sm font-medium">
               本页内容
@@ -59,10 +80,13 @@ export function Docs({
             </CollapsibleContent>
           </Collapsible>
         ) : null}
-        <div
-          className="text-base leading-[1.8] wrap-anywhere [&_a]:underline [&_a]:underline-offset-4 [&_a:hover]:text-muted-foreground [&_blockquote]:my-5 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground [&_code]:font-mono [&_code]:text-sm [&_h2]:mt-10 [&_h2]:mb-4 [&_h2]:scroll-mt-6 [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:mt-7 [&_h3]:mb-3 [&_h3]:scroll-mt-6 [&_h3]:text-base [&_h3]:font-semibold [&_li]:my-2 [&_ol]:my-4 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-4 [&_pre]:my-5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted [&_pre]:p-4 [&_pre]:text-sm [&_pre]:leading-6 [&_pre]:[overflow-wrap:normal] [&_ul]:my-4 [&_ul]:list-disc [&_ul]:pl-6 [&_img]:my-5 [&_img]:h-auto [&_img]:max-w-full [&_img]:rounded-lg [&_.doc-table]:my-5 [&_.doc-table]:overflow-x-auto [&_table]:w-full [&_table]:border-collapse [&_table]:text-sm [&_th]:border-b [&_th]:border-border [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:font-semibold [&_td]:min-w-32 [&_td]:border-b [&_td]:border-border [&_td]:px-3 [&_td]:py-3 [&_td]:align-top [&_.doc-screenshot]:my-6 [&_.doc-screenshot]:block [&_.doc-screenshot]:cursor-zoom-in [&_.doc-screenshot]:rounded-lg [&_.doc-screenshot]:no-underline [&_.doc-screenshot:focus-visible]:outline-2 [&_.doc-screenshot:focus-visible]:outline-offset-4 [&_.doc-screenshot:focus-visible]:outline-ring [&_.doc-screenshot_img]:my-0 [&_.doc-screenshot_img]:border [&_.doc-screenshot_img]:border-border"
-          dangerouslySetInnerHTML={{ __html: content.html }}
-        />
+        <div className="text-base leading-[1.8] wrap-anywhere [&_a]:underline [&_a]:underline-offset-4 [&_a:hover]:text-muted-foreground [&_blockquote]:my-5 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground [&_code]:font-mono [&_code]:text-sm [&_h2]:mt-10 [&_h2]:mb-4 [&_h2]:scroll-mt-6 [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:mt-7 [&_h3]:mb-3 [&_h3]:scroll-mt-6 [&_h3]:text-base [&_h3]:font-semibold [&_li]:my-2 [&_ol]:my-4 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-4 [&_pre]:my-5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted [&_pre]:p-4 [&_pre]:text-sm [&_pre]:leading-6 [&_pre]:[overflow-wrap:normal] [&_ul]:my-4 [&_ul]:list-disc [&_ul]:pl-6 [&_img]:my-5 [&_img]:h-auto [&_img]:max-w-full [&_img]:rounded-lg [&_.doc-table]:my-5 [&_.doc-table]:overflow-x-auto [&_table]:w-full [&_table]:border-collapse [&_table]:text-sm [&_th]:border-b [&_th]:border-border [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:font-semibold [&_td]:min-w-32 [&_td]:border-b [&_td]:border-border [&_td]:px-3 [&_td]:py-3 [&_td]:align-top [&_.doc-screenshot]:my-6 [&_.doc-screenshot]:block [&_.doc-screenshot]:cursor-zoom-in [&_.doc-screenshot]:rounded-lg [&_.doc-screenshot]:no-underline [&_.doc-screenshot:focus-visible]:outline-2 [&_.doc-screenshot:focus-visible]:outline-offset-4 [&_.doc-screenshot:focus-visible]:outline-ring [&_.doc-screenshot_img]:my-0 [&_.doc-screenshot_img]:border [&_.doc-screenshot_img]:border-border">
+          {Guide ? (
+            <Guide html={content.html} />
+          ) : (
+            <div dangerouslySetInnerHTML={{ __html: content.html }} />
+          )}
+        </div>
         <nav
           aria-label="相邻文档"
           className="mt-12 flex items-start justify-between gap-6 border-t border-border pt-6 text-sm"

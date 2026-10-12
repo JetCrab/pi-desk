@@ -1,0 +1,60 @@
+.host {
+  --git-added: #16803c;
+  --git-modified: #216bcc;
+  --git-deleted: #d12c38;
+}
+
+:global(.dark) .host {
+  --git-added: #59c77b;
+  --git-modified: #6aabff;
+  --git-deleted: #ff757f;
+}
+
+.added,
+.modified,
+.deletedBefore,
+.deletedAfter {
+  /* 实际移动命中区，保持点击相对元素左缘小于 4px，避免触发 Monaco 折叠。 */
+  margin-left: 8px;
+  width: 4px !important;
+  z-index: 1;
+  cursor: pointer;
+}
+
+.added::before,
+.modified::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  content: '';
+}
+
+.added::before {
+  background: var(--git-added);
+}
+
+.modified::before {
+  background: var(--git-modified);
+}
+
+.deletedBefore::before,
+.deletedAfter::before {
+  position: absolute;
+  left: 0;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 4px solid var(--git-deleted);
+  content: '';
+}
+
+.deletedBefore::before {
+  top: -3px;
+}
+
+.deletedAfter::before {
+  bottom: -3px;
+}

@@ -1,0 +1,192 @@
+.chatMessages {
+  position: absolute;
+  inset: 54px 0 128px;
+  overflow-y: auto;
+}
+.chatMessages[data-returned='true'] {
+  bottom: 96px;
+}
+.agentCard {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  font-size: 12px;
+}
+.cardHeader {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 7px;
+  padding: 9px 10px 0;
+}
+.cardHeader > strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.role {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.cardHeader small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.cardStatus {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.cardTitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  padding: 5px 10px 9px 33px;
+  font-weight: 500;
+}
+.cardTitle small {
+  color: var(--muted-foreground);
+  font-family: monospace;
+  font-size: 10px;
+  font-weight: 400;
+}
+.returnHeader {
+  display: block;
+  position: relative;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.returnResult {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+.returnResult > strong,
+.childConclusion > strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.result {
+  display: grid;
+  gap: 5px;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.result code {
+  font-size: 11px;
+}
+.mainReply {
+  font-size: 13px;
+}
+.interruptLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.childConversation {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex: 1;
+  min-height: 0;
+  gap: 14px;
+  padding: 14px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+.processLabel {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.childRequest {
+  align-self: flex-end;
+  max-width: 94%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--muted);
+  font-size: 12px;
+}
+.searching {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.toolSteps {
+  display: grid;
+  gap: 8px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  font-size: 12px;
+}
+.toolSteps > span {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  overflow-wrap: anywhere;
+}
+.toolSteps code {
+  font-size: 11px;
+}
+.childObservation {
+  font-size: 12px;
+}
+.childConclusion {
+  width: 100%;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.childConversation[data-highlighted='true'] {
+  background: var(--muted);
+  box-shadow: inset 3px 0 var(--foreground);
+}
+.agentCard[data-highlighted='true'] {
+  outline: 2px solid var(--foreground);
+  outline-offset: 2px;
+}
+.returnPointer {
+  position: absolute;
+  top: 27px;
+  right: 25%;
+  fill: var(--foreground);
+  stroke: var(--background);
+  stroke-width: 1.3px;
+  pointer-events: none;
+}
+[data-running='true'] .returnPointer {
+  animation: result-in 450ms ease-out both;
+}
+@keyframes result-in {
+  from {
+    opacity: 0;
+    transform: translate(24px, 16px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-running='true'] .returnPointer {
+    animation: none;
+  }
+}

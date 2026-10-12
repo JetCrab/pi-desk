@@ -1,0 +1,495 @@
+.sidebarShortcuts {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: 6px;
+  margin-top: auto;
+  padding: 6px 2px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.sidebarShortcuts > span,
+.sidebarShortcuts > button {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  min-width: 40px;
+  min-height: 48px;
+  padding: 6px;
+  border-radius: 6px;
+}
+.sidebarShortcuts > button,
+.moreButton {
+  cursor: pointer;
+}
+.sidebarShortcuts > button[data-highlighted='true'],
+.moreButton[data-highlighted='true'],
+.rangeControls > button[data-highlighted='true'],
+.modelRow[data-highlighted='true'],
+.expandedSession[data-highlighted='true'] {
+  outline: 2px solid var(--foreground);
+  outline-offset: 2px;
+}
+.shortcutPointer,
+.morePointer {
+  position: absolute;
+  z-index: 3;
+  fill: var(--foreground);
+  stroke: var(--background);
+  stroke-width: 1.3px;
+  pointer-events: none;
+}
+.shortcutPointer {
+  top: 26px;
+  left: 25px;
+}
+.morePointer {
+  top: 20px;
+  left: 16px;
+}
+[data-running='true'] .shortcutPointer,
+[data-running='true'] .morePointer {
+  animation: pointer-in 450ms ease-out both;
+}
+.moreButton {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+}
+.moreMenu {
+  position: absolute;
+  z-index: 2;
+  left: 14px;
+  bottom: 54px;
+  display: grid;
+  gap: 2px;
+  width: 188px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--popover);
+  box-shadow: 0 8px 28px #00000014;
+  font-size: 12px;
+}
+.moreMenu > small {
+  padding: 3px 8px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.moreMenu > span,
+.moreMenu > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.moreMenu > button {
+  background: var(--accent);
+  cursor: pointer;
+}
+.overlay {
+  position: absolute;
+  inset: 26px 0 0;
+  background: color-mix(in srgb, var(--background) 75%, transparent);
+}
+.panel {
+  position: absolute;
+  inset: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+  box-shadow: 0 8px 28px #00000014;
+  animation: panel-in 150ms ease-out;
+}
+.panelHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.panelHeader > strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.panelHeader > span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.panelHeader > button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  margin-left: auto;
+  cursor: pointer;
+}
+.overviewBody,
+.analysisBody {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 10px;
+  padding: 12px;
+  overflow-y: auto;
+}
+.overviewBody > *,
+.analysisBody > * {
+  flex-shrink: 0;
+}
+.rangeControls,
+.analysisTabs,
+.metricControls,
+.sourceFilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+.rangeControls > button,
+.rangeControls > span,
+.analysisTabs > button,
+.metricControls > span,
+.sourceFilters > span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 3px 7px;
+  border-radius: 6px;
+}
+.rangeControls > button,
+.analysisTabs > button {
+  cursor: pointer;
+}
+.rangeControls > button[aria-pressed='true'],
+.analysisTabs > button[aria-pressed='true'],
+.metricControls > span[data-active='true'],
+.sourceFilters > span[data-active='true'] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.rangeControls > span,
+.metricControls > span,
+.sourceFilters > span {
+  color: var(--muted-foreground);
+}
+.rangeControls > small,
+.analysisTabs > span {
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.kpis,
+.analysisKpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.kpis > div,
+.analysisKpis > div {
+  display: grid;
+  gap: 3px;
+  padding-left: 9px;
+  border-left: 1px solid var(--border);
+}
+.kpis strong,
+.analysisKpis strong {
+  font-size: 19px;
+  line-height: 1.4;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.kpis span,
+.analysisKpis span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.secondary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.secondary > span {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--muted);
+}
+.trendPanel,
+.analysisTrend {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.trendPanel > strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.trendPanel svg {
+  height: 75px;
+}
+.calendar {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+.calendar > div {
+  display: grid;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--muted);
+  font-size: 10px;
+}
+.calendar strong {
+  font-size: 11px;
+  font-weight: 500;
+}
+.calendar > div[data-peak='true'] {
+  background: var(--accent);
+}
+.overviewLower {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.sessionSection,
+.modelSection {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+}
+.sessionSection > strong,
+.modelSection > strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.sessionRow {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: 11px;
+}
+button.sessionRow {
+  cursor: pointer;
+}
+.sessionRow > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sessionRow strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.sessionRow > span:nth-child(2),
+.sessionRow > small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.modelRow {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+button.modelRow {
+  cursor: pointer;
+}
+.modelRow > strong {
+  font-size: 11px;
+  font-weight: 500;
+}
+.modelRow > span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.modelRow[data-selected='true'] {
+  background: var(--accent);
+}
+.expandedSession {
+  padding: 10px;
+  border-radius: 6px;
+}
+.agentBreakdown {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0;
+}
+.agentBreakdown > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border);
+}
+.agentBreakdown strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.agentBreakdown span,
+.agentBreakdown small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.agentBreakdown small {
+  grid-column: 1 / -1;
+}
+.analysisTabs {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.analysisKpis {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.analysisTrend svg {
+  height: 90px;
+}
+.totalsStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+}
+.totalsStrip > span {
+  color: var(--muted-foreground);
+}
+.totalsStrip > strong {
+  font-weight: 500;
+}
+.scopeNote {
+  display: block;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.agentTable {
+  display: grid;
+  gap: 0;
+}
+.agentTable > div:not(.share) {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(0, 0.6fr));
+  gap: 10px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.agentTable > .tableHead {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.agentTable strong {
+  font-weight: 500;
+}
+.agentTable > div > span:first-child {
+  display: grid;
+  gap: 3px;
+}
+.agentTable small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.share {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding-block: 16px;
+  font-size: 11px;
+}
+.share > div {
+  display: flex;
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 3px;
+}
+.share i:first-child {
+  width: 60%;
+  background: var(--foreground);
+}
+.share i:last-child {
+  width: 40%;
+  background: var(--muted-foreground);
+}
+.events {
+  display: grid;
+}
+.events > div {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.events > div > span:nth-child(2) {
+  display: grid;
+  gap: 4px;
+}
+.events strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.events small,
+.eventTime {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.events > .scopeNote {
+  margin-top: 12px;
+}
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes pointer-in {
+  from {
+    opacity: 0;
+    transform: translate(24px, 16px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel,
+  [data-running='true'] .shortcutPointer,
+  [data-running='true'] .morePointer {
+    animation: none;
+  }
+}

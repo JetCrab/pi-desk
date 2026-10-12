@@ -1,0 +1,198 @@
+.effect,
+.principle,
+.config {
+  margin: 24px 0;
+  color: var(--foreground);
+  line-height: 1.6;
+}
+.effect {
+  margin-top: 0;
+  padding-top: 18px;
+  border-block: 1px solid var(--border);
+}
+.title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.title > span,
+.note {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 400;
+}
+.effectBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 24px;
+  margin-top: 20px;
+}
+.windowExample,
+.balanceExample {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--muted);
+}
+.windowExample > strong,
+.balanceExample > strong:first-child {
+  font-size: 14px;
+  font-weight: 500;
+}
+.windowExample > div:not(.progress) {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.windowExample > div > span,
+.windowExample > span,
+.balanceExample > span {
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.windowExample > div > strong,
+.balanceExample .balance {
+  font-size: 26px;
+  line-height: 1.4;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.windowExample small,
+.balanceExample small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.progress {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--border);
+}
+.progress > span {
+  display: block;
+  height: 100%;
+  background: var(--foreground);
+}
+.note {
+  padding-block: 14px;
+  font-size: 13px;
+}
+.principle {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 18px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--muted);
+}
+.principle > div {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  text-align: center;
+}
+.principle strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.principle span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.principle > svg {
+  color: var(--muted-foreground);
+}
+.config {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.config .title {
+  padding: 14px 16px;
+  background: var(--muted);
+}
+.channel {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border-block: 1px solid var(--border);
+}
+.channel > span,
+.channel > small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.channel > strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.sourceForm {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+.field {
+  display: grid;
+  gap: 6px;
+}
+.field > span {
+  font-size: 14px;
+  font-weight: 500;
+}
+.field > div {
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--input);
+  border-radius: 6px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.field code {
+  font-size: 13px;
+}
+.field > small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.enabled {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  font-size: 14px;
+}
+.enabled > span {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.config .note {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+@media (max-width: 640px) {
+  .effectBody {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  .principle {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+  .principle strong {
+    font-size: 13px;
+  }
+}
