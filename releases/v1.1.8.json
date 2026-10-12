@@ -1,0 +1,100 @@
+{
+  "tag": "v1.1.8",
+  "date": 1791769261334,
+  "source": {
+    "base": "2c723842494b0b5e3d1341fcc2d6f81212f4d1ef",
+    "head": "b71c631c5258d3f91e9ec2cf7a9f4fa567fbcd4f"
+  },
+  "packages": [
+    {
+      "name": "@jetcrab/pi-desk-sdk",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk",
+      "version": "1.1.8"
+    },
+    {
+      "name": "@jetcrab/pi-desk-bg-run",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-ctx",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-deliverables",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-quota-viewer",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-remote-debug",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-subagent",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tibo-monitor",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tool-reason",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@jetcrab/pi-desk-usage",
+      "version": "1.1.1"
+    }
+  ],
+  "clients": [
+    {
+      "platform": "windows",
+      "version": "1.1.8",
+      "file": "PiDesk-Windows-x86-Setup.exe",
+      "sha256": "99460c76b62e32dc2d23bebbbaaf4edbee6032a84d1897fed623f007a21b92e8"
+    },
+    {
+      "platform": "macos",
+      "version": "1.1.8",
+      "file": "PiDesk-macOS-universal.dmg",
+      "sha256": "1a468249440a1806371c803f2e2a1bdcfa2ea94ab7a57dfd70ab70f7e3bd195c"
+    },
+    {
+      "platform": "linux",
+      "version": "1.1.8",
+      "file": "PiDesk-Linux-x86_64.AppImage",
+      "sha256": "724f33b0588be32d336de29c5f3a675ea38c305969a74defb4069f9111420dc8"
+    },
+    {
+      "platform": "android",
+      "version": "1.1.0",
+      "file": "PiDesk-Android.apk",
+      "sha256": "298cb6eef6229dbe7d39666f3cc74104ef0f88177ce90bd3361e76aa5d199972"
+    }
+  ],
+  "changes": {
+    "added": [
+      "Added Chinese usage guides and interactive demos for nine plugins, linked from the plugin documentation."
+    ],
+    "breaking": [],
+    "changed": [
+      "Desktop setup now prioritizes Node.js/npm available to the application and lets you select an existing Node.js installation or its bin directory before downloading an environment.",
+      "Desktop environment download errors now distinguish connection, timeout, and data-transfer failures and suggest recovery options.",
+      "Moved Pi Desk documentation and the local application example from docs/pi-desk/ to docs/.",
+      "Diff views now show whitespace-only changes."
+    ],
+    "features": [
+      "Project file previews now include Git status in file tabs, line-level change markers, previous/next change navigation, and direct access to the corresponding diff."
+    ],
+    "fixed": [
+      "Fixed chat positioning when returning to a conversation or browser tab: reading positions are preserved while a response is running, and the latest exchange is restored after it finishes.",
+      "Fixed Escape dismissal of hover cards so their triggers no longer retain keyboard focus."
+    ],
+    "removed": []
+  }
+}
