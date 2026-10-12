@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { parse } from 'yaml'
+import { readWorkflow } from './fixtures/l4-workflow-test-runtime.mjs'
 import { syncRelease } from '../apps/website/scripts/sync-release.mjs'
 import { deploymentConfig, websiteDeployScript } from '../.github/scripts/deploy-website.mjs'
 import { normalizeStaticSegments, verifyWebsite } from '../.github/scripts/build-website.mjs'
@@ -218,40 +218,43 @@ test('官网部署配置只允许限定应用目录与HTTPS入口', () => {
 })
 
 test('主发布把模型和部署凭据分开，不开放PR特权入口', async () => {
-  const main = await readFile(
-    new URL('../.github/workflows/release-main.yml', import.meta.url),
-    'utf8'
-  )
-  const dev = await readFile(
-    new URL('../.github/workflows/release-dev.yml', import.meta.url),
-    'utf8'
-  )
-  assert.match(main, /branches: \[main\]/)
-  assert.doesNotMatch(main, /pull_request_target|secrets: inherit|environment:\s*production/)
-  const modelStep = main.slice(main.indexOf('name: 作者和审核者'), main.indexOf('name: 固定已核验'))
-  assert.match(modelStep, /RELEASE_MODEL_API_KEY/)
-  assert.doesNotMatch(modelStep, /GH_TOKEN|WEBSITE_SSH|ANDROID_.*PASSWORD/)
-  const workflow = parse(dev)
-  assert.equal(workflow.permissions.contents, 'read')
-  const writers = Object.entries(workflow.jobs).filter(
-    ([, job]) => job.permissions?.contents === 'write'
-  )
-  assert.deepEqual(writers.map(([name]) => name).sort(), ['npm-artifacts', 'plan', 'result'])
-  for (const [name, job] of writers) {
-    const checkout = job.steps.find((step) => step.uses?.startsWith('actions/checkout@'))
-    assert.equal(checkout.with['persist-credentials'], false)
-    assert.ok(
-      job.steps.some(
-        (step) =>
-          step.run ===
-          {
-            plan: 'node .github/scripts/release-dev.mjs prepare',
-            result: 'node .github/scripts/release-dev.mjs complete',
-            'npm-artifacts': 'node .github/scripts/release-dev-reuse.mjs record'
-          }[name]
-      )
+  const main = await readWorkflow('release-main')
+  const dev = await readWorkflow('release-dev')
+  assert.deepEqual(main.on.push.branches, ['main'])
+  assert.equal(Object.hasOwn(main.on, 'pull_request_target'), false)
+  for (const job of Object.values(main.jobs)) {
+    assert.notEqual(job.secrets, 'inherit')
+    assert.notEqual(
+      typeof job.environment === 'object' ? job.environment.name : job.environment,
+      'production'
     )
   }
-  assert.doesNotMatch(dev, /WEBSITE_SSH|RELEASE_MODEL_API_KEY|upload_server: true|distribute: true/)
-  assert.match(dev, /NPM_TOKEN: \$\{\{ secrets.NPM_TOKEN \}\}/)
+  const modelStep = main.jobs.notes.steps.find((step) => step.env?.RELEASE_MODEL_API_KEY)
+  assert.ok(modelStep)
+  for (const key of Object.keys(modelStep.env))
+    assert.doesNotMatch(key, /^(?:GH_TOKEN|WEBSITE_SSH|ANDROID_.*PASSWORD)/)
+  assert.equal(dev.permissions.contents, 'read')
+  const writers = Object.entries(dev.jobs).filter(
+    ([, job]) => job.permissions?.contents === 'write'
+  )
+  const commands = [
+    /release-dev\.mjs\s+prepare\b/,
+    /release-dev\.mjs\s+complete\b/,
+    /release-dev-reuse\.mjs\s+record\b/
+  ]
+  for (const command of commands)
+    assert.ok(writers.some(([, job]) => job.steps?.some((step) => command.test(step.run ?? ''))))
+  for (const [, job] of writers) {
+    const checkout = job.steps.find((step) => step.uses?.startsWith('actions/checkout@'))
+    assert.equal(checkout.with['persist-credentials'], false)
+    assert.ok(job.steps.some((step) => commands.some((command) => command.test(step.run ?? ''))))
+  }
+  assert.doesNotMatch(JSON.stringify(dev), /WEBSITE_SSH|RELEASE_MODEL_API_KEY/)
+  for (const job of Object.values(dev.jobs)) {
+    assert.notEqual(job.with?.upload_server, true)
+    assert.notEqual(job.with?.distribute, true)
+  }
+  assert.ok(
+    Object.values(dev.jobs).some((job) => job.secrets?.NPM_TOKEN === '${{ secrets.NPM_TOKEN }}')
+  )
 })

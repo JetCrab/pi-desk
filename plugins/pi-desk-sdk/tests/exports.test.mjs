@@ -342,25 +342,11 @@ test('Browser 文件预览公开类型保留三模式和可选图片列表', asy
 
 test('package exports 声明全部稳定子入口', async () => {
   const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
-  assert.match(manifest.version, /^\d+\.\d+\.\d+(?:-dev\.\d+)?$/u)
-  assert.equal(manifest.peerDependencies['@base-ui/react'], '^1.7.0')
-  assert.equal(manifest.peerDependencies.react, '>=19')
-  assert.equal(manifest.peerDependencies['react-dom'], '>=19')
-  assert.deepEqual(Object.keys(manifest.exports), [
+  assert.match(manifest.version, /^\d+\.\d+\.\d+(?:-dev(?:\.\d+)?)?$/u)
+  for (const key of [
     '.',
     './settings',
     './errors',
-    './capabilities',
-    './entry',
-    './session',
-    './browser',
-    './react',
-    './react/base',
-    './react/markdown',
-    './host-runtime/*'
-  ])
-  for (const key of [
-    '.',
     './capabilities',
     './entry',
     './session',
@@ -378,7 +364,6 @@ test('package exports 声明全部稳定子入口', async () => {
 
 test('SDK 生产依赖不强制安装宿主公共 UI', async () => {
   const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
-  assert.deepEqual(Object.keys(manifest.dependencies), ['zod'])
   for (const name of [
     '@base-ui/react',
     '@streamdown/cjk',

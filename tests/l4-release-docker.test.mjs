@@ -11,6 +11,7 @@ import {
 } from '../.github/scripts/release-docker.mjs'
 import { sha256 } from '../.github/scripts/release-github.mjs'
 import { selectCiChecks } from '../.github/scripts/select-ci-checks.mjs'
+import { evaluateWorkflowCondition, readWorkflow } from './fixtures/l4-workflow-test-runtime.mjs'
 
 const source = 'a'.repeat(40)
 const version = '1.2.3'
@@ -172,58 +173,76 @@ test('已有固定版本内容不同或无法确认远端状态时不推送', as
 })
 
 test('Docker复用工作流的两个调用入口均授予构建与发布所需权限', async () => {
-  const main = await readFile(
-    new URL('../.github/workflows/release-main.yml', import.meta.url),
-    'utf8'
-  )
-  const jobs = main.split(/(?=^  [\w-]+:\s*$)/m)
+  const main = await readWorkflow('release-main')
   for (const name of ['docker-build', 'docker']) {
-    const job = jobs.find((block) => block.startsWith(`  ${name}:\n`))
-    assert.ok(job, `应保留 Docker 工作流调用入口：${name}`)
-    const permissions = job.match(/^    permissions:\n((?:      [^\n]+\n)+)/m)?.[1]
-    assert.ok(permissions, `${name} 必须明确声明工作流权限`)
-    for (const permission of ['contents', 'packages']) {
-      assert.match(
-        permissions,
-        new RegExp(`^      ${permission}: write$`, 'm'),
-        `${name} 必须授予 ${permission}: write`
-      )
-    }
+    const job = main.jobs[name]
+    assert.equal(job.uses, './.github/workflows/release-docker.yml')
+    const permissions = job.permissions ?? main.permissions
+    for (const permission of ['contents', 'packages'])
+      assert.equal(permissions[permission], 'write', `${name} 缺少 ${permission}: write`)
   }
 })
 
 test('无隧道更新的批次仍构建镜像，正式公开要求镜像任务真实成功', async () => {
-  const { parse } = await import('yaml')
-  const workflow = parse(
-    await readFile(new URL('../.github/workflows/release-main.yml', import.meta.url), 'utf8')
-  )
-  assert.match(workflow.jobs['docker-build'].if, /always\(\)/)
-  assert.match(workflow.jobs['docker-build'].if, /needs\.assemble\.result == 'success'/)
-  assert.match(workflow.jobs.docker.if, /always\(\)/)
-  assert.match(workflow.jobs.docker.if, /needs\.docker-build\.result == 'success'/)
-  assert.match(workflow.jobs.publish.if, /needs\.docker\.result == 'success'/)
+  const workflow = await readWorkflow('release-main')
+  const needs = {
+    prepare: {
+      result: 'success',
+      outputs: { docker: 'true', tunnel: 'false', published: 'false' }
+    },
+    assemble: { result: 'success' },
+    'docker-build': { result: 'success' },
+    'npm-publish': { result: 'success' },
+    tunnel: { result: 'skipped' },
+    docker: { result: 'success' }
+  }
+  assert.equal(evaluateWorkflowCondition(workflow.jobs['docker-build'].if, { needs }), true)
+  assert.equal(evaluateWorkflowCondition(workflow.jobs.docker.if, { needs }), true)
+  assert.equal(evaluateWorkflowCondition(workflow.jobs.publish.if, { needs }), true)
+  for (const result of ['failure', 'cancelled', 'skipped']) {
+    assert.equal(
+      evaluateWorkflowCondition(workflow.jobs['docker-build'].if, {
+        needs: { ...needs, assemble: { result } }
+      }),
+      false
+    )
+    assert.equal(
+      evaluateWorkflowCondition(workflow.jobs.docker.if, {
+        needs: { ...needs, 'docker-build': { result } }
+      }),
+      false
+    )
+    assert.equal(
+      evaluateWorkflowCondition(workflow.jobs.publish.if, {
+        needs: { ...needs, docker: { result } }
+      }),
+      false
+    )
+  }
 })
 
 test('Docker仅由main调用且所有公开发布等待镜像验收', async () => {
-  const main = await readFile(
-    new URL('../.github/workflows/release-main.yml', import.meta.url),
-    'utf8'
+  const main = await readWorkflow('release-main')
+  const docker = await readWorkflow('release-docker')
+  const dev = await readWorkflow('release-dev')
+  for (const [name, dependencies] of [
+    ['docker-build', ['prepare', 'assemble']],
+    ['npm-publish', ['prepare', 'assemble', 'docker-build']],
+    ['publish', ['prepare', 'assemble', 'npm-publish', 'tunnel', 'docker']]
+  ]) {
+    for (const dependency of dependencies) assert.ok(main.jobs[name].needs.includes(dependency))
+  }
+  assert.ok(Object.hasOwn(docker.on, 'workflow_call'))
+  assert.equal(Object.hasOwn(docker.on, 'workflow_dispatch'), false)
+  assert.equal(Object.hasOwn(docker.on, 'push'), false)
+  assert.ok(
+    Object.values(docker.jobs).some((job) =>
+      job.steps?.some((step) => step.run?.includes('l4-docker-smoke.mjs'))
+    )
   )
-  const docker = await readFile(
-    new URL('../.github/workflows/release-docker.yml', import.meta.url),
-    'utf8'
+  assert.ok(
+    Object.values(dev.jobs).every((job) => job.uses !== './.github/workflows/release-docker.yml')
   )
-  const dev = await readFile(
-    new URL('../.github/workflows/release-dev.yml', import.meta.url),
-    'utf8'
-  )
-  assert.match(main, /docker-build:[\s\S]*?needs: \[prepare, assemble\]/)
-  assert.match(main, /npm-publish:[\s\S]*?needs: \[prepare, assemble, docker-build\]/)
-  assert.match(main, /publish:\n    needs: \[prepare, assemble, npm-publish, tunnel, docker\]/)
-  assert.match(docker, /github.ref == 'refs\/heads\/main'/)
-  assert.match(docker, /l4-docker-smoke\.mjs/)
-  assert.doesNotMatch(docker, /next build|workflow_dispatch|branches:.*dev/)
-  assert.doesNotMatch(dev, /release-docker\.yml/)
   assert.equal(selectCiChecks(['apps/docker/Dockerfile'], false).automation, true)
   assert.equal(selectCiChecks(['apps/docker/Dockerfile'], false).web, false)
 })

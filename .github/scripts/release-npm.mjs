@@ -302,12 +302,8 @@ async function prepare(entries, output) {
     }
   }
   if (full) {
-    await stage('test 发布边界', () =>
-      runAsync(process.execPath, [
-        '--test',
-        'tests/l4-public-boundary.test.mjs',
-        'tests/l4-release-npm.test.mjs'
-      ])
+    await stage('test npm 发布回归', () =>
+      runAsync(process.execPath, ['--test', 'tests/l4-release-npm.test.mjs'])
     )
   }
   await runPackageTasks(

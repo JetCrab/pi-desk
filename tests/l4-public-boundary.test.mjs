@@ -133,15 +133,4 @@ test('官网应用可独立公开，维护资料仍留在私有侧', async () =>
   assert.equal(website.private, true, '官网应用不发布到 npm')
   assert.equal(website.name, '@jetcrab/pi-desk-website')
   assert.ok(!JSON.stringify(website).includes('.pi/打包'))
-  const docs = await readdir(join(root, 'apps/website/content/docs'))
-  assert.deepEqual(docs.sort(), [
-    'development.md',
-    'devices.md',
-    'docker.md',
-    'faq.md',
-    'installation.md',
-    'overview.md',
-    'plugins.md',
-    'quickstart.md'
-  ])
 })

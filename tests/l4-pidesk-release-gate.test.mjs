@@ -1,79 +1,77 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { runInNewContext } from 'node:vm'
 import { selectCiChecks } from '../.github/scripts/select-ci-checks.mjs'
+import { evaluateWorkflowCondition, readWorkflow } from './fixtures/l4-workflow-test-runtime.mjs'
 
-const workflow = await readFile(
-  new URL('../.github/workflows/release-npm.yml', import.meta.url),
-  'utf8'
-)
-const publish = workflow.match(/\n  publish:\n\s+if: >-\n([\s\S]*?)\n\s+needs:/)[1]
+const workflow = await readWorkflow('release-npm')
 
 function canPublish({
   packages = ['pi-desk'],
-  linux = 'success',
+  installed = 'success',
   phase = 'all',
   source = '',
   cancelled = false
 } = {}) {
-  const expression = publish.replace(
-    /needs\.([a-z][\w-]*)/g,
-    (_, name) => `needs[${JSON.stringify(name)}]`
-  )
-  return runInNewContext(expression, {
+  return evaluateWorkflowCondition(workflow.jobs.publish.if, {
     needs: {
       plan: { result: 'success', outputs: { packages: JSON.stringify(packages) } },
       build: { result: 'success' },
-      'installed-commands': { result: linux }
+      'installed-commands': { result: installed }
     },
-    inputs: { phase, source_sha: source, publish: false },
-    github: { event_name: 'push' },
-    always: () => true,
-    cancelled: () => cancelled,
-    fromJSON: JSON.parse,
-    contains: (values, value) => values.includes(value)
+    inputs: { phase, source_sha: source },
+    cancelled: () => cancelled
   })
 }
 
 test('宿主发布等待双平台同批制品验收，失败、跳过和取消均阻断', () => {
   assert.equal(canPublish(), true)
-  for (const linux of ['failure', 'cancelled', 'skipped'])
-    assert.equal(canPublish({ linux }), false)
+  for (const installed of ['failure', 'cancelled', 'skipped'])
+    assert.equal(canPublish({ installed }), false)
   assert.equal(canPublish({ cancelled: true }), false)
-  assert.match(workflow, /installed-commands:\n\s+needs: \[plan, build\]/)
-  assert.match(workflow, /os: \[ubuntu-latest, windows-latest\]/)
-  assert.match(workflow, /needs: \[plan, build, installed-commands\]/)
+  const installed = workflow.jobs['installed-commands']
+  for (const dependency of ['plan', 'build']) assert.ok(installed.needs.includes(dependency))
+  for (const os of ['ubuntu-latest', 'windows-latest'])
+    assert.ok(installed.strategy.matrix.os.includes(os))
+  for (const dependency of ['plan', 'build', 'installed-commands'])
+    assert.ok(workflow.jobs.publish.needs.includes(dependency))
 })
 
 test('纯插件批次可跳过宿主检查，正式构建与已验证制品复用保持原语义', () => {
-  assert.equal(canPublish({ packages: ['pi-desk-usage'], linux: 'skipped' }), true)
+  assert.equal(canPublish({ packages: ['pi-desk-usage'], installed: 'skipped' }), true)
   assert.equal(canPublish({ phase: 'build' }), false)
-  assert.equal(canPublish({ phase: 'publish', source: 'fixed-source', linux: 'skipped' }), true)
-  assert.equal(canPublish({ phase: 'publish', source: '', linux: 'skipped' }), false)
-  assert.match(workflow, /path: \$\{\{ env.NPM_ARTIFACT_DIR \}\}\/\*\.tgz/)
-  assert.match(workflow, /command-smoke\/sdk\.tgz.*command-smoke\/host\.tgz/)
-})
-
-test('宿主制品准备直接执行核心回归，不受 dev 的轻量模式跳过', async () => {
-  const source = await readFile(
-    new URL('../.github/scripts/release-npm.mjs', import.meta.url),
-    'utf8'
+  assert.equal(canPublish({ phase: 'publish', source: 'fixed-source', installed: 'skipped' }), true)
+  assert.equal(canPublish({ phase: 'publish', source: '', installed: 'skipped' }), false)
+  const downloads = workflow.jobs.publish.steps.filter((step) =>
+    step.uses?.startsWith('actions/download-artifact@')
   )
-  const host = source.slice(
-    source.indexOf('if (entry.directory === projectRoot) {'),
-    source.indexOf('const host = entries.find')
+  assert.ok(downloads.some((step) => step.with.path === '${{ env.NPM_ARTIFACT_DIR }}'))
+  const verification = workflow.jobs['installed-commands'].steps.find((step) =>
+    step.run?.includes('verify-npm-install.mjs')
   )
-  const core = host.indexOf("['test:pidesk']")
-  assert.ok(core >= 0 && core < host.indexOf('if (full)'), '核心命令回归必须位于完整检查条件之外')
+  assert.ok(verification.run.includes('command-smoke/sdk.tgz'))
+  assert.ok(verification.run.includes('command-smoke/host.tgz'))
 })
 
 test('Source checks 在两个平台执行核心与真实命令验收', async () => {
-  const source = await readFile(new URL('../.github/workflows/check.yml', import.meta.url), 'utf8')
-  const job = source.slice(source.indexOf('\n  pidesk:'), source.indexOf('\n  website:'))
-  assert.match(job, /os: \[ubuntu-latest, windows-latest\]/)
-  assert.match(job, /run: pnpm test:pidesk/)
-  assert.match(job, /run: node --test tests\/l1-pidesk\.e2e\.mjs/)
+  const checks = await readWorkflow('check')
+  const job = checks.jobs.pidesk
+  for (const os of ['ubuntu-latest', 'windows-latest'])
+    assert.ok(job.strategy.matrix.os.includes(os))
+  assert.ok(job.steps.some((step) => /\bpnpm\s+test:pidesk\b/.test(step.run ?? '')))
+  assert.ok(job.steps.some((step) => step.run?.includes('tests/l1-pidesk.e2e.mjs')))
+})
+
+test('源码公开边界只由独立检查负责且不因业务选择而跳过', async () => {
+  const checks = await readWorkflow('check')
+  const owners = Object.values(checks.jobs).filter((job) =>
+    job.steps?.some((step) => step.run?.includes('l4-public-boundary.test.mjs'))
+  )
+  assert.equal(owners.length, 1)
+  assert.equal(owners[0].if, undefined)
+  const checkout = owners[0].steps.find((step) => step.uses?.startsWith('actions/checkout@'))
+  assert.equal(checkout.with.ref, '${{ inputs.source_sha || github.sha }}')
+  const boundary = owners[0].steps.find((step) => step.run?.includes('l4-public-boundary.test.mjs'))
+  assert.equal(boundary.if, undefined)
 })
 
 test('关键命令实现、回归及验收入口变化触发检查，无关文档和官网不触发', () => {

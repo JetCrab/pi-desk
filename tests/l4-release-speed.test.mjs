@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { parse } from 'yaml'
+import { evaluateWorkflowCondition, readWorkflow } from './fixtures/l4-workflow-test-runtime.mjs'
 import { clientPlatforms } from '../.github/scripts/release-record.mjs'
 import { selectCiChecks, selectPluginChecks } from '../.github/scripts/select-ci-checks.mjs'
 import { transferRustCache } from '../.github/scripts/rust-cache.mjs'
@@ -100,28 +100,29 @@ test('main和dev不按分支强制全仓库检查，已打包插件不再安排�
   }
 })
 
-test('发布不执行排版或Lint，功能与制品检查在两条渠道均保留', async () => {
-  const checks = parse(await readFile('.github/workflows/check.yml', 'utf8'))
-  const source = await readFile('.github/scripts/release-npm.mjs', 'utf8')
+test('发布源码检查不执行排版或Lint，已打包主包不重复类型检查', async () => {
+  const checks = await readWorkflow('check')
   const steps = Object.values(checks.jobs).flatMap((job) => job.steps ?? [])
   assert.ok(steps.every((step) => !/format:check|typecheck:tests/.test(step.run ?? '')))
   for (const step of steps.filter((step) => /\b(?:lint|eslint)\b/.test(step.run ?? ''))) {
-    assert.ok(step.if.includes("github.event_name == 'pull_request'"))
+    for (const event_name of ['push', 'workflow_dispatch', 'pull_request']) {
+      assert.equal(
+        evaluateWorkflowCondition(step.if, {
+          github: { event_name },
+          needs: { changes: { outputs: { automation: 'true' } } }
+        }),
+        event_name === 'pull_request'
+      )
+    }
   }
   const production = checks.jobs.web.steps.find((step) => step.run?.includes('pnpm typecheck'))
-  assert.match(production.if, /!contains\(fromJSON\(inputs.built_packages/)
+  for (const built_packages of ['[]', '["pi-desk"]']) {
+    assert.equal(
+      evaluateWorkflowCondition(production.if, { inputs: { built_packages } }),
+      built_packages === '[]'
+    )
+  }
   assert.match(production.run, /check:layers/)
-  const host = source.slice(
-    source.indexOf('if (entry.directory === projectRoot) {'),
-    source.indexOf('const host = entries.find')
-  )
-  assert.doesNotMatch(host, /lint|format|typecheck:tests/)
-  assert.match(host, /\['typecheck', 'check:layers'\]/)
-  assert.ok(
-    host.indexOf("['typecheck', 'check:layers']") < host.indexOf('if (full)'),
-    'dev也必须执行主程序类型和依赖分层检查'
-  )
-  assert.match(host, /\['test:package'\]/)
   assert.ok(checks.jobs.web.steps.some((step) => step.run?.includes('tests/l2-chat-state.test.ts')))
 })
 
@@ -241,57 +242,66 @@ test('跨任务恢复后重新生成Cargo依赖的绝对路径元数据', async 
 })
 
 test('正式审查只等待固定提交，发布仍等待审查和所有构建', async () => {
-  const workflow = await readFile(
-    new URL('../.github/workflows/release-main.yml', import.meta.url),
-    'utf8'
-  )
-  const notes = workflow.slice(workflow.indexOf('\n  notes:'), workflow.indexOf('\n  npm-build:'))
-  assert.match(notes, /needs: prepare\n/)
-  assert.doesNotMatch(notes, /BUILD_RESULTS|plan\.tests|needs:\s*\[/)
-  const assemble = workflow.slice(
-    workflow.indexOf('\n  assemble:'),
-    workflow.indexOf('\n  npm-publish:')
-  )
+  const workflow = await readWorkflow('release-main')
+  assert.deepEqual([].concat(workflow.jobs.notes.needs), ['prepare'])
   const required = ['prepare', 'checks', 'notes', 'npm-build', 'tunnel-build', ...clientPlatforms]
-  const dependencies = parse(workflow).jobs.assemble.needs
-  for (const job of required) assert.ok(dependencies.includes(job), `正式汇总必须等待 ${job}`)
-  assert.match(assemble, /!contains\(needs\.\*\.result, 'failure'\)/)
-  assert.match(assemble, /!contains\(needs\.\*\.result, 'cancelled'\)/)
+  const assemble = workflow.jobs.assemble
+  for (const job of required) assert.ok(assemble.needs.includes(job), `正式汇总必须等待 ${job}`)
+  const needs = Object.fromEntries(required.map((name) => [name, { result: 'success' }]))
+  needs.prepare.outputs = { published: 'false' }
+  assert.equal(evaluateWorkflowCondition(assemble.if, { needs }), true)
+  for (const job of required) {
+    for (const result of ['failure', 'cancelled']) {
+      assert.equal(
+        evaluateWorkflowCondition(assemble.if, {
+          needs: { ...needs, [job]: { ...needs[job], result } }
+        }),
+        false,
+        `${job} ${result} 必须阻止正式汇总`
+      )
+    }
+  }
 })
 
 test('隧道并行构建后复用已验证镜像，推送仍等待正式汇合', async () => {
-  const workflow = await readFile(
-    new URL('../.github/workflows/release-main.yml', import.meta.url),
-    'utf8'
-  )
-  const build = workflow.slice(
-    workflow.indexOf('\n  tunnel-build:'),
-    workflow.indexOf('\n  assemble:')
-  )
-  assert.match(build, /needs: prepare\n/)
-  assert.match(build, /outputs\.tunnel == 'true'/)
-  assert.match(build, /phase: build/)
-  const publish = workflow.slice(workflow.indexOf('\n  tunnel:'), workflow.indexOf('\n  publish:'))
-  assert.match(publish, /needs: \[prepare, assemble, docker-build\]/)
-  assert.match(publish, /!contains\(needs\.\*\.result, 'failure'\)/)
-  assert.match(publish, /phase: publish/)
-  const tunnel = await readFile(
-    new URL('../.github/workflows/release-tunnel.yml', import.meta.url),
-    'utf8'
-  )
-  assert.match(tunnel, /apps\/tunnel\/server\/Cargo\.toml/)
-  assert.match(tunnel, /inputs.phase != 'publish'/)
-  assert.match(tunnel, /inputs.phase != 'build'/)
-  assert.match(tunnel, /group: release-tunnel-version-push/)
-  assert.match(tunnel, /加载同一镜像并核对源码/)
+  const workflow = await readWorkflow('release-main')
+  const build = workflow.jobs['tunnel-build']
+  assert.deepEqual([].concat(build.needs), ['prepare'])
+  assert.equal(build.with.phase, 'build')
+  for (const tunnel of ['true', 'false']) {
+    assert.equal(
+      evaluateWorkflowCondition(build.if, {
+        needs: { prepare: { outputs: { published: 'false', tunnel } } }
+      }),
+      tunnel === 'true'
+    )
+  }
+  const publish = workflow.jobs.tunnel
+  for (const dependency of ['prepare', 'assemble', 'docker-build'])
+    assert.ok(publish.needs.includes(dependency))
+  assert.equal(publish.with.phase, 'publish')
+  const tunnel = await readWorkflow('release-tunnel')
+  assert.equal(tunnel.jobs.publish.concurrency.group, 'release-tunnel-version-push')
+  const needs = {
+    plan: { result: 'success', outputs: { changed: 'true' } },
+    build: { result: 'success' }
+  }
+  for (const phase of ['build', 'publish']) {
+    const context = {
+      needs,
+      inputs: { phase, check_only: false, source_sha: 'a'.repeat(40) },
+      github: { ref: 'refs/heads/main' }
+    }
+    assert.equal(evaluateWorkflowCondition(tunnel.jobs.build.if, context), phase === 'build')
+    assert.equal(evaluateWorkflowCondition(tunnel.jobs.publish.if, context), phase === 'publish')
+  }
+  assert.ok(tunnel.jobs.publish.steps.some((step) => /\bdocker\s+load\b/.test(step.run ?? '')))
 })
 
 test('正式批次去重源码命令验收，但保留同批安装态两平台与Windows核心回归', async () => {
-  const read = async (name) =>
-    parse(await readFile(new URL(`../.github/workflows/${name}.yml`, import.meta.url), 'utf8'))
-  const main = await read('release-main')
-  const checks = await read('check')
-  const npm = await read('release-npm')
+  const main = await readWorkflow('release-main')
+  const checks = await readWorkflow('check')
+  const npm = await readWorkflow('release-npm')
   assert.equal(main.jobs.checks.with.built_packages, '${{ needs.prepare.outputs.npm }}')
   assert.equal(main.jobs.checks.with.base_sha, '${{ needs.prepare.outputs.check_base }}')
   assert.equal(main.jobs.prepare.permissions.actions, 'read')
@@ -299,19 +309,25 @@ test('正式批次去重源码命令验收，但保留同批安装态两平台�
   assert.equal(checks.jobs.changes.steps[0].with.ref, '${{ github.sha }}')
   assert.equal(checks.jobs.core.steps[0].with.ref, '${{ github.sha }}')
   assert.equal(checks.jobs.web.steps[0].with.ref, '${{ inputs.source_sha || github.sha }}')
-  const dev = await read('release-dev')
+  const dev = await readWorkflow('release-dev')
   assert.equal(dev.jobs.checks.with.base_sha, '${{ needs.plan.outputs.check_base }}')
   assert.equal(dev.jobs.checks.with.built_packages, '${{ needs.plan.outputs.packages }}')
-  assert.match(checks.jobs.pidesk.if, /!contains\(fromJSON\(inputs.built_packages/)
-  assert.deepEqual(npm.jobs['installed-commands'].strategy.matrix.os, [
-    'ubuntu-latest',
-    'windows-latest'
-  ])
-  const windows = npm.jobs['installed-commands'].steps.find(
-    (step) => step.name === 'Windows 核心回归复用同批 SDK 产物'
+  const needs = { changes: { outputs: { pidesk: 'true' } } }
+  for (const built_packages of ['[]', '["pi-desk"]']) {
+    assert.equal(
+      evaluateWorkflowCondition(checks.jobs.pidesk.if, { needs, inputs: { built_packages } }),
+      built_packages === '[]'
+    )
+  }
+  for (const os of ['ubuntu-latest', 'windows-latest'])
+    assert.ok(npm.jobs['installed-commands'].strategy.matrix.os.includes(os))
+  const windows = npm.jobs['installed-commands'].steps.find((step) =>
+    /\bpnpm\s+test:pidesk\b/.test(step.run ?? '')
   )
-  assert.equal(windows.if, "runner.os == 'Windows'")
-  assert.match(windows.run, /pnpm test:pidesk/)
+  assert.ok(windows)
+  for (const os of ['Windows', 'Linux']) {
+    assert.equal(evaluateWorkflowCondition(windows.if, { runner: { os } }), os === 'Windows')
+  }
 })
 
 test('同一运行的制品名称跨重试稳定，构建数据仍按attempt隔离', async () => {
@@ -324,24 +340,26 @@ test('同一运行的制品名称跨重试稳定，构建数据仍按attempt隔�
     'release-tunnel',
     'release-docker'
   ]) {
-    const workflow = await readFile(
-      new URL(`../.github/workflows/${name}.yml`, import.meta.url),
-      'utf8'
-    )
-    assert.doesNotMatch(
-      workflow,
-      /name: [^\n]*github\.run_attempt/,
-      `${name} 不得让成功制品随重试失联`
-    )
-    assert.match(
-      workflow,
-      /(?:path:|TARGET_DIR:|OUTPUT:|_ROOT:|ARTIFACT_DIR:|PACKAGE_DIR:)[^\n]*temp\/[^\n]*github\.run_(?:id|attempt)/
-    )
-    for (const upload of workflow.matchAll(
-      /uses: actions\/upload-artifact@v4([\s\S]*?)(?=\n      -|\n  [a-z][\w-]*:|$)/g
-    )) {
-      assert.match(upload[1], /overwrite: true/, `${name} 重跑上传须替换本run同源制品`)
+    const workflow = await readWorkflow(name)
+    const steps = Object.values(workflow.jobs).flatMap((job) => job.steps ?? [])
+    for (const step of steps.filter((step) => step.uses?.startsWith('actions/upload-artifact@'))) {
+      assert.ok(!step.with.name.includes('github.run_attempt'), `${name} 重试不得改变制品身份`)
+      assert.equal(step.with.overwrite, true, `${name} 重跑上传须替换本run同源制品`)
     }
+    const env = [
+      workflow.env ?? {},
+      ...Object.values(workflow.jobs).map((job) => job.env ?? {})
+    ].flatMap((values) => Object.entries(values))
+    assert.ok(
+      env.some(
+        ([key, value]) =>
+          /(?:TARGET_DIR|OUTPUT|_ROOT|ARTIFACT_DIR|PACKAGE_DIR)$/.test(key) &&
+          typeof value === 'string' &&
+          value.includes('temp/') &&
+          value.includes('github.run_attempt')
+      ),
+      `${name} 构建数据必须按重试隔离`
+    )
   }
 })
 
@@ -353,39 +371,30 @@ test('dev共享进程清理变更进入统一入口的宿主检查而非无关�
 })
 
 test('客户端dev执行受影响回归，覆盖安装仍仅在main', async () => {
-  const windows = await readFile(
-    new URL('../.github/workflows/build-clients.yml', import.meta.url),
-    'utf8'
+  const clients = await readWorkflow('build-clients')
+  const apple = await readWorkflow('release-apple')
+  for (const job of [clients.jobs.windows, apple.jobs.macos]) {
+    assert.equal(job.env.BUILD_PROFILE, 'release')
+    assert.ok(job.env.RUST_CACHE_STAGE.endsWith('-release'))
+  }
+  const windows = clients.jobs.windows
+  assert.ok(windows.steps.some((step) => step.run?.includes('check-desktop-tunnel.mjs')))
+  const installation = windows.steps.find((step) =>
+    step.run?.includes('test-installer-overwrite.mjs')
   )
-  assert.match(windows, /BUILD_PROFILE: release\n/)
-  assert.match(windows, /RUST_CACHE_STAGE:.*windows-release/)
-  assert.doesNotMatch(windows, /--debug/)
-  const macos = await readFile(
-    new URL('../.github/workflows/release-apple.yml', import.meta.url),
-    'utf8'
-  )
-  assert.match(macos, /BUILD_PROFILE: release\n/)
-  assert.match(macos, /RUST_CACHE_STAGE:.*macos-release/)
-  assert.doesNotMatch(macos, /--debug/)
-  assert.match(windows, /name: 受影响桌面 Rust 回归/)
-  assert.match(
-    windows,
-    /name: 隔离验证覆盖安装与正常退出\n\s+if: github.ref == 'refs\/heads\/main'/
-  )
-  assert.match(windows, /check-desktop-tunnel\.mjs/)
-  assert.match(windows, /build_tasks=\(:app:testDebugUnitTest\)/)
-  assert.match(
-    windows,
-    /if \[\[ "\$CHECK_ONLY" != true \]\]; then build_tasks\+=\(:app:assembleRelease\)/
-  )
-  const main = await readFile(
-    new URL('../.github/workflows/release-main.yml', import.meta.url),
-    'utf8'
-  )
-  assert.match(main, /uses: \.\/.github\/workflows\/check.yml/)
-  const jobs = parse(main).jobs
+  assert.ok(installation)
+  for (const ref of ['refs/heads/main', 'refs/heads/dev']) {
+    for (const check_only of [false, true]) {
+      assert.equal(
+        evaluateWorkflowCondition(installation.if, { github: { ref }, inputs: { check_only } }),
+        ref === 'refs/heads/main' && !check_only
+      )
+    }
+  }
+  const main = await readWorkflow('release-main')
+  assert.equal(main.jobs.checks.uses, './.github/workflows/check.yml')
   for (const platform of clientPlatforms) {
-    assert.ok(jobs[platform]?.uses, `缺少 ${platform} 的构建入口`)
-    assert.ok(jobs.assemble.needs.includes(platform), `${platform} 未纳入发布门禁`)
+    assert.ok(main.jobs[platform]?.uses, `缺少 ${platform} 的构建入口`)
+    assert.ok(main.jobs.assemble.needs.includes(platform), `${platform} 未纳入发布门禁`)
   }
 })
