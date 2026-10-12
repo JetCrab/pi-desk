@@ -221,6 +221,8 @@ export function L2ProjectPreviewDialog({
   const code = (
     <div className="flex size-full min-h-0 min-w-0 flex-col">
       <L3ProjectFileTabs
+        cwd={cwd}
+        gitRuntime={git}
         paths={state.tabs}
         activePath={state.activePath}
         diffPath={diffPath}
@@ -230,6 +232,7 @@ export function L2ProjectPreviewDialog({
       />
       <L3ProjectDocumentView
         runtime={files}
+        gitRuntime={git}
         compact={size.width < 1100 || narrow}
         onEscape={onClose}
       />

@@ -1,7 +1,7 @@
 'use client'
 
 import { ChevronDownIcon, ChevronUpIcon, FileCode2Icon, XIcon } from 'lucide-react'
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
@@ -13,8 +13,12 @@ import {
 } from '@client/l4_foundation/ui/shadcn/context-menu'
 import type { L3FileTabCloseScope } from './l3-project-file-runtime'
 import { L3FileContextMenuContent } from './l3-file-context-menu-content'
+import type { L3ProjectGitBrowser } from './l3-project-git-runtime'
+import { findL3GitFile, getL3GitChangeBadge, getL3GitChangeClass } from './l3-project-git-model'
 
 interface L3ProjectFileTabsProps {
+  cwd: string
+  gitRuntime: L3ProjectGitBrowser
   paths: readonly string[]
   activePath: string | null
   diffPath: string | null
@@ -39,6 +43,8 @@ function fileLabel(path: string, paths: readonly string[]): string {
 }
 
 export function L3ProjectFileTabs({
+  cwd,
+  gitRuntime,
   paths,
   activePath,
   diffPath,
@@ -47,6 +53,8 @@ export function L3ProjectFileTabs({
   onClose
 }: L3ProjectFileTabsProps): React.JSX.Element | null {
   const { t } = useTranslation('projectFiles')
+  useSyncExternalStore(gitRuntime.subscribe, gitRuntime.getRevision, gitRuntime.getRevision)
+  const snapshot = gitRuntime.getWorkspace(cwd)?.snapshot
   const rowsRef = useRef<HTMLDivElement>(null)
   const suppressTouchClickRef = useRef(false)
   const [expanded, setExpanded] = useState(false)
@@ -98,6 +106,10 @@ export function L3ProjectFileTabs({
           {tabs.map((tab, index) => {
             const clipped = !expanded && clippedIndexes.includes(index)
             const selected = tab.path === active
+            const change =
+              tab.path && snapshot?.status === 'ready'
+                ? findL3GitFile(cwd, tab.path, snapshot.repositories)?.change
+                : undefined
             const closeLabel =
               tab.path === null
                 ? t('closeDiff', { name: tab.title.split('/').at(-1) })
@@ -186,7 +198,17 @@ export function L3ProjectFileTabs({
                     }}
                   >
                     <FileCode2Icon className="size-3.5 shrink-0" />
-                    <span className="truncate">{tab.label}</span>
+                    <span className={cn('truncate', change && getL3GitChangeClass(change))}>
+                      {tab.label}
+                    </span>
+                    {change ? (
+                      <span
+                        className={cn('shrink-0 text-xs', getL3GitChangeClass(change))}
+                        aria-label={t('gitStatus', { status: getL3GitChangeBadge(change) })}
+                      >
+                        {getL3GitChangeBadge(change)}
+                      </span>
+                    ) : null}
                   </button>
                   <Button
                     variant="ghost"

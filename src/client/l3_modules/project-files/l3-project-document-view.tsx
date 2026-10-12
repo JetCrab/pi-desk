@@ -6,13 +6,21 @@ import {
   CopyIcon,
   FileCode2Icon,
   FoldVerticalIcon,
+  GitCompareArrowsIcon,
   ListOrderedIcon,
   LoaderCircleIcon,
   RefreshCwIcon,
   SearchIcon,
   WrapTextIcon
 } from 'lucide-react'
-import { useEffect, useImperativeHandle, useRef, useSyncExternalStore, type Ref } from 'react'
+import {
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type Ref
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { copyL4BrowserText } from '@client/l4_foundation/lib/l4-browser-clipboard'
 import {
@@ -25,6 +33,8 @@ import { L4ImageViewer } from '@client/l4_foundation/ui/l4-image-viewer'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import type { L3ProjectFileRuntime } from './l3-project-file-runtime'
+import type { L3ProjectGitBrowser } from './l3-project-git-runtime'
+import { useL3ProjectDocumentGit } from './l3-project-document-git'
 import { L3CodeSurfaceToolbarButton } from './l3-code-surface-toolbar-button'
 import { buildL3FilePreviewHtml } from './l3-file-preview-html'
 
@@ -38,13 +48,17 @@ export interface L3ProjectDocumentHandle {
 export function L3ProjectDocumentView({
   ref: handleRef,
   runtime,
+  gitRuntime,
   compact,
+  visible = true,
   onEscape,
   onSwitchPane
 }: {
   ref?: Ref<L3ProjectDocumentHandle>
   runtime: L3ProjectFileRuntime
+  gitRuntime: L3ProjectGitBrowser
   compact: boolean
+  visible?: boolean
   onEscape: () => void
   onSwitchPane?: () => void
 }): React.JSX.Element {
@@ -55,6 +69,7 @@ export function L3ProjectDocumentView({
   const document = !activeDiff && activePath ? runtime.state.documents.get(activePath) : null
   const isHtml = Boolean(activePath && /\.html?$/i.test(activePath))
   const showSource = document?.status === 'text' && (!isHtml || document.viewMode === 'source')
+  const hostRef = useRef<HTMLDivElement>(null)
   const previewRef = useRef<L4CodePreviewHandle>(null)
   const diffRef = useRef<L4CodeDiffHandle>(null)
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -83,6 +98,42 @@ export function L3ProjectDocumentView({
     if (activePath && previewRef.current)
       runtime.saveEditorState(activePath, previewRef.current.getViewState())
   }
+  const { refresh, unavailable } = useL3ProjectDocumentGit(
+    runtime,
+    gitRuntime,
+    hostRef,
+    savePosition,
+    visible
+  )
+  const comparison = document?.status === 'text' ? document.comparison : undefined
+  const [computed, setComputed] = useState<{
+    original: string
+    modified: string
+    count: number | null
+  } | null>(null)
+  const count =
+    comparison?.status === 'ready' &&
+    document?.status === 'text' &&
+    computed?.original === comparison.original.content &&
+    computed.modified === document.content
+      ? computed.count
+      : undefined
+  const openDiff = (line?: number): void => {
+    if (!activePath) return
+    savePosition()
+    runtime.openFileDiff(activePath, line)
+  }
+  const gitStatus =
+    unavailable || comparison?.status === 'error'
+      ? t('gitMarkersFailed')
+      : comparison?.status === 'unavailable' || (comparison?.status === 'ready' && count === null)
+        ? t('gitMarkersUnavailable')
+        : comparison?.status === 'loading' ||
+            (comparison?.status === 'ready' && count === undefined)
+          ? t('gitMarkersLoading')
+          : comparison?.status === 'ready'
+            ? t('gitChangesCount', { count })
+            : null
   const copyText = (): void => {
     if (document?.status !== 'text') return
     const selection = previewRef.current?.getSelectionText() ?? ''
@@ -93,6 +144,7 @@ export function L3ProjectDocumentView({
   }
   return (
     <div
+      ref={hostRef}
       className="flex size-full min-h-0 min-w-0 flex-col outline-none"
       tabIndex={-1}
       onFocus={(event) => {
@@ -181,6 +233,41 @@ export function L3ProjectDocumentView({
                   ))}
                 </div>
               ) : null}
+              {showSource && gitStatus ? (
+                <span
+                  data-testid="file-git-status"
+                  role="status"
+                  className="mr-auto min-w-0 truncate text-xs text-muted-foreground"
+                  title={comparison?.status === 'error' ? comparison.error : gitStatus}
+                >
+                  {compact && comparison?.status === 'ready' && typeof count === 'number'
+                    ? t('gitChangesCompact', { count })
+                    : gitStatus}
+                </span>
+              ) : null}
+              {showSource && comparison?.status === 'ready' ? (
+                <>
+                  {typeof count === 'number' && count > 0 ? (
+                    <>
+                      <L3CodeSurfaceToolbarButton
+                        label={t('previousChange')}
+                        onClick={() => previewRef.current?.previousChange()}
+                      >
+                        <ArrowUpIcon className="size-4" />
+                      </L3CodeSurfaceToolbarButton>
+                      <L3CodeSurfaceToolbarButton
+                        label={t('nextChange')}
+                        onClick={() => previewRef.current?.nextChange()}
+                      >
+                        <ArrowDownIcon className="size-4" />
+                      </L3CodeSurfaceToolbarButton>
+                    </>
+                  ) : null}
+                  <L3CodeSurfaceToolbarButton label={t('viewDiff')} onClick={() => openDiff()}>
+                    <GitCompareArrowsIcon className="size-4" />
+                  </L3CodeSurfaceToolbarButton>
+                </>
+              ) : null}
               {showSource && activePath ? (
                 <>
                   <L3CodeSurfaceToolbarButton
@@ -210,10 +297,7 @@ export function L3ProjectDocumentView({
                 </>
               ) : null}
               {activePath ? (
-                <L3CodeSurfaceToolbarButton
-                  label={t('reloadCurrentFile')}
-                  onClick={() => runtime.reloadFile(activePath)}
-                >
+                <L3CodeSurfaceToolbarButton label={t('reloadCurrentFile')} onClick={refresh}>
                   <RefreshCwIcon className="size-4" />
                 </L3CodeSurfaceToolbarButton>
               ) : null}
@@ -231,6 +315,7 @@ export function L3ProjectDocumentView({
               modified={activeDiff.modified}
               viewMode={compact ? 'inline' : diffViewMode}
               savedState={activeDiff.editorState}
+              initialLine={activeDiff.initialLine}
               onSaveState={(position) => runtime.saveDiffState(activeDiff, position)}
               onEscape={escape}
             />
@@ -302,6 +387,18 @@ export function L3ProjectDocumentView({
             path={activePath}
             content={document.content}
             size={document.size}
+            originalContent={
+              comparison?.status === 'ready' ? comparison.original.content : undefined
+            }
+            onChanges={(count) => {
+              if (comparison?.status === 'ready')
+                setComputed({
+                  original: comparison.original.content,
+                  modified: document.content,
+                  count
+                })
+            }}
+            onOpenDiff={openDiff}
             savedState={document.editorState}
             onSaveState={(path, state) => runtime.saveEditorState(path, state)}
             onEscape={escape}

@@ -9,7 +9,7 @@ import { createJiti } from 'jiti'
 
 const execute = promisify(execFile)
 const projectRoot = resolve(import.meta.dirname, '..')
-const docsRoot = join(projectRoot, 'docs/pi-desk')
+const docsRoot = join(projectRoot, 'docs')
 
 // 复制出的文档和示例必须只依赖已发布资料，不依赖开发仓库的工作目录。
 test('主包携带统一文档，复制到独立目录后所有正文链接有效', async () => {
@@ -18,7 +18,7 @@ test('主包携带统一文档，复制到独立目录后所有正文链接有�
   const run = await mkdtemp(join(parent, 'package-links-'))
   let passed = false
   try {
-    const installed = join(run, 'installed/docs/pi-desk')
+    const installed = join(run, 'installed/docs')
     await cp(docsRoot, installed, { recursive: true })
     for (const name of ['README.md', 'commands.md', 'plugins.md']) {
       const path = join(installed, name)
@@ -44,12 +44,14 @@ test('主包携带统一文档，复制到独立目录后所有正文链接有�
       'README.md',
       'commands.md',
       'plugins.md',
+      'doc_asset/client-overview.webp',
+      'doc_asset/multi-window.webp',
       'examples/local-application/package.json',
       'examples/local-application/pi-desk.ts',
       'examples/local-application/browser/entry.js',
       'examples/local-application/browser/application.js'
     ]) {
-      assert.ok(files.has(`docs/pi-desk/${path}`), `npm 包缺少 ${path}`)
+      assert.ok(files.has(`docs/${path}`), `npm 包缺少 ${path}`)
     }
     passed = true
   } finally {

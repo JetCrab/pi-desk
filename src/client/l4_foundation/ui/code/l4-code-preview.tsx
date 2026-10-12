@@ -23,6 +23,8 @@ import {
 
 import { bindL4MonacoPreviewEscape } from './l4-monaco-preview-escape'
 import { useL4CodePreferences } from './l4-code-preferences'
+import { bindL4CodeLineMarkers, type L4CodeLineMarkers } from './l4-code-line-markers'
+import markerStyles from './l4-code-line-markers.module.css'
 
 export type L4CodePreviewState = editor.ICodeEditorViewState
 
@@ -32,6 +34,8 @@ export interface L4CodePreviewHandle {
   getSelectionText: () => string
   getViewState: () => L4CodePreviewState | null
   focus: () => void
+  previousChange: () => void
+  nextChange: () => void
 }
 
 interface L4CodePreviewProps {
@@ -41,13 +45,27 @@ interface L4CodePreviewProps {
   savedState: L4CodePreviewState | null
   onSaveState: (path: string, state: L4CodePreviewState | null) => void
   onEscape?: () => void
+  originalContent?: string
+  onChanges?: (count: number | null) => void
+  onOpenDiff?: (lineNumber: number) => void
 }
 
 function L4CodePreviewComponent(
-  { path, content, size, savedState, onSaveState, onEscape }: L4CodePreviewProps,
+  {
+    path,
+    content,
+    size,
+    savedState,
+    onSaveState,
+    onEscape,
+    originalContent,
+    onChanges,
+    onOpenDiff
+  }: L4CodePreviewProps,
   ref: ForwardedRef<L4CodePreviewHandle>
 ): React.JSX.Element {
   const { t } = useTranslation('common')
+  const { t: projectFilesT } = useTranslation('projectFiles')
   const { wrapLines } = useL4CodePreferences()
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
@@ -55,11 +73,16 @@ function L4CodePreviewComponent(
   const wrapLinesRef = useRef(wrapLines)
   const savedStateRef = useRef(savedState)
   const escapeRef = useRef(onEscape)
+  const markersRef = useRef<L4CodeLineMarkers | null>(null)
+  const changesRef = useRef(onChanges)
+  const openDiffRef = useRef(onOpenDiff)
 
   useEffect(() => {
     savedStateRef.current = savedState
     escapeRef.current = onEscape
-  }, [onEscape, savedState])
+    changesRef.current = onChanges
+    openDiffRef.current = onOpenDiff
+  }, [onChanges, onEscape, onOpenDiff, savedState])
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
 
   useEffect(() => {
@@ -90,6 +113,12 @@ function L4CodePreviewComponent(
       },
       focus(): void {
         editorRef.current?.focus()
+      },
+      previousChange(): void {
+        markersRef.current?.previousChange()
+      },
+      nextChange(): void {
+        markersRef.current?.nextChange()
       }
     }),
     []
@@ -101,6 +130,7 @@ function L4CodePreviewComponent(
     let active = true
     let codeEditor: editor.IStandaloneCodeEditor | null = null
     let model: editor.ITextModel | null = null
+    let markers: L4CodeLineMarkers | null = null
     let stopThemeObserver = (): void => undefined
     let stopTypographyObserver = (): void => undefined
 
@@ -131,6 +161,7 @@ function L4CodePreviewComponent(
           wrappingIndent: 'same',
           ...getL4MonacoTypography(),
           lineNumbersMinChars: 3,
+          lineDecorationsWidth: 26,
           folding: size <= 1024 * 1024,
           renderValidationDecorations: 'off',
           renderWhitespace: 'selection',
@@ -145,6 +176,25 @@ function L4CodePreviewComponent(
         if (escapeRef.current)
           bindL4MonacoPreviewEscape(codeEditor, monaco.KeyCode.Escape, () => escapeRef.current?.())
         editorRef.current = codeEditor
+        if (originalContent !== undefined) {
+          markers = bindL4CodeLineMarkers(codeEditor, monaco, {
+            path,
+            original: originalContent,
+            modified: content,
+            tooltip: (kind, count) =>
+              projectFilesT(
+                {
+                  added: 'gitAddedLines',
+                  modified: 'gitModifiedLines',
+                  deleted: 'gitDeletedLines'
+                }[kind],
+                { count }
+              ),
+            onChanges: (count) => changesRef.current?.(count),
+            onOpenDiff: (lineNumber) => openDiffRef.current?.(lineNumber)
+          })
+          markersRef.current = markers
+        }
         stopThemeObserver = observeL4MonacoTheme((theme) => monaco.editor.setTheme(theme))
         stopTypographyObserver = observeL4MonacoTypography((typography) =>
           codeEditor?.updateOptions(typography)
@@ -158,18 +208,24 @@ function L4CodePreviewComponent(
           errorName: error instanceof Error ? error.name : 'UnknownError'
         })
         setLoadState('error')
+        if (originalContent !== undefined) changesRef.current?.(null)
       })
 
     return () => {
       active = false
       stopThemeObserver()
       stopTypographyObserver()
-      if (codeEditor) onSaveStateRef.current(path, codeEditor.saveViewState())
+      markers?.dispose()
+      markersRef.current = null
+      if (codeEditor) {
+        savedStateRef.current = codeEditor.saveViewState()
+        onSaveStateRef.current(path, savedStateRef.current)
+      }
       editorRef.current = null
       codeEditor?.dispose()
       model?.dispose()
     }
-  }, [content, path, size, t])
+  }, [content, originalContent, path, projectFilesT, size, t])
 
   useEffect(() => {
     editorRef.current?.updateOptions({ wordWrap: wrapLines ? 'on' : 'off' })
@@ -180,7 +236,7 @@ function L4CodePreviewComponent(
       data-testid="code-preview"
       className="relative h-full min-h-0 w-full overflow-hidden bg-background"
     >
-      <div ref={hostRef} className="size-full" />
+      <div ref={hostRef} className={`size-full ${markerStyles.host}`} />
       {loadState === 'loading' ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 bg-background text-sm text-muted-foreground">
           <LoaderCircleIcon className="size-4 animate-spin" /> {t('codeLoading')}

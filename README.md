@@ -23,11 +23,11 @@ Pi powers the agent. Pi Desk provides the interface, with a lightweight core and
 ## Interface demo
 
 <p>
-  <a href="./docs/images/client-overview.webp">
-    <img src="./docs/images/client-overview.webp" alt="File preview" width="300" />
+  <a href="./docs/doc_asset/client-overview.webp">
+    <img src="./docs/doc_asset/client-overview.webp" alt="File preview" width="300" />
   </a>
-  <a href="./docs/images/multi-window.webp">
-    <img src="./docs/images/multi-window.webp" alt="Side-by-side conversations" width="300" />
+  <a href="./docs/doc_asset/multi-window.webp">
+    <img src="./docs/doc_asset/multi-window.webp" alt="Side-by-side conversations" width="300" />
   </a>
 </p>
 

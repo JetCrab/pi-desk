@@ -39,6 +39,7 @@ import {
 import type { L3ProjectGitBrowser } from './l3-project-git-runtime'
 import {
   getL3GitChangeBadge,
+  getL3GitChangeClass,
   getL3GitHeadLabel,
   getL3GitRepositoryName,
   joinL3GitProjectPath,
@@ -118,12 +119,7 @@ function fileIcon(path: string): React.JSX.Element {
 
 function changedFileNameClass(change: L3GitProjectChange | null): string | undefined {
   if (!change) return undefined
-  const badge = getL3GitChangeBadge(change.change)
-  if (badge === 'D') return 'text-muted-foreground'
-  if (badge === '?') return 'text-red-600 dark:text-red-400'
-  if (badge === 'A') return 'text-emerald-600 dark:text-emerald-400'
-  if (badge === '!') return 'text-violet-600 dark:text-violet-400'
-  return 'text-blue-600 dark:text-blue-400'
+  return getL3GitChangeClass(change.change)
 }
 
 function DirectoryFeedback({

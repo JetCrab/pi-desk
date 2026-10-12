@@ -1,0 +1,521 @@
+.sidebarShortcuts {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: 6px;
+  margin-top: auto;
+  padding: 6px 2px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.sidebarShortcuts > button {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  min-width: 40px;
+  min-height: 48px;
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.sidebarShortcuts > button[data-highlighted='true'] {
+  outline: 2px solid var(--foreground);
+  outline-offset: 2px;
+}
+.shortcutPointer {
+  position: absolute;
+  z-index: 3;
+  top: 26px;
+  left: 25px;
+  fill: var(--foreground);
+  stroke: var(--background);
+  stroke-width: 1.3px;
+  pointer-events: none;
+}
+[data-running='true'] .shortcutPointer {
+  animation: pointer-in 450ms ease-out both;
+}
+.overlay {
+  position: absolute;
+  inset: 26px 0 0;
+  background: color-mix(in srgb, var(--background) 75%, transparent);
+}
+.panel {
+  position: absolute;
+  inset: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+  box-shadow: 0 8px 28px #00000014;
+  animation: panel-in 150ms ease-out;
+}
+.panelHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  min-height: 42px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.panelHeader > strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.panelHeader > span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.panelHeader > button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  margin-left: auto;
+  cursor: pointer;
+}
+.settingsLayout {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+.settingsNavigation {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 12px 8px;
+  border-right: 1px solid var(--border);
+  background: var(--muted);
+  font-size: 11px;
+}
+.settingsNavigation > span,
+.settingsNavigation > strong {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 5px;
+  font-weight: 500;
+}
+.settingsNavigation > strong {
+  color: var(--muted-foreground);
+  border-top: 1px solid var(--border);
+}
+.settingsNavigation > button {
+  min-height: 28px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  background: var(--accent);
+  text-align: left;
+  cursor: pointer;
+}
+.settingsContent {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.settingsToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.settingsToolbar > span {
+  min-height: 26px;
+  padding: 3px 5px;
+  border-radius: 5px;
+  color: var(--muted-foreground);
+}
+.settingsToolbar > span[data-active='true'] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.settingsToolbar > button,
+.empty > button,
+.applicationToolbar > button {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  cursor: pointer;
+  font-size: 11px;
+}
+.settingsToolbar > button {
+  margin-left: auto;
+}
+.sourceLayout {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+.sourceNavigation {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 8px;
+  border-right: 1px solid var(--border);
+  font-size: 11px;
+}
+.sourceNavigation > span:first-child {
+  min-height: 28px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--muted-foreground);
+}
+.sourceNavigation > strong,
+.sourceNavigation > small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 500;
+}
+.sourceSelected {
+  display: grid;
+  gap: 4px;
+  padding: 7px 5px;
+  border-radius: 5px;
+  background: var(--accent);
+}
+.sourceSelected > small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.sourceEditor {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.empty {
+  display: grid;
+  place-items: center;
+  gap: 12px;
+  padding: 40px 12px;
+  text-align: center;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.addSource {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  font-size: 12px;
+}
+.addSource > strong {
+  font-weight: 600;
+}
+.select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid var(--input);
+  border-radius: 6px;
+}
+.channelOptions {
+  display: grid;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--popover);
+  box-shadow: 0 3px 12px #00000009;
+}
+.channelOptions > span,
+.channelOptions > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-height: 25px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.channelOptions > button {
+  background: var(--accent);
+  cursor: pointer;
+}
+.sourceHeading {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px 0;
+}
+.sourceHeading > strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.sourceHeading > span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.saved {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 12px 0;
+  padding: 5px 7px;
+  border-radius: 4px;
+  background: var(--muted);
+  font-size: 11px;
+}
+.compactForm > div {
+  gap: 10px;
+  padding: 12px;
+}
+.compactForm > div > div > span,
+.compactForm > div > div > div {
+  font-size: 12px;
+}
+.compactForm > div > div > div code {
+  font-size: 11px;
+}
+.compactForm > div > div > small {
+  font-size: 10px;
+}
+.settingsFooter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+}
+.settingsFooter > span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.settingsFooter > button {
+  flex-shrink: 0;
+  min-height: 28px;
+  margin-left: auto;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 11px;
+  cursor: pointer;
+}
+.settingsFooter > button:disabled {
+  background: var(--muted);
+  color: var(--muted-foreground);
+  cursor: default;
+}
+.applicationToolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.search {
+  flex: 1;
+  min-height: 28px;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted-foreground);
+}
+.displayItems {
+  padding: 4px 6px;
+  color: var(--muted-foreground);
+}
+.applicationToolbar > button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.applicationBody {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  overflow-y: auto;
+}
+.channelHeading {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.quotaRecord {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.recordHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.recordHeader > strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.recordHeader > span {
+  color: var(--destructive);
+  font-size: 11px;
+}
+.recordHeader > button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  margin-left: auto;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.windowMetrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.windowMetrics > div {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+.windowMetrics > div > span,
+.windowMetrics small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.windowMetrics strong {
+  font-size: 22px;
+  line-height: 1.4;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.progress {
+  height: 5px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--border);
+}
+.progress > span {
+  display: block;
+  height: 100%;
+  background: var(--foreground);
+}
+.details {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.detailIdentity {
+  display: grid;
+  gap: 3px;
+}
+.detailIdentity > strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.detailIdentity > span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.windowDetail {
+  display: grid;
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+}
+.windowDetail > strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.windowDetail small,
+.windowDetail > span:last-child {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.windowDetail b {
+  font-weight: 500;
+}
+.failure {
+  display: grid;
+  gap: 3px;
+  flex-shrink: 0;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--muted);
+  color: var(--destructive);
+  font-size: 11px;
+}
+.failure strong {
+  font-weight: 600;
+}
+.responseNote {
+  display: block;
+  margin-top: 12px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+@container (max-width: 600px) {
+  .settingsLayout {
+    grid-template-columns: 86px minmax(0, 1fr);
+  }
+  .sourceLayout {
+    grid-template-columns: 92px minmax(0, 1fr);
+  }
+  .windowMetrics {
+    gap: 10px;
+  }
+}
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes pointer-in {
+  from {
+    opacity: 0;
+    transform: translate(24px, 16px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel,
+  [data-running='true'] .shortcutPointer {
+    animation: none;
+  }
+}

@@ -44,10 +44,11 @@ interface L4CodeDiffProps {
   onEscape?: () => void
   savedState?: L4CodeDiffState | null
   onSaveState?: (state: L4CodeDiffState | null) => void
+  initialLine?: number
 }
 
 function L4CodeDiffComponent(
-  { original, modified, viewMode, onEscape, savedState, onSaveState }: L4CodeDiffProps,
+  { original, modified, viewMode, onEscape, savedState, onSaveState, initialLine }: L4CodeDiffProps,
   ref: ForwardedRef<L4CodeDiffHandle>
 ): React.JSX.Element {
   const { t } = useTranslation('common')
@@ -58,12 +59,14 @@ function L4CodeDiffComponent(
   const escapeRef = useRef(onEscape)
   const savedStateRef = useRef(savedState)
   const saveStateRef = useRef(onSaveState)
+  const initialLineRef = useRef(initialLine)
 
   useEffect(() => {
     escapeRef.current = onEscape
     savedStateRef.current = savedState
     saveStateRef.current = onSaveState
-  }, [onEscape, onSaveState, savedState])
+    initialLineRef.current = initialLine
+  }, [initialLine, onEscape, onSaveState, savedState])
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [changeCount, setChangeCount] = useState<number | null>(null)
 
@@ -130,6 +133,7 @@ function L4CodeDiffComponent(
           useInlineViewWhenSpaceIsLimited: false,
           enableSplitViewResizing: true,
           diffAlgorithm: 'advanced',
+          ignoreTrimWhitespace: false,
           maxComputationTime: 5_000,
           hideUnchangedRegions: initialSettings.collapseUnchanged
             ? {
@@ -156,13 +160,29 @@ function L4CodeDiffComponent(
           contextmenu: true,
           ariaLabel: t('gitDiffReadOnly')
         })
-        diffEditor.setModel({ original: originalModel, modified: modifiedModel })
+        const requestedLine = initialLineRef.current
+        let initialPositionApplied = false
         scrollListeners.push(
           diffEditor.onDidUpdateDiff(() => {
-            if (active) setChangeCount(diffEditor?.getLineChanges()?.length ?? null)
+            if (!active || !diffEditor) return
+            const changes = diffEditor.getLineChanges()
+            setChangeCount(changes?.length ?? null)
+            if (!initialPositionApplied && changes !== null && requestedLine !== undefined) {
+              initialPositionApplied = true
+              const lineNumber = Math.max(
+                1,
+                Math.min(requestedLine, modifiedModel?.getLineCount() ?? 1)
+              )
+              const modifiedEditor = diffEditor.getModifiedEditor()
+              modifiedEditor.setPosition({ lineNumber, column: 1 })
+              modifiedEditor.revealLineInCenter(lineNumber)
+            }
           })
         )
-        if (savedStateRef.current) diffEditor.restoreViewState(savedStateRef.current)
+        diffEditor.setModel({ original: originalModel, modified: modifiedModel })
+        if (requestedLine === undefined && savedStateRef.current) {
+          diffEditor.restoreViewState(savedStateRef.current)
+        }
         const save = (): void => saveStateRef.current?.(diffEditor?.saveViewState() ?? null)
         scrollListeners.push(
           diffEditor.getOriginalEditor().onDidScrollChange(save),

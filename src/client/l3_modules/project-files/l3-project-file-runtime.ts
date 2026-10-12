@@ -22,6 +22,16 @@ export type L3DirectoryState =
   | { status: 'idle' | 'loading' }
   | { status: 'ready'; entries: L4ProjectFileEntry[]; truncated: boolean }
   | { status: 'error'; error: string }
+export type L3FileComparison =
+  | { status: 'loading' }
+  | {
+      status: 'ready'
+      repositoryRoot: string
+      path: string
+      original: { path: string; content: string }
+    }
+  | { status: 'unavailable' }
+  | { status: 'error'; error: string }
 export type L3FileDocument =
   | { status: 'unloaded' }
   | { status: 'loading' }
@@ -31,6 +41,7 @@ export type L3FileDocument =
       size: number
       editorState: L4CodePreviewState | null
       viewMode: 'source' | 'preview'
+      comparison?: L3FileComparison
     }
   | { status: 'image'; mimeType: L4ProjectFileImageMimeType; size: number; objectUrl: string }
   | { status: 'error'; error: string }
@@ -47,6 +58,7 @@ interface DiffOptions {
   comparison?: L4GitHistoricalDiff
   editorState?: L4CodeDiffState | null
   label?: string
+  initialLine?: number
 }
 export type L3FileDiff = DiffOptions &
   (
@@ -492,6 +504,71 @@ export class L3ProjectFileRuntime {
     }
     this.publish()
   }
+  async compareFile(
+    path: string,
+    target: { repositoryRoot: string; path: string } | null,
+    signal: AbortSignal
+  ): Promise<void> {
+    const document = this.state.documents.get(path)
+    if (this.disposed || signal.aborted || document?.status !== 'text') return
+    if (!target) {
+      if (document.comparison) {
+        delete document.comparison
+        this.publish()
+      }
+      return
+    }
+    const loading: L3FileComparison = { status: 'loading' }
+    document.comparison = loading
+    this.publish()
+    const current = (): boolean =>
+      !this.disposed &&
+      !signal.aborted &&
+      this.state.documents.get(path) === document &&
+      document.comparison === loading
+    try {
+      const result = await this.reader.diff(target.repositoryRoot, target.path, signal)
+      if (!current()) return
+      if (result.kind === 'text') {
+        // 比较结果的工作区正文与基线一起替换，不能把新行号画在缓存正文上。
+        document.content = result.modified.content
+        document.size = new TextEncoder().encode(result.modified.content).length
+        document.comparison = {
+          status: 'ready',
+          repositoryRoot: target.repositoryRoot,
+          path: target.path,
+          original: result.original
+        }
+      } else {
+        document.comparison = { status: 'unavailable' }
+      }
+    } catch (cause) {
+      if (!current()) return
+      console.warn('[Pi Desk][ProjectFile] 读取行变更失败', {
+        cwd: this.cwd,
+        path,
+        error: message(cause)
+      })
+      document.comparison = { status: 'error', error: message(cause) }
+    }
+    this.publish()
+  }
+  openFileDiff(path: string, initialLine?: number): void {
+    const document = this.state.documents.get(path)
+    if (this.disposed || document?.status !== 'text' || document.comparison?.status !== 'ready')
+      return
+    const comparison = document.comparison
+    this.clearDiff()
+    this.state.activeDiff = {
+      status: 'text',
+      repositoryRoot: comparison.repositoryRoot,
+      path: comparison.path,
+      original: comparison.original,
+      modified: { path: comparison.path, content: document.content },
+      initialLine
+    }
+    this.publish()
+  }
   openDiff(
     repositoryRoot: string,
     path: string,
@@ -616,7 +693,12 @@ export class L3ProjectFileRuntime {
   private invalidateDocument(path: string): void {
     this.documentRequests.get(path)?.abort()
     this.documentRequests.delete(path)
-    this.releaseDocument(this.state.documents.get(path))
+    const document = this.state.documents.get(path)
+    if (document?.status === 'text') {
+      if (document.editorState) this.restoredEditorStates.set(path, document.editorState)
+      this.restoredFileViewModes.set(path, document.viewMode)
+    }
+    this.releaseDocument(document)
     this.state.documents.set(path, { status: 'unloaded' })
   }
   private releaseDocument(document: L3FileDocument | undefined): void {

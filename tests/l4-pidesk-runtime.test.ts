@@ -168,7 +168,7 @@ test(
       assert.equal(await readFile(prodSkillPath, 'utf8'), '旧正式环境宿主指引')
       assert.equal(await readFile(userSkillPath, 'utf8'), userSkill)
       const navigation = commands.appendL4PiDeskSystemPrompt()[0]
-      const docsDirectory = resolve('docs/pi-desk')
+      const docsDirectory = resolve('docs')
       assert.ok(navigation.includes(docsDirectory.replaceAll('\\', '/')))
       assert.equal(navigation.includes('/skills/'), false)
       assert.equal(await readFile(join(agentDir, 'settings.json'), 'utf8'), settingsText)

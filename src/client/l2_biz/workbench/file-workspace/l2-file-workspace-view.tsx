@@ -207,6 +207,8 @@ export function L2FileWorkspaceView({
         ) : null}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <L2FileWorkspaceTabs
+            cwd={cwd}
+            gitRuntime={gitRuntime}
             paths={workspace.tabs}
             activePath={activePath}
             diffPath={diffPath}
@@ -217,6 +219,12 @@ export function L2FileWorkspaceView({
           <L3ProjectDocumentView
             ref={documentRef}
             runtime={runtime.getFileRuntime(workId)}
+            gitRuntime={gitRuntime}
+            visible={
+              expanded ||
+              (workspace.windowOpen &&
+                (presentation === 'split' || workspace.activePane === 'files'))
+            }
             compact={compact}
             onEscape={escape}
             onSwitchPane={onSwitchPane}

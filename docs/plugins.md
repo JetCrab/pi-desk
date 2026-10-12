@@ -112,7 +112,114 @@ Push 可丢失、不持久化、不 ACK、不重放，也不创建聊天消息�
 - 当前页面轻提示：`plugin.notify({ level: 'success', title: '保存成功' })` 或 `host.notify()`，只在当前页面短暂展示，离线可错过。
 - 服务端全局通知：Node `plugin.notifications.publish({ level: 'success', title: '处理完成', event: { name: 'open-result', data: {} } })`；用返回 ID 调用 `update/delete`。Browser Entry 通过 `plugin.notifications.onEvent('open-result', handler)` 处理点击，成功后宿主删除通知。Node 未重启时重连可恢复；Node 重启或插件释放后清空，不持久化。
 
-消息适配需要时读 `/entry` 的 `declareMessage` 与 `/browser` 的 Message View 类型：Node 投影原始 Pi 消息，Browser 按最终 `viewKey + priority` 选择 View。首屏必需数据放 Summary，大内容按 Detail 获取；View 失败只影响相应消息，不自行解析 Pi 原始类型或切换到另一个低优先级 View。
+## 消息展示
+
+Node Entry 的 Declaration 把已有 Pi 消息转换为 `{ viewKey, summary, detail }`；Browser 的 Message View 按 `viewKey` 展示。`viewKey` 使用小写 kebab-case 的 `namespace/view-name` 形式，标识展示数据协议，不是消息 ID。Declaration 不创建消息，也不管理消息身份。
+
+以原生插件产生的 `customType = 'example-status'` 消息为例，在 Node Entry 的 `setup(plugin)` 中注册：
+
+```ts
+plugin.declareMessage('status', {
+  priority: 100,
+  match({ message }) {
+    return message.kind === 'custom' && message.customType === 'example-status'
+  },
+  project({ defaultProjection }) {
+    return {
+      viewKey: 'example/status',
+      summary: defaultProjection.summary,
+      detail: null
+    }
+  }
+})
+```
+
+此例复用默认自定义消息的 `summary.text`。在 Browser Entry 同步注册对应视图：
+
+```js
+plugin.registerContribution('message-view', 'status', {
+  viewKey: 'example/status',
+  priority: 100,
+  load: () => import('./status-view.js').then((module) => module.default)
+})
+```
+
+同目录的 `status-view.js`：
+
+```js
+export default {
+  mount({ container, target }) {
+    const element = document.createElement('p')
+    container.append(element)
+
+    function render() {
+      const { text } = target.message.getSnapshot().summary
+      if (typeof text !== 'string') {
+        target.reportError(new Error('消息摘要缺少 text'))
+        return
+      }
+      element.textContent = text
+    }
+
+    const unsubscribe = target.message.subscribe(render)
+    render()
+    return () => {
+      unsubscribe()
+      element.remove()
+    }
+  }
+}
+```
+
+- `match/project` 必须同步、快速、无副作用；每次返回完整投影，不自行计算或传输增量。自定义数据的结构由对应 `viewKey` 的 Declaration/View 约定，不扩充通用消息类型。
+- 首屏和实时必需内容放 `summary`；大内容或用户展开后才用的数据放 `detail`。需要详情时，仅在消息已有 `entryId` 且 `fixed.hasDetail` 为真后调用 `target.message.loadDetail()`；异步结果须检查挂载的 `signal`，不能写回失效视图。
+- 视图从 `getSnapshot()` 读取完整当前状态，并通过 `subscribe()` 跟随更新；同 `viewKey` 的消息更新不重新挂载，Temporary 转 Durable 保持同一 Handle，`viewKey` 改变时会重挂。释放时解除订阅并清理自有资源。
+- Declaration 和 View 分别按 `priority` 选择，数值越大越优先；同最高优先级冲突会报错。声明、加载或展示失败不自动尝试低优先级实现；异步展示错误通过 `target.reportError(error)` 交给宿主处理。
+- 刷新后仍需展示的数据必须存在于最终 Pi Entry，仅通过 Tool `onUpdate()` 提供的数据不会自动持久化。更新插件时兼容已有消息结构，不靠自动重载旧会话解决兼容问题。
+
+## 任务
+
+Task Center 用于当前 Session 的真实任务，通过 `bindSessionPlugin()` 返回的 `plugin` 上报；Global 插件的任务由自身运行态管理，不创建 Session Task。
+
+在真实操作开始时创建任务，完成后上报结果。以下 `runTask()` 是插件已有的业务函数：
+
+```ts
+const task = plugin.startTask({
+  title: '处理文件',
+  activity: '正在执行'
+})
+
+try {
+  await runTask()
+  task.complete('处理完成')
+} catch (error) {
+  task.fail(error instanceof Error ? error.message : String(error))
+  throw error
+}
+```
+
+- 进度使用 `task.update({ activity, info })`；`info` 是 `{ label, value }[]`，整体替换，`[]` 清空，不放日志正文。
+- 有停止能力时，给 `startTask()` 的 `interrupt` 传入真实停止函数，签名为 `() => Promise<void>`。回调返回不代表任务已经结束；确认实际停止后调用 `task.stopped()`，会话关闭等中断使用 `task.interrupted()`。
+- 一个任务只进入一次终态，终态后不能 `update()` 或再次结束；`remove()` 只移除上报记录，不停止真实操作。
+- `detailSource` 可选：文本日志用 `{ kind: 'text-file', path: logPath }`；活动子会话用 `{ kind: 'pi-conversation', session: childSession }`；历史会话用 `{ kind: 'pi-conversation', sessionFile }`。文件路径均为服务端绝对路径，活动实例和文件来源二选一。
+- 宿主只观察详情，不接管插件创建的资源。会话关闭时停止自有任务、上报终态并释放子会话等资源，不关闭父会话；需要随分支结束的任务在树导航前收敛。
+- 任务列表是运行态，不是持久历史；宿主保留全部运行中任务和最近 100 条终态，不能依赖更早记录一直存在。
+
+## 日志
+
+命令、构建等任务的完整输出由插件写入日志文件，并负责容量与清理。界面复用宿主日志能力，不自行读取文件或实现监听、重连。
+
+从 `@jetcrab/pi-desk-sdk/react/base` 导入 `PluginLogViewer`，在已有 `PluginHostProvider` 内使用：
+
+```tsx
+<PluginLogViewer path={logPath} />
+```
+
+`logPath` 是服务端可访问的绝对文本文件路径。文件未创建时继续等待；组件处理追加、重写、重连与读取重试，最多显示末尾 128KB、1000 行，不修改原文件。
+
+非 React 界面使用 `host.logs.open(logPath)`，通过返回句柄的 `getSnapshot()`、`subscribe()` 和 `retry()` 读取与观察，释放时调用 `dispose()`。Session Task 可使用 `detailSource: { kind: 'text-file', path: logPath }` 展示同一日志。
+
+业务数据只传递必要的日志摘要和路径，不把日志正文放入 Method 返回、Plugin Push、状态槽位或 Pi JSONL。
 
 ## 更新生效
 

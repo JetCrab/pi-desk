@@ -176,7 +176,7 @@ test('已知结果兼容旧空字段，保留未知版本、零插件及异常�
     mode: 'normal',
     cwd: 'C:/project',
     agentDir: 'C:/agent',
-    docsDirectory: 'C:/host/docs/pi-desk'
+    docsDirectory: 'C:/host/docs'
   }
   assert.equal(
     readL3ConversationPiDeskOutput('pideskInfo', JSON.stringify(environment))?.kind,

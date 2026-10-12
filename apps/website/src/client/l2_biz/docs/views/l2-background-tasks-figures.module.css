@@ -1,0 +1,195 @@
+.effect,
+.principle,
+.config {
+  margin: 24px 0;
+  color: var(--foreground);
+  line-height: 1.6;
+}
+.effect {
+  margin-top: 0;
+  padding-block: 18px 0;
+  border-block: 1px solid var(--border);
+}
+.figureTitle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.figureTitle > span {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+.lane {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  margin-top: 18px;
+}
+.laneLabel {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 14px;
+}
+.laneLabel strong {
+  font-weight: 500;
+}
+.laneLabel svg,
+.sequence svg {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+.sequence {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 14px;
+}
+.sequence > span,
+.sequence > strong {
+  padding: 8px 10px;
+  text-align: center;
+  border-radius: 6px;
+  background: var(--muted);
+  font-weight: 400;
+}
+.sequence > strong {
+  border: 1px solid var(--border);
+  background: var(--background);
+  font-weight: 500;
+}
+.note {
+  padding: 14px 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.principle {
+  padding: 20px 18px 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--muted);
+}
+.flow {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+}
+.flow > div {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  text-align: center;
+}
+.flow strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.flow > div > span:last-child {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.flowArrow {
+  color: var(--muted-foreground);
+}
+.processIcon {
+  height: 20px;
+  line-height: 20px;
+  font-size: 15px;
+}
+.outputs {
+  display: flex;
+  height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+.principle .note {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+.config {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.config .figureTitle {
+  padding: 14px 18px;
+  background: var(--muted);
+}
+.parameters {
+  margin: 0;
+}
+.parameters > div {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.85fr) minmax(0, 1.15fr);
+  gap: 14px;
+  align-items: center;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+}
+.parameters dt,
+.parameters dd {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+.parameters dt code,
+.parameters dd > span {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.parameters strong {
+  font-weight: 500;
+}
+.config .note {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+@media (max-width: 640px) {
+  .lane {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    margin-top: 20px;
+  }
+  .sequence {
+    gap: 4px;
+    font-size: 13px;
+  }
+  .sequence > span,
+  .sequence > strong {
+    flex: 1;
+    padding: 8px 4px;
+  }
+  .sequence svg {
+    width: 14px;
+  }
+  .flow {
+    gap: 6px;
+  }
+  .flow strong {
+    font-size: 13px;
+  }
+  .flow > div > span:last-child {
+    font-size: 12px;
+  }
+  .principle {
+    padding-inline: 10px;
+  }
+  .parameters > div {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    padding-inline: 12px;
+    gap: 10px;
+  }
+  .parameters dt code {
+    overflow-wrap: anywhere;
+  }
+}

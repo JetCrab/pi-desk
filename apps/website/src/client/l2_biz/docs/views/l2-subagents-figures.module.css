@@ -1,0 +1,246 @@
+.effect,
+.principle,
+.config {
+  margin: 24px 0;
+  color: var(--foreground);
+  line-height: 1.6;
+}
+.effect {
+  margin-top: 0;
+  padding-top: 18px;
+  border-block: 1px solid var(--border);
+}
+.title {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.title > span,
+.note {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 400;
+}
+.delegation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  margin-top: 20px;
+}
+.owner,
+.child {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 16px 12px;
+  border-radius: 8px;
+  background: var(--muted);
+  text-align: center;
+}
+.owner strong,
+.child strong,
+.conclusion strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.owner > span,
+.child > span,
+.conclusion > span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.outward {
+  color: var(--muted-foreground);
+}
+.returning {
+  grid-column: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.conclusion {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.note {
+  padding-block: 14px;
+  font-size: 13px;
+}
+.principle {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 18px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--muted);
+}
+.principle > div {
+  display: grid;
+  gap: 6px;
+  text-align: center;
+}
+.principle strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.principle span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.principle > svg {
+  color: var(--muted-foreground);
+}
+.config {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  container-type: inline-size;
+}
+.settingsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  background: var(--muted);
+}
+.settingsHeader > div {
+  display: grid;
+  gap: 4px;
+}
+.settingsHeader strong {
+  font-size: 16px;
+  font-weight: 600;
+}
+.settingsHeader > div > span {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.save {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 13px;
+}
+.columns,
+.settingRow {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr) 112px;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.columns {
+  padding-block: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.enabled {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.enabled > span {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.enabled strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.enabled small,
+.field > span {
+  display: none;
+}
+.field {
+  min-width: 0;
+}
+.field > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid var(--input);
+  border-radius: 6px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.field svg {
+  flex-shrink: 0;
+}
+.field[data-disabled='true'] > div {
+  border-color: var(--border);
+  color: var(--muted-foreground);
+  background: var(--muted);
+}
+.config .note {
+  padding: 12px 16px;
+}
+@container (max-width: 520px) {
+  .columns {
+    display: none;
+  }
+  .settingRow {
+    grid-template-columns: minmax(0, 1fr) 112px;
+  }
+  .enabled {
+    grid-column: 1 / -1;
+  }
+  .enabled small {
+    display: inline;
+    color: var(--muted-foreground);
+    font-size: 12px;
+  }
+  .field > span {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--muted-foreground);
+    font-size: 12px;
+  }
+}
+@media (max-width: 640px) {
+  .delegation {
+    gap: 8px;
+  }
+  .owner,
+  .child {
+    padding-inline: 6px;
+  }
+  .returning {
+    flex-wrap: wrap;
+  }
+  .principle {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+  .principle strong {
+    font-size: 13px;
+  }
+}

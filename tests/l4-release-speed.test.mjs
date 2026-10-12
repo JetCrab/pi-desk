@@ -28,10 +28,7 @@ test('双渠道只检查相关组件，无基线时保留完整功能检查', ()
   assert.equal(plugin.website, false)
   assert.ok(Object.values(selectCiChecks([], true)).every(Boolean))
   assert.equal(selectCiChecks(['tests/l2-chat-state.test.ts'], false).web, true)
-  assert.equal(
-    selectCiChecks(['docs/pi-desk/examples/local-application/pi-desk.ts'], false).pidesk,
-    true
-  )
+  assert.equal(selectCiChecks(['docs/examples/local-application/pi-desk.ts'], false).pidesk, true)
   assert.deepEqual(selectPluginChecks(['plugins/pi-desk-usage/README.md']), [])
   assert.deepEqual(selectPluginChecks(['plugins/pi-desk-usage/src/index.ts']), ['pi-desk-usage'])
   assert.deepEqual(
