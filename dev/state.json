@@ -2,14 +2,14 @@
   "checks": "7535e1dea8845dd6fe9edde3eb69611738206ee1",
   "units": {
     "windows": {
-      "version": "1.1.6",
-      "source": "7535e1dea8845dd6fe9edde3eb69611738206ee1",
-      "runId": "38143453660"
+      "version": "1.1.7",
+      "source": "91ced88e7e7dfeb96524de25a4e0d4d7ccaa6596",
+      "runId": "38188041309"
     },
     "macos": {
-      "version": "1.1.6",
-      "source": "7535e1dea8845dd6fe9edde3eb69611738206ee1",
-      "runId": "38143453660"
+      "version": "1.1.7",
+      "source": "91ced88e7e7dfeb96524de25a4e0d4d7ccaa6596",
+      "runId": "38188041309"
     },
     "android": {
       "version": "1.1.0",
@@ -82,9 +82,9 @@
       "runId": "37956528121"
     },
     "linux": {
-      "version": "1.1.6",
-      "source": "7535e1dea8845dd6fe9edde3eb69611738206ee1",
-      "runId": "38143453660"
+      "version": "1.1.7",
+      "source": "91ced88e7e7dfeb96524de25a4e0d4d7ccaa6596",
+      "runId": "38188041309"
     }
   }
 }
