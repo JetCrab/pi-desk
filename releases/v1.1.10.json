@@ -1,0 +1,104 @@
+{
+  "tag": "v1.1.10",
+  "date": 1791858194777,
+  "source": {
+    "base": "b71c631c5258d3f91e9ec2cf7a9f4fa567fbcd4f",
+    "head": "20aadfa37bf6146773dce9fc3b32f8855cab3b49"
+  },
+  "packages": [
+    {
+      "name": "@jetcrab/pi-desk-sdk",
+      "version": "1.1.2"
+    },
+    {
+      "name": "@jetcrab/pi-desk",
+      "version": "1.1.10"
+    },
+    {
+      "name": "@jetcrab/pi-desk-bg-run",
+      "version": "1.1.2"
+    },
+    {
+      "name": "@jetcrab/pi-desk-ctx",
+      "version": "1.1.2"
+    },
+    {
+      "name": "@jetcrab/pi-desk-deliverables",
+      "version": "1.1.2"
+    },
+    {
+      "name": "@jetcrab/pi-desk-quota-viewer",
+      "version": "1.1.2"
+    },
+    {
+      "name": "@jetcrab/pi-desk-remote-debug",
+      "version": "1.1.2"
+    },
+    {
+      "name": "@jetcrab/pi-desk-subagent",
+      "version": "1.1.2"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tibo-monitor",
+      "version": "1.1.2"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tool-reason",
+      "version": "1.1.1"
+    },
+    {
+      "name": "@jetcrab/pi-desk-usage",
+      "version": "1.1.3"
+    }
+  ],
+  "clients": [
+    {
+      "platform": "windows",
+      "version": "1.1.9",
+      "file": "PiDesk-Windows-x86-Setup.exe",
+      "sha256": "d80facbe4655e173271a2c415afb2f7ad1450ba67016d28a3dcdf444cad57c48"
+    },
+    {
+      "platform": "macos",
+      "version": "1.1.9",
+      "file": "PiDesk-macOS-universal.dmg",
+      "sha256": "ec8990d44f1b86354835f1cb8d10705e144eaada3f03420cb68e0a19bcee96c6"
+    },
+    {
+      "platform": "linux",
+      "version": "1.1.9",
+      "file": "PiDesk-Linux-x86_64.AppImage",
+      "sha256": "5a39063083e8c886bda4ab0fe06d5e244fc8f764099d8331a58b8d4229254082"
+    },
+    {
+      "platform": "android",
+      "version": "1.1.0",
+      "file": "PiDesk-Android.apk",
+      "sha256": "298cb6eef6229dbe7d39666f3cc74104ef0f88177ce90bd3361e76aa5d199972"
+    }
+  ],
+  "changes": {
+    "features": [
+      "Switch between the session project and plugin-registered preview directories in the file workspace, with per-directory browsing state, Git status, and diffs. Git branch switching remains limited to the session project.",
+      "Generate a random strong password in authentication settings.",
+      "Receive a security warning after more than five consecutive failed login attempts."
+    ],
+    "added": [
+      "Plugin SDK support for registering session preview directories and choosing a default preview directory without changing the session working directory.",
+      "Plugins can publish notifications with a stable key to update an existing notification instead of creating duplicates."
+    ],
+    "changed": [
+      "New or replacement login passwords must be 12–256 characters and include at least three of uppercase letters, lowercase letters, digits, and symbols. Leading or trailing whitespace and control characters are not allowed.",
+      "Excess concurrent password checks return a retry prompt, and login errors no longer expose authentication configuration details.",
+      "Pi compatibility is checked by loading the runtime and verifying required SDK capabilities rather than enforcing version-number restrictions. Installation guidance now recommends the latest Pi.",
+      "Long reasoning displays show the latest 5,000 characters and offer an option to copy the full text.",
+      "Unchanged lines in diffs are no longer collapsed by default."
+    ],
+    "fixed": [
+      "Preserve chat reading position while viewing files, and restore live-follow behavior when returning to a running session that was following new messages.",
+      "Repeated Tibo notifications for the same post update the existing notification instead of creating duplicates."
+    ],
+    "removed": [],
+    "breaking": []
+  }
+}
