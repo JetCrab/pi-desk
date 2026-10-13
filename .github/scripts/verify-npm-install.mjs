@@ -85,7 +85,7 @@ export async function verifyNpmInstall({
       '--no-audit',
       '--no-fund',
       '--registry=https://registry.npmjs.org',
-      `@earendil-works/pi-coding-agent@${manifest.devDependencies['@earendil-works/pi-coding-agent']}`
+      '@earendil-works/pi-coding-agent@latest'
     ])
     console.info(
       `[smoke:install] 耗时 ${((performance.now() - installStarted) / 1000).toFixed(1)} 秒`

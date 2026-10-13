@@ -7,11 +7,9 @@ const { tmpdir } = require('node:os')
 const { isAbsolute, join } = require('node:path')
 const { fileURLToPath, pathToFileURL } = require('node:url')
 const { terminateManagedTree } = require('../process/l4-process-tree.js')
-const { packageRoot } = require('../process/l4-package-root.js')
 
 const PI_PACKAGE = '@earendil-works/pi-coding-agent'
 const PI_RUNTIME_EXIT_CODE = 78
-const INSTALL_VERSION = require(join(packageRoot, 'package.json')).devDependencies[PI_PACKAGE]
 const CORE_PACKAGES = [
   PI_PACKAGE,
   '@earendil-works/pi-agent-core',
@@ -71,9 +69,6 @@ async function findGlobalPi() {
   if (manifest.name !== PI_PACKAGE || typeof manifest.version !== 'string')
     throw new Error(`全局 Pi 包清单无效：${packageRoot}`)
   const requirePi = createRequire(join(packageRoot, 'package.json'))
-  const semver = requirePi('semver')
-  if (!semver.gte(manifest.version, INSTALL_VERSION))
-    throw new Error(`全局 Pi ${manifest.version} 过旧，需要 ${INSTALL_VERSION} 或更高的兼容版本`)
   const packages = new Map([[PI_PACKAGE, { root: packageRoot, manifest }]])
   for (const name of CORE_PACKAGES.slice(1)) {
     const directory = requirePi.resolve
@@ -82,11 +77,6 @@ async function findGlobalPi() {
       .find((candidate) => existsSync(join(candidate, 'package.json')))
     if (!directory) throw new Error(`全局 Pi 缺少核心依赖：${name}`)
     const dependency = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'))
-    const range = manifest.dependencies?.[name]
-    if (!range || !semver.satisfies(dependency.version, range))
-      throw new Error(
-        `全局 Pi 核心依赖不一致：${name}@${dependency.version}，需要 ${range || '有效依赖声明'}`
-      )
     packages.set(name, { root: realpathSync(directory), manifest: dependency })
   }
   // 新版 SDK 的内部 Pi 模块也必须由同一依赖树提供，不能落回宿主依赖。
@@ -192,12 +182,12 @@ async function checkPiModules(runtime) {
 
 function formatPiRuntimeError(error) {
   const reason = error instanceof Error ? error.message : String(error)
-  const command = `npm install -g --ignore-scripts ${PI_PACKAGE}@${INSTALL_VERSION}`
+  const command = `npm install -g --ignore-scripts ${PI_PACKAGE}@latest`
   return [
     reason,
     '',
     'Pi Desk 使用当前 Node/npm 环境中的全局 Pi，不会自动安装或更新 Pi。',
-    `如需安装、更新或修复 Pi，以下命令任选一条，安装当前 Pi Desk 使用的 Pi ${INSTALL_VERSION}：`,
+    '如需安装、更新或修复 Pi，以下命令任选一条，安装最新 Pi：',
     '',
     '官方 npm 源：',
     `  ${command} --registry=https://registry.npmjs.org`,
@@ -220,7 +210,7 @@ async function checkGlobalPi() {
     status: runtime ? 'ready' : 'missing',
     version: runtime?.version ?? null,
     path: runtime?.root ?? null,
-    installVersion: INSTALL_VERSION
+    installVersion: 'latest'
   }
 }
 
