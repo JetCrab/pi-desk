@@ -24,8 +24,8 @@
 2. 打开终端（Windows 使用 PowerShell），逐行执行：
 
 ```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.1 --registry=https://registry.npmjs.org
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.1 --registry=https://mirrors.cloud.tencent.com/npm # 中国用户可改用这个加速下载
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest --registry=https://registry.npmjs.org
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest --registry=https://mirrors.cloud.tencent.com/npm # 中国用户可改用这个加速下载
 npm install -g @jetcrab/pi-desk --registry=https://registry.npmjs.org
 npm install -g @jetcrab/pi-desk --registry=https://mirrors.cloud.tencent.com/npm # 中国用户可改用这个加速下载
 pi-desk
@@ -33,7 +33,7 @@ pi-desk
 
 3. 浏览器打开 [http://127.0.0.1:6233/](http://127.0.0.1:6233/)。使用期间保持终端开启；停止时按 `Ctrl+C`。
 
-第一条命令安装 Pi，第二条安装 Pi Desk；**只安装 Pi Desk 不会自动安装 Pi**。已有可用的全局 Pi（1.0.1 或更新的兼容版本）时可跳过第一条命令。Pi 必须安装在启动 Pi Desk 所用的 Node/npm 环境中。
+第一条命令安装 Pi，第二条安装 Pi Desk；**只安装 Pi Desk 不会自动安装 Pi**。已有可用的全局 Pi 时可跳过第一条命令。Pi 必须安装在启动 Pi Desk 所用的 Node/npm 环境中。
 
 安装后按[第一次对话](/docs/quickstart/)连接模型；遇到问题看[常见问题](/docs/faq/)。
 
@@ -64,7 +64,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest --registr
 pi --version
 ```
 
-若 Pi Desk 的启动提示要求某个版本，可将 `@latest` 换成提示中的版本，例如 `@1.0.1`。通过 Pi 官方安装脚本或其他包管理器安装的 Pi，按 [Pi 官方说明](https://pi.dev/docs/latest/cli#update-pi-or-packages)更新。
+Pi Desk 不按 Pi 版本号限制启动，而是检查实际加载和所需 SDK 能力。通过 Pi 官方安装脚本或其他包管理器安装的 Pi，按 [Pi 官方说明](https://pi.dev/docs/latest/cli#update-pi-or-packages)更新。
 
 更新完成后重新启动 Pi Desk；桌面端可先点击“重新检测”。插件更新或“重载 Pi 配置”不会升级 Pi 本体。
 

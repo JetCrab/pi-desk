@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { realpathSync } from 'node:fs'
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
@@ -15,12 +13,6 @@ const register = pathToFileURL(
   join(root, 'src/server/l4_foundation/pi/l4-pi-runtime-register.mjs')
 ).href
 const codingAgent = '@earendil-works/pi-coding-agent'
-const installVersion = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
-  .devDependencies[codingAgent]
-const requirePi = createRequire(
-  realpathSync(join(root, 'node_modules', codingAgent, 'package.json'))
-)
-const semverRoot = dirname(requirePi.resolve('semver/package.json'))
 const sdkFunctions = [
   'DefaultPackageManager',
   'DefaultResourceLoader',
@@ -86,7 +78,6 @@ async function writePi(directory, version, missingFunction) {
     )
     await writeFile(join(dependencyRoot, 'index.js'), `export const marker = '${name}:${version}';`)
   }
-  await cp(semverRoot, join(piRoot, 'node_modules', 'semver'), { recursive: true })
   await mkdir(join(piRoot, 'dist'), { recursive: true })
   await writeFile(
     join(piRoot, 'package.json'),
@@ -126,9 +117,9 @@ function assertPiInstallHelp(stderr) {
   for (const registry of ['https://registry.npmjs.org', 'https://mirrors.cloud.tencent.com/npm']) {
     assert.ok(
       stderr.includes(
-        `npm install -g --ignore-scripts ${codingAgent}@${installVersion} --registry=${registry}`
+        `npm install -g --ignore-scripts ${codingAgent}@latest --registry=${registry}`
       ),
-      '提示提供与当前包清单一致的安装命令'
+      '提示安装最新 Pi，不限定版本号'
     )
   }
   assert.match(stderr, /供中国用户加速下载/)
@@ -173,7 +164,7 @@ test('全局 Pi 缺失时检查返回 missing，启动拒绝本地回退', async
     status: 'missing',
     version: null,
     path: null,
-    installVersion: '1.0.1'
+    installVersion: 'latest'
   })
   await assert.rejects(
     run(['--import', register, '-e', "console.log('unexpected-start')"], missing),
@@ -210,35 +201,29 @@ test('Pi Desk 不变，替换全局 Pi 后新进程使用新版且三种加载�
   })
 })
 
-test('全局 Pi 版本过旧时检查和启动均提供更新指引', async (context) => {
+test('全局 Pi 按实际能力检查，不限制旧版、新版或预发布版本号', async (context) => {
   const directory = await fixture(context)
-  const piRoot = await writePi(directory, '0.99.1')
-  for (const args of [
-    [checker, '--check'],
-    ['--import', register, '-e', "console.log('unexpected-start')"]
-  ]) {
-    await assert.rejects(run(args, piRoot), (error) => {
-      assert.equal(error.code, 78)
-      assert.match(error.stderr, /过旧，需要 1\.0\.1/)
-      assertPiInstallHelp(error.stderr)
-      assert.doesNotMatch(error.stdout, /unexpected-start/)
-      return true
+  for (const version of ['0.99.1', '1.2.0', '2.0.0-beta.1']) {
+    const piRoot = await writePi(directory, version)
+    const { stdout } = await run([checker, '--check'], piRoot)
+    assert.deepEqual(JSON.parse(stdout), {
+      status: 'ready',
+      version,
+      path: await realpath(piRoot),
+      installVersion: 'latest'
     })
+    assert.equal((await loadIdentity(piRoot)).version, version)
   }
 })
 
-test('全局 Pi 核心依赖不一致或 SDK 缺失时返回前置失败', async (context) => {
+test('全局 Pi 不按内部依赖版本号拒绝运行，但 SDK 缺失时返回前置失败', async (context) => {
   const directory = await fixture(context)
   const piRoot = await writePi(directory, '1.0.1')
   const dependencyPath = join(piRoot, 'node_modules', '@earendil-works/pi-ai', 'package.json')
   const dependency = JSON.parse(await readFile(dependencyPath, 'utf8'))
   await writeFile(dependencyPath, JSON.stringify({ ...dependency, version: '0.99.1' }))
-  await assert.rejects(run([checker, '--check'], piRoot), (error) => {
-    assert.equal(error.code, 78)
-    assert.match(error.stderr, /核心依赖不一致/)
-    assertPiInstallHelp(error.stderr)
-    return true
-  })
+  const { stdout } = await run([checker, '--check'], piRoot)
+  assert.equal(JSON.parse(stdout).status, 'ready')
   await writePi(directory, '1.0.1', 'createAgentSessionFromServices')
   await assert.rejects(run([checker, '--check'], piRoot), (error) => {
     assert.equal(error.code, 78)
@@ -258,8 +243,10 @@ test('正式包与 SDK 将 Pi 设为 optional peer，保留开发版本基准', 
     '@earendil-works/pi-tui'
   ]) {
     assert.equal(host.dependencies[name], undefined)
-    assert.equal(host.devDependencies[name], '1.0.1')
+    assert.equal(host.devDependencies[name], host.devDependencies[codingAgent])
   }
+  assert.equal(host.peerDependencies[codingAgent], '*')
   assert.equal(host.peerDependenciesMeta[codingAgent].optional, true)
+  assert.equal(sdk.peerDependencies[codingAgent], '*')
   assert.equal(sdk.peerDependenciesMeta[codingAgent].optional, true)
 })

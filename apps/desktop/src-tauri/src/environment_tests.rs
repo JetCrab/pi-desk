@@ -174,6 +174,50 @@ fn pi_root_resolves_unix_bin_symlinks() {
 }
 
 #[test]
+fn pi_probe_accepts_any_version_with_a_working_cli() {
+    let directory = TestDirectory::new("pi-version-independent");
+    let state = directory.state();
+    fs::create_dir_all(&state.root).unwrap();
+    let log = directory.0.join("desktop.log");
+    let output = process::run_capture(
+        "node -p process.execPath",
+        None,
+        Duration::from_secs(10),
+        &log,
+        &|| false,
+    )
+    .unwrap();
+    assert!(output.status.success());
+    let node = process::decode_output(&output.stdout).trim().to_string();
+    mark_ready(&state, Component::Node, "v22.22.2", PathBuf::from(node));
+    let pi = directory.0.join("pi");
+    fs::create_dir_all(pi.join("dist")).unwrap();
+    for version in ["0.99.1", "1.2.0", "2.0.0-beta.1"] {
+        fs::write(
+            pi.join("package.json"),
+            serde_json::json!({
+                "name": PI_PACKAGE,
+                "version": version,
+                "bin": { "pi": "dist/cli.js" }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            pi.join("dist/cli.js"),
+            format!("console.log({});", serde_json::to_string(version).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            state.probe(Component::Pi, &pi, &|| false, &log).unwrap(),
+            version
+        );
+    }
+    fs::write(pi.join("dist/cli.js"), "process.exit(1);").unwrap();
+    assert!(state.probe(Component::Pi, &pi, &|| false, &log).is_err());
+}
+
+#[test]
 fn pi_check_entry_prefers_current_name_and_supports_legacy_packages() {
     let directory = TestDirectory::new("pi-check-entry");
     let bin = directory.0.join("node_modules/@jetcrab/pi-desk/bin");

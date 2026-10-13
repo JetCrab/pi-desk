@@ -1093,11 +1093,6 @@ impl EnvironmentState {
                 return Err("请选择 Pi coding-agent 的 package.json 或 CLI 入口".into());
             }
             let version = manifest["version"].as_str().ok_or("Pi 版本无效")?;
-            if semver::Version::parse(version).map_err(|error| error.to_string())?
-                < semver::Version::new(1, 0, 1)
-            {
-                return Err("Pi 版本过旧，请更新到 1.0.1 或选择兼容版本".into());
-            }
             let entry = manifest["bin"]
                 .as_str()
                 .or_else(|| manifest["bin"]["pi"].as_str())
@@ -1364,10 +1359,7 @@ impl EnvironmentState {
             if value["status"] == "ready" {
                 Ok(())
             } else {
-                Err(format!(
-                    "Pi 未就绪；服务需要 Pi {}，请安装兼容版本后重新检测",
-                    value["installVersion"].as_str().unwrap_or("新版")
-                ))
+                Err("Pi 未就绪，请安装或选择可用的 Pi 后重新检测".into())
             }
         });
         logging::write(
