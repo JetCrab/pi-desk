@@ -344,7 +344,10 @@ test('同一运行的制品名称跨重试稳定，构建数据仍按attempt隔�
     const steps = Object.values(workflow.jobs).flatMap((job) => job.steps ?? [])
     for (const step of steps.filter((step) => step.uses?.startsWith('actions/upload-artifact@'))) {
       assert.ok(!step.with.name.includes('github.run_attempt'), `${name} 重试不得改变制品身份`)
-      assert.equal(step.with.overwrite, true, `${name} 重跑上传须替换本run同源制品`)
+      if (name === 'release-docker' && step.with.name.startsWith('docker-image-')) {
+        assert.notEqual(step.with.overwrite, true, '已验证镜像不能被重跑覆盖')
+        assert.equal(step.if, "steps.image.outputs.reused != 'true'", '已恢复镜像不重复上传')
+      } else assert.equal(step.with.overwrite, true, `${name} 重跑上传须替换本run同源制品`)
     }
     const env = [
       workflow.env ?? {},

@@ -124,6 +124,7 @@ test('首次成功抓取只建立基线，重复与备用源历史回填不通�
   const notification = hostState.notifications[0]
   assert.ok(notification)
   assert.equal(notification.level, 'info')
+  assert.equal(notification.key, 'post:new')
   assert.deepEqual(
     runtime.snapshot().records.map((item) => item.id),
     ['new', 'old', 'backfill']
@@ -183,6 +184,7 @@ test('慢翻译不阻塞下一轮RSS抓取，且同一帖子不会重复排队',
   releaseTranslation()
   await waitFor(() => hostState.notifications.length === 1)
   assert.equal(hostState.notifications[0]?.event?.name, 'open-post')
+  assert.equal(hostState.notifications[0]?.key, 'post:new')
 })
 
 test('RSS超时后保留记录并自动进行下一轮，迟到响应不覆盖结果', async (context) => {

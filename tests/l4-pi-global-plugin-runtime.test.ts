@@ -436,6 +436,7 @@ test('Pi Desk Plugin Facade 发布全局状态和通知并在释放时清理', a
     plugin.setState({ status: 'ready' })
     plugin.registerMethod('publish', async () => ({
       notificationId: plugin.notifications.publish({
+        key: 'build:run-1',
         level: 'success',
         title: '构建完成',
         event: { name: 'open-result', data: { runId: 'run-1' } }
@@ -490,6 +491,7 @@ test('Pi Desk Plugin Facade 发布全局状态和通知并在释放时清理', a
       type: 'publish',
       pluginName: 'app-runtime-fixture',
       input: {
+        key: 'build:run-1',
         level: 'success',
         title: '构建完成',
         event: { name: 'open-result', data: { runId: 'run-1' } }

@@ -28,7 +28,12 @@ export { L3AppRuntimeTargetNotFoundError as L2AppRuntimeTargetNotFoundError }
 export type L2AppRuntime = L3AppRuntime
 
 export interface L2AppNotificationPublisher {
-  publish(input: { level: L3AppNotificationLevel; title: string; description?: string }): string
+  publish(input: {
+    key?: string
+    level: L3AppNotificationLevel
+    title: string
+    description?: string
+  }): string
   update(notificationId: string, changes: L3AppNotificationChanges): void
   delete(notificationId: string): void
   dispose(): void

@@ -1,4 +1,9 @@
 import type { L2WorkSessionListItem } from '@common/l2_biz/work-session/l2-work-session-contract'
+import type { L2ChatSource } from '@common/l2_biz/chat/l2-chat-contract'
+import {
+  projectPreviewDirectoryKey,
+  type L4ProjectPreviewState
+} from '@common/l4_foundation/file/l4-project-preview-contract'
 import type { L4CodePreviewState } from '@client/l4_foundation/ui/code/l4-code-preview'
 import { readL3ImagePreviewMode } from '@client/l3_modules/preferences/l3-work-session-file-preferences'
 import {
@@ -26,12 +31,21 @@ export interface L2SessionFileWorkspace extends L3ProjectFileState {
   readonly activePane: 'chat' | 'files'
 }
 type SourceRef = Pick<L2WorkSessionListItem, 'workId' | 'cwd' | 'sessionId' | 'branchId'>
+interface FileRoot {
+  files: L3ProjectFileRuntime
+  unsubscribe: () => void
+}
+interface SessionDirectories {
+  directories: string[]
+  defaultDirectory: string | null
+  selectedDirectory: string
+}
 interface SessionLayout {
   files: L3ProjectFileRuntime
+  roots: Map<string, FileRoot>
   windowOpen: boolean
   chatWidthPercent: number
   activePane: 'chat' | 'files'
-  unsubscribe: () => void
 }
 
 export class L2FileWorkspaceRuntime {
@@ -39,6 +53,7 @@ export class L2FileWorkspaceRuntime {
   private readonly listeners = new Set<() => void>()
   private readonly workspaces = new Map<string, SessionLayout>()
   private readonly sources = new Map<string, SourceRef>()
+  private readonly previewDirectories = new Map<string, SessionDirectories>()
   private expandedWorkId: string | null = null
   private revision = 0
   constructor(
@@ -69,6 +84,69 @@ export class L2FileWorkspaceRuntime {
   getExpandedWorkId(): string | null {
     return this.expandedWorkId
   }
+  getDirectories(workId: string): readonly string[] {
+    return this.previewDirectories.get(workId)?.directories ?? []
+  }
+  getDirectory(workId: string): string {
+    const selection = this.previewDirectories.get(workId)
+    if (!selection) throw new Error(l2WorkbenchText('sourceChanged'))
+    return selection.selectedDirectory
+  }
+  applyPreviewDirectories(source: L2ChatSource, state: L4ProjectPreviewState): void {
+    const current = this.sources.get(source.workId)
+    if (!current || current.sessionId !== source.sessionId || current.branchId !== source.branchId)
+      return
+    const previous = this.previewDirectories.get(source.workId)!
+    const unique = new Map([[projectPreviewDirectoryKey(current.cwd), current.cwd]])
+    for (const directory of state.directories) {
+      const key = projectPreviewDirectoryKey(directory)
+      if (!unique.has(key)) unique.set(key, directory)
+    }
+    const defaultDirectory = state.defaultDirectory
+      ? (unique.get(projectPreviewDirectoryKey(state.defaultDirectory)) ?? null)
+      : null
+    const previousDefaultKey = previous.defaultDirectory
+      ? projectPreviewDirectoryKey(previous.defaultDirectory)
+      : null
+    const defaultKey = defaultDirectory ? projectPreviewDirectoryKey(defaultDirectory) : null
+    const selectedDirectory =
+      previousDefaultKey !== defaultKey
+        ? (defaultDirectory ?? current.cwd)
+        : (unique.get(projectPreviewDirectoryKey(previous.selectedDirectory)) ?? current.cwd)
+    const directories = [...unique.values()]
+    if (
+      previous.defaultDirectory === defaultDirectory &&
+      previous.selectedDirectory === selectedDirectory &&
+      previous.directories.length === directories.length &&
+      previous.directories.every((directory, index) => directory === directories[index])
+    )
+      return
+    this.previewDirectories.set(source.workId, { directories, defaultDirectory, selectedDirectory })
+    const layout = this.workspaces.get(source.workId)
+    if (layout) {
+      for (const [key, root] of layout.roots) {
+        if (unique.has(key)) continue
+        root.unsubscribe()
+        root.files.dispose()
+        layout.roots.delete(key)
+      }
+      this.switchFiles(source.workId, layout)
+    }
+    this.publish()
+  }
+  selectDirectory(workId: string, directory: string): void {
+    const selection = this.previewDirectories.get(workId)
+    if (!selection) throw new Error(l2WorkbenchText('sourceChanged'))
+    const registered = selection.directories.find(
+      (candidate) => projectPreviewDirectoryKey(candidate) === projectPreviewDirectoryKey(directory)
+    )
+    if (!registered) throw new Error(l2WorkbenchText('sourceChanged'))
+    if (selection.selectedDirectory === registered) return
+    selection.selectedDirectory = registered
+    const layout = this.workspaces.get(workId)
+    if (layout) this.switchFiles(workId, layout)
+    this.publish()
+  }
   reconcileWorkSessions(sessions: readonly L2WorkSessionListItem[]): void {
     this.standaloneImages.reconcileWorkSessions(sessions)
     const next = new Map(
@@ -88,15 +166,24 @@ export class L2FileWorkspaceRuntime {
         continue
       const layout = this.workspaces.get(id)
       if (layout) {
-        layout.unsubscribe()
-        layout.files.dispose()
+        this.disposeLayout(layout)
         this.workspaces.delete(id)
-        changed = true
       }
+      this.previewDirectories.delete(id)
+      changed = true
       if (this.expandedWorkId === id) this.expandedWorkId = null
     }
     this.sources.clear()
-    for (const [id, source] of next) this.sources.set(id, source)
+    for (const [id, source] of next) {
+      this.sources.set(id, source)
+      if (!this.previewDirectories.has(id)) {
+        this.previewDirectories.set(id, {
+          directories: [source.cwd],
+          defaultDirectory: null,
+          selectedDirectory: source.cwd
+        })
+      }
+    }
     if (changed) this.publish()
   }
   ensureRoot(id: string): Promise<void> {
@@ -214,7 +301,9 @@ export class L2FileWorkspaceRuntime {
   }
   handleGitBranchChanged(cwd: string, root: string): void {
     for (const layout of this.workspaces.values()) {
-      if (layout.files.cwd === cwd) layout.files.handleGitBranchChanged(root)
+      for (const entry of layout.roots.values()) {
+        if (entry.files.cwd === cwd) entry.files.handleGitBranchChanged(root)
+      }
     }
   }
   saveEditorState(id: string, path: string, state: L4CodePreviewState | null): void {
@@ -228,12 +317,10 @@ export class L2FileWorkspaceRuntime {
   }
   dispose(): void {
     this.standaloneImages.dispose()
-    for (const layout of this.workspaces.values()) {
-      layout.unsubscribe()
-      layout.files.dispose()
-    }
+    for (const layout of this.workspaces.values()) this.disposeLayout(layout)
     this.workspaces.clear()
     this.sources.clear()
+    this.previewDirectories.clear()
     this.expandedWorkId = null
     this.listeners.clear()
   }
@@ -242,9 +329,21 @@ export class L2FileWorkspaceRuntime {
     if (!source) throw new Error(l2WorkbenchText('sourceChanged'))
     const existing = this.workspaces.get(id)
     if (existing) return existing
-    const context = { workId: id, cwd: source.cwd }
-    const files = new L3ProjectFileRuntime(
-      source.cwd,
+    const layout: SessionLayout = {
+      files: this.createFiles(id, this.getDirectory(id)),
+      roots: new Map(),
+      windowOpen: false,
+      chatWidthPercent: 50,
+      activePane: 'files'
+    }
+    this.attachRoot(id, layout, layout.files)
+    this.workspaces.set(id, layout)
+    return layout
+  }
+  private createFiles(id: string, cwd: string): L3ProjectFileRuntime {
+    const context = { workId: id, cwd }
+    return new L3ProjectFileRuntime(
+      cwd,
       {
         list: (path, signal) => this.biz.list({ ...context, path }, signal),
         search: (query, signal) => this.biz.search({ ...context, query }, signal),
@@ -266,22 +365,44 @@ export class L2FileWorkspaceRuntime {
         }
       }
     )
-    const layout: SessionLayout = {
-      files,
-      windowOpen: false,
-      chatWidthPercent: 50,
-      activePane: 'files',
-      unsubscribe: () => undefined
-    }
-    layout.unsubscribe = files.subscribe(() => {
+  }
+  private attachRoot(id: string, layout: SessionLayout, files: L3ProjectFileRuntime): void {
+    const unsubscribe = files.subscribe(() => {
+      if (layout.files !== files) return
       if (!files.state.activePath && !files.state.activeDiff && this.expandedWorkId !== id) {
         layout.windowOpen = false
         layout.activePane = 'chat'
       }
       this.publish()
     })
-    this.workspaces.set(id, layout)
-    return layout
+    layout.roots.set(projectPreviewDirectoryKey(files.cwd), { files, unsubscribe })
+  }
+  private switchFiles(id: string, layout: SessionLayout): void {
+    const directory = this.getDirectory(id)
+    const key = projectPreviewDirectoryKey(directory)
+    if (projectPreviewDirectoryKey(layout.files.cwd) === key) return
+    let root = layout.roots.get(key)
+    if (!root) {
+      const files = this.createFiles(id, directory)
+      this.attachRoot(id, layout, files)
+      root = layout.roots.get(key)!
+    }
+    layout.files = root.files
+    if (
+      !root.files.state.activePath &&
+      !root.files.state.activeDiff &&
+      this.expandedWorkId !== id
+    ) {
+      layout.windowOpen = false
+      layout.activePane = 'chat'
+    }
+  }
+  private disposeLayout(layout: SessionLayout): void {
+    for (const root of layout.roots.values()) {
+      root.unsubscribe()
+      root.files.dispose()
+    }
+    layout.roots.clear()
   }
   private publish(): void {
     this.revision += 1

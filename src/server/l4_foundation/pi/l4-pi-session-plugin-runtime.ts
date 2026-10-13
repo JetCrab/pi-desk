@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { isAbsolute, resolve } from 'node:path'
 import {
   createEventBus,
   type EventBus,
@@ -10,12 +11,19 @@ import {
   SESSION_PLUGIN_METHOD_EVENT,
   SESSION_PLUGIN_PUSH_EVENT,
   SESSION_PLUGIN_STATE_EVENT,
+  SESSION_PREVIEW_DIRECTORY_EVENT,
   type SessionPluginMethodEvent,
   type SessionPluginPushEvent,
   type SessionPluginMethodRegistration,
   type SessionPluginSource
 } from '@jetcrab/pi-desk-sdk'
 import { z } from 'zod'
+import {
+  L4_PROJECT_PREVIEW_MAX_DIRECTORIES,
+  L4_PROJECT_PREVIEW_PLUGIN_KEY,
+  projectPreviewDirectoryKey,
+  readL4ProjectPreviewState
+} from '@common/l4_foundation/file/l4-project-preview-contract'
 import { L4PiTaskRuntime, type L4PiTaskRecord, type L4PiTaskSummary } from './l4-pi-task-runtime'
 import type { L4PiTaskDetailEvent, L4PiTaskDetailWatch } from './l4-pi-task-detail-runtime'
 import {
@@ -45,6 +53,16 @@ const L4PiSessionPluginPushSchema = z
     data: L4PiSessionPluginObjectSchema
   })
   .strict()
+const L4PiSessionPreviewDirectorySchema = z
+  .object({
+    directory: z
+      .string()
+      .min(1)
+      .max(4096)
+      .refine((directory) => isAbsolute(directory) && !directory.includes('\0')),
+    default: z.boolean().optional()
+  })
+  .strict()
 const L4_PI_SESSION_PLUGIN_PUSH_MAX_BYTES = 64 * 1024
 
 export type L4PiSessionPluginObject = z.infer<typeof L4PiSessionPluginObjectSchema>
@@ -69,6 +87,7 @@ export class L4PiSessionPluginRuntime {
   private taskRuntime!: L4PiTaskRuntime
   private unsubscribe: () => void = () => undefined
   private unsubscribePush: () => void = () => undefined
+  private unsubscribePreviewDirectory: () => void = () => undefined
   private disposed = false
 
   readonly eventBus: EventBus
@@ -117,6 +136,22 @@ export class L4PiSessionPluginRuntime {
         options.onInvalidUpdate(cause)
       }
     })
+    this.unsubscribePreviewDirectory = this.controller.on(
+      SESSION_PREVIEW_DIRECTORY_EVENT,
+      (input) => {
+        if (this.disposed) return
+        const parsed = L4PiSessionPreviewDirectorySchema.safeParse(input)
+        if (!parsed.success) {
+          options.onInvalidUpdate(parsed.error)
+          return
+        }
+        try {
+          if (this.applyPreviewDirectory(parsed.data)) options.onChanged()
+        } catch (cause) {
+          options.onInvalidUpdate(cause)
+        }
+      }
+    )
     this.unsubscribePush = this.controller.on(SESSION_PLUGIN_PUSH_EVENT, (input) => {
       if (this.disposed) return
       const parsed = L4PiSessionPluginPushSchema.safeParse(input)
@@ -203,6 +238,7 @@ export class L4PiSessionPluginRuntime {
     if (this.disposed) return
     this.unsubscribe()
     this.unsubscribePush()
+    this.unsubscribePreviewDirectory()
     this.taskRuntime.dispose()
     this.controller.clear()
     this.methods.clear()
@@ -217,6 +253,7 @@ export class L4PiSessionPluginRuntime {
     this.disposed = true
     this.unsubscribe()
     this.unsubscribePush()
+    this.unsubscribePreviewDirectory()
     this.taskRuntime.dispose()
     this.controller.clear()
     this.methods.clear()
@@ -265,9 +302,32 @@ export class L4PiSessionPluginRuntime {
     this.slots.set('task-center', { serialized: JSON.stringify(value), value })
   }
 
+  private applyPreviewDirectory(input: z.infer<typeof L4PiSessionPreviewDirectorySchema>): boolean {
+    const directory = resolve(input.directory)
+    const key = projectPreviewDirectoryKey(directory)
+    const slot = this.slots.get(L4_PROJECT_PREVIEW_PLUGIN_KEY)
+    const current = readL4ProjectPreviewState(slot?.value)
+    const existing = current.directories.find((item) => projectPreviewDirectoryKey(item) === key)
+    if (!existing && current.directories.length >= L4_PROJECT_PREVIEW_MAX_DIRECTORIES) {
+      throw new Error(`会话预览目录数量已达上限 ${L4_PROJECT_PREVIEW_MAX_DIRECTORIES}`)
+    }
+    const registered = existing ?? directory
+    const value: L4PiSessionPluginObject = {
+      directories: existing ? current.directories : [...current.directories, registered],
+      defaultDirectory: input.default === true ? registered : current.defaultDirectory
+    }
+    const serialized = JSON.stringify(value)
+    if (slot?.serialized === serialized) return false
+    this.slots.set(L4_PROJECT_PREVIEW_PLUGIN_KEY, { serialized, value })
+    return true
+  }
+
   private apply(update: z.infer<typeof L4PiSessionPluginUpdateSchema>): boolean {
     if (Object.hasOwn(update, 'task-center')) {
       throw new Error('task-center plugin slot is reserved by the Task Runtime')
+    }
+    if (Object.hasOwn(update, L4_PROJECT_PREVIEW_PLUGIN_KEY)) {
+      throw new Error('project-preview 插件槽由会话预览目录登记管理')
     }
     let changed = false
     for (const [pluginName, value] of Object.entries(update)) {

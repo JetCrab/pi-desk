@@ -65,7 +65,7 @@ async function handle(request: Request, action: 'get' | 'replace'): Promise<Resp
 
     const input = L2AuthSettingsReplaceRequestSchema.safeParse(payload)
     if (!input.success) {
-      return createL4ApiErrorResponse(400, '请填写至少 8 位密码', {
+      return createL4ApiErrorResponse(400, '密码不符合要求，请按输入框下方的规则调整。', {
         key: 'auth:settingsInvalid'
       })
     }

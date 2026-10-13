@@ -477,6 +477,14 @@ export class WorkSessionManage {
     })
   }
 
+  getProjectPreviewContext(
+    workSession: WorkSession,
+    directory: string
+  ): { cwd: string; isCurrent: () => boolean } | null {
+    if (this.workSessionsById.get(workSession.workId) !== workSession) return null
+    return this.chat.getProjectPreviewContext(workSession, directory)
+  }
+
   async replaceProjectGitBranch(
     inputValue: L2WorkSessionGitBranchReplaceRequest
   ): Promise<L2WorkSessionGitBranchOperationResponse> {

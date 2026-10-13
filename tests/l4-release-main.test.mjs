@@ -16,10 +16,10 @@ import { loadReleaseRecord, saveReleaseRecord } from '../.github/scripts/release
 import {
   assembleBatch,
   publishBatch,
-  stageNpm,
   prepareBatch,
   prepareResumeBatch,
-  prepareWebsiteBatch
+  prepareWebsiteBatch,
+  cleanupBatch
 } from '../.github/scripts/release-main.mjs'
 import { sha256 } from '../.github/scripts/release-github.mjs'
 import {
@@ -140,6 +140,7 @@ function githubFixture(releases) {
   const records = new Map()
   let branch = false
   let pending
+  const tags = new Map()
   return {
     calls,
     records,
@@ -159,6 +160,29 @@ function githubFixture(releases) {
     request: async (path, options = {}) => {
       calls.push({ path, ...options })
       if (path.startsWith('/actions/workflows/')) return { workflow_runs: [] }
+      if (path.startsWith('/actions/runs/') && path.includes('/jobs?')) return { jobs: [] }
+      if (path.startsWith('/actions/runs/')) return { artifacts: [] }
+      if (path === '/releases' && options.method === 'POST') {
+        const release = {
+          ...draft({ tag: options.body.tag_name, source: { head: options.body.target_commitish } }),
+          id: releases.reduce((id, item) => Math.max(id, item.id), 10) + 1
+        }
+        releases.push(release)
+        return release
+      }
+      if (/^\/releases\/\d+$/.test(path)) {
+        const release = releases.find((item) => item.id === Number(path.split('/').at(-1)))
+        if (options.method === 'DELETE') releases.splice(releases.indexOf(release), 1)
+        else if (options.method === 'PATCH') Object.assign(release, options.body)
+        return release ?? null
+      }
+      if (path.startsWith('/git/ref/tags/')) {
+        const tag = path.slice('/git/ref/tags/'.length)
+        return tags.has(tag) ? { object: { sha: tags.get(tag) } } : null
+      }
+      if (path.startsWith('/commits/')) return { sha: tags.get(path.slice('/commits/'.length)) }
+      if (path === '/git/refs' && options.body.ref.startsWith('refs/tags/'))
+        tags.set(options.body.ref.slice('refs/tags/'.length), options.body.sha)
       if (path === '/git/ref/heads/release-data')
         return branch ? { object: { sha: 'data-head' } } : null
       if (path.startsWith('/contents/releases/')) {
@@ -522,27 +546,28 @@ test('复用安装包需验证实际字节摘要，最终记录包含四个平�
   for (const item of oldRecord.clients) old.files.set(item.file, Buffer.from(item.platform))
   await repo.save('README.md', 'next release')
   const plan = createReleasePlan(repo.root, { head: repo.commit(), previous: oldRecord, date: 2 })
-  const release = draft(plan.record)
-  release.files.set('changes.json', Buffer.from(JSON.stringify(plan.record.changes)))
-  const github = githubFixture([old, release])
-  const record = await assembleBatch({
+  const github = githubFixture([old])
+  const input = {
     github,
-    release,
     plan,
     directory: repo.root,
-    repository: 'fixture/project'
-  })
+    output: join(repo.root, 'release'),
+    changes: plan.record.changes
+  }
+  const record = await assembleBatch(input)
   assert.equal(record.clients.length, 4)
-  for (const item of record.clients) assert.equal(sha256(release.files.get(item.file)), item.sha256)
-  assert.ok(release.files.has('release.json'))
-  assert.ok(!release.files.has('release.md'))
-  release.files.set(oldRecord.clients[0].file, Buffer.from('tampered'))
-  await assert.rejects(
-    assembleBatch({ github, release, plan, directory: repo.root, repository: 'fixture/project' })
+  for (const item of record.clients)
+    assert.equal(sha256(await readFile(join(repo.root, 'release', item.file))), item.sha256)
+  assert.ok(
+    github.calls.every((call) => !call.method),
+    '汇总阶段不能写入GitHub状态'
   )
+  assert.ok(JSON.parse(await readFile(join(repo.root, 'release/release.json'))))
+  old.files.set(oldRecord.clients[0].file, Buffer.from('tampered'))
+  await assert.rejects(assembleBatch(input), /摘要/)
 })
 
-test('正式准备固定已提交版本，重跑不新增提交或推进失败基线', async (t) => {
+test('正式准备只保存固定计划，失败重跑不预建Release或推进成功基线', async (t) => {
   const repo = await fixture(t)
   await repo.pkg('pi-desk', '1.1.0')
   const source = repo.commit()
@@ -554,27 +579,25 @@ test('正式准备固定已提交版本，重跑不新增提交或推进失败�
   const releases = []
   const github = githubFixture(releases)
   const request = github.request
+  let storedPlan
   github.request = async (path, options) => {
-    if (path !== '/releases') return request(path, options)
-    assert.equal(options.body.name, options.body.tag_name)
-    const release = {
-      id: 10,
-      draft: true,
-      prerelease: false,
-      tag_name: options.body.tag_name,
-      target_commitish: options.body.target_commitish,
-      assets: [],
-      files: new Map()
-    }
-    releases.push(release)
-    return release
+    if (path.startsWith('/actions/runs/11/artifacts'))
+      return { artifacts: storedPlan ? [{ name: 'release-plan-11', expired: false }] : [] }
+    return request(path, options)
+  }
+  const download = async (_run, _name, directory) => {
+    await mkdir(directory, { recursive: true })
+    await writeFile(join(directory, 'plan.json'), JSON.stringify(storedPlan))
   }
   const output = join(repo.root, 'temp/plan')
   const first = await prepareBatch(repo.root, {
     github,
     source,
-    output
+    output,
+    runId: '11',
+    download
   })
+  storedPlan = first.plan
   assert.equal(first.outputs.sha, source)
   assert.equal(first.outputs.docker, true)
   assert.equal(repo.git('rev-parse', 'origin/main'), first.outputs.sha)
@@ -587,21 +610,41 @@ test('正式准备固定已提交版本，重跑不新增提交或推进失败�
   const again = await prepareBatch(repo.root, {
     github,
     source,
-    output
+    output,
+    runId: '11',
+    download
   })
   assert.deepEqual(again.plan, first.plan)
   assert.equal(again.outputs.sha, first.outputs.sha)
-  assert.equal(releases.length, 1)
+  assert.equal(releases.length, 0)
+  assert.ok(
+    github.calls.every((call) => !call.method),
+    '准备阶段只能读取GitHub状态'
+  )
   const previous = completed(first.plan.record)
   await saveReleaseRecord(github, previous)
-  releases[0].draft = false
-  releases[0].published_at = '2026-10-01T00:00:00Z'
+  releases.push({ ...draft(previous), draft: false, published_at: '2026-10-01T00:00:00Z' })
   await repo.pkg('pi-desk', '1.1.1')
   await repo.save('src/feature.ts', 'export const feature = true')
-  const next = await prepareBatch(repo.root, { github, source: repo.commit(), output })
+  storedPlan = undefined
+  const next = await prepareBatch(repo.root, {
+    github,
+    source: repo.commit(),
+    output,
+    runId: '11',
+    download
+  })
+  storedPlan = next.plan
   assert.equal(next.outputs.check_base, source)
-  const retry = await prepareBatch(repo.root, { github, source: next.outputs.sha, output })
-  assert.equal(retry.outputs.check_base, source, '草稿重试继续原计划的成功基线')
+  const retry = await prepareBatch(repo.root, {
+    github,
+    source: next.outputs.sha,
+    output,
+    runId: '11',
+    download
+  })
+  assert.equal(retry.outputs.check_base, source, '重试继续原计划的成功基线')
+  assert.deepEqual(retry.plan, next.plan)
 })
 
 test('正式tag独立递增且不复用失败批次占用的版本', () => {
@@ -611,39 +654,194 @@ test('正式tag独立递增且不复用失败批次占用的版本', () => {
   assert.equal(nextReleaseTag('1.0.0', 'v1.0.0', ['v1.0.2', 'v1.0.1']), 'v1.0.3')
 })
 
-test('正式记录持久保存后才移除内部附件，公开失败仍可重试', async (t) => {
+test('末端公开失败清理本次草稿，原始制品和固定记录仍可重试', async (t) => {
   const repo = await fixture(t)
   const record = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
-  const release = draft(record)
-  const github = githubFixture([release])
-  await github.putAsset(release, 'release.json', Buffer.from(JSON.stringify(record)))
-  await github.putAsset(release, 'release.md', Buffer.from('old presentation'))
-  await github.putAsset(release, 'plan.json', Buffer.from('{}'))
-  await github.putAsset(release, 'docker-image.json', Buffer.from('{}'))
-  await github.putAsset(release, 'pi-desk-docker.tar.gz', Buffer.from('verified image'))
+  const releases = []
+  const github = githubFixture(releases)
   for (const client of record.clients)
-    await github.putAsset(release, client.file, Buffer.from(client.platform))
+    await writeFile(join(repo.root, client.file), Buffer.from(client.platform))
   const request = github.request
   let failed = false
   github.request = async (path, options) => {
-    if (path === `/releases/${release.id}` && options?.method === 'PATCH' && !failed) {
+    if (/^\/releases\/\d+$/.test(path) && options?.method === 'PATCH' && !failed) {
       failed = true
       throw Error('临时公开失败')
     }
     return request(path, options)
   }
-  await assert.rejects(
-    publishBatch({ github, release, repository: 'fixture/project' }),
-    /临时公开失败/
-  )
+  const input = { github, record, directory: repo.root, repository: 'fixture/project' }
+  await assert.rejects(publishBatch(input), /临时公开失败/)
+  assert.equal(releases.length, 0, '末端失败不能留下本次新建草稿')
   assert.deepEqual(await loadReleaseRecord(github, record.tag), record)
+  for (const client of record.clients)
+    assert.equal(sha256(await readFile(join(repo.root, client.file))), client.sha256)
+  await publishBatch(input)
+  assert.equal(releases.length, 1)
+  assert.equal(releases[0].draft, false)
   assert.deepEqual(
-    release.assets.map((item) => item.name).sort(),
+    releases[0].assets.map((item) => item.name).sort(),
     record.clients.map((item) => item.file).sort()
   )
-  await publishBatch({ github, release, repository: 'fixture/project' })
-  assert.ok(github.calls.some((call) => call.method === 'PATCH' && call.body.name === 'v1.0.0'))
+  await cleanupBatch({ github, plan: { record }, directory: repo.root })
+  assert.equal(releases.length, 1, '清理步骤不能删除已公开版本')
   await assert.rejects(saveReleaseRecord(github, { ...record, date: 2 }), /拒绝覆盖/)
+})
+
+test('安装包摘要错误在创建Release之前失败', async (t) => {
+  const repo = await fixture(t)
+  const record = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
+  const github = githubFixture([])
+  for (const client of record.clients) await writeFile(join(repo.root, client.file), 'tampered')
+  await assert.rejects(
+    publishBatch({ github, record, directory: repo.root, repository: 'fixture/project' }),
+    /摘要/
+  )
+  assert.ok(!github.calls.some((call) => call.path === '/releases' && call.method === 'POST'))
+})
+
+test('公开请求成功但响应丢失时不能清理已公开版本', async (t) => {
+  const repo = await fixture(t)
+  const record = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
+  const releases = []
+  const github = githubFixture(releases)
+  for (const client of record.clients)
+    await writeFile(join(repo.root, client.file), Buffer.from(client.platform))
+  const request = github.request
+  github.request = async (path, options) => {
+    const result = await request(path, options)
+    if (/^\/releases\/\d+$/.test(path) && options?.method === 'PATCH') throw Error('公开响应丢失')
+    return result
+  }
+  await assert.rejects(
+    publishBatch({ github, record, directory: repo.root, repository: 'fixture/project' }),
+    /公开响应丢失/
+  )
+  assert.equal(releases.length, 1)
+  assert.equal(releases[0].draft, false)
+  assert.ok(!github.calls.some((call) => call.method === 'DELETE'))
+})
+
+test('安装包上传失败只清理本次草稿，不影响已公开版本', async (t) => {
+  const repo = await fixture(t)
+  const previous = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
+  const published = { ...draft(previous), draft: false, published_at: '2026-10-01T00:00:00Z' }
+  const releases = [published]
+  const github = githubFixture(releases)
+  await saveReleaseRecord(github, previous)
+  const record = {
+    ...previous,
+    tag: 'v1.0.1',
+    date: 2,
+    source: { base: repo.head, head: 'b'.repeat(40) }
+  }
+  for (const client of record.clients)
+    await writeFile(join(repo.root, client.file), Buffer.from(client.platform))
+  github.putAsset = async () => {
+    throw Error('安装包上传中断')
+  }
+  await assert.rejects(
+    publishBatch({ github, record, directory: repo.root, repository: 'fixture/project' }),
+    /安装包上传中断/
+  )
+  assert.deepEqual(releases, [published])
+  assert.equal(await loadReleaseRecord(github, record.tag, { optional: true }), null)
+})
+
+test('清理失败保留原始发布错误并报告草稿残留', async (t) => {
+  const repo = await fixture(t)
+  const record = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
+  const releases = []
+  const github = githubFixture(releases)
+  for (const client of record.clients)
+    await writeFile(join(repo.root, client.file), Buffer.from(client.platform))
+  github.putAsset = async () => {
+    throw Error('原始上传失败')
+  }
+  const request = github.request
+  github.request = async (path, options) => {
+    if (/^\/releases\/\d+$/.test(path) && options?.method === 'DELETE') throw Error('清理网络失败')
+    return request(path, options)
+  }
+  const messages = []
+  t.mock.method(console, 'error', (message) => messages.push(message))
+  await assert.rejects(
+    publishBatch({ github, record, directory: repo.root, repository: 'fixture/project' }),
+    /原始上传失败/
+  )
+  assert.equal(releases.length, 1)
+  assert.ok(
+    messages.some((message) => message.includes('清理网络失败') && message.includes(record.tag))
+  )
+})
+
+test('工作流只在末端写Release，内部发布包支持失败重试', async () => {
+  const workflow = await readWorkflow('release-main')
+  for (const name of ['prepare', 'notes', 'assemble'])
+    assert.equal(workflow.jobs[name].permissions.contents, 'read')
+  assert.equal(workflow.jobs.publish.permissions.contents, 'write')
+  const bundle = workflow.jobs.assemble.steps.find((step) =>
+    step.with?.name?.startsWith('release-bundle-')
+  )
+  assert.equal(bundle.uses, 'actions/upload-artifact@v4')
+  assert.ok(
+    workflow.jobs.publish.steps.some(
+      (step) => step.uses === 'actions/download-artifact@v4' && step.with.name === bundle.with.name
+    )
+  )
+  const cleanup = workflow.jobs.publish.steps.find((step) =>
+    step.run?.endsWith('release-main.mjs cleanup')
+  )
+  assert.equal(cleanup.if, 'failure() || cancelled()')
+  const notes = workflow.jobs.notes.steps.find((step) =>
+    step.with?.name?.startsWith('release-review-')
+  )
+  assert.ok(notes.with.path.split('\n').some((path) => path.endsWith('/changes.json')))
+})
+
+test('无Release草稿也能从Actions固定计划续跑原源码', async (t) => {
+  const repo = await fixture(t)
+  const plan = createReleasePlan(repo.root, { head: repo.head, date: 1 })
+  await repo.save('.github/workflows/release-main.yml', 'fixed scheduling')
+  const current = repo.commit()
+  const github = githubFixture([])
+  const request = github.request
+  github.request = async (path, options) => {
+    if (path.startsWith('/actions/workflows/')) return { workflow_runs: [{ id: 11 }] }
+    if (path.includes('/artifacts?'))
+      return { artifacts: [{ name: 'release-plan-11', expired: false }] }
+    return request(path, options)
+  }
+  const result = await prepareResumeBatch(repo.root, {
+    github,
+    tag: plan.record.tag,
+    source: current,
+    output: join(repo.root, 'temp/resume'),
+    runId: '12',
+    download: async (_run, _name, directory) => {
+      await mkdir(directory, { recursive: true })
+      await writeFile(join(directory, 'plan.json'), JSON.stringify(plan))
+    }
+  })
+  assert.deepEqual(result.plan, plan)
+  assert.equal(result.outputs.sha, repo.head)
+  assert.equal(result.outputs.tag, plan.record.tag)
+  assert.equal(result.outputs.published, false)
+  assert.ok(
+    github.calls.every((call) => !call.method),
+    '续跑准备不能创建或修改Release'
+  )
+})
+
+test('旧草稿缺少固定计划时停止，不重新分配批次', async (t) => {
+  const repo = await fixture(t)
+  const plan = createReleasePlan(repo.root, { head: repo.head, date: 1 })
+  const github = githubFixture([draft(plan.record)])
+  await assert.rejects(
+    prepareBatch(repo.root, { github, source: repo.head, output: join(repo.root, 'temp/plan') }),
+    /固定计划/
+  )
+  assert.ok(github.calls.every((call) => !call.method))
 })
 
 test('修复调度后续跑原草稿，源码和版本不变且不接受已公开记录', async (t) => {
@@ -706,7 +904,7 @@ test('只重部署最新官网，不创建新Release或重发产品', async (t) 
   )
 })
 
-test('恢复到草稿的客户端不重新构建，汇总核对并复用原字节', async (t) => {
+test('旧草稿客户端恢复至工作流内部，汇总核对原字节而不重新构建', async (t) => {
   const repo = await fixture(t)
   const plan = createReleasePlan(repo.root, { head: repo.head })
   const release = draft(plan.record)
@@ -730,9 +928,10 @@ test('恢复到草稿的客户端不重新构建，汇总核对并复用原字�
   for (const platform of clientPlatforms) assert.equal(prepared.outputs[platform], false)
   const record = await assembleBatch({
     github,
-    release,
     plan,
-    directory: join(repo.root, 'never-built')
+    directory: join(repo.root, 'temp/plan/restored/clients'),
+    output: join(repo.root, 'release'),
+    changes: JSON.parse(await readFile(join(repo.root, 'temp/plan/restored/notes/changes.json')))
   })
   assert.equal(record.clients.length, 4)
   for (const client of record.clients)
@@ -742,10 +941,11 @@ test('恢复到草稿的客户端不重新构建，汇总核对并复用原字�
 test('发布自动创建固定提交tag，不移动已有不同提交的tag', async (t) => {
   const repo = await fixture(t)
   const record = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
-  const release = draft(record)
-  release.files.set('release.json', Buffer.from(JSON.stringify(record)))
-  const github = githubFixture([release])
-  await publishBatch({ github, release, repository: 'fixture/project' })
+  const github = githubFixture([])
+  for (const client of record.clients)
+    await writeFile(join(repo.root, client.file), Buffer.from(client.platform))
+  const input = { github, record, directory: repo.root, repository: 'fixture/project' }
+  await publishBatch(input)
   assert.ok(github.calls.some((call) => call.path === '/git/refs' && call.body.sha === repo.head))
   assert.ok(github.calls.some((call) => call.method === 'PATCH' && call.body.draft === false))
   const request = github.request
@@ -754,7 +954,7 @@ test('发布自动创建固定提交tag，不移动已有不同提交的tag', as
     if (path.startsWith('/commits/')) return { sha: 'b'.repeat(40) }
     return request(path, options)
   }
-  await assert.rejects(publishBatch({ github, release, repository: 'fixture/project' }), /拒绝移动/)
+  await assert.rejects(publishBatch(input), /拒绝移动/)
 })
 
 test('npm重试从草稿恢复原已验证tarball，不采用重新构建的不同内容', async (t) => {
@@ -763,11 +963,13 @@ test('npm重试从草稿恢复原已验证tarball，不采用重新构建的不�
   plan.npm = ['pi-desk']
   const release = draft(plan.record)
   const name = 'jetcrab-pi-desk-1.0.0.tgz'
-  release.files.set(name, Buffer.from('verified package'))
-  release.assets.push({ id: 1, name })
-  await writeFile(join(repo.root, name), 'rebuilt package')
-  await stageNpm({ github: githubFixture([release]), release, plan, directory: repo.root })
-  assert.equal(await readFile(join(repo.root, name), 'utf8'), 'verified package')
+  const github = githubFixture([release])
+  await github.putAsset(release, 'plan.json', Buffer.from(JSON.stringify(plan)))
+  await github.putAsset(release, name, Buffer.from('verified package'))
+  const output = join(repo.root, 'temp/plan')
+  const result = await prepareBatch(repo.root, { github, source: repo.head, output })
+  assert.equal(result.outputs.npm_ready, true)
+  assert.equal(await readFile(join(output, 'restored/npm', name), 'utf8'), 'verified package')
 })
 
 test('发布记录拒绝路径逃逸、未签名Android包和重复平台', async (t) => {

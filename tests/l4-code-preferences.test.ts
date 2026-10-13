@@ -70,7 +70,7 @@ function runtime(): L3ProjectFileRuntime {
   return new L3ProjectFileRuntime('C:/project', reader, { imagePreviewMode: () => 'compressed' })
 }
 
-test('代码偏好默认换行，保存开启和关闭，并向同页面消费者和其他标签页同步', () => {
+test('代码偏好默认换行且不折叠未变更行，保存选择并向同页面消费者和其他标签页同步', () => {
   const fixture = browserFixture()
   const seen: boolean[] = []
   const unsubscribe = subscribeL4CodePreferences(() => seen.push(readL4CodePreferences().wrapLines))
@@ -78,20 +78,21 @@ test('代码偏好默认换行，保存开启和关闭，并向同页面消费�
     assert.deepEqual(readL4CodePreferences(), {
       wrapLines: true,
       diffViewMode: 'side-by-side',
-      collapseUnchanged: true
+      collapseUnchanged: false
     })
     saveL4CodePreferences({ wrapLines: false })
     assert.equal(readL4CodePreferences().wrapLines, false)
     assert.equal(JSON.parse(fixture.browser.values.get(STORAGE_KEY)!).wrapLines, false)
-    saveL4CodePreferences({ diffViewMode: 'inline', collapseUnchanged: false })
+    saveL4CodePreferences({ diffViewMode: 'inline', collapseUnchanged: true })
     assert.deepEqual(JSON.parse(fixture.browser.values.get(STORAGE_KEY)!), {
       wrapLines: false,
       diffViewMode: 'inline',
-      collapseUnchanged: false
+      collapseUnchanged: true
     })
     fixture.browser.values.set(STORAGE_KEY, JSON.stringify({ wrapLines: true }))
     fixture.browser.changed(STORAGE_KEY)
     assert.equal(readL4CodePreferences().wrapLines, true)
+    assert.equal(readL4CodePreferences().collapseUnchanged, false)
     assert.deepEqual(seen, [false, false, true])
     fixture.browser.values.clear()
     fixture.browser.changed(null)
@@ -108,6 +109,7 @@ test('迁移旧项目预览换行选择，不覆盖已有统一偏好或修改�
   try {
     assert.equal(readL4CodePreferences().wrapLines, false)
     assert.equal(JSON.parse(fixture.browser.values.get(STORAGE_KEY)!).wrapLines, false)
+    assert.equal(readL4CodePreferences().collapseUnchanged, false)
     assert.equal(fixture.browser.values.get(LEGACY_KEY), legacy)
     fixture.browser.values.set(LEGACY_KEY, JSON.stringify({ wrapLines: true }))
     fixture.browser.changed(STORAGE_KEY)
@@ -138,7 +140,7 @@ test('文件和 Diff 共用选择，切换、重新加载、关闭重开不恢�
     await setImmediate()
     second.setDiffWrapLines(true)
     second.setDiffViewMode('inline')
-    second.setDiffCollapseUnchanged(false)
+    second.setDiffCollapseUnchanged(true)
     second.reloadDiff()
     await setImmediate()
     second.openDiff('', 'c.ts')
@@ -146,7 +148,7 @@ test('文件和 Diff 共用选择，切换、重新加载、关闭重开不恢�
     assert.deepEqual(readL4CodePreferences(), {
       wrapLines: true,
       diffViewMode: 'inline',
-      collapseUnchanged: false
+      collapseUnchanged: true
     })
     first.setWrapLines('a.ts', false)
     assert.equal(readL4CodePreferences().wrapLines, false)

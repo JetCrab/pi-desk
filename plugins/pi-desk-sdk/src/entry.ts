@@ -79,6 +79,8 @@ export interface PluginNotificationEventInput {
 }
 
 export interface PluginNotificationPublishInput {
+  /** 同一插件内的业务去重标识，去除首尾空白后为 1～256 字符。 */
+  key?: string
   level: PluginNotificationLevel
   title: string
   description?: string

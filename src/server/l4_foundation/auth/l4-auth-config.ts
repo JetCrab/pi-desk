@@ -19,6 +19,15 @@ const ReadAuthConfigSchema = AuthConfigSchema.extend({
 
 type AuthConfig = z.infer<typeof AuthConfigSchema>
 
+let activePasswordVerifications = 0
+
+export class L4AuthBusyError extends Error {
+  constructor() {
+    super('登录尝试过多，请稍后重试。')
+    this.name = 'L4AuthBusyError'
+  }
+}
+
 export interface L4AuthCredentials extends AuthConfig {
   sessionSecret: string
 }
@@ -97,9 +106,16 @@ export async function verifyL4AuthPassword(
   password: string,
   passwordHash: string
 ): Promise<boolean> {
-  const [, salt, expected] = passwordHash.split(':')
-  const actual = await derivePassword(password, salt)
-  return timingSafeEqual(actual, Buffer.from(expected, 'hex'))
+  if (activePasswordVerifications >= 2) throw new L4AuthBusyError()
+  activePasswordVerifications += 1
+  try {
+    const [, salt, expected] = passwordHash.split(':')
+    const actual = await derivePassword(password, salt)
+    return timingSafeEqual(actual, Buffer.from(expected, 'hex'))
+  } finally {
+    // 计算完成才释放，不随 HTTP 连接提前关闭而释放。
+    activePasswordVerifications -= 1
+  }
 }
 
 export function writeL4AuthConfig(config: AuthConfig | null): void {

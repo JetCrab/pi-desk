@@ -24,19 +24,7 @@ async function fixture(t) {
   await mkdir(parent, { recursive: true })
   const directory = await mkdtemp(join(parent, 'batch-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const files = new Map()
-  const release = { draft: true, target_commitish: source, assets: [] }
-  const github = {
-    asset: async (_release, name) => files.get(name),
-    putAsset: async (_release, name, bytes) => {
-      if (files.has(name)) assert.equal(sha256(files.get(name)), sha256(bytes))
-      else {
-        files.set(name, bytes)
-        release.assets.push({ name })
-      }
-    }
-  }
-  return { directory, files, release, github }
+  return { directory }
 }
 
 function inspection(id = imageId) {
@@ -70,35 +58,25 @@ test('镜像使用同批主包和SDK，Pi单独安装并拒绝开发版本', () 
   assert.throws(() => dockerInstallManifests(host, { ...sdk, version: '1.1.0-dev.1' }))
 })
 
-test('已验证镜像上传后可按原摘要恢复，损坏或错批次禁止复用', async (t) => {
+test('工作流制品中的已验证镜像按原摘要复用，损坏或错批次禁止复用', async (t) => {
   const f = await fixture(t)
   const bytes = Buffer.from('same verified image')
   await writeFile(join(f.directory, dockerAssets.archive), bytes)
   await stageDockerImage({ ...f, source, version, imageId })
-  await writeFile(join(f.directory, dockerAssets.archive), 'different rebuilt image')
   assert.equal(await restoreDockerImage({ ...f, source, version }), true)
   assert.deepEqual(await readFile(join(f.directory, dockerAssets.archive)), bytes)
-  const record = JSON.parse(f.files.get(dockerAssets.record))
+  const record = JSON.parse(await readFile(join(f.directory, dockerAssets.record)))
   assert.equal(record.sha256, sha256(bytes))
   await assert.rejects(restoreDockerImage({ ...f, source: 'd'.repeat(40), version }))
-  f.files.set(dockerAssets.archive, Buffer.from('tampered'))
+  await writeFile(join(f.directory, dockerAssets.archive), 'tampered')
   await assert.rejects(restoreDockerImage({ ...f, source, version }), /摘要/)
 })
 
-test('镜像记录上传中断时仍复用先保存的压缩镜像，不覆盖原内容', async (t) => {
+test('没有镜像制品时允许构建，但归档不完整时不能冒充可复用镜像', async (t) => {
   const f = await fixture(t)
-  const bytes = Buffer.from('verified before interrupted record upload')
-  f.files.set(dockerAssets.archive, bytes)
-  f.release.assets.push({ name: dockerAssets.archive })
-  const calls = []
-  const run = (args) => {
-    calls.push(args)
-    if (args[0] === 'image') return JSON.stringify([inspection()])
-    return ''
-  }
-  assert.equal(await restoreDockerImage({ ...f, source, version, run }), true)
-  assert.ok(calls.some((args) => args[0] === 'load'))
-  assert.equal(JSON.parse(f.files.get(dockerAssets.record)).sha256, sha256(bytes))
+  assert.equal(await restoreDockerImage({ ...f, source, version }), false)
+  await writeFile(join(f.directory, dockerAssets.archive), 'verified image without record')
+  await assert.rejects(restoreDockerImage({ ...f, source, version }), /记录|完整/)
 })
 
 test('首次发布推固定版本与latest，同摘要重试不覆盖固定版本', async (t) => {
@@ -172,15 +150,18 @@ test('已有固定版本内容不同或无法确认远端状态时不推送', as
   assert.ok(calls.every((args) => args[0] !== 'push'))
 })
 
-test('Docker复用工作流的两个调用入口均授予构建与发布所需权限', async () => {
+test('Docker构建通过Actions恢复制品，不再需要写入Release草稿', async () => {
   const main = await readWorkflow('release-main')
+  const workflow = await readWorkflow('release-docker')
   for (const name of ['docker-build', 'docker']) {
     const job = main.jobs[name]
     assert.equal(job.uses, './.github/workflows/release-docker.yml')
     const permissions = job.permissions ?? main.permissions
-    for (const permission of ['contents', 'packages'])
-      assert.equal(permissions[permission], 'write', `${name} 缺少 ${permission}: write`)
+    assert.equal(permissions.actions, 'read', `${name} 缺少 actions: read`)
+    assert.equal(permissions.packages, 'write', `${name} 缺少 packages: write`)
   }
+  assert.equal(workflow.jobs.build.permissions.contents, 'read')
+  assert.equal(workflow.jobs.build.permissions.actions, 'read')
 })
 
 test('无隧道更新的批次仍构建镜像，正式公开要求镜像任务真实成功', async () => {

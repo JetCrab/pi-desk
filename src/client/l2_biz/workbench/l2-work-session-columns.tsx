@@ -329,6 +329,7 @@ const WorkSessionColumn = memo(function WorkSessionColumn({
               </div>
             </header>
             <L2WorkbenchChatView
+              active={contentActive}
               visible={chatVisible && contentActive}
               workSession={workSession}
               chatRuntime={chatRuntime}

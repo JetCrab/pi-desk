@@ -113,12 +113,8 @@ function allowHttpRequest(
   try {
     authenticated = authRuntime?.isAuthenticated(request.headers.cookie) ?? false
   } catch {
-    endHttpAuthError(
-      response,
-      503,
-      '登录保护配置无法读取，请修复配置或删除 auth.json 后重新设置',
-      'auth:configUnavailable'
-    )
+    console.error('[Pi Desk][NodeServer] 登录保护配置读取失败')
+    endHttpAuthError(response, 503, '登录暂不可用，请稍后重试。', 'auth:unavailable')
     return false
   }
   if (pathname === LOGIN_PAGE_PATH) {
@@ -399,7 +395,8 @@ async function startServer(): Promise<void> {
     try {
       authenticated = authRuntime.isAuthenticated(request.headers.cookie)
     } catch {
-      rejectUpgrade(socket, 503, '登录保护配置无法读取')
+      console.error('[Pi Desk][NodeServer] 握手认证配置读取失败')
+      rejectUpgrade(socket, 503, '登录暂不可用，请稍后重试。')
       return
     }
     if (!authenticated) {

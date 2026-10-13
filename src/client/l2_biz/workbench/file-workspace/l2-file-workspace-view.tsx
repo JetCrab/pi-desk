@@ -53,8 +53,11 @@ export function L2FileWorkspaceView({
 }: L2FileWorkspaceViewProps): React.JSX.Element | null {
   const { t } = useTranslation('workbench')
   useSyncExternalStore(runtime.subscribe, runtime.getRevision, runtime.getRevision)
-  const { workId, cwd, projectName } = workSession
+  const { workId, projectName } = workSession
+  const cwd = runtime.getDirectory(workId)
   const workspace = runtime.getWorkspace(workId)
+  const directoryName = cwd.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) ?? cwd
+  const previewProjectName = cwd === workSession.cwd ? projectName : directoryName
   const [directoryOpen, setDirectoryOpen] = useState(true)
   const documentRef = useRef<L3ProjectDocumentHandle>(null)
   const expanded = presentation === 'expanded'
@@ -137,9 +140,9 @@ export function L2FileWorkspaceView({
           </p>
           <p
             className="truncate text-xs text-muted-foreground"
-            title={`${projectName} · ${diffPath ?? activePath ?? cwd}`}
+            title={`${cwd} · ${diffPath ?? activePath ?? ''}`}
           >
-            {projectName}
+            {previewProjectName}
             {(diffPath ?? activePath) ? ` · ${diffPath ?? activePath}` : ''}
           </p>
         </div>
@@ -178,7 +181,7 @@ export function L2FileWorkspaceView({
                   size="icon-sm"
                   aria-label={t('newTerminal')}
                   title={t('newTerminal')}
-                  onClick={() => onOpenTerminal(cwd)}
+                  onClick={() => onOpenTerminal(workSession.cwd)}
                 >
                   <TerminalIcon className="size-4" />
                 </Button>
@@ -197,7 +200,7 @@ export function L2FileWorkspaceView({
             </div>
             <L2ProjectFileBrowser
               workId={workId}
-              cwd={cwd}
+              cwd={workSession.cwd}
               projectName={projectName}
               runtime={runtime}
               gitRuntime={gitRuntime}
@@ -217,6 +220,7 @@ export function L2FileWorkspaceView({
             onClose={(path, scope) => runtime.closeTabs(workId, path, scope)}
           />
           <L3ProjectDocumentView
+            key={cwd}
             ref={documentRef}
             runtime={runtime.getFileRuntime(workId)}
             gitRuntime={gitRuntime}

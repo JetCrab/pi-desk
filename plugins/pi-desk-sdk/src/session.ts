@@ -11,6 +11,7 @@ export const SESSION_PLUGIN_STATE_EVENT = 'pi-desk:session-plugins'
 export const SESSION_PLUGIN_METHOD_EVENT = 'pi-desk:session-plugin-methods:v1'
 export const SESSION_PLUGIN_PUSH_EVENT = 'pi-desk:session-plugin-push:v1'
 export const SESSION_PLUGIN_CAPABILITIES_EVENT = 'pi-desk:session-capabilities'
+export const SESSION_PREVIEW_DIRECTORY_EVENT = 'pi-desk:session-preview-directory'
 
 export type SessionCapabilityHandler = (
   rules: SessionCapabilityRules,
@@ -66,6 +67,7 @@ export type SessionPluginMethodEvent =
 export interface SessionPluginFacade {
   readonly name: string
   setState(state: PluginJsonObject | null): void
+  addPreviewDirectory(directory: string, options?: { default?: boolean }): void
   push(event: string, data: PluginJsonObject): void
   registerMethod(method: string, execute: SessionPluginMethodHandler): () => void
   onCapabilitiesChange(handler: SessionCapabilityHandler): () => void
@@ -99,6 +101,12 @@ export function bindSessionPlugin(pi: ExtensionAPI, pluginName: string): Session
     name,
     setState(state): void {
       pi.events.emit(SESSION_PLUGIN_STATE_EVENT, { [name]: state })
+    },
+    addPreviewDirectory(directory, options): void {
+      pi.events.emit(SESSION_PREVIEW_DIRECTORY_EVENT, {
+        directory,
+        ...(options?.default === undefined ? {} : { default: options.default })
+      })
     },
     push(eventInput, data): void {
       const event = normalizePluginIdentifier(eventInput, 'event')

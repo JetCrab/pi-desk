@@ -11,7 +11,10 @@ export async function loginL2Auth(clientId: string, input: L2AuthLoginRequest): 
   const parsed = L2AuthLoginRequestSchema.safeParse(input)
   if (!parsed.success) {
     throw new Error(
-      l4LocalizedErrorMessage({ msg: '登录参数无效', i18n: { key: 'auth:invalidInput' } })
+      l4LocalizedErrorMessage({
+        msg: '登录失败，请检查登录信息后重试。',
+        i18n: { key: 'auth:invalidInput' }
+      })
     )
   }
   const response = await fetch('/api/auth/login', {

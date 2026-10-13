@@ -217,6 +217,52 @@ function customMessage(text: string): Extract<L4PiChatMessage, { type: 'custom' 
   }
 }
 
+test('预览目录授权仅接受当前会话CWD与登记目录，重建后旧授权失效', async () => {
+  let emit!: (event: PiChatWorkerEvent) => void
+  const fixture = await createFixture(
+    {
+      async send() {
+        throw new Error('授权测试不发送模型请求')
+      },
+      async compact() {}
+    },
+    (runtime) => {
+      emit = installChatSnapshot(runtime, () => [])
+    }
+  )
+  try {
+    const { chatRuntime, workSession, piRuntime } = fixture
+    const original = chatRuntime.getProjectPreviewContext(workSession, workSession.cwd)
+    assert.equal(original?.cwd, workSession.cwd)
+    assert.equal(piRuntime.isWorkerInitialized, false)
+    const directory = join(workSession.cwd, 'isolated')
+    assert.equal(chatRuntime.getProjectPreviewContext(workSession, directory), null)
+    const runtime = {
+      extensionMode: 'normal' as const,
+      initializationError: null,
+      queues: { steering: [], followUp: [] },
+      model: null,
+      capabilityMode: null,
+      contextUsage: null,
+      plugins: { 'project-preview': { directories: [directory], defaultDirectory: directory } }
+    }
+    emit({ type: 'runtime_changed', runtime })
+    const registered = chatRuntime.getProjectPreviewContext(workSession, directory)
+    assert.equal(registered?.cwd, directory)
+    assert.equal(registered?.isCurrent(), true)
+    assert.equal(chatRuntime.getProjectPreviewContext(workSession, join(directory, 'nested')), null)
+    assert.equal(piRuntime.isWorkerInitialized, false)
+    emit({ type: 'runtime_changed', runtime: { ...runtime, plugins: {} } })
+    assert.equal(registered?.isCurrent(), false)
+    assert.equal(original?.isCurrent(), true)
+    await chatRuntime.refreshWorkSession(workSession)
+    assert.equal(original?.isCurrent(), false)
+    assert.equal(chatRuntime.getProjectPreviewContext(workSession, directory), null)
+  } finally {
+    await fixture.dispose()
+  }
+})
+
 test('有效cursor只返回后缀且保留Canonical Detail，无效cursor回退全量', async () => {
   const entries = [
     assistantEntry('cursor-first', 'first', 'first-thinking', 100),

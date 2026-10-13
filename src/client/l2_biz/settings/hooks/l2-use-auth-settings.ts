@@ -5,7 +5,12 @@ import { useTranslation } from 'react-i18next'
 import type { L2AuthSettings } from '@common/l2_biz/auth/l2-auth-contract'
 import { useL4AppSocket } from '@client/l4_foundation/realtime/app-socket/l4-app-socket'
 import { useL4ConfirmDialog } from '@client/l4_foundation/ui/l4-confirm-dialog'
-import { getL2AuthSettings, logoutL2Auth, replaceL2AuthSettings } from '../l2-auth-settings-biz'
+import {
+  generateL2AuthPassword,
+  getL2AuthSettings,
+  logoutL2Auth,
+  replaceL2AuthSettings
+} from '../l2-auth-settings-biz'
 
 interface AuthSettingsState {
   settings: L2AuthSettings | null
@@ -17,6 +22,7 @@ interface AuthSettingsState {
   setPassword: (value: string) => void
   retry: () => void
   save: () => Promise<void>
+  generatePassword: () => void
   disable: () => Promise<void>
   logout: () => Promise<void>
   dialog: React.JSX.Element | null
@@ -50,6 +56,16 @@ export function useL2AuthSettings(): AuthSettingsState {
       })
     return () => controller.abort()
   }, [clientId, attempt, t])
+
+  const generatePassword = (): void => {
+    if (pending.current) return
+    try {
+      setPassword(generateL2AuthPassword())
+      setError(null)
+    } catch {
+      setError(t('generatePasswordFailed'))
+    }
+  }
 
   const save = async (): Promise<void> => {
     if (pending.current || !settings) return
@@ -111,6 +127,7 @@ export function useL2AuthSettings(): AuthSettingsState {
     password,
     setPassword,
     save,
+    generatePassword,
     disable,
     logout,
     dialog,

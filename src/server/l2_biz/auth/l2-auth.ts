@@ -19,12 +19,56 @@ import {
   type L4AuthCredentials
 } from '@server/l4_foundation/auth/l4-auth-config'
 import { appendL4LoginRecord } from '@server/l4_foundation/auth/l4-login-record-store'
+import {
+  getL3AppNotificationRuntime,
+  type L3AppNotificationPublisher,
+  type L3AppNotificationRuntime
+} from '@server/l3_modules/app-runtime/l3-app-notification-runtime'
+import { getL4HostSettingsStore } from '@server/l4_foundation/l4-host-settings-store'
+import { L2_AUTH_MESSAGES } from '@common/l2_biz/auth/l2-auth-messages'
 
 export const L2_WEB_SESSION_COOKIE_NAME = 'pi-desk-session'
 const WEB_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 
+function recordLoginResult(success: boolean): void {
+  const runtime = getL3AppNotificationRuntime()
+  const loginAttempts = (globalThis.__piDeskLoginAttempts ??= new WeakMap())
+  let attempts = loginAttempts.get(runtime)
+  if (!attempts) {
+    attempts = { failures: 0, publisher: runtime.createPublisher() }
+    loginAttempts.set(runtime, attempts)
+  }
+  if (success) {
+    attempts.failures = 0
+    return
+  }
+  attempts.failures += 1
+  if (attempts.failures <= 5) return
+  if (attempts.failures === 6) {
+    console.warn('[Pi Desk][Auth] 连续登录失败超过阈值，发布登录异常提醒')
+  }
+  try {
+    const locale = getL4HostSettingsStore().getSnapshot().region.locale
+    const messages = L2_AUTH_MESSAGES[locale]
+    attempts.publisher.publish({
+      key: 'auth:login-failures',
+      level: 'warning',
+      title: messages.loginAlertTitle,
+      description: messages.loginAlertDescription
+    })
+  } catch (error) {
+    console.error('[Pi Desk][Auth] 登录异常提醒发布失败', {
+      errorName: error instanceof Error ? error.name : 'UnknownError'
+    })
+  }
+}
+
 declare global {
   var __piDeskAuthMutation: Promise<void> | undefined
+  // 跨 HTTP 路由共享，计数和发布者跟随通知 Runtime 释放，不保存失败请求内容。
+  var __piDeskLoginAttempts:
+    | WeakMap<L3AppNotificationRuntime, { failures: number; publisher: L3AppNotificationPublisher }>
+    | undefined
 }
 
 export interface L2WebAuthLoginResult {
@@ -58,15 +102,20 @@ export async function authenticateL2WebLogin(
 ): Promise<L2WebAuthLoginResult | null> {
   const credentials = readL4AuthCredentials()
   if (!credentials) {
+    recordLoginResult(true)
     return { cookieName: L2_WEB_SESSION_COOKIE_NAME, token: '', maxAgeSeconds: 0 }
   }
   const passwordMatches = await verifyL4AuthPassword(input.password, credentials.passwordHash)
-  if (!passwordMatches) return null
-  // scrypt 计算期间凭据可能已被修改或删除，不为旧配置签发会话。
+  // scrypt 计算期间凭据可能已被修改或删除，不为旧配置签发会话或累计失败次数。
   if (readL4AuthCredentials()?.sessionSecret !== credentials.sessionSecret) return null
+  if (!passwordMatches) {
+    recordLoginResult(false)
+    return null
+  }
 
   const loggedInAt = Date.now()
   appendL4LoginRecord({ loggedInAt })
+  recordLoginResult(true)
   return {
     cookieName: L2_WEB_SESSION_COOKIE_NAME,
     token: createL4WebAuthSessionToken(
@@ -101,6 +150,7 @@ export function replaceL2AuthSettings(
       throw new L2AuthRequiredError()
     }
     writeL4AuthConfig(config)
+    recordLoginResult(true)
     console.info('[Pi Desk][Auth] 登录保护已更新', { enabled: config !== null })
   })
   globalThis.__piDeskAuthMutation = operation.catch(() => undefined)

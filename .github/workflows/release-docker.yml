@@ -33,12 +33,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
           persist-credentials: false
+      - name: 使用当前归档脚本，产品源码保持固定
+        run: git show '${{ github.sha }}:.github/scripts/release-docker.mjs' > .github/scripts/release-docker.mjs
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.2
@@ -79,16 +83,14 @@ jobs:
         run: node tests/l4-docker-smoke.mjs "$IMAGE_REPOSITORY:${{ steps.image.outputs.version }}" "${{ steps.image.outputs.version }}"
       - name: 保存并归档已验证镜像
         if: steps.image.outputs.reused != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           docker save "$IMAGE_REPOSITORY:${{ steps.image.outputs.version }}" | gzip > "$DOCKER_ARTIFACT_DIR/pi-desk-docker.tar.gz"
           node .github/scripts/release-docker.mjs stage
       - uses: actions/upload-artifact@v4
+        if: steps.image.outputs.reused != 'true'
         with:
           name: docker-image-${{ github.run_id }}
-          overwrite: true
           path: |
             ${{ env.DOCKER_ARTIFACT_DIR }}/pi-desk-docker.tar.gz
             ${{ env.DOCKER_ARTIFACT_DIR }}/docker-image.json
@@ -116,7 +118,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
           persist-credentials: false
+      - name: 使用当前发布脚本，产品源码保持固定
+        run: git show '${{ github.sha }}:.github/scripts/release-docker.mjs' > .github/scripts/release-docker.mjs
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.2

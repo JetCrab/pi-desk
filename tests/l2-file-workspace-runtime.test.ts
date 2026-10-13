@@ -76,6 +76,84 @@ function gitBiz(): L2WorkSessionGitBiz {
   }
 }
 
+test('多目录按根隔离文件状态，默认推送不覆盖手动选择', async () => {
+  const requests: string[] = []
+  const runtime = new L2FileWorkspaceRuntime(
+    fileBiz({
+      async get(input) {
+        requests.push(`${input.cwd}:${input.path}`)
+        return { kind: 'text', content: input.cwd, size: input.cwd.length }
+      }
+    }),
+    gitBiz()
+  )
+  const session = workSession('a')
+  runtime.reconcileWorkSessions([session])
+  assert.deepEqual(runtime.getDirectories('a'), [session.cwd])
+  runtime.openFile('a', 'README.md')
+  runtime.setExpandedPaths('a', new Set(['src']))
+  runtime.setSearchQuery('a', 'readme')
+  await waitImmediate()
+  const original = runtime.getWorkspace('a')?.documents.get('README.md')
+  const state = { directories: ['C:/isolated'], defaultDirectory: 'C:/isolated' }
+  runtime.applyPreviewDirectories(session, state)
+  assert.equal(runtime.getDirectory('a'), 'C:/isolated')
+  runtime.openFile('a', 'README.md')
+  await waitImmediate()
+  const isolated = runtime.getWorkspace('a')?.documents.get('README.md')
+  assert.notEqual(isolated, original)
+  assert.equal(isolated?.status, 'text')
+  if (isolated?.status === 'text') assert.equal(isolated.content, 'C:/isolated')
+
+  runtime.selectDirectory('a', session.cwd)
+  runtime.applyPreviewDirectories(session, structuredClone(state))
+  assert.equal(runtime.getDirectory('a'), session.cwd)
+  assert.equal(runtime.getWorkspace('a')?.documents.get('README.md'), original)
+  assert.equal(runtime.getWorkspace('a')?.expandedPaths.has('src'), true)
+  assert.equal(runtime.getWorkspace('a')?.search.query, 'readme')
+  runtime.applyPreviewDirectories(session, {
+    directories: ['C:/isolated', 'C:/extra'],
+    defaultDirectory: 'C:/isolated'
+  })
+  assert.equal(runtime.getDirectory('a'), session.cwd)
+  runtime.selectDirectory('a', 'C:/isolated')
+  assert.equal(runtime.getWorkspace('a')?.documents.get('README.md'), isolated)
+  assert.deepEqual(requests, ['C:/project:README.md', 'C:/isolated:README.md'])
+  runtime.dispose()
+})
+
+test('预览根随Source失效释放，迟到登记不影响新会话', async () => {
+  const requests: AbortSignal[] = []
+  const runtime = new L2FileWorkspaceRuntime(
+    fileBiz({
+      get(_input, signal) {
+        if (signal) requests.push(signal)
+        return new Promise(() => undefined)
+      }
+    }),
+    gitBiz()
+  )
+  const session = workSession('a')
+  runtime.reconcileWorkSessions([session])
+  runtime.applyPreviewDirectories(session, {
+    directories: ['C:/isolated'],
+    defaultDirectory: 'C:/isolated'
+  })
+  runtime.openFile('a', 'pending.ts')
+  runtime.applyPreviewDirectories(session, { directories: [], defaultDirectory: null })
+  assert.equal(requests[0]?.aborted, true)
+  assert.deepEqual(runtime.getDirectories('a'), [session.cwd])
+  assert.equal(runtime.getDirectory('a'), session.cwd)
+  runtime.reconcileWorkSessions([{ ...session, branchId: 'v1:new' }])
+  runtime.applyPreviewDirectories(session, {
+    directories: ['C:/old-branch'],
+    defaultDirectory: 'C:/old-branch'
+  })
+  assert.deepEqual(runtime.getDirectories('a'), [session.cwd])
+  assert.equal(runtime.getDirectory('a'), session.cwd)
+  runtime.dispose()
+})
+
 test('同项目会话独立保留文件，收起恢复和焦点快照不重新读取正文', async () => {
   const requests: string[] = []
   const runtime = new L2FileWorkspaceRuntime(

@@ -73,6 +73,10 @@ import { createL2WorkbenchVersionRefresh } from './l2-workbench-version-refresh'
 import { L2FileWorkspaceRuntime } from './file-workspace/l2-file-workspace-runtime'
 import { L2ProjectFileBrowser } from './file-workspace/l2-project-file-browser'
 import {
+  subscribeL2ProjectPreviewDirectories,
+  syncL2ProjectPreviewGitReferences
+} from './file-workspace/l2-project-preview-biz'
+import {
   L2PluginStandaloneFilePreview,
   type L2PluginStandaloneFilePreviewTarget
 } from './file-workspace/l2-plugin-standalone-file-preview'
@@ -607,8 +611,8 @@ export function L2Workbench({
 
       workSessionsInitializedRef.current = true
       pluginHost.replaceWorkSessions(next.workSessions)
-      fileRuntime.reconcileWorkSessions(next.workSessions)
       workSessionsRef.current = next.workSessions
+      fileRuntime.reconcileWorkSessions(next.workSessions)
       pinnedCountRef.current = next.pinnedCount
       setPluginStandaloneFilePreview((current) => {
         if (!current) return null
@@ -811,8 +815,20 @@ export function L2Workbench({
   }, [])
 
   useEffect(() => {
-    gitRuntime.reconcileWorkSessions(workSessions, focusedWorkId)
-  }, [focusedWorkId, gitRuntime, workSessions])
+    syncL2ProjectPreviewGitReferences(fileRuntime, gitRuntime, workSessions, focusedWorkId)
+  }, [fileRuntime, focusedWorkId, gitRuntime, workSessions])
+
+  useEffect(
+    () =>
+      subscribeL2ProjectPreviewDirectories(
+        chatRuntime,
+        fileRuntime,
+        gitRuntime,
+        () => workSessionsRef.current,
+        () => focusedWorkIdRef.current
+      ),
+    [chatRuntime, fileRuntime, gitRuntime]
+  )
 
   useEffect(() => {
     const token = {}
@@ -976,8 +992,22 @@ export function L2Workbench({
     const displayed = getL2DisplayedWorkSessionIds(layout, pinnedWorkIds)
       .map((workId) => workSessionById.get(workId))
       .filter((workSession): workSession is L2WorkSessionListItem => workSession !== undefined)
+    if (fileBrowserMounted && activeWorkSession && sidebarMode === 'files') {
+      if (!displayed.some((session) => session.workId === activeWorkSession.workId)) {
+        displayed.push(activeWorkSession)
+      }
+    }
     chatRuntime.ensureDisplayedWorkSessions(displayed)
-  }, [chatRuntime, layout, layoutLoaded, pinnedWorkIds, workSessions])
+  }, [
+    activeWorkSession,
+    chatRuntime,
+    fileBrowserMounted,
+    layout,
+    layoutLoaded,
+    pinnedWorkIds,
+    sidebarMode,
+    workSessions
+  ])
 
   useEffect(() => {
     if (!layoutLoaded) return
@@ -1513,7 +1543,7 @@ export function L2Workbench({
   const handleSidebarRefreshFiles = useCallback((): void => {
     if (!activeCwd || !activeWorkId) return
     fileRuntime.refreshTree(activeWorkId)
-    void gitRuntime.refreshSnapshot(activeCwd)
+    void gitRuntime.refreshSnapshot(fileRuntime.getDirectory(activeWorkId))
   }, [activeCwd, activeWorkId, fileRuntime, gitRuntime])
   const openGitBranchPicker = useCallback((target: L2GitBranchPickerTarget): void => {
     setGitBranchPickerTarget(target)
@@ -1553,6 +1583,7 @@ export function L2Workbench({
         closeMobileDrawer()
         return
       }
+      fileRuntime.selectDirectory(current.workId, current.cwd)
       fileRuntime.openFile(current.workId, path)
       focusWorkSession(current.workId)
       closeMobileDrawer()
@@ -1851,7 +1882,7 @@ export function L2Workbench({
         if (!activeCwd) return
         closeMobileDrawer()
         fileRuntime.collapseExpandedWindow()
-        pluginHost.previewProject(activeCwd)
+        pluginHost.previewProject(activeWorkId ? fileRuntime.getDirectory(activeWorkId) : activeCwd)
       }}
       onOpenTerminal={() => {
         closeMobileDrawer()

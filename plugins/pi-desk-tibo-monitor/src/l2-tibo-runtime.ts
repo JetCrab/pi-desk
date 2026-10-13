@@ -421,6 +421,7 @@ export class TiboRuntime {
           if (signal.aborted || !record?.analysis || !this.pendingNotifications.has(id)) return
           const level = record.analysis.reset.level
           this.host.notifications.publish({
+            key: `post:${record.id}`,
             level: level === 'none' ? 'info' : 'warning',
             title:
               level === 'announced'
