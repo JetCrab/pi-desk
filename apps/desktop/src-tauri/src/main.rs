@@ -139,19 +139,16 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
             config_path.display()
         ),
     );
-    let loaded = match config::load(&config_path) {
-        Ok(loaded) => loaded,
+    let config = match config::load(&config_path) {
+        Ok(config) => config,
         Err(error) => {
             logging::write(&log_path, "config-error", &error);
             return Err(error.into());
         }
     };
-    if loaded.needs_rewrite {
-        config::save(&config_path, &loaded.config)?;
-    }
-    let runtime_info = runtime::load_runtime_info(&runtime_path, &loaded.config);
+    let runtime_info = runtime::load_runtime_info(&runtime_path, &config);
     app.manage(ShellState::new(
-        loaded.config,
+        config,
         runtime_info,
         config_path,
         runtime_path,
