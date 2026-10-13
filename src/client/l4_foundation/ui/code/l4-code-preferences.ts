@@ -8,7 +8,7 @@ const LEGACY_STORAGE_KEY = 'pi-super:project-preview:global'
 const PreferencesSchema = z.object({
   wrapLines: z.boolean().default(true),
   diffViewMode: z.enum(['side-by-side', 'inline']).default('side-by-side'),
-  collapseUnchanged: z.boolean().default(true)
+  collapseUnchanged: z.boolean().default(false)
 })
 type CodePreferences = z.infer<typeof PreferencesSchema>
 const DEFAULT_PREFERENCES = PreferencesSchema.parse({})

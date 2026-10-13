@@ -35,17 +35,26 @@ export function createL1ProjectRoute<I extends contracts.L3ProjectReadContext, O
         key: 'errors:projectCwdAbsolute'
       })
     try {
+      let isCurrent: (() => boolean) | undefined
       if (input.workId) {
-        const session = await getL2WorkSessionManage().getWorkSession(input.workId)
+        const manage = getL2WorkSessionManage()
+        const session = await manage.getWorkSession(input.workId)
         if (!session)
           return createL4ApiErrorResponse(404, '工作会话不存在', { key: 'errors:sessionMissing' })
-        if (session.cwd !== input.cwd)
-          return createL4ApiErrorResponse(409, '工作会话项目已变化', {
+        const context = manage.getProjectPreviewContext(session, input.cwd)
+        if (!context)
+          return createL4ApiErrorResponse(409, '工作会话项目已变化或预览目录未登记', {
             key: 'errors:projectChanged'
           })
-        input.cwd = session.cwd
+        input.cwd = context.cwd
+        isCurrent = context.isCurrent
       }
-      return createL4ApiSuccessResponse(contract.response.parse(await execute(input)))
+      const result = await execute(input)
+      if (isCurrent && !isCurrent())
+        return createL4ApiErrorResponse(409, '工作会话项目已变化', {
+          key: 'errors:projectChanged'
+        })
+      return createL4ApiSuccessResponse(contract.response.parse(result))
     } catch (error) {
       console.warn('[Pi Desk][Project] 项目请求失败', {
         path: contract.path,

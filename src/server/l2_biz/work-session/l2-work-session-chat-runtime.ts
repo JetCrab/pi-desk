@@ -1,5 +1,11 @@
 import 'server-only'
 
+import { resolve } from 'node:path'
+import {
+  L4_PROJECT_PREVIEW_PLUGIN_KEY,
+  projectPreviewDirectoryKey,
+  readL4ProjectPreviewState
+} from '@common/l4_foundation/file/l4-project-preview-contract'
 import {
   L2ChatModelContextGetRequestSchema,
   L2ChatModelContextGetResponseSchema,
@@ -272,6 +278,28 @@ export class L2WorkSessionChatRuntime {
     const source = L2ChatSourceSchema.parse(sourceInput)
     const record = this.recordsByWorkId.get(source.workId)
     return record !== undefined && this.matches(record.source, source)
+  }
+
+  getProjectPreviewContext(
+    workSession: WorkSession,
+    directory: string
+  ): { cwd: string; isCurrent: () => boolean } | null {
+    const record = this.recordsByWorkId.get(workSession.workId)
+    if (!record || record.workSession !== workSession) return null
+    const key = projectPreviewDirectoryKey(resolve(directory))
+    const originalCwd = key === projectPreviewDirectoryKey(resolve(workSession.cwd))
+    const registeredDirectory = (): string | undefined =>
+      readL4ProjectPreviewState(
+        record.state.runtime.plugins[L4_PROJECT_PREVIEW_PLUGIN_KEY]
+      ).directories.find((item) => projectPreviewDirectoryKey(item) === key)
+    const cwd = originalCwd ? workSession.cwd : registeredDirectory()
+    if (!cwd) return null
+    const isCurrent = (): boolean =>
+      this.recordsByWorkId.get(workSession.workId) === record &&
+      record.acceptingCommands &&
+      this.matches(record.source, this.sourceFor(workSession)) &&
+      (originalCwd || registeredDirectory() !== undefined)
+    return isCurrent() ? { cwd, isCurrent } : null
   }
 
   refreshPluginMessages(): void {

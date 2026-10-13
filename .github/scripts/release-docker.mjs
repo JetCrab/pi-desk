@@ -66,54 +66,24 @@ function assertRecord(record, source, version, bytes) {
   return record
 }
 
-export async function stageDockerImage({ github, release, directory, source, version, imageId }) {
-  assert.equal(release.draft, true)
-  assert.equal(release.target_commitish, source)
+export async function stageDockerImage({ directory, source, version, imageId }) {
   assert.match(source, /^[a-f0-9]{40}$/)
   assert.match(version, stable)
   assert.match(imageId, digestPattern)
   const bytes = await readFile(join(directory, dockerAssets.archive))
   const record = { source, version, imageId, sha256: sha256(bytes) }
-  // 先保存不可覆盖的实际镜像；记录上传中断时可从同一镜像补回。
-  await github.putAsset(release, dockerAssets.archive, bytes)
-  await github.putAsset(release, dockerAssets.record, Buffer.from(json(record)))
   await writeFile(join(directory, dockerAssets.record), json(record))
 }
 
-export async function restoreDockerImage({
-  github,
-  release,
-  directory,
-  source,
-  version,
-  run = docker
-}) {
-  const archive = release.assets.some((item) => item.name === dockerAssets.archive)
-  const recordExists = release.assets.some((item) => item.name === dockerAssets.record)
-  if (!archive) {
-    assert.equal(recordExists, false, '镜像记录存在但缺少已验证镜像，停止重建')
-    return false
-  }
-  assert.equal(release.target_commitish, source)
-  const bytes = await github.asset(release, dockerAssets.archive)
-  await mkdir(directory, { recursive: true })
-  const path = join(directory, dockerAssets.archive)
-  if (recordExists) {
-    const record = assertRecord(
-      JSON.parse(await github.asset(release, dockerAssets.record)),
-      source,
-      version,
-      bytes
-    )
-    await writeFile(path, bytes)
-    await writeFile(join(directory, dockerAssets.record), json(record))
-  } else {
-    await writeFile(path, bytes)
-    run(['load', '--input', path])
-    const image = JSON.parse(run(['image', 'inspect', `${imageRepository}:${version}`]))[0]
-    const imageId = assertImage(image, source, version)
-    await stageDockerImage({ github, release, directory, source, version, imageId })
-  }
+export async function restoreDockerImage({ directory, source, version }) {
+  const archive = join(directory, dockerAssets.archive)
+  const record = join(directory, dockerAssets.record)
+  const archiveExists = existsSync(archive)
+  const recordExists = existsSync(record)
+  if (!archiveExists && !recordExists) return false
+  assert.ok(archiveExists, '镜像记录存在但缺少已验证镜像，停止重建')
+  assert.ok(recordExists, '已验证镜像缺少记录，归档不完整，停止重建')
+  assertRecord(JSON.parse(await readFile(record)), source, version, await readFile(archive))
   console.info('已恢复同批已验证镜像，不重复构建。')
   return true
 }
@@ -276,27 +246,45 @@ async function main() {
     await verifyPublicPull(version)
     return
   }
-  const github = createGitHubClient({
-    repository: process.env.GITHUB_REPOSITORY,
-    token: process.env.GH_TOKEN
-  })
-  const release = (await github.releases()).find(
-    (item) => item.tag_name === process.env.RELEASE_TAG
-  )
-  assert.ok(release?.draft, 'Docker制品只能归档到本批发布草稿')
   if (command === 'restore') {
-    const reused = await restoreDockerImage({ github, release, directory, source, version })
+    const repository = process.env.GITHUB_REPOSITORY
+    const runId = process.env.GITHUB_RUN_ID
+    assert.match(runId, /^\d+$/)
+    const github = createGitHubClient({ repository, token: process.env.GH_TOKEN })
+    const name = `docker-image-${runId}`
+    let artifact
+    for (let page = 1; ; page++) {
+      const result = await github.request(
+        `/actions/runs/${runId}/artifacts?per_page=100&page=${page}`
+      )
+      artifact = result.artifacts.find((item) => item.name === name)
+      if (artifact || result.artifacts.length < 100) break
+    }
+    let reused = false
+    if (artifact) {
+      assert.equal(artifact.expired, false, '已验证镜像制品已过期，停止重建')
+      console.info('正在下载当前工作流已验证镜像制品。')
+      await mkdir(directory, { recursive: true })
+      execFileSync(
+        'gh',
+        ['run', 'download', runId, '--repo', repository, '--name', name, '--dir', directory],
+        { stdio: 'inherit' }
+      )
+      reused = await restoreDockerImage({ directory, source, version })
+      assert.equal(reused, true, '已验证镜像制品缺少完整归档，停止重建')
+    } else {
+      console.info('当前工作流尚无已验证镜像制品，开始首次构建。')
+    }
     await appendFile(process.env.GITHUB_OUTPUT, `reused=${reused}\nversion=${version}\n`)
   } else if (command === 'stage') {
     const image = JSON.parse(docker(['image', 'inspect', `${imageRepository}:${version}`]))[0]
     await stageDockerImage({
-      github,
-      release,
       directory,
       source,
       version,
       imageId: assertImage(image, source, version)
     })
+    console.info('已生成本地镜像校验记录，等待归档工作流制品。')
   } else throw new Error('未知Docker发布阶段')
 }
 

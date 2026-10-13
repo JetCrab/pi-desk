@@ -91,6 +91,7 @@ interface DetailLoadState {
 }
 
 const USER_MESSAGE_COLLAPSE_THRESHOLD_LINES = 6
+const THINKING_RENDER_CHARACTER_LIMIT = 5_000
 const MESSAGE_COPY_FEEDBACK_MS = 1500
 const PROCESS_ITEM_BATCH_SIZE = 64
 const TOOL_DETAIL_SCROLL_CLASS = 'max-h-[min(20rem,45dvh)] overflow-auto [scrollbar-gutter:stable]'
@@ -656,22 +657,40 @@ function AssistantReasoningContent({
   content: string
   streaming: boolean
 }): React.JSX.Element {
+  const { t } = useTranslation('conversation')
   const { scrollRef, contentRef } = useStickToBottom({
     initial: streaming ? 'instant' : false,
     resize: 'instant'
   })
+  const truncated = content.length > THINKING_RENDER_CHARACTER_LIMIT
+  const visibleContent = content.slice(-THINKING_RENDER_CHARACTER_LIMIT)
 
   return (
-    <div
-      ref={scrollRef}
-      className="max-h-56 overflow-y-auto pb-2 pr-2 [scrollbar-gutter:stable] sm:max-h-72"
-    >
-      <div ref={contentRef}>
-        <L3ConversationMarkdown isAnimating={streaming} mode={streaming ? 'streaming' : 'static'}>
-          {content}
-        </L3ConversationMarkdown>
+    <>
+      <div
+        ref={scrollRef}
+        className="max-h-56 overflow-y-auto pb-2 pr-2 [scrollbar-gutter:stable] sm:max-h-72"
+      >
+        <div ref={contentRef}>
+          {/* Streamdown 按节点位置缓存元素；窗口移动时重建，避免等长内容沿用旧文本。 */}
+          <L3ConversationMarkdown
+            key={truncated ? content.length : undefined}
+            isAnimating={streaming}
+            mode={streaming ? 'streaming' : 'static'}
+          >
+            {visibleContent}
+          </L3ConversationMarkdown>
+        </div>
       </div>
-    </div>
+      {truncated ? (
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <p className="text-xs text-muted-foreground">
+            {t('thinkingTruncated', { count: THINKING_RENDER_CHARACTER_LIMIT })}
+          </p>
+          <MessageCopyAction text={content} copyLabel={t('copyThinking')} alwaysVisible />
+        </div>
+      ) : null}
+    </>
   )
 }
 

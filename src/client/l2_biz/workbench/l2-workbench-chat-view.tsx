@@ -25,6 +25,7 @@ import { L2WorkbenchChatNavigation } from './hooks/l2-workbench-chat-navigation'
 import { L2WorkbenchChatViewportManager } from './hooks/l2-workbench-chat-viewport'
 
 interface L2WorkbenchChatViewProps {
+  active: boolean
   visible: boolean
   workSession: L2WorkSessionListItem
   chatRuntime: L2WorkbenchChatRuntime
@@ -33,6 +34,7 @@ interface L2WorkbenchChatViewProps {
 }
 
 function L2WorkbenchChatViewComponent({
+  active,
   visible,
   workSession,
   chatRuntime,
@@ -138,22 +140,9 @@ function L2WorkbenchChatViewComponent({
         >
           {(turnWindow) => (
             <>
-              <L2WorkbenchChatViewportManager
-                key={`viewport:${source.sessionId}:${source.branchId}`}
-                visible={visible}
-                running={viewportRunning}
-                ready={hasMessages}
-                containsTail={turnWindow.containsTail}
-                latestUserAnchor={latestUserAnchor}
-                entrySnapshot={entrySnapshot}
-                onResetToTail={turnWindow.resetToTail}
-                onSaveSnapshot={saveViewportSnapshot}
-                onClearSnapshot={clearViewportSnapshot}
-              />
-              <L3ConversationTailSpacerObserver active={visible} />
               <L3ConversationStickToBottomBridge>
                 <ConversationContent
-                  scrollClassName="pi-desk-chat-scrollbar pi-desk-chat-conversation-scroll"
+                  scrollClassName="pi-desk-chat-scrollbar pi-desk-chat-conversation-scroll overflow-auto"
                   className="mx-auto min-h-full w-full max-w-3xl gap-6 px-3 pt-3 pb-4 sm:px-5"
                 >
                   {turnWindow.visibleTurns.map((turn, index) => {
@@ -172,6 +161,21 @@ function L2WorkbenchChatViewComponent({
                   })}
                 </ConversationContent>
               </L3ConversationStickToBottomBridge>
+              {/* 内容先挂载，确保视口管理器的布局 effect 能取得滚动节点。 */}
+              <L2WorkbenchChatViewportManager
+                key={`viewport:${source.sessionId}:${source.branchId}`}
+                active={active}
+                visible={visible}
+                running={viewportRunning}
+                ready={hasMessages}
+                containsTail={turnWindow.containsTail}
+                latestUserAnchor={latestUserAnchor}
+                entrySnapshot={entrySnapshot}
+                onResetToTail={turnWindow.resetToTail}
+                onSaveSnapshot={saveViewportSnapshot}
+                onClearSnapshot={clearViewportSnapshot}
+              />
+              <L3ConversationTailSpacerObserver active={visible} />
               <L2WorkbenchChatNavigation
                 key={`navigation:${source.sessionId}:${source.branchId}`}
                 active={visible}

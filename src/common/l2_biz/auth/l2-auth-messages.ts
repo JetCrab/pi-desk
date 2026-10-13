@@ -9,8 +9,12 @@ export const L2_AUTH_MESSAGES = {
     changePassword: 'Change password',
     setPassword: 'Set a password',
     newPassword: 'New password',
-    passwordHint: 'At least 8 characters',
-    saveEffect: 'Saving requires all devices to sign in again.',
+    passwordHint:
+      '12–256 characters; use at least three of: uppercase letters, lowercase letters, numbers and symbols. No leading/trailing spaces, line breaks or invisible control characters.',
+    generatePassword: 'Generate password',
+    generatePasswordHint: 'Generate a random 16-character password',
+    generatePasswordFailed: 'Unable to generate a password. Please try again.',
+    saveEffect: 'Keep your password safe. Saving requires all devices to sign in again.',
     enable: 'Enable sign-in protection',
     saveAndSignIn: 'Save and sign in again',
     saving: 'Saving…',
@@ -27,7 +31,7 @@ export const L2_AUTH_MESSAGES = {
     recoveryDescription:
       'Delete this file on the device running the service, then refresh the page to restore access.',
     settingsFailed: 'Unable to load or save sign-in protection settings.',
-    settingsInvalid: 'Enter a password of at least 8 characters.',
+    settingsInvalid: 'The password does not meet the requirements shown below the field.',
     configUnavailable:
       'Unable to read sign-in protection settings. Repair the configuration or delete auth.json and set it up again.',
     crossOriginDenied: 'Cross-site changes to sign-in protection are not allowed.',
@@ -36,8 +40,13 @@ export const L2_AUTH_MESSAGES = {
     submitting: 'Signing in…',
     loginFailed: 'Unable to sign in',
     invalidResponse: 'Invalid response from the sign-in service',
-    invalidCredentials: 'Incorrect password',
-    invalidInput: 'Invalid sign-in details',
+    invalidCredentials: 'Sign-in failed. Check your sign-in details and try again.',
+    invalidInput: 'Sign-in failed. Check your sign-in details and try again.',
+    unavailable: 'Sign-in is temporarily unavailable. Please try again later.',
+    tooManyAttempts: 'Too many sign-in attempts. Please try again later.',
+    loginAlertTitle: 'Unusual sign-in activity',
+    loginAlertDescription:
+      'More than 5 consecutive sign-in failures. Check whether these attempts were yours.',
     invalidClient: 'Invalid client identifier'
   },
   'zh-CN': {
@@ -50,8 +59,12 @@ export const L2_AUTH_MESSAGES = {
     changePassword: '修改密码',
     setPassword: '设置密码',
     newPassword: '新密码',
-    passwordHint: '至少 8 个字符',
-    saveEffect: '保存后，所有设备都需要重新登录。',
+    passwordHint:
+      '12–256 个字符，至少包含大写字母、小写字母、数字、符号中的三类；不能有首尾空白、换行或不可见控制字符。',
+    generatePassword: '生成密码',
+    generatePasswordHint: '随机生成 16 位密码',
+    generatePasswordFailed: '生成密码失败，请重试。',
+    saveEffect: '请妥善保存密码。保存后，所有设备都需要重新登录。',
     enable: '启用登录保护',
     saveAndSignIn: '保存并重新登录',
     saving: '正在保存…',
@@ -66,7 +79,7 @@ export const L2_AUTH_MESSAGES = {
     recovery: '忘记密码？',
     recoveryDescription: '在运行服务的设备上删除下面的文件，然后刷新页面，即可恢复访问。',
     settingsFailed: '登录保护设置处理失败。',
-    settingsInvalid: '请填写至少 8 位密码。',
+    settingsInvalid: '密码不符合要求，请按输入框下方的规则调整。',
     configUnavailable: '登录保护配置无法读取，请修复配置或删除 auth.json 后重新设置。',
     crossOriginDenied: '不允许跨站修改登录保护。',
     password: '密码',
@@ -74,8 +87,12 @@ export const L2_AUTH_MESSAGES = {
     submitting: '正在登录',
     loginFailed: '登录失败',
     invalidResponse: '登录服务响应无效',
-    invalidCredentials: '密码不正确',
-    invalidInput: '登录参数无效',
+    invalidCredentials: '登录失败，请检查登录信息后重试。',
+    invalidInput: '登录失败，请检查登录信息后重试。',
+    unavailable: '登录暂不可用，请稍后重试。',
+    tooManyAttempts: '登录尝试过多，请稍后重试。',
+    loginAlertTitle: '登录异常提醒',
+    loginAlertDescription: '登录已连续失败超过 5 次，请确认是否为本人操作。',
     invalidClient: '客户端标识无效'
   }
 } as const

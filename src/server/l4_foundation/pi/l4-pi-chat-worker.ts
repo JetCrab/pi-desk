@@ -444,7 +444,8 @@ export class L4PiChatWorker {
           console.warn('[Pi Desk][PiChatWorker] 已忽略非法插件运行态更新', {
             sessionId: this.sessionManager.getSessionId(),
             cwd: this.cwd,
-            errorName: cause instanceof Error ? cause.name : 'UnknownError'
+            errorName: cause instanceof Error ? cause.name : 'UnknownError',
+            message: cause instanceof Error ? cause.message : String(cause)
           })
         }
       }

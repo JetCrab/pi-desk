@@ -79,6 +79,7 @@ export interface L3ProjectFileState {
   expandedPaths: Set<string>
   treeScrollTop: number
   search: L3FileSearch
+  searchOpen: boolean
   documents: Map<string, L3FileDocument>
   activeDiff: L3FileDiff | null
 }
@@ -130,6 +131,7 @@ export class L3ProjectFileRuntime {
     expandedPaths: new Set(),
     treeScrollTop: 0,
     search: { query: '', status: 'idle', matches: [], truncated: false, error: null },
+    searchOpen: false,
     documents: new Map(),
     activeDiff: null
   }
@@ -159,6 +161,11 @@ export class L3ProjectFileRuntime {
     return () => this.listeners.delete(listener)
   }
   getRevision = (): number => this.revision
+  setSearchOpen(open: boolean): void {
+    if (this.state.searchOpen === open) return
+    this.state.searchOpen = open
+    this.publish()
+  }
   get canReveal(): boolean {
     return Boolean(this.options.reveal)
   }

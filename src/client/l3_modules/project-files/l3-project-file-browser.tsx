@@ -64,6 +64,8 @@ interface L3ProjectFileBrowserProps {
   gitRuntime: L3ProjectGitBrowser
   onOpenGitBranches: (repositoryRoot: string) => void
   onFileOpened?: () => void
+  rootTitle?: React.ReactNode
+  gitReadOnly?: boolean
 }
 
 const EMPTY_GIT_REPOSITORIES: readonly L4GitRepository[] = []
@@ -155,7 +157,9 @@ export function L3ProjectFileBrowser({
   runtime,
   gitRuntime,
   onOpenGitBranches,
-  onFileOpened
+  onFileOpened,
+  rootTitle,
+  gitReadOnly = false
 }: L3ProjectFileBrowserProps): React.JSX.Element {
   const { t } = useTranslation('projectFiles')
   const { locale } = useL4Region()
@@ -165,7 +169,8 @@ export function L3ProjectFileBrowser({
   const gitWorkspace = gitRuntime.getWorkspace(cwd)
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const [searchOpen, setSearchOpen] = useState(false)
+  const searchOpen = workspace.searchOpen
+  const setSearchOpen = (open: boolean): void => runtime.setSearchOpen(open)
   const [visibleEntries, setVisibleEntries] = useState<Record<string, number>>({})
   const moreEntries = (key: string, total: number): React.ReactNode => {
     const count = visibleEntries[key] ?? 300
@@ -548,14 +553,14 @@ export function L3ProjectFileBrowser({
             <button
               data-testid={`project-git-branch-${root || 'root'}`}
               type="button"
-              disabled={repository.state !== 'ready'}
+              disabled={gitReadOnly || repository.state !== 'ready'}
               className={cn(
                 buttonVariants({ variant: 'outline', size: 'sm' }),
                 'max-w-28 shrink gap-1 font-mono text-xs text-muted-foreground'
               )}
               title={
                 repository.state === 'ready'
-                  ? t('gitBranches')
+                  ? t(gitReadOnly ? 'gitBranchReadOnly' : 'gitBranches')
                   : selectL4LocalizedText(repository.message, locale)
               }
               onClick={() => onOpenGitBranches(root)}
@@ -667,28 +672,35 @@ export function L3ProjectFileBrowser({
               runtime.canReveal ? (path, type) => runtime.revealFile(path, type) : undefined
             }
             trigger={
-              <div tabIndex={0} className="flex min-w-0 flex-1 items-baseline gap-1">
-                <p className="shrink-0 truncate text-xs font-semibold" title={projectName}>
-                  {projectName}
-                </p>
-                <span className="text-xs text-muted-foreground">·</span>
-                <p className="min-w-0 truncate font-mono text-xs text-muted-foreground" title={cwd}>
-                  {compactPath(cwd)}
-                </p>
-              </div>
+              rootTitle ? (
+                <div className="flex min-w-0 flex-1">{rootTitle}</div>
+              ) : (
+                <div tabIndex={0} className="flex min-w-0 flex-1 items-baseline gap-1">
+                  <p className="shrink-0 truncate text-xs font-semibold" title={projectName}>
+                    {projectName}
+                  </p>
+                  <span className="text-xs text-muted-foreground">·</span>
+                  <p
+                    className="min-w-0 truncate font-mono text-xs text-muted-foreground"
+                    title={cwd}
+                  >
+                    {compactPath(cwd)}
+                  </p>
+                </div>
+              )
             }
           />
           {singleProjectRootRepository ? (
             <button
               type="button"
-              disabled={singleProjectRootRepository.state !== 'ready'}
+              disabled={gitReadOnly || singleProjectRootRepository.state !== 'ready'}
               className={cn(
                 buttonVariants({ variant: 'outline', size: 'sm' }),
                 'max-w-32 shrink gap-1 font-mono text-xs text-muted-foreground'
               )}
               title={
                 singleProjectRootRepository.state === 'ready'
-                  ? t('gitBranches')
+                  ? t(gitReadOnly ? 'gitBranchReadOnly' : 'gitBranches')
                   : selectL4LocalizedText(singleProjectRootRepository.message, locale)
               }
               onClick={() => onOpenGitBranches('')}

@@ -5,7 +5,7 @@ import {
   L2AuthLoginResponseSchema
 } from '@common/l2_biz/auth/l2-auth-contract'
 import { authenticateL2WebLogin } from '@server/l2_biz/auth/l2-auth'
-import { L4AuthConfigError } from '@server/l4_foundation/auth/l4-auth-config'
+import { L4AuthBusyError, L4AuthConfigError } from '@server/l4_foundation/auth/l4-auth-config'
 import {
   createL4WebAuthCookieHeader,
   shouldUseL4SecureWebCookie
@@ -25,18 +25,24 @@ export async function POST(request: Request): Promise<Response> {
   try {
     payload = await request.json()
   } catch {
-    return createL4ApiErrorResponse(400, '请求 JSON 格式无效', { key: 'auth:invalidInput' })
+    return createL4ApiErrorResponse(400, '登录失败，请检查登录信息后重试。', {
+      key: 'auth:invalidInput'
+    })
   }
 
   const input = L2AuthLoginRequestSchema.safeParse(payload)
   if (!input.success)
-    return createL4ApiErrorResponse(400, '登录参数无效', { key: 'auth:invalidInput' })
+    return createL4ApiErrorResponse(400, '登录失败，请检查登录信息后重试。', {
+      key: 'auth:invalidInput'
+    })
 
   try {
     const result = await authenticateL2WebLogin(input.data)
     if (!result) {
       console.warn('[Pi Desk][AuthLoginApi] 登录凭据无效', { clientId })
-      return createL4ApiErrorResponse(401, '密码不正确', { key: 'auth:invalidCredentials' })
+      return createL4ApiErrorResponse(401, '登录失败，请检查登录信息后重试。', {
+        key: 'auth:invalidCredentials'
+      })
     }
 
     const response = createL4ApiSuccessResponse(L2AuthLoginResponseSchema.parse({}))
@@ -53,13 +59,21 @@ export async function POST(request: Request): Promise<Response> {
     console.info('[Pi Desk][AuthLoginApi] 登录成功', { clientId })
     return response
   } catch (error) {
+    if (error instanceof L4AuthBusyError) {
+      const response = createL4ApiErrorResponse(429, error.message, { key: 'auth:tooManyAttempts' })
+      response.headers.set('Retry-After', '1')
+      response.headers.set('Cache-Control', 'no-store')
+      return response
+    }
     console.error('[Pi Desk][AuthLoginApi] 登录处理失败', {
       clientId,
       errorName: error instanceof Error ? error.name : 'UnknownError'
     })
     if (error instanceof L4AuthConfigError) {
-      return createL4ApiErrorResponse(503, error.message, { key: 'auth:configUnavailable' })
+      return createL4ApiErrorResponse(503, '登录暂不可用，请稍后重试。', {
+        key: 'auth:unavailable'
+      })
     }
-    return createL4ApiErrorResponse(500, '登录失败，请稍后重试', { key: 'auth:loginFailed' })
+    return createL4ApiErrorResponse(500, '登录暂不可用，请稍后重试。', { key: 'auth:unavailable' })
   }
 }

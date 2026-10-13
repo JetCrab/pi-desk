@@ -47,6 +47,23 @@ export async function logoutL2Auth(clientId: string): Promise<void> {
   window.location.replace('/login')
 }
 
+export function generateL2AuthPassword(): string {
+  // 64 个字符可直接映射随机字节，不产生取模偏差。
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@'
+  while (true) {
+    const bytes = crypto.getRandomValues(new Uint8Array(16))
+    const password = Array.from(bytes, (value) => alphabet[value % 64]).join('')
+    if (
+      /[A-Z]/.test(password) &&
+      /[a-z]/.test(password) &&
+      /[0-9]/.test(password) &&
+      /[!@]/.test(password)
+    ) {
+      return password
+    }
+  }
+}
+
 export async function replaceL2AuthSettings(
   clientId: string,
   input: L2AuthSettingsReplaceRequest
@@ -55,7 +72,7 @@ export async function replaceL2AuthSettings(
   if (!parsed.success) {
     throw new Error(
       l4LocalizedErrorMessage({
-        msg: '请填写至少 8 位密码',
+        msg: '密码不符合要求，请按输入框下方的规则调整。',
         i18n: { key: 'auth:settingsInvalid' }
       })
     )

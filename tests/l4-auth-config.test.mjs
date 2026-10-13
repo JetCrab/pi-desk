@@ -73,6 +73,13 @@ test('认证文件格式、scrypt 参数、独立 key 与哈希期间变更拒�
   assert.match(passwordHash, /^scrypt:[a-f0-9]{32}:[a-f0-9]{128}$/)
   assert.equal(await auth.verifyL4AuthPassword(password, passwordHash), true)
   assert.equal(await auth.verifyL4AuthPassword('incorrect password', passwordHash), false)
+  const concurrent = [
+    auth.verifyL4AuthPassword(password, passwordHash),
+    auth.verifyL4AuthPassword(password, passwordHash)
+  ]
+  await assert.rejects(auth.verifyL4AuthPassword(password, passwordHash), auth.L4AuthBusyError)
+  assert.deepEqual(await Promise.all(concurrent), [true, true])
+  assert.equal(await auth.verifyL4AuthPassword(password, passwordHash), true)
   const [, salt, digest] = passwordHash.split(':')
   const independentDigest = await deriveScrypt(password, Buffer.from(salt, 'hex'), 64, {
     N: 32768,

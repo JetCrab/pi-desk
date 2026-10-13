@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       resume_tag:
-        description: '续跑已有未公开草稿，保持原源码、版本和制品；留空正常发布'
+        description: '续跑未公开批次的Actions制品或旧草稿，保持原源码、版本和制品；留空正常发布'
         required: false
         type: string
         default: ''
@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: release-main
@@ -26,7 +27,6 @@ concurrency:
 
 env:
   RELEASE_ROOT: ${{ github.workspace }}/temp/run/release-main/${{ github.run_id }}-${{ github.run_attempt }}
-  NPM_ARTIFACT_DIR: ${{ github.workspace }}/temp/package/npm-release/${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   prepare:
@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write
+      contents: read
       actions: read
     outputs:
       sha: ${{ steps.plan.outputs.sha }}
@@ -63,7 +63,7 @@ jobs:
         with:
           version: 10.15.0
           run_install: false
-      - name: 核对已确认版本并固定发布草稿
+      - name: 核对已确认版本并固定内部发布计划
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
@@ -77,6 +77,55 @@ jobs:
           path: ${{ env.RELEASE_ROOT }}/plan.json
           retention-days: 7
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-windows-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.RELEASE_ROOT }}/restored/clients/client-windows-${{ github.run_id }}/
+          retention-days: 7
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-macos-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.RELEASE_ROOT }}/restored/clients/client-macos-${{ github.run_id }}/
+          retention-days: 7
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-linux-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.RELEASE_ROOT }}/restored/clients/client-linux-${{ github.run_id }}/
+          retention-days: 7
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-android-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.RELEASE_ROOT }}/restored/clients/client-android-${{ github.run_id }}/
+          retention-days: 7
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-packages-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.RELEASE_ROOT }}/restored/npm/*.tgz
+          retention-days: 7
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-review-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.RELEASE_ROOT }}/restored/notes/
+          retention-days: 7
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.RELEASE_ROOT }}/restored/docker/
+          retention-days: 7
+          if-no-files-found: ignore
 
   checks:
     needs: prepare
@@ -93,11 +142,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -116,7 +165,7 @@ jobs:
           RELEASE_MODEL: ${{ vars.RELEASE_MODEL }}
           RELEASE_MODEL_API_KEY: ${{ secrets.RELEASE_MODEL_API_KEY }}
         run: node .github/release-agent/run.mjs "$RELEASE_ROOT/plan.json" "$RELEASE_ROOT/changes.json"
-      - name: 固定已核验的变更记录
+      - name: 核对已审查的变更记录
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/release-main.mjs save-notes
@@ -125,7 +174,9 @@ jobs:
         with:
           name: release-review-${{ github.run_id }}
           overwrite: true
-          path: ${{ env.RELEASE_ROOT }}/changes.json.evidence.json
+          path: |
+            ${{ env.RELEASE_ROOT }}/changes.json
+            ${{ env.RELEASE_ROOT }}/changes.json.evidence.json
           retention-days: 7
           if-no-files-found: ignore
 
@@ -201,7 +252,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: write
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -215,29 +267,21 @@ jobs:
           name: release-plan-${{ github.run_id }}
           path: ${{ env.RELEASE_ROOT }}
       - uses: actions/download-artifact@v4
-        if: needs.prepare.outputs.windows == 'true' || needs.prepare.outputs.macos == 'true' || needs.prepare.outputs.linux == 'true' || needs.prepare.outputs.android == 'true'
+        with:
+          name: release-review-${{ github.run_id }}
+          path: ${{ env.RELEASE_ROOT }}
+      - uses: actions/download-artifact@v4
         with:
           pattern: client-*
           path: ${{ env.RELEASE_ROOT }}/clients
-      - uses: actions/download-artifact@v4
-        if: needs.prepare.outputs.npm != '[]' && needs.prepare.outputs.npm_ready != 'true'
-        with:
-          name: npm-packages-${{ github.run_id }}
-          path: ${{ env.NPM_ARTIFACT_DIR }}
-      - name: 校验并归档当前客户端或复用包
+      - name: 校验并整理当前客户端或复用包
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/release-main.mjs assemble
-      - name: 保留可重试的同一批 npm 制品
-        if: needs.prepare.outputs.npm != '[]'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node .github/scripts/release-main.mjs stage-npm
       - uses: actions/upload-artifact@v4
-        if: needs.prepare.outputs.npm != '[]'
         with:
-          name: npm-packages-${{ github.run_id }}
-          path: ${{ env.NPM_ARTIFACT_DIR }}/*.tgz
+          name: release-bundle-${{ github.run_id }}
+          path: ${{ env.RELEASE_ROOT }}/release/
           overwrite: true
           retention-days: 7
           if-no-files-found: error
@@ -246,7 +290,8 @@ jobs:
     needs: [prepare, assemble]
     if: always() && !cancelled() && needs.assemble.result == 'success' && needs.prepare.outputs.docker == 'true'
     permissions:
-      contents: write
+      contents: read
+      actions: read
       packages: write
     uses: ./.github/workflows/release-docker.yml
     with:
@@ -290,7 +335,8 @@ jobs:
     needs: [prepare, docker-build]
     if: always() && !cancelled() && needs.docker-build.result == 'success' && needs.prepare.outputs.docker == 'true'
     permissions:
-      contents: write
+      contents: read
+      actions: read
       packages: write
     uses: ./.github/workflows/release-docker.yml
     with:
@@ -310,10 +356,11 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -322,10 +369,19 @@ jobs:
         with:
           name: release-plan-${{ github.run_id }}
           path: ${{ env.RELEASE_ROOT }}
-      - name: 自动打 tag 并公开正式 Release
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundle-${{ github.run_id }}
+          path: ${{ env.RELEASE_ROOT }}/release
+      - name: 末端创建 Release、上传完整安装包并公开版本
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/release-main.mjs publish
+      - name: 清理本次未公开草稿，保留原制品供重试
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-main.mjs cleanup
 
   website-build:
     needs: [prepare, publish]

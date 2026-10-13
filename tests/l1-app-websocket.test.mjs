@@ -15,7 +15,7 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const clientId = '9cc3c65d-89c2-4b33-ac1f-1829c3344a21'
 const observerClientId = '32f6ff76-5b7e-43e3-a3c4-44f80726fa75'
 const protocol = 'pi-desk.v1'
-const testPassword = 'Qq.445566'
+const testPassword = 'Local-test-password-42'
 const development = process.env.PI_DESK_E2E_DEVELOPMENT === '1'
 // 源码准备包含 tsx/Pi 加载和 Next 首次编译；业务用例仍使用独立的 90 秒预算。
 const startupTimeoutMs = development ? 120_000 : 30_000

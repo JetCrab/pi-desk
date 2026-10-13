@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { bindSessionPlugin, type SessionPluginPushEvent } from '@jetcrab/pi-desk-sdk'
@@ -15,6 +15,7 @@ type SessionPluginRuntime = InstanceType<SessionPluginRuntimeModule['L4PiSession
 const require = createRequire(import.meta.url)
 const serverOnlyEntry = require.resolve('server-only')
 const jiti = createJiti(import.meta.url, {
+  tsconfigPaths: resolve('tsconfig.json'),
   moduleCache: false,
   alias: { 'server-only': join(dirname(serverOnlyEntry), 'empty.js') }
 })
@@ -56,6 +57,82 @@ function createRuntime(
 function extensionApi(runtime: SessionPluginRuntime): ExtensionAPI {
   return { events: runtime.eventBus } as ExtensionAPI
 }
+
+test('预览目录按路径登记，默认选择最后生效且只存在会话内存', async () => {
+  const { L4PiSessionPluginRuntime } = await loadSessionPluginRuntime()
+  let changes = 0
+  const runtime = createRuntime(
+    () => changes++,
+    () => undefined,
+    () => undefined,
+    L4PiSessionPluginRuntime
+  )
+  const plugin = bindSessionPlugin(extensionApi(runtime), 'preview-fixture')
+  const first = resolve('preview-first')
+  const second = resolve('preview-second')
+  try {
+    plugin.addPreviewDirectory(first)
+    assert.deepEqual(runtime.snapshot()['project-preview'], {
+      directories: [first],
+      defaultDirectory: null
+    })
+    plugin.addPreviewDirectory(second, { default: true })
+    plugin.addPreviewDirectory(join(second, '.'), { default: true })
+    assert.equal(changes, 2)
+    assert.deepEqual(runtime.snapshot()['project-preview'], {
+      directories: [first, second],
+      defaultDirectory: second
+    })
+    const another = bindSessionPlugin(extensionApi(runtime), 'another-preview')
+    another.addPreviewDirectory(first, { default: true })
+    assert.equal(runtime.snapshot()['project-preview']?.defaultDirectory, first)
+    plugin.addPreviewDirectory(second)
+    assert.equal(runtime.snapshot()['project-preview']?.defaultDirectory, first)
+    runtime.resetBranch()
+    assert.equal(runtime.snapshot()['project-preview'], undefined)
+    plugin.addPreviewDirectory(second, { default: true })
+    assert.deepEqual(runtime.snapshot()['project-preview'], {
+      directories: [second],
+      defaultDirectory: second
+    })
+    runtime.reset()
+    assert.equal(runtime.snapshot()['project-preview'], undefined)
+    runtime.dispose()
+    const before = changes
+    plugin.addPreviewDirectory(first, { default: true })
+    assert.equal(changes, before)
+    assert.equal(runtime.snapshot()['project-preview'], undefined)
+  } finally {
+    runtime.dispose()
+  }
+})
+
+test('非法目录和超限登记被拒绝，普通插件不能覆盖宿主预览槽', async () => {
+  const { L4PiSessionPluginRuntime } = await loadSessionPluginRuntime()
+  const errors: unknown[] = []
+  const runtime = new L4PiSessionPluginRuntime({
+    onChanged: () => undefined,
+    onPush: () => undefined,
+    onTasksChanged: () => undefined,
+    onInvalidUpdate: (error) => errors.push(error)
+  })
+  const plugin = bindSessionPlugin(extensionApi(runtime), 'preview-fixture')
+  try {
+    plugin.addPreviewDirectory('relative', { default: true })
+    plugin.addPreviewDirectory(`${resolve('invalid')}\0`)
+    assert.equal(runtime.snapshot()['project-preview'], undefined)
+    for (let index = 0; index < 32; index++) {
+      plugin.addPreviewDirectory(resolve(`directory-${index}`), { default: true })
+    }
+    const previous = runtime.snapshot()['project-preview']
+    plugin.addPreviewDirectory(resolve('overflow'), { default: true })
+    runtime.eventBus.emit('pi-desk:session-plugins', { 'project-preview': null })
+    assert.deepEqual(runtime.snapshot()['project-preview'], previous)
+    assert.equal(errors.length, 4)
+  } finally {
+    runtime.dispose()
+  }
+})
 
 test('Session Plugin reset 清空状态、方法、Push 与任务监听并重新绑定一次', async () => {
   const { L4PiSessionPluginRuntime } = await loadSessionPluginRuntime()

@@ -58,6 +58,7 @@ interface MutableCwdGitWorkspace {
 interface ProjectRef {
   workId: string
   cwd: string
+  readOnly?: boolean
 }
 
 function createWorkspace(cwd: string): MutableCwdGitWorkspace {
@@ -107,7 +108,8 @@ export class L2GitWorkspaceRuntime {
 
   reconcileWorkSessions(
     workSessions: readonly L2WorkSessionListItem[],
-    focusedWorkId: string | null
+    focusedWorkId: string | null,
+    previewDirectories: readonly Pick<ProjectRef, 'workId' | 'cwd'>[] = []
   ): void {
     const next = new Map<string, ProjectRef>()
     const focused = focusedWorkId
@@ -120,9 +122,16 @@ export class L2GitWorkspaceRuntime {
       }
     }
 
+    for (const directory of previewDirectories) {
+      if (!next.has(directory.cwd)) next.set(directory.cwd, { ...directory, readOnly: true })
+    }
     const changed =
       next.size !== this.projectRefs.size ||
-      [...next].some(([cwd, ref]) => this.projectRefs.get(cwd)?.workId !== ref.workId)
+      [...next].some(
+        ([cwd, ref]) =>
+          this.projectRefs.get(cwd)?.workId !== ref.workId ||
+          this.projectRefs.get(cwd)?.readOnly !== ref.readOnly
+      )
     if (!changed) return
     this.projectRefs.clear()
     for (const [cwd, ref] of next) this.projectRefs.set(cwd, ref)
@@ -171,7 +180,7 @@ export class L2GitWorkspaceRuntime {
     workspace.heads = { ...workspace.heads, status: 'loading', error: null }
     this.publish()
     try {
-      const result = await this.biz.getHeads(project, controller.signal)
+      const result = await this.biz.getHeads({ workId: project.workId, cwd }, controller.signal)
       if (workspace.headsRequest?.token !== token) return
       workspace.headsRequest = null
       workspace.heads = { status: 'ready', repositories: result.repositories, error: null }
@@ -238,7 +247,10 @@ export class L2GitWorkspaceRuntime {
     this.publish()
 
     try {
-      const data = await this.biz.listBranches({ ...project, repositoryRoot }, controller.signal)
+      const data = await this.biz.listBranches(
+        { workId: project.workId, cwd, repositoryRoot },
+        controller.signal
+      )
       if (workspace.branchRequests.get(repositoryRoot)?.token !== token) return
       workspace.branchRequests.delete(repositoryRoot)
       workspace.branches.set(repositoryRoot, { status: 'ready', data, error: null })
@@ -261,7 +273,7 @@ export class L2GitWorkspaceRuntime {
     repositoryRoot: string,
     target: L2WorkSessionGitBranchTarget
   ): Promise<void> {
-    const project = this.requireProject(cwd)
+    const project = this.requireWritableProject(cwd)
     const workspace = this.workspaceFor(cwd)
     if (workspace.branchOperations.has(repositoryRoot)) return
     workspace.branchOperations.add(repositoryRoot)
@@ -283,7 +295,7 @@ export class L2GitWorkspaceRuntime {
     name: string,
     startPoint: L2WorkSessionGitBranchTarget | null
   ): Promise<void> {
-    const project = this.requireProject(cwd)
+    const project = this.requireWritableProject(cwd)
     const workspace = this.workspaceFor(cwd)
     if (workspace.branchOperations.has(repositoryRoot)) return
     workspace.branchOperations.add(repositoryRoot)
@@ -346,7 +358,7 @@ export class L2GitWorkspaceRuntime {
     this.publish()
 
     try {
-      const result = await this.biz.get(project, controller.signal)
+      const result = await this.biz.get({ workId: project.workId, cwd }, controller.signal)
       if (workspace.snapshotRequest?.token !== token) return
       workspace.snapshotRequest = null
       workspace.snapshot = { status: 'ready', repositories: result.repositories, error: null }
@@ -373,7 +385,13 @@ export class L2GitWorkspaceRuntime {
   private requireProject(cwd: string): ProjectRef {
     const project = this.projectRefs.get(cwd)
     if (!project) throw new Error(l2WorkbenchText('gitNoProjectOperation'))
-    return project
+    return { workId: project.workId, cwd: project.cwd }
+  }
+
+  private requireWritableProject(cwd: string): ProjectRef {
+    if (this.projectRefs.get(cwd)?.readOnly)
+      throw new Error(l2WorkbenchText('gitNoProjectOperation'))
+    return this.requireProject(cwd)
   }
 
   private applyRepository(

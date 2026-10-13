@@ -67,6 +67,18 @@ plugin.push('changed', {})
 
 Node `plugin.setState()` 则整体替换自身全局状态；Browser 通过 `host.globalState.getSnapshot()/subscribe()` 只读。两者不是同一槽位，均不得读写其他插件状态。宿主地区设置由 `host.settings.getSnapshot()/subscribe()` 只读，不另存权威副本。
 
+### 会话预览目录
+
+Session 插件可为左侧项目文件增加目录，不改变 Pi 会话 CWD：
+
+```ts
+plugin.addPreviewDirectory(directory, { default: true })
+```
+
+`directory` 为服务端绝对目录；省略第二个参数只登记，`default: true` 同时设为默认预览目录，后登记的默认生效。原 CWD 始终可选；目录规范化后去重，最多登记 32 个。重复快照不会覆盖用户的手动选择。登记只在当前会话运行态内，插件在 `session_start`、`session_tree` 从自身数据恢复后重新登记；不要在普通查询时重复请求默认选择。
+
+调用不等待回执；非法路径或超限由宿主拒绝并记日志，实际目录内容按需读取。旧宿主或独立 Pi 不处理该登记；兼容旧 SDK 时使用 `plugin.addPreviewDirectory?.(...)`。已有 `files.preview/reveal/readImage` 的相对路径仍以会话 CWD 为基准。
+
 ## Browser Entry 与懒界面
 
 Entry 默认导出普通同步函数即可；在函数返回前完成全部 `registerContribution(kind, name, definition)`。kind 支持 `application`、`composer-panel`、`settings-page`、`session-sidebar-tab`、`message-view`。Entry 只放元数据、loader、轻量页面状态和事件订阅；返回 disposer 清理自有订阅与资源。
@@ -110,7 +122,9 @@ Method 调用没有 Browser 视图级取消参数；Global handler 的 `context.
 Push 可丢失、不持久化、不 ACK、不重放，也不创建聊天消息。Entry ready、连接恢复 ready、视图 mount 时按需要查询 Method 建立权威基线；不要用页面轮询替代已有的宿主状态同步。
 
 - 当前页面轻提示：`plugin.notify({ level: 'success', title: '保存成功' })` 或 `host.notify()`，只在当前页面短暂展示，离线可错过。
-- 服务端全局通知：Node `plugin.notifications.publish({ level: 'success', title: '处理完成', event: { name: 'open-result', data: {} } })`；用返回 ID 调用 `update/delete`。Browser Entry 通过 `plugin.notifications.onEvent('open-result', handler)` 处理点击，成功后宿主删除通知。Node 未重启时重连可恢复；Node 重启或插件释放后清空，不持久化。
+- 服务端全局通知：Node `plugin.notifications.publish({ key: 'result:run-1', level: 'success', title: '处理完成', event: { name: 'open-result', data: { runId: 'run-1' } } })`；用返回 ID 调用 `update/delete`。Browser Entry 通过 `plugin.notifications.onEvent('open-result', handler)` 处理点击，成功后宿主删除通知。Node 未重启时重连可恢复；Node 重启或插件释放后清空，不持久化。
+
+`publish()` 的 `key` 可选，去除首尾空白后为 1～256 字符，由业务标识事件，例如 `post:${postId}` 或 `build:${runId}`。同一插件、同一 `key` 的现存通知只保留一条：内容相同不广播；内容变化整体更新文字、级别和点击 Event，返回原 ID，保留创建时间与位置。再次发布时省略 `description/event` 会清除旧值；`update()` 仍只修改文字和级别。不传 `key` 每次新增，不按文字自动合并。通知删除或淘汰后同 `key` 可重新创建，不保存已关闭记录；`key` 只存在于服务端通知内存，不随通知传给浏览器。带 `key` 的发布需使用支持通知去重的宿主；旧宿主会拒绝未知字段，不自动降级为新增通知。
 
 ## 消息展示
 

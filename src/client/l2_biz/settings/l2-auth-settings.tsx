@@ -2,6 +2,7 @@
 
 import {
   ChevronRightIcon,
+  DicesIcon,
   LoaderCircleIcon,
   LogOutIcon,
   ShieldCheckIcon,
@@ -76,15 +77,28 @@ export function L2AuthSettings(): React.JSX.Element {
             </div>
             <div className="min-w-0 max-w-[40rem] space-y-4">
               <div className="space-y-1">
-                <label className="block text-sm font-medium" htmlFor="auth-password">
-                  {t(enabled ? 'newPassword' : 'password')}
-                </label>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="block text-sm font-medium" htmlFor="auth-password">
+                    {t(enabled ? 'newPassword' : 'password')}
+                  </label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    title={t('generatePasswordHint')}
+                    onClick={state.generatePassword}
+                  >
+                    <DicesIcon aria-hidden="true" />
+                    {t('generatePassword')}
+                  </Button>
+                </div>
                 <L4PasswordInput
                   id="auth-password"
                   name="password"
                   className="[&::-ms-reveal]:hidden"
                   autoComplete="new-password"
-                  minLength={8}
+                  minLength={12}
                   maxLength={256}
                   required
                   disabled={busy}
@@ -92,7 +106,7 @@ export function L2AuthSettings(): React.JSX.Element {
                   aria-describedby={`auth-password-hint${state.error ? ' auth-settings-error' : ''}`}
                   onChange={(event) => state.setPassword(event.target.value)}
                 />
-                <p id="auth-password-hint" className="text-xs text-muted-foreground">
+                <p id="auth-password-hint" className="text-sm text-muted-foreground">
                   {t('passwordHint')}
                 </p>
               </div>

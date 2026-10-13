@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   L2AuthLoginRequestSchema,
+  L2AuthNewPasswordSchema,
   L2AuthLogoutRequestSchema,
   L2AuthSettingsGetRequestSchema,
   L2AuthSettingsReplaceRequestSchema
@@ -35,6 +36,46 @@ test('登录与设置仅接收密码并拒绝用户名及额外字段', () => {
   assert.equal(L2AuthSettingsReplaceRequestSchema.safeParse({ password: 'short' }).success, false)
   assert.equal(L2AuthSettingsReplaceRequestSchema.safeParse({ password: null }).success, true)
   assert.equal(L2AuthSettingsReplaceRequestSchema.safeParse({ username: null }).success, false)
+})
+
+test('新密码至少12位且满足三类字符，旧密码仍可登录', () => {
+  for (const password of [
+    'OnlylettersHere',
+    '123456789012',
+    'Abcdefghij1',
+    ' abcDEF123456',
+    'abcDEF123456 ',
+    'abcDEF123456\n',
+    'abcDEF123456\t',
+    'abcDEF123456\u200b',
+    `Ab1${'x'.repeat(254)}`
+  ]) {
+    assert.equal(
+      L2AuthNewPasswordSchema.safeParse(password).success,
+      false,
+      JSON.stringify(password)
+    )
+  }
+  for (const password of [
+    'Abcdefghijk1',
+    'abcdefghij1!',
+    'ABCDEFGHIJ1!',
+    'Abcdefghijk!',
+    'Abcd efgh12!',
+    'Password123!',
+    `Ab1${'x'.repeat(253)}`
+  ]) {
+    assert.equal(
+      L2AuthNewPasswordSchema.safeParse(password).success,
+      true,
+      JSON.stringify(password)
+    )
+  }
+  assert.equal(L2AuthLoginRequestSchema.safeParse({ password: 'old-pass' }).success, true)
+  assert.equal(
+    L2AuthSettingsReplaceRequestSchema.safeParse({ password: 'old-pass' }).success,
+    false
+  )
 })
 
 test('签名会话绑定密钥、校验过期时间并安全解析 Cookie', () => {

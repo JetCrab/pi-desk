@@ -1,8 +1,10 @@
 import 'server-only'
 
 import { randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import {
   L3AppNotificationChangesSchema,
+  L3AppNotificationKeySchema,
   L3AppNotificationSchema,
   L3PluginNotificationChangesSchema,
   L3PluginNotificationPublishInputSchema,
@@ -21,6 +23,7 @@ const L3_PLUGIN_NOTIFICATION_EVENT_MAX_JSON_BYTES = 64 * 1024
 type L3AppNotificationOwner = string | object
 
 export interface L3AppNotificationPublishInput {
+  key?: string
   level: L3AppNotificationLevel
   title: string
   description?: string
@@ -49,7 +52,10 @@ export class L3AppNotificationOwnerError extends Error {
 }
 
 export class L3AppNotificationRuntime {
-  private readonly ownersByNotificationId = new Map<string, L3AppNotificationOwner>()
+  private readonly ownersByNotificationId = new Map<
+    string,
+    { owner: L3AppNotificationOwner; key: string | undefined }
+  >()
   private readonly unsubscribe: () => void
   private disposed = false
 
@@ -100,6 +106,7 @@ export class L3AppNotificationRuntime {
     const pluginName = L3PluginNameSchema.parse(pluginNameInput)
     const normalized = L3PluginNotificationPublishInputSchema.parse(input)
     return this.publish(pluginName, {
+      key: normalized.key,
       level: normalized.level,
       title: normalized.title,
       ...(normalized.description === undefined ? {} : { description: normalized.description }),
@@ -154,7 +161,42 @@ export class L3AppNotificationRuntime {
       throw new Error('Plugin notification event data exceeds 64KB')
     }
 
+    const key = L3AppNotificationKeySchema.optional().parse(input.key)
     const current = this.runtime.readSnapshot().notifications
+    const existing =
+      key === undefined
+        ? undefined
+        : current.find((notification) => {
+            const registration = this.ownersByNotificationId.get(notification.notificationId)
+            return registration?.owner === owner && registration.key === key
+          })
+    const notification = L3AppNotificationSchema.parse({
+      notificationId: existing?.notificationId ?? randomUUID(),
+      level: input.level,
+      title: input.title,
+      description: input.description ?? null,
+      createdAt: existing?.createdAt ?? Date.now(),
+      event: input.event ?? null
+    })
+
+    if (existing) {
+      const changes = {
+        level: notification.level,
+        title: notification.title,
+        description: notification.description,
+        event: notification.event
+      }
+      if (
+        existing.level !== changes.level ||
+        existing.title !== changes.title ||
+        existing.description !== changes.description ||
+        !isDeepStrictEqual(existing.event, changes.event)
+      ) {
+        this.update(owner, existing.notificationId, changes)
+      }
+      return existing.notificationId
+    }
+
     const oldest = current.length >= L3_APP_NOTIFICATION_MAX_ITEMS ? current[0] : undefined
     if (oldest) {
       this.runtime.applyInternal({
@@ -163,15 +205,7 @@ export class L3AppNotificationRuntime {
       })
     }
 
-    const notification = L3AppNotificationSchema.parse({
-      notificationId: randomUUID(),
-      level: input.level,
-      title: input.title,
-      description: input.description ?? null,
-      createdAt: Date.now(),
-      event: input.event ?? null
-    })
-    this.ownersByNotificationId.set(notification.notificationId, owner)
+    this.ownersByNotificationId.set(notification.notificationId, { owner, key })
     try {
       this.runtime.applyInternal({
         key: 'notifications',
@@ -215,7 +249,7 @@ export class L3AppNotificationRuntime {
       this.runtime.readSnapshot().notifications.map((notification) => notification.notificationId)
     )
     const notificationIds = [...this.ownersByNotificationId.entries()]
-      .filter(([, currentOwner]) => currentOwner === owner)
+      .filter(([, registration]) => registration.owner === owner)
       .map(([notificationId]) => notificationId)
     for (const notificationId of notificationIds) {
       if (!activeIds.has(notificationId)) {
@@ -230,9 +264,9 @@ export class L3AppNotificationRuntime {
   }
 
   private assertOwner(owner: L3AppNotificationOwner, notificationId: string): void {
-    const currentOwner = this.ownersByNotificationId.get(notificationId)
-    if (!currentOwner) throw new L3AppNotificationNotFoundError(notificationId)
-    if (currentOwner !== owner) throw new L3AppNotificationOwnerError(notificationId)
+    const registration = this.ownersByNotificationId.get(notificationId)
+    if (!registration) throw new L3AppNotificationNotFoundError(notificationId)
+    if (registration.owner !== owner) throw new L3AppNotificationOwnerError(notificationId)
   }
 
   private ensureActive(): void {

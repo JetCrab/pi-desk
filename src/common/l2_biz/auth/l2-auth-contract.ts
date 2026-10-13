@@ -23,8 +23,21 @@ export const L2AuthSettingsGetResponseSchema = z
   })
   .strict()
 
+export const L2AuthNewPasswordSchema = z
+  .string()
+  .min(12)
+  .max(256)
+  .refine(
+    (password) => password === password.trim() && !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(password)
+  )
+  .refine(
+    (password) =>
+      [/[A-Z]/, /[a-z]/, /[0-9]/, /[\p{P}\p{S}]/u].filter((pattern) => pattern.test(password))
+        .length >= 3
+  )
+
 export const L2AuthSettingsReplaceRequestSchema = z.union([
-  L2AuthLoginRequestSchema.extend({ password: z.string().min(8).max(256) }),
+  L2AuthLoginRequestSchema.extend({ password: L2AuthNewPasswordSchema }),
   z.object({ password: z.null() }).strict()
 ])
 export const L2AuthSettingsReplaceResponseSchema = z.object({}).strict()

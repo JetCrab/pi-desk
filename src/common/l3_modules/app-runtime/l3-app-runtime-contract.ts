@@ -9,6 +9,7 @@ import {
 import { L4TimestampMsSchema } from '@common/l4_foundation/l4-timestamp-contract'
 
 export const L3AppNotificationIdSchema = z.string().uuid()
+export const L3AppNotificationKeySchema = z.string().trim().min(1).max(256)
 export const L3AppNotificationLevelSchema = z.enum(['info', 'success', 'warning', 'error'])
 export const L3AppNotificationTitleSchema = z.string().trim().min(1).max(120)
 export const L3AppNotificationDescriptionSchema = z.string().trim().max(320).nullable()
@@ -51,7 +52,8 @@ export const L3AppNotificationChangesSchema = z
   .object({
     level: L3AppNotificationLevelSchema.optional(),
     title: L3AppNotificationTitleSchema.optional(),
-    description: L3AppNotificationDescriptionSchema.optional()
+    description: L3AppNotificationDescriptionSchema.optional(),
+    event: L3AppNotificationEventSchema.nullable().optional()
   })
   .strict()
   .refine((changes) => Object.keys(changes).length > 0, {
@@ -173,6 +175,7 @@ export const L3PluginNotificationEventInputSchema = z
 
 export const L3PluginNotificationPublishInputSchema = z
   .object({
+    key: L3AppNotificationKeySchema.optional(),
     level: L3AppNotificationLevelSchema,
     title: L3AppNotificationTitleSchema,
     description: z.string().trim().max(320).optional(),
