@@ -253,11 +253,12 @@ export type BrowserFilePreviewMode = 'session' | 'expanded' | 'standalone'
 export interface BrowserFilePreviewOptions {
   // 省略时兼容此前行为：在来源会话的文件工作区打开。
   mode?: BrowserFilePreviewMode
-  // 仅 standalone 使用；按顺序浏览图片，path 指定初始图片，重复路径只保留首次出现。
+  // 仅 standalone 使用；支持会话 cwd 下规范相对路径或服务端绝对路径，须包含初始 path，重复路径只保留首次出现。
   imagePaths?: readonly string[]
 }
 
 export interface BrowserWorkSessionFileHost {
+  // preview/reveal 支持会话 cwd 下规范相对路径或服务端绝对文件路径（可在项目外）。
   preview(source: PluginSource, path: string, options?: BrowserFilePreviewOptions): void
   reveal(source: PluginSource, path: string): Promise<void>
   // 文件缺失返回 null；调用方持有 Blob，负责取消请求和释放自己创建的 URL。
@@ -265,6 +266,7 @@ export interface BrowserWorkSessionFileHost {
 }
 
 export interface BrowserSessionFileHost {
+  // 路径规则与 BrowserWorkSessionFileHost 的 preview/reveal 一致。
   preview(path: string, options?: BrowserFilePreviewOptions): void
   reveal(path: string): Promise<void>
 }

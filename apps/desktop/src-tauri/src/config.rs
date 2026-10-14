@@ -24,11 +24,6 @@ pub struct DesktopConfig {
     pub tunnel: TunnelConnectionConfig,
 }
 
-pub struct LoadedDesktopConfig {
-    pub config: DesktopConfig,
-    pub needs_rewrite: bool,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetConfig {
@@ -66,69 +61,22 @@ pub enum ReleaseChannel {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", from = "PackageConfigInput")]
+#[serde(rename_all = "camelCase")]
 pub struct PackageConfig {
     pub name: String,
     // 仅供 npm 操作注入统一源，旧服务配置中的 registry 不再读取或写入。
     #[serde(skip)]
     pub registry: Option<String>,
+    #[serde(default)]
     pub startup_update: UpdatePolicy,
+    #[serde(default = "default_periodic_update")]
     pub periodic_update: UpdatePolicy,
+    #[serde(default)]
     pub channel: ReleaseChannel,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PackageConfigInput {
-    name: String,
-    #[serde(default, deserialize_with = "deserialize_present")]
-    startup_update: Option<UpdatePolicy>,
-    #[serde(default, deserialize_with = "deserialize_present")]
-    periodic_update: Option<UpdatePolicy>,
-    #[serde(default)]
-    channel: ReleaseChannel,
-    #[serde(
-        default,
-        alias = "autoUpdate",
-        deserialize_with = "deserialize_present"
-    )]
-    auto_update_on_start: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_present")]
-    periodic_update_check: Option<bool>,
-}
-
-// 只有字段缺失才采用默认值，显式 null 仍须通过枚举或布尔类型校验。
-fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
-}
-
-impl From<PackageConfigInput> for PackageConfig {
-    fn from(input: PackageConfigInput) -> Self {
-        let legacy_policy = |enabled| {
-            if enabled {
-                UpdatePolicy::Update
-            } else {
-                UpdatePolicy::None
-            }
-        };
-        Self {
-            name: input.name,
-            registry: None,
-            startup_update: input
-                .startup_update
-                .or_else(|| input.auto_update_on_start.map(legacy_policy))
-                .unwrap_or(UpdatePolicy::Check),
-            periodic_update: input
-                .periodic_update
-                .or_else(|| input.periodic_update_check.map(legacy_policy))
-                .unwrap_or(UpdatePolicy::None),
-            channel: input.channel,
-        }
-    }
+fn default_periodic_update() -> UpdatePolicy {
+    UpdatePolicy::None
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -328,14 +276,11 @@ fn normalize_web_url(raw_value: &str) -> Result<String, String> {
     Ok(url.to_string())
 }
 
-pub fn load(path: &Path) -> Result<LoadedDesktopConfig, String> {
+pub fn load(path: &Path) -> Result<DesktopConfig, String> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            return Ok(LoadedDesktopConfig {
-                config: normalize(DesktopConfig::default())?,
-                needs_rewrite: false,
-            })
+            return normalize(DesktopConfig::default());
         }
         Err(error) => return Err(format!("读取桌面配置失败：{error}")),
     };
@@ -349,21 +294,13 @@ pub fn load(path: &Path) -> Result<LoadedDesktopConfig, String> {
     let content = fs::read_to_string(path).map_err(|error| format!("读取桌面配置失败：{error}"))?;
     let value: serde_json::Value =
         serde_json::from_str(&content).map_err(|error| format!("桌面配置格式无效：{error}"))?;
-    if value.get("targets").is_some() {
-        let config: DesktopConfig =
-            serde_json::from_value(value).map_err(|error| format!("桌面配置格式无效：{error}"))?;
-        return Ok(LoadedDesktopConfig {
-            config: normalize(config)?,
-            needs_rewrite: false,
-        });
+    if value.get("targets").is_none() {
+        return normalize(DesktopConfig::default());
     }
 
-    let legacy: LegacyDesktopConfig =
-        serde_json::from_value(value).map_err(|error| format!("旧桌面配置格式无效：{error}"))?;
-    Ok(LoadedDesktopConfig {
-        config: migrate_legacy(legacy)?,
-        needs_rewrite: true,
-    })
+    let config: DesktopConfig =
+        serde_json::from_value(value).map_err(|error| format!("桌面配置格式无效：{error}"))?;
+    normalize(config)
 }
 
 pub fn save(path: &Path, config: &DesktopConfig) -> Result<(), String> {
@@ -405,89 +342,6 @@ pub fn save(path: &Path, config: &DesktopConfig) -> Result<(), String> {
     result
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LegacyDesktopConfig {
-    visit: LegacyVisitConfig,
-    server: LegacyServerConfig,
-    #[serde(default)]
-    tunnel: LegacyTunnelConfig,
-}
-
-#[derive(Deserialize)]
-struct LegacyVisitConfig {
-    url: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LegacyServerConfig {
-    url: String,
-    start_command: String,
-    ready_path: String,
-    #[serde(default)]
-    package: Option<PackageConfig>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LegacyTunnelConfig {
-    #[serde(default)]
-    enabled: bool,
-    #[serde(default)]
-    control_server_url: String,
-    #[serde(default)]
-    control_key: String,
-    #[serde(default)]
-    public_port: u16,
-    #[serde(default)]
-    device_id: String,
-}
-
-fn migrate_legacy(legacy: LegacyDesktopConfig) -> Result<DesktopConfig, String> {
-    let visit_url = normalize_target_url(&legacy.visit.url)?;
-    let server_url = normalize_target_url(&legacy.server.url)?;
-    if Url::parse(&server_url)
-        .map_err(|_| "本机服务地址无效".to_string())?
-        .scheme()
-        != "http"
-    {
-        return Err("托管本机服务的网址必须使用 http://".to_string());
-    }
-
-    let server = ServerConfig {
-        start_command: legacy.server.start_command,
-        ready_path: legacy.server.ready_path,
-        package: legacy.server.package,
-    };
-    let target_tunnel = (legacy.tunnel.public_port != 0).then_some(TargetTunnelConfig {
-        enabled: legacy.tunnel.enabled,
-        public_port: legacy.tunnel.public_port,
-    });
-    let mut targets = vec![TargetConfig {
-        url: visit_url.clone(),
-        server: None,
-        tunnel: None,
-    }];
-    if visit_url == server_url {
-        targets[0].server = Some(server);
-        targets[0].tunnel = target_tunnel;
-    } else {
-        targets.push(TargetConfig {
-            url: server_url,
-            server: Some(server),
-            tunnel: target_tunnel,
-        });
-    }
-
-    let tunnel = TunnelConnectionConfig {
-        control_server_url: legacy.tunnel.control_server_url,
-        control_key: legacy.tunnel.control_key,
-        device_id: legacy.tunnel.device_id,
-    };
-    normalize(DesktopConfig { targets, tunnel })
-}
-
 fn temporary_path(path: &Path) -> PathBuf {
     let name = path
         .file_name()
@@ -506,9 +360,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        default_server_config, load, migrate_legacy, normalize, normalize_target_url, save,
-        DesktopConfig, LegacyDesktopConfig, PackageConfig, ReleaseChannel, ServerConfig,
-        TargetConfig, TargetTunnelConfig, TunnelConnectionConfig, UpdatePolicy,
+        default_server_config, load, normalize, normalize_target_url, save, DesktopConfig,
+        PackageConfig, ReleaseChannel, ServerConfig, TargetConfig, TargetTunnelConfig,
+        TunnelConnectionConfig, UpdatePolicy,
     };
 
     #[test]
@@ -535,14 +389,14 @@ mod tests {
             value["targets"][0]["server"]["package"]["registry"] = registry;
             fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
             let loaded = load(&path).unwrap();
-            let server = loaded.config.targets[0].server.as_ref().unwrap();
+            let server = loaded.targets[0].server.as_ref().unwrap();
             assert!(server.package.as_ref().unwrap().registry.is_none());
             assert_eq!(
                 server.start_command,
                 original.targets[0].server.as_ref().unwrap().start_command
             );
-            assert_eq!(loaded.config.targets[0].url, "http://127.0.0.1:30333/");
-            save(&path, &loaded.config).unwrap();
+            assert_eq!(loaded.targets[0].url, "http://127.0.0.1:30333/");
+            save(&path, &loaded).unwrap();
             let saved: serde_json::Value =
                 serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
             assert!(saved["targets"][0]["server"]["package"]
@@ -642,29 +496,6 @@ mod tests {
     }
 
     #[test]
-    fn migrates_legacy_visit_and_server_into_url_targets() {
-        let legacy: LegacyDesktopConfig = serde_json::from_str(
-            r#"{"visit":{"url":"http://127.0.0.1:30333"},"server":{"url":"http://127.0.0.1:30333","startCommand":"pnpm dlx {package} start -p {port}","readyPath":"/api/health","package":{"name":"@jetcrab/pi-desk","autoUpdate":false}},"tunnel":{"enabled":false,"publicPort":40001}}"#,
-        )
-        .expect("旧配置应可读取");
-        let config = migrate_legacy(legacy).expect("旧配置应迁移");
-
-        assert_eq!(config.targets.len(), 1);
-        assert!(config.targets[0].server.is_some());
-        assert_eq!(
-            config.targets[0].tunnel.as_ref().unwrap().public_port,
-            40001
-        );
-        let package = config.targets[0]
-            .server
-            .as_ref()
-            .and_then(|server| server.package.as_ref())
-            .unwrap();
-        assert_eq!(package.startup_update, UpdatePolicy::None);
-        assert_eq!(package.periodic_update, UpdatePolicy::None);
-    }
-
-    #[test]
     fn preserves_configured_start_command() {
         let command = "npm run serve -- --port 30333";
         let config = normalize(DesktopConfig {
@@ -688,35 +519,42 @@ mod tests {
     }
 
     #[test]
-    fn load_marks_legacy_config_for_rewrite() {
+    fn ignores_legacy_config_without_rewriting_it() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let directory = std::env::temp_dir().join(format!(
-            "jetcrab-desktop-config-test-{}-{suffix}",
-            std::process::id()
-        ));
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../temp/tests/desktop-config")
+            .join(format!(
+                "ignored-legacy-config-{}-{suffix}",
+                std::process::id()
+            ));
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("config.json");
-        fs::write(
-            &path,
-            r#"{"visit":{"url":"https://example.com"},"server":{"url":"http://127.0.0.1:30333","startCommand":"pnpm start -p {port}","readyPath":"/api/health"}}"#,
-        )
-        .unwrap();
-
-        let loaded = load(&path).expect("旧配置文件应可迁移");
-        assert!(loaded.needs_rewrite);
-        save(&path, &loaded.config).expect("迁移完成后应重写桌面配置");
-        let rewritten = fs::read_to_string(&path).unwrap();
-
-        assert_eq!(loaded.config.targets.len(), 2);
-        assert!(rewritten.contains("\"targets\""));
-        assert!(!rewritten.contains("\"visit\""));
-        assert!(serde_json::from_str::<serde_json::Value>(&rewritten)
-            .unwrap()
-            .get("tunnel")
-            .is_some());
+        for content in [
+            r#"{"visit":{"url":"https://example.com"},"server":{"url":"http://127.0.0.1:30334","startCommand":"pnpm start -p {port}","readyPath":"/health","package":{"name":"example-service","autoUpdateOnStart":true,"periodicUpdateCheck":true}},"tunnel":{"enabled":true,"publicPort":40001,"controlServerUrl":"https://example.com/tunnel"}}"#,
+            r#"{"visit":null,"server":false,"tunnel":"ignored"}"#,
+        ] {
+            fs::write(&path, content).unwrap();
+            let loaded = load(&path).expect("旧配置应被忽略而不报错");
+            assert_eq!(loaded.targets.len(), 1);
+            assert_eq!(loaded.targets[0].url, "http://127.0.0.1:30333/");
+            assert!(loaded.targets[0].tunnel.is_none());
+            let package = loaded.targets[0]
+                .server
+                .as_ref()
+                .unwrap()
+                .package
+                .as_ref()
+                .unwrap();
+            assert_eq!(package.name, "@jetcrab/pi-desk");
+            assert_eq!(package.startup_update, UpdatePolicy::Check);
+            assert_eq!(package.periodic_update, UpdatePolicy::None);
+            assert_eq!(package.channel, ReleaseChannel::Stable);
+            assert!(loaded.tunnel.control_server_url.is_empty());
+            assert_eq!(fs::read_to_string(&path).unwrap(), content);
+        }
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -739,14 +577,13 @@ mod tests {
         .unwrap();
 
         let loaded = load(&path).expect("配置的服务应可加载");
-        assert!(!loaded.needs_rewrite);
-        let server = loaded.config.targets[0].server.as_ref().unwrap();
+        let server = loaded.targets[0].server.as_ref().unwrap();
         assert_eq!(
             server.start_command,
             "node_modules\\.bin\\pi-super.cmd start -H 127.0.0.1 -p {port} --no-open"
         );
         assert_eq!(server.package.as_ref().unwrap().name, "@jetcrab/pi-super");
-        save(&path, &loaded.config).expect("保存时应保留用户配置的服务");
+        save(&path, &loaded).expect("保存时应保留用户配置的服务");
         let rewritten = fs::read_to_string(&path).unwrap();
         assert!(rewritten.contains("@jetcrab/pi-super"));
         assert!(rewritten.contains("pi-super.cmd"));

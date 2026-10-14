@@ -26,7 +26,13 @@ import {
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const scenario = process.argv[2] ?? 'all'
-assert.ok(['all', 'reading', 'follow-retained', 'follow-remount', 'send-switch'].includes(scenario))
+const desktop = process.argv.includes('--desktop')
+assert.ok(
+  ['all', 'reading', 'follow-retained', 'follow-remount', 'send-switch', 'switch-ended'].includes(
+    scenario
+  )
+)
+assert.ok(!desktop || scenario === 'switch-ended', '桌面参数仅用于已结束会话切换回归')
 const taskId = `follow-return-${scenario}-${process.pid}`
 const runRoot = join(projectRoot, 'temp/run/chat-return', taskId)
 const agentRoot = join(projectRoot, 'temp/pi/chat-return-e2e', taskId)
@@ -217,6 +223,89 @@ async function switchMobile(client, from, to) {
   await settle(client)
 }
 
+async function recordSwitch(client, from, to) {
+  if (!desktop) {
+    await click(client, `[data-work-id="${from}"] [aria-label="显示工作会话菜单"]`)
+    await click(client, '[data-testid="sidebar-mode-sessions"]')
+  }
+  const selector = `[data-testid="work-session-row-${to}"]`
+  await waitFor(
+    client,
+    `document.querySelector(${JSON.stringify(selector)}) !== null`,
+    '目标会话切换入口可用'
+  )
+  await evaluate(
+    client,
+    `(() => {
+      window.__switchFrames = [];
+      window.__switchComplete = new Promise((resolveSwitch, rejectSwitch) => {
+        const start = performance.now();
+        let firstMessageAt = null;
+        const sample = () => {
+          const now = performance.now();
+          const log = document.querySelector('[data-work-id="${to}"] [role="log"]');
+          const scroll = log && [...log.querySelectorAll('div')].find(element =>
+            ['auto', 'scroll'].includes(getComputedStyle(element).overflowY));
+          const user = [...(log?.querySelectorAll('[data-chat-user-message]') ?? [])].at(-1);
+          if (scroll && user) {
+            firstMessageAt ??= now;
+            window.__switchFrames.push({
+              time: now - firstMessageAt,
+              top: scroll.scrollTop,
+              height: scroll.scrollHeight,
+              offset: user.getBoundingClientRect().top - scroll.getBoundingClientRect().top,
+              gap: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight,
+            });
+          }
+          if (firstMessageAt !== null && now - firstMessageAt >= 1000) {
+            resolveSwitch(window.__switchFrames);
+          } else if (now - start >= 10000) {
+            rejectSwitch(new Error('目标会话消息未及时显示'));
+          } else {
+            requestAnimationFrame(sample);
+          }
+        };
+        requestAnimationFrame(sample);
+      });
+      document.querySelector(${JSON.stringify(selector)}).click();
+    })()`
+  )
+  return evaluate(client, 'window.__switchComplete')
+}
+
+async function checkEndedSwitch(client, from, to) {
+  const frames = await recordSwitch(client, from, to)
+  const displaced = frames.filter((frame) => Math.abs(frame.offset - 12) > 2)
+  assert.equal(
+    displaced.length,
+    0,
+    `切换后不应从目标位置继续滚动：${JSON.stringify(displaced.slice(0, 5))}`
+  )
+  assert.ok(frames.at(-1).gap > 100, '切换应保留末条提问位置，不能滑到底部')
+  console.log('已结束会话切换逐帧检查', {
+    from,
+    to,
+    frames: frames.length,
+    maxOffsetError: Math.max(...frames.map((frame) => Math.abs(frame.offset - 12)))
+  })
+}
+
+async function checkFollowSwitch(client, from, to) {
+  const frames = await recordSwitch(client, from, to)
+  const displaced = frames.filter((frame) => frame.gap > 2)
+  assert.equal(
+    displaced.length,
+    0,
+    `切回跟随中的会话应直接显示底部：${JSON.stringify(displaced.slice(0, 5))}`
+  )
+  console.log('运行中会话切换逐帧检查', {
+    from,
+    to,
+    frames: frames.length,
+    maxBottomGap: Math.max(...frames.map((frame) => frame.gap))
+  })
+}
+
 async function openFile(client) {
   const entry = `${column} [data-testid="session-files-entry"]`
   if (await evaluate(client, `document.querySelector(${JSON.stringify(entry)}) !== null`)) {
@@ -326,7 +415,7 @@ async function checkFollowReturn(client, mode) {
   )
   // 立即切走用例也要等请求实际到达，不能向上一轮响应写入。
   await requestArrived
-  await switchMobile(client, destination, workId)
+  await checkFollowSwitch(client, destination, workId)
   await checkFollowing(client, '正在修改。')
   assert.ok((await evaluate(client, metrics)).tailSpace > 100, '返回时应仍保留空白占位')
 
@@ -346,7 +435,7 @@ async function checkFollowReturn(client, mode) {
     )
     await settle(client)
   }
-  await switchMobile(client, destination, workId)
+  await checkFollowSwitch(client, destination, workId)
   await checkFollowing(client, marker)
   const nextMarker = `${mode}：返回后继续跟随新增回复`
   send(`\n\n${answer}\n\n${nextMarker}`)
@@ -415,7 +504,7 @@ async function main() {
       cdpPort,
       join(runRoot, 'browser'),
       '560,854',
-      ['--edge-skip-compat-layer-relaunch', '--disable-smooth-scrolling']
+      ['--edge-skip-compat-layer-relaunch']
     )
     await waitForBrowserReady(browser, cdpPort)
     client = await createCdpPage(cdpPort)
@@ -432,7 +521,7 @@ async function main() {
       };
     `
     })
-    await setViewport(client, 390, 854, true)
+    await setViewport(client, desktop ? 1280 : 390, desktop ? 900 : 854, !desktop)
     await navigate(client, `http://127.0.0.1:${appPort}/login`)
     const login = await evaluate(
       client,
@@ -445,6 +534,16 @@ async function main() {
     )
     await navigate(client, `http://127.0.0.1:${appPort}/?chatScrollDebug=1`)
     await checkLatest(client, '已结束会话首次进入定位末条提问')
+    if (scenario === 'all' || scenario === 'switch-ended') {
+      await checkEndedSwitch(client, workId, replacementWorkId)
+      await checkEndedSwitch(client, replacementWorkId, workId)
+      await checkLatest(client, '已结束会话切回后保持末条提问位置')
+      if (scenario === 'switch-ended') {
+        success = true
+        console.log(`已结束会话切换定向回归通过：${desktop ? '桌面端' : '移动端'}`)
+        return
+      }
+    }
     for (const mode of ['follow-retained', 'follow-remount', 'send-switch']) {
       if (scenario === 'all' || scenario === mode) await checkFollowReturn(client, mode)
     }

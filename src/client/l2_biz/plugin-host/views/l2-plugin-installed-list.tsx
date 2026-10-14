@@ -89,8 +89,8 @@ export function L2PluginInstalledList(props: InstalledListProps): React.JSX.Elem
     label: t(`statusFilter_${value}`)
   }))
   return (
-    <section aria-label={t('installed')} className="min-w-0 space-y-3">
-      <div className="sticky top-0 z-10 space-y-3 bg-popover pb-2">
+    <section aria-label={t('installed')} className="flex min-h-0 min-w-0 flex-col gap-3">
+      <div className="shrink-0 space-y-3 bg-popover pb-2">
         <div className="flex flex-wrap items-center gap-2">
           <Input
             aria-label={t('filterInstalled')}
@@ -200,92 +200,96 @@ export function L2PluginInstalledList(props: InstalledListProps): React.JSX.Elem
           </p>
         ) : null}
       </div>
-      {props.loading && !props.snapshot ? (
-        <p role="status" className="py-6 text-sm text-muted-foreground">
-          {t('loading')}
-        </p>
-      ) : plugins.length ? (
-        <div className="divide-y rounded-lg border bg-card">
-          {plugins.map((plugin) => {
-            const name = pluginDisplayName(plugin)
-            const key = pluginRequestKey(plugin.source)
-            const browserError = plugin.pluginName
-              ? (props.browserErrors.get(plugin.pluginName) ?? null)
-              : null
-            return (
-              <article
-                key={key}
-                aria-label={name}
-                className={`min-w-0 px-4 py-3 ${props.selected.has(key) && props.batchMode ? 'bg-accent/40' : ''}`}
-              >
-                <div className="flex items-start gap-3">
-                  {props.batchMode && plugin.kind !== 'extension' ? (
-                    <div className="flex min-h-8 shrink-0 items-center">
-                      <Checkbox
-                        checked={props.selected.has(key)}
-                        aria-label={t('selectPlugin', { name })}
-                        onCheckedChange={(checked) => props.onSelect([key], checked)}
-                      />
-                    </div>
-                  ) : null}
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-                      <div className="flex min-w-0 flex-1 basis-64 flex-wrap items-center gap-x-2 gap-y-1">
-                        <Button
-                          variant="link"
-                          className="h-auto min-h-8 min-w-0 max-w-full justify-start p-0 text-left text-sm font-semibold whitespace-normal no-underline hover:underline [overflow-wrap:anywhere]"
-                          aria-label={t('viewDetails', { name })}
-                          onClick={() => props.onDetail(plugin.source)}
-                        >
-                          {name}
-                        </Button>
-                        {plugin.version ? (
-                          <span className="text-xs text-muted-foreground">v{plugin.version}</span>
-                        ) : null}
-                        {plugin.updateAvailable ? (
-                          <span className="inline-flex rounded-md bg-status-success/10 px-2 py-0.5 text-xs font-medium text-status-success">
-                            {plugin.availableVersion
-                              ? t('newVersion', { version: plugin.availableVersion })
-                              : t('updateAvailable')}
-                          </span>
-                        ) : null}
-                        {plugin.updateTag && plugin.updateTag !== 'latest' ? (
-                          <span className="text-xs text-muted-foreground">
-                            {plugin.updateTag === 'dev' ? t('channelDev') : plugin.updateTag}
-                          </span>
-                        ) : null}
+      <div className="pi-desk-chat-scrollbar min-h-0 overflow-y-auto">
+        {props.loading && !props.snapshot ? (
+          <p role="status" className="py-6 text-sm text-muted-foreground">
+            {t('loading')}
+          </p>
+        ) : plugins.length ? (
+          <div className="divide-y rounded-lg border bg-card">
+            {plugins.map((plugin) => {
+              const name = pluginDisplayName(plugin)
+              const key = pluginRequestKey(plugin.source)
+              const browserError = plugin.pluginName
+                ? (props.browserErrors.get(plugin.pluginName) ?? null)
+                : null
+              return (
+                <article
+                  key={key}
+                  aria-label={name}
+                  className={`min-w-0 px-4 py-3 ${props.selected.has(key) && props.batchMode ? 'bg-accent/40' : ''}`}
+                >
+                  <div className="flex items-start gap-3">
+                    {props.batchMode && plugin.kind !== 'extension' ? (
+                      <div className="flex min-h-8 shrink-0 items-center">
+                        <Checkbox
+                          checked={props.selected.has(key)}
+                          aria-label={t('selectPlugin', { name })}
+                          onCheckedChange={(checked) => props.onSelect([key], checked)}
+                        />
                       </div>
-                      <L2PluginManagementControls
+                    ) : null}
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                        <div className="flex min-w-0 flex-1 basis-64 flex-wrap items-center gap-x-2 gap-y-1">
+                          <Button
+                            variant="link"
+                            className="h-auto min-h-8 min-w-0 max-w-full justify-start p-0 text-left text-sm font-semibold whitespace-normal no-underline hover:underline [overflow-wrap:anywhere]"
+                            aria-label={t('viewDetails', { name })}
+                            onClick={() => props.onDetail(plugin.source)}
+                          >
+                            {name}
+                          </Button>
+                          {plugin.version ? (
+                            <span className="text-xs text-muted-foreground">v{plugin.version}</span>
+                          ) : null}
+                          {plugin.updateAvailable ? (
+                            <span className="inline-flex rounded-md bg-status-success/10 px-2 py-0.5 text-xs font-medium text-status-success">
+                              {plugin.availableVersion
+                                ? t('newVersion', { version: plugin.availableVersion })
+                                : t('updateAvailable')}
+                            </span>
+                          ) : null}
+                          {plugin.updateTag && plugin.updateTag !== 'latest' ? (
+                            <span className="text-xs text-muted-foreground">
+                              {plugin.updateTag === 'dev' ? t('channelDev') : plugin.updateTag}
+                            </span>
+                          ) : null}
+                        </div>
+                        <L2PluginManagementControls
+                          plugin={plugin}
+                          displayName={name}
+                          browserError={browserError}
+                          disabled={props.disabled}
+                          pending={busy(plugin)}
+                          browserRetryPending={props.requests.has(`entry:${plugin.pluginName}`)}
+                          onAction={(action) => props.onAction(plugin, action)}
+                        />
+                      </div>
+                      {plugin.description ? (
+                        <p className="line-clamp-2 text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                          {selectL4LocalizedText(plugin.description, locale)}
+                        </p>
+                      ) : null}
+                      <L2PluginManagementFeedback
                         plugin={plugin}
-                        displayName={name}
                         browserError={browserError}
-                        disabled={props.disabled}
-                        pending={busy(plugin)}
-                        browserRetryPending={props.requests.has(`entry:${plugin.pluginName}`)}
-                        onAction={(action) => props.onAction(plugin, action)}
+                        requestError={
+                          props.errors[key] ?? props.errors[`entry:${plugin.pluginName}`]
+                        }
                       />
                     </div>
-                    {plugin.description ? (
-                      <p className="line-clamp-2 text-sm text-muted-foreground [overflow-wrap:anywhere]">
-                        {selectL4LocalizedText(plugin.description, locale)}
-                      </p>
-                    ) : null}
-                    <L2PluginManagementFeedback
-                      plugin={plugin}
-                      browserError={browserError}
-                      requestError={props.errors[key] ?? props.errors[`entry:${plugin.pluginName}`]}
-                    />
                   </div>
-                </div>
-              </article>
-            )
-          })}
-        </div>
-      ) : (
-        <p className="py-8 text-center text-sm text-muted-foreground">
-          {t(props.filter || props.statusFilter !== 'all' ? 'noMatches' : 'empty')}
-        </p>
-      )}
+                </article>
+              )
+            })}
+          </div>
+        ) : (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            {t(props.filter || props.statusFilter !== 'all' ? 'noMatches' : 'empty')}
+          </p>
+        )}
+      </div>
     </section>
   )
 }

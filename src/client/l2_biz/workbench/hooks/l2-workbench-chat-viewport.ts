@@ -83,6 +83,11 @@ export function L2WorkbenchChatViewportManager({
   const positioningRef = useRef(false)
   const initializedRef = useRef(false)
   const positionedUserAnchorRef = useRef<string | null>(null)
+  // 首屏定位目标跨布局效果重建保留，开始交互或离开视图时释放。
+  const entryPositionRef = useRef<{
+    anchor: L2WorkbenchChatViewportSnapshot | null
+    follow: boolean
+  } | null>(null)
   // 只在首次进入仍在运行的视图时恢复旧锚点；之后的新用户消息使用自己的锚点。
   const entrySnapshotRef = useRef(running ? entrySnapshot : null)
   const suspendedViewportRef = useRef<
@@ -109,12 +114,14 @@ export function L2WorkbenchChatViewportManager({
     if (!active && !running) {
       initializedRef.current = false
       entrySnapshotRef.current = null
+      entryPositionRef.current = null
       suspendedViewportRef.current = null
       stopScroll()
       logL3ConversationScroll('viewport:leave-ended', scrollElement)
       return
     }
     if (!visible) {
+      entryPositionRef.current = null
       if (initializedRef.current && suspendedViewportRef.current === null) {
         // stopScroll 会清掉库的跟随状态；查看文件仍只暂停阅读，不恢复跟随。
         suspendedViewportRef.current =
@@ -171,6 +178,7 @@ export function L2WorkbenchChatViewportManager({
     if (returnedToPage && visible && !running) {
       initializedRef.current = false
       entrySnapshotRef.current = null
+      entryPositionRef.current = null
     }
     if (!ready || !visible || !pageVisible) return
     if (!running) onClearSnapshot()
@@ -178,7 +186,8 @@ export function L2WorkbenchChatViewportManager({
     const initializing = !initializedRef.current
     const hasNewUser =
       latestUserAnchor !== null && latestUserAnchor !== positionedUserAnchorRef.current
-    if (!initializing && !hasNewUser) return
+    const entryPosition = hasNewUser ? null : entryPositionRef.current
+    if (!initializing && !hasNewUser && !entryPosition) return
     if (initializing && !running && !containsTail) {
       onResetToTail()
       return
@@ -186,6 +195,7 @@ export function L2WorkbenchChatViewportManager({
 
     const currentScrollElement = scrollRef.current
     if (hasNewUser) {
+      entryPositionRef.current = null
       onClearSnapshot()
       if (currentScrollElement) clearL3ConversationTailSpacer(currentScrollElement)
     }
@@ -211,7 +221,11 @@ export function L2WorkbenchChatViewportManager({
 
       let target: HTMLElement | null = null
       let targetOffset = L3_CONVERSATION_TOP_GUTTER_PX
-      const snapshot = initializing && running ? entrySnapshotRef.current : null
+      const snapshot = entryPosition
+        ? entryPosition.anchor
+        : initializing && running
+          ? entrySnapshotRef.current
+          : null
       if (snapshot) {
         const savedTarget = findL3ConversationMessage(
           scrollElement,
@@ -232,30 +246,31 @@ export function L2WorkbenchChatViewportManager({
       }
       target ??= findL3ConversationMessage(scrollElement, 'data-chat-user-message')
 
-      const followAfterPosition = target !== null && snapshot === null && (running || !initializing)
-      const enterRunningAtBottom = initializing && running && snapshot === null
-      if (target) {
+      const followAfterPosition =
+        entryPosition?.follow ??
+        (target !== null && snapshot === null && (running || !initializing))
+      const enterRunningAtBottom =
+        entryPosition?.follow ?? (initializing && running && snapshot === null)
+      const entryTarget = target
+      const positionEntry = (): void => {
         stopScroll()
-        positionL3ConversationMessage(scrollElement, target, targetOffset, containsTail)
-        if (enterRunningAtBottom) {
-          // 无快照表示应继续吸底；首帧同步置底，后置收敛不再产生可见移动。
+        if (entryTarget) {
+          positionL3ConversationMessage(scrollElement, entryTarget, targetOffset, containsTail)
+        } else {
+          clearL3ConversationTailSpacer(scrollElement)
+        }
+        if (enterRunningAtBottom || !entryTarget) {
+          // 首屏懒布局展开后也在绘制前置底，不交给后续缓动收敛。
           scrollElement.scrollTop = Math.max(
             0,
             scrollElement.scrollHeight - scrollElement.clientHeight
           )
         }
         markProgrammaticScroll(state, scrollElement)
-      } else {
-        clearL3ConversationTailSpacer(scrollElement)
-        scrollElement.scrollTop = Math.max(
-          0,
-          scrollElement.scrollHeight - scrollElement.clientHeight
-        )
-        void scrollToBottom({ animation: 'instant' })
+        // 同步确立跟随，立即切走也不能丢失这个状态。
+        if (followAfterPosition || !entryTarget) void scrollToBottom({ animation: 'instant' })
       }
-
-      // 定位时就确立跟随，不能等下一帧，否则立即切走会丢失这个状态。
-      if (followAfterPosition) void scrollToBottom({ animation: 'instant' })
+      positionEntry()
 
       logL3ConversationScroll('viewport:initialize:positioned', scrollElement, {
         initializing,
@@ -267,21 +282,21 @@ export function L2WorkbenchChatViewportManager({
       initializedRef.current = true
       positionedUserAnchorRef.current = latestUserAnchor
       entrySnapshotRef.current = null
-      if (initializing && !running && target) {
-        // 首屏的懒布局仍会改变高度；用户开始操作后立即交还阅读位置。
-        const entryTarget = target
-        const observer = new ResizeObserver(() => {
-          stopScroll()
-          positionL3ConversationMessage(scrollElement, entryTarget, targetOffset, containsTail)
-          markProgrammaticScroll(state, scrollElement)
-        })
+      if (initializing || entryPosition) {
+        const anchor = target?.dataset.chatScrollAnchor
+        entryPositionRef.current = {
+          anchor: anchor ? { messageId: anchor, offset: targetOffset } : null,
+          follow: followAfterPosition || target === null
+        }
+        const observer = new ResizeObserver(positionEntry)
         observer.observe(scrollElement)
         if (scrollElement.firstElementChild) observer.observe(scrollElement.firstElementChild)
         const interactionElement = scrollElement.parentElement!
         const events = ['wheel', 'touchstart', 'pointerdown', 'keydown', 'click'] as const
-        const release = (): void => {
+        const release = (event?: Event): void => {
           observer.disconnect()
           for (const event of events) interactionElement.removeEventListener(event, release, true)
+          if (event) entryPositionRef.current = null
           releaseEntryAnchor = null
           positioningRef.current = false
         }

@@ -159,8 +159,9 @@ async function resolveProjectFileRevealTarget(
   root: string,
   protocolPath: string
 ): Promise<ProjectFileRevealTarget> {
-  const unresolved = resolve(root, ...protocolPath.split('/'))
-  if (!isInsideRoot(root, unresolved)) {
+  const absolute = isAbsolute(protocolPath)
+  const unresolved = resolve(root, protocolPath)
+  if (!absolute && !isInsideRoot(root, unresolved)) {
     throw new L4WorkSessionProjectFileError(
       'outside-project',
       `Project path escapes root: ${protocolPath}`
@@ -176,7 +177,7 @@ async function resolveProjectFileRevealTarget(
       `Containing directory was not found: ${protocolPath}`
     )
   }
-  if (!isInsideRoot(root, directory)) {
+  if (!absolute && !isInsideRoot(root, directory)) {
     throw new L4WorkSessionProjectFileError(
       'outside-project',
       `Containing directory resolves outside root: ${protocolPath}`
@@ -198,7 +199,7 @@ async function resolveProjectFileRevealTarget(
     }
     throw new L4WorkSessionProjectFileError('read-failed', `无法读取定位目标：${protocolPath}`)
   }
-  if (!isInsideRoot(root, target)) {
+  if (!absolute && !isInsideRoot(root, target)) {
     throw new L4WorkSessionProjectFileError(
       'outside-project',
       `Project path resolves outside root: ${protocolPath}`

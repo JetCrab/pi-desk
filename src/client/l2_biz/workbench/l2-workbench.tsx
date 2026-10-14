@@ -25,10 +25,7 @@ import {
   type L2PiDirectoryListResponse
 } from '@common/l2_biz/pi-session/l2-pi-session-contract'
 import type { L2PluginManagementSnapshot } from '@common/l2_biz/plugin/l2-plugin-management-contract'
-import {
-  L2WorkSessionFilePathSchema,
-  L2WorkSessionFilePreviewPathSchema
-} from '@common/l2_biz/work-session/l2-work-session-file-contract'
+import { L2WorkSessionFilePreviewPathSchema } from '@common/l2_biz/work-session/l2-work-session-file-contract'
 import type {
   L2WorkSessionListItem,
   L2WorkSessionListResponse
@@ -1614,8 +1611,8 @@ export function L2Workbench({
       mode: BrowserFilePreviewMode,
       imagePathsInput?: readonly string[]
     ): void => {
-      const path = L2WorkSessionFilePathSchema.safeParse(pathInput)
-      const images = L2WorkSessionFilePathSchema.array()
+      const path = L2WorkSessionFilePreviewPathSchema.safeParse(pathInput)
+      const images = L2WorkSessionFilePreviewPathSchema.array()
         .nonempty()
         .optional()
         .safeParse(imagePathsInput)
@@ -1663,7 +1660,7 @@ export function L2Workbench({
   )
   const revealWorkSessionFile = useCallback(
     async (source: PluginSource, pathInput: string): Promise<void> => {
-      const path = L2WorkSessionFilePathSchema.safeParse(pathInput)
+      const path = L2WorkSessionFilePreviewPathSchema.safeParse(pathInput)
       if (!path.success) throw new Error(t('invalidFilePath'))
       const current = workSessionsRef.current.find(
         (item) =>

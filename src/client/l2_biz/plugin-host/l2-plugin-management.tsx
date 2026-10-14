@@ -333,41 +333,43 @@ export function L2PluginManagement({
         <TabsContent
           value="installed"
           keepMounted
-          className="pi-desk-chat-scrollbar min-h-0 overflow-y-auto p-4 data-[hidden]:hidden sm:p-6"
+          className="flex min-h-0 flex-col overflow-hidden p-4 data-[hidden]:hidden sm:p-6"
         >
-          <div className="space-y-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-4">
             {direct.open ? (
-              <L2PluginDirectInstall
-                source={direct.source}
-                isNpm={Boolean(direct.spec)}
-                multiple={direct.sources.length > 1}
-                tag={direct.tag}
-                selectedVersion={direct.selectedVersion}
-                onTag={direct.setTag}
-                detail={direct.detail}
-                loading={direct.loading}
-                pending={directPending}
-                disabled={disabled}
-                error={direct.error ?? (directErrors || null)}
-                operationMessage={
-                  directPending
-                    ? (operationMessage(directPlugin?.operation?.phase) ?? t('submitting'))
-                    : null
-                }
-                override={direct.override}
-                registry={direct.registry}
-                onSource={direct.changeSource}
-                onMode={direct.setOverride}
-                onRegistry={direct.setRegistry}
-                onRead={() => void direct.loadDetail()}
-                onVersion={(version) => void direct.loadDetail(version)}
-                onInstall={() =>
-                  void direct.install(management.requestInstall, (items) =>
-                    management.setConfirmation({ kind: 'batch', input: { action: 'add', items } })
-                  )
-                }
-                onClose={() => direct.setOpen(false)}
-              />
+              <div className="pi-desk-chat-scrollbar max-h-1/2 shrink-0 overflow-y-auto">
+                <L2PluginDirectInstall
+                  source={direct.source}
+                  isNpm={Boolean(direct.spec)}
+                  multiple={direct.sources.length > 1}
+                  tag={direct.tag}
+                  selectedVersion={direct.selectedVersion}
+                  onTag={direct.setTag}
+                  detail={direct.detail}
+                  loading={direct.loading}
+                  pending={directPending}
+                  disabled={disabled}
+                  error={direct.error ?? (directErrors || null)}
+                  operationMessage={
+                    directPending
+                      ? (operationMessage(directPlugin?.operation?.phase) ?? t('submitting'))
+                      : null
+                  }
+                  override={direct.override}
+                  registry={direct.registry}
+                  onSource={direct.changeSource}
+                  onMode={direct.setOverride}
+                  onRegistry={direct.setRegistry}
+                  onRead={() => void direct.loadDetail()}
+                  onVersion={(version) => void direct.loadDetail(version)}
+                  onInstall={() =>
+                    void direct.install(management.requestInstall, (items) =>
+                      management.setConfirmation({ kind: 'batch', input: { action: 'add', items } })
+                    )
+                  }
+                  onClose={() => direct.setOpen(false)}
+                />
+              </div>
             ) : null}
             <L2PluginInstalledList
               snapshot={snapshot}
@@ -413,7 +415,13 @@ export function L2PluginManagement({
               onRefresh={() => void management.refresh()}
             />
             {!snapshot?.plugins.length && !direct.open ? (
-              <Button size="sm" variant="outline" disabled={disabled} onClick={openDirect}>
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0 self-start"
+                disabled={disabled}
+                onClick={openDirect}
+              >
                 {t('directInstall')}
               </Button>
             ) : null}

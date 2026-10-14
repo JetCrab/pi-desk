@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { join, resolve, sep } from 'node:path'
 import test from 'node:test'
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from '@earendil-works/pi-coding-agent'
 import {
@@ -96,7 +96,7 @@ test('Tool 原子校验多个文件，历史恢复后按批次倒序分页并 Pu
   assert.ok(tool)
   assert.equal(
     tool.parameters.properties?.items?.items?.properties?.path?.description,
-    '当前项目 cwd 下已存在、可在 Pi Desk 中预览的完成文件相对路径，使用 / 分隔'
+    '已存在、可在 Pi Desk 中预览的完成文件路径；支持绝对路径或相对当前会话 cwd 的路径'
   )
   assert.deepEqual(tool.promptGuidelines, [
     'Use deliverable only for important completed results or acceptance evidence that can be previewed in Pi Desk, such as images, code files that are themselves a requested deliverable, and HTML. Do not register ordinary source edits, intermediate files, or files that cannot be previewed.'
@@ -193,6 +193,84 @@ test('Tool 原子校验多个文件，历史恢复后按批次倒序分页并 Pu
         }
       ],
       hasMore: true
+    }
+  )
+})
+
+test('项目外绝对路径、父目录和目录链接登记为可恢复的绝对文件路径', async (contextTest) => {
+  const testRoot = resolve('temp/tests/deliverables', `external-paths-${process.pid}`)
+  const cwd = join(testRoot, 'project')
+  const external = join(testRoot, 'external')
+  contextTest.after(() => rm(testRoot, { recursive: true, force: true }))
+  await mkdir(cwd, { recursive: true })
+  await mkdir(external, { recursive: true })
+  await writeFile(join(external, 'result.html'), '<h1>完成</h1>')
+  await symlink(external, join(cwd, 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+
+  const handlers = new Map<string, Handler>()
+  const emitted: Array<{ channel: string; payload: unknown }> = []
+  const captured: { tool?: CapturedTool } = {}
+  extension({
+    registerTool(definition: CapturedTool) {
+      captured.tool = definition
+    },
+    on(name: string, handler: Handler) {
+      handlers.set(name, handler)
+    },
+    events: {
+      emit(channel: string, payload: unknown) {
+        emitted.push({ channel, payload })
+      }
+    }
+  } as unknown as ExtensionAPI)
+  const tool = captured.tool
+  assert.ok(tool)
+  const extensionContext = context(cwd, [])
+  const execute = (path: string): Promise<{ details?: unknown }> =>
+    tool.execute(
+      'external-tool',
+      { items: [{ path, title: '项目外交付' }] },
+      new AbortController().signal,
+      undefined,
+      extensionContext
+    )
+  const storedPath = (await realpath(join(external, 'result.html'))).split(sep).join('/')
+  const items = [{ path: storedPath, title: '项目外交付' }]
+  for (const path of [
+    join(external, 'result.html'),
+    '../external/result.html',
+    'linked/result.html'
+  ]) {
+    assert.deepEqual((await execute(path)).details, { items })
+  }
+  await assert.rejects(execute(join(external, 'missing.html')), /文件不存在/)
+  await assert.rejects(execute(external), /不是文件/)
+  await assert.rejects(execute('\0invalid'), /路径无效/)
+
+  const branchContext = context(cwd, [
+    entry('legacy', [{ path: 'old.png', title: '旧交付' }]),
+    entry('external', items)
+  ])
+  await handlers.get('session_start')?.({}, branchContext)
+  const registration = emitted
+    .filter((item) => item.channel === SESSION_PLUGIN_METHOD_EVENT)
+    .map((item) => item.payload as SessionPluginMethodEvent)
+    .find((item) => item.type === 'register')?.registration
+  assert.ok(registration)
+  assert.deepEqual(
+    await registration.execute(
+      {},
+      {
+        source: { workId: 'work-1', sessionId: 'session-1', branchId: 'v1:main' },
+        extensionContext: branchContext
+      }
+    ),
+    {
+      deliveries: [
+        { entryId: 'external', items },
+        { entryId: 'legacy', items: [{ path: 'old.png', title: '旧交付' }] }
+      ],
+      hasMore: false
     }
   )
 })

@@ -77,7 +77,7 @@ plugin.addPreviewDirectory(directory, { default: true })
 
 `directory` 为服务端绝对目录；省略第二个参数只登记，`default: true` 同时设为默认预览目录，后登记的默认生效。原 CWD 始终可选；目录规范化后去重，最多登记 32 个。重复快照不会覆盖用户的手动选择。登记只在当前会话运行态内，插件在 `session_start`、`session_tree` 从自身数据恢复后重新登记；不要在普通查询时重复请求默认选择。
 
-调用不等待回执；非法路径或超限由宿主拒绝并记日志，实际目录内容按需读取。旧宿主或独立 Pi 不处理该登记；兼容旧 SDK 时使用 `plugin.addPreviewDirectory?.(...)`。已有 `files.preview/reveal/readImage` 的相对路径仍以会话 CWD 为基准。
+调用不等待回执；非法路径或超限由宿主拒绝并记日志，实际目录内容按需读取。旧宿主或独立 Pi 不处理该登记；兼容旧 SDK 时使用 `plugin.addPreviewDirectory?.(...)`。`files.preview/reveal` 支持会话 CWD 下规范相对路径或服务端绝对文件路径（包括项目外文件）；`preview` 的 `imagePaths` 使用相同路径规则。宿主仍校验当前 Source，目录浏览边界不变。依赖项目外文件的插件需要同步更新宿主，旧宿主只接受项目内相对路径。`readImage` 仍只接受会话 CWD 下规范相对路径。
 
 ## Browser Entry 与懒界面
 
