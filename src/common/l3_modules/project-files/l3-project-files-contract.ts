@@ -47,9 +47,16 @@ export type L3ProjectRevealTargetType = z.infer<typeof L3ProjectRevealTargetType
 export const L3ProjectFileReveal = {
   path: '/api/project-files/reveal',
   request: L3ProjectReadContextSchema.extend({
-    path: L4ProjectDirectoryPathSchema,
+    path: z.union([L4ProjectDirectoryPathSchema, L4ProjectFilePreviewPathSchema]),
     targetType: L3ProjectRevealTargetTypeSchema.optional()
-  }).refine((input) => input.path !== '' || input.targetType === 'directory', '文件路径不能为空'),
+  })
+    .refine((input) => input.path !== '' || input.targetType === 'directory', '文件路径不能为空')
+    .refine(
+      (input) =>
+        (input.workId && input.targetType !== 'directory') ||
+        L4ProjectDirectoryPathSchema.safeParse(input.path).success,
+      '独立项目和目录定位只接受根内相对路径'
+    ),
   response: z.object({}).strict()
 } as const
 

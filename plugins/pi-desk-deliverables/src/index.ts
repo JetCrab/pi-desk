@@ -1,5 +1,5 @@
 import { realpath, stat } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from '@earendil-works/pi-coding-agent'
 import { Type, type Static } from 'typebox'
 import {
@@ -18,7 +18,8 @@ const deliverableItemSchema = Type.Object(
     path: Type.String({
       minLength: 1,
       maxLength: 4096,
-      description: '当前项目 cwd 下已存在、可在 Pi Desk 中预览的完成文件相对路径，使用 / 分隔'
+      description:
+        '已存在、可在 Pi Desk 中预览的完成文件路径；支持绝对路径或相对当前会话 cwd 的路径'
     }),
     title: Type.String({
       minLength: 1,
@@ -48,20 +49,13 @@ function jsonObject(value: unknown): PluginJsonObject {
 
 function isInsideRoot(root: string, target: string): boolean {
   const child = relative(root, target)
-  return child === '' || (!child.startsWith('..') && !isAbsolute(child))
+  return child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child)
 }
 
-function canonicalRelativePath(value: string): string {
+function filePath(value: string): string {
   const path = value.trim().replace(/^@/, '')
-  if (
-    !path ||
-    path.startsWith('/') ||
-    path.includes('\\') ||
-    path.includes('\0') ||
-    /^[a-zA-Z]:/.test(path) ||
-    path.split('/').some((segment) => !segment || segment === '.' || segment === '..')
-  ) {
-    throw new Error(`交付物路径必须是规范的项目相对路径：${value}`)
+  if (!path || path.length > 4096 || path.includes('\0')) {
+    throw new Error(`交付物路径无效：${value}`)
   }
   return path
 }
@@ -70,19 +64,19 @@ async function validateItems(cwd: string, input: DeliverableInput): Promise<Deli
   const root = await realpath(cwd)
   return Promise.all(
     input.items.map(async (item) => {
-      const path = canonicalRelativePath(item.path)
+      const path = filePath(item.path)
       const title = item.title.trim()
       if (!title || title.length > 40) throw new Error('交付物标题必须包含 1-40 个字符')
 
       let target: string
       try {
-        target = await realpath(resolve(root, ...path.split('/')))
+        target = await realpath(resolve(root, path))
       } catch {
         throw new Error(`交付物文件不存在：${path}`)
       }
-      if (!isInsideRoot(root, target)) throw new Error(`交付物文件超出当前项目：${path}`)
       if (!(await stat(target)).isFile()) throw new Error(`交付物路径不是文件：${path}`)
-      return { path, title }
+      const storedPath = isInsideRoot(root, target) ? relative(root, target) : target
+      return { path: storedPath.split(sep).join('/'), title }
     })
   )
 }
@@ -100,7 +94,7 @@ function parseItems(value: unknown): DeliverableItem[] | null {
     const item = record(raw)
     if (!item || typeof item.path !== 'string' || typeof item.title !== 'string') return null
     try {
-      const path = canonicalRelativePath(item.path)
+      const path = filePath(item.path)
       const title = item.title.trim()
       if (!title || title.length > 40) return null
       items.push({ path, title })

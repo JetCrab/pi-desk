@@ -11,6 +11,7 @@ import {
   L2WorkSessionFileListRequestSchema,
   L2WorkSessionFileRevealRequestSchema
 } from '../src/common/l2_biz/work-session/l2-work-session-file-contract'
+import { L3ProjectFileReveal } from '../src/common/l3_modules/project-files/l3-project-files-contract'
 import {
   L4WorkSessionProjectFileError,
   getL4WorkSessionProjectFile,
@@ -34,7 +35,7 @@ async function fixture(context: test.TestContext): Promise<string> {
   return root
 }
 
-test('目录浏览仍拒绝越界，文件预览允许绝对路径', () => {
+test('目录浏览仍拒绝越界，会话文件预览和定位允许绝对路径', () => {
   assert.equal(
     L2WorkSessionFileListRequestSchema.safeParse({
       workId: 'work-1',
@@ -52,13 +53,39 @@ test('目录浏览仍拒绝越界，文件预览允许绝对路径', () => {
     }).success,
     true
   )
+  for (const path of [
+    'C:/outside.txt',
+    'C:\\outside.txt',
+    '/outside.txt',
+    '\\\\server\\share\\outside.txt'
+  ]) {
+    assert.equal(
+      L2WorkSessionFileRevealRequestSchema.safeParse({ workId: 'work-1', cwd: 'C:/project', path })
+        .success,
+      true
+    )
+    assert.equal(L3ProjectFileReveal.request.safeParse({ cwd: 'C:/project', path }).success, false)
+    assert.equal(
+      L3ProjectFileReveal.request.safeParse({
+        workId: 'work-1',
+        cwd: 'C:/project',
+        path,
+        targetType: 'directory'
+      }).success,
+      false
+    )
+  }
+  for (const path of ['../outside.txt', '', 'bad\0path']) {
+    assert.equal(
+      L2WorkSessionFileRevealRequestSchema.safeParse({ workId: 'work-1', cwd: 'C:/project', path })
+        .success,
+      false
+    )
+  }
   assert.equal(
-    L2WorkSessionFileRevealRequestSchema.safeParse({
-      workId: 'work-1',
-      cwd: 'C:/project',
-      path: 'C:/outside.txt'
-    }).success,
-    false
+    L3ProjectFileReveal.request.safeParse({ cwd: 'C:/project', path: '', targetType: 'directory' })
+      .success,
+    true
   )
 })
 
@@ -195,6 +222,44 @@ test('绝对路径可预览 WorkSession 项目外文件', async (context) => {
     content: '{"type":"session"}\n',
     size: 19
   })
+})
+
+test('绝对路径可定位项目外文件，删除后仅回退直接父目录', async (context) => {
+  const root = await fixture(context)
+  const externalDirectory = await fixture(context)
+  const externalPath = join(externalDirectory, 'README.md')
+  const calls: Array<{ command: string; args: string[] }> = []
+  const run = async (command: string, args: string[]): Promise<void> => {
+    calls.push({ command, args })
+  }
+  await revealL4WorkSessionProjectFile(root, externalPath, run)
+  await rm(externalPath)
+  await revealL4WorkSessionProjectFile(root, externalPath, run)
+  const command =
+    process.platform === 'win32'
+      ? 'explorer.exe'
+      : process.platform === 'darwin'
+        ? 'open'
+        : 'xdg-open'
+  const args =
+    process.platform === 'win32'
+      ? ['/select,', externalPath]
+      : process.platform === 'darwin'
+        ? ['-R', externalPath]
+        : [externalDirectory]
+  assert.deepEqual(calls, [
+    { command, args },
+    { command, args: [externalDirectory] }
+  ])
+  await assert.rejects(
+    revealL4WorkSessionProjectFile(root, join(externalDirectory, 'missing', 'file.txt'), run),
+    (error: unknown) => error instanceof L4WorkSessionProjectFileError && error.kind === 'not-found'
+  )
+  await assert.rejects(
+    revealL4WorkSessionProjectFile(root, externalDirectory, run),
+    (error: unknown) => error instanceof L4WorkSessionProjectFileError && error.kind === 'not-file'
+  )
+  assert.equal(calls.length, 2)
 })
 
 test('压缩预览输出较小 WebP，原图预览保持 JPEG', async (context) => {

@@ -37,6 +37,10 @@ const STYLES = `
 type DeliverableFileKind = 'image' | 'html' | 'text'
 
 function absoluteFileAddress(cwd: string, path: string): string {
+  if (/^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('\\\\') || path.startsWith('//')) {
+    return path.replaceAll('/', '\\')
+  }
+  if (path.startsWith('/')) return path
   const windowsPath = /^[a-zA-Z]:[\\/]/.test(cwd) || cwd.startsWith('\\\\')
   const separator = windowsPath ? '\\' : '/'
   const normalizedCwd = windowsPath ? cwd.replaceAll('/', '\\') : cwd
