@@ -22,10 +22,13 @@ const executable = resolve(process.argv[2] ?? '')
 const frontend = resolve(process.argv[3] ?? '')
 const identifier = 'com.jetcrab.desktop.ui-smoke'
 const nativeDownloadOnly = process.argv.includes('--source-settings-only')
+const nativePiUpdateOnly = process.argv.includes('--pi-update-native-only')
 const setupOnly = process.argv.includes('--setup-only') || nativeDownloadOnly
 const downloadSourceOnly = process.argv.includes('--download-source-only')
 const environmentOnly = process.argv.includes('--environment-only')
-const layoutOnly = process.argv.includes('--layout-only') || downloadSourceOnly || environmentOnly
+const piUpdateOnly = process.argv.includes('--pi-update-only')
+const layoutOnly =
+  process.argv.includes('--layout-only') || downloadSourceOnly || environmentOnly || piUpdateOnly
 const startupOnly = process.argv.includes('--startup-only')
 const sourceScenario =
   process.argv.find((value) => value.startsWith('--source-scenario='))?.split('=')[1] ?? 'china'
@@ -390,6 +393,7 @@ function installLayoutFixture(desktopVersion) {
       status: 'ready',
       step: '',
       error: null,
+      piUpdate: { status: 'idle', version: null, error: null },
       components: ['node', 'bash', 'pi'].map((name) => ({
         name,
         status: 'ready',
@@ -478,6 +482,19 @@ function installLayoutFixture(desktopVersion) {
         return
       }
       if (command === 'open_target_command') return
+      if (command === 'check_pi_update_command') {
+        state.environment.piUpdate = { status: 'available', version: '1.2.0', error: null }
+        return
+      }
+      if (command === 'update_pi_command') {
+        state.environment.piUpdate.status = 'updating'
+        state.environment.status = 'installing'
+        state.environment.step = '正在安装 Pi 1.2.0'
+        state.targets.forEach((target) => {
+          if (target.server?.status === 'running') target.server.status = 'stopped'
+        })
+        return
+      }
       if (command === 'prepare_environment_command') {
         state.environment.status = 'installing'
         state.environment.step = '正在下载 Node.js'
@@ -486,6 +503,16 @@ function installLayoutFixture(desktopVersion) {
         return
       }
       if (command === 'cancel_environment_command') {
+        if (state.environment.piUpdate.status === 'updating') {
+          state.environment.status = 'ready'
+          state.environment.piUpdate = {
+            status: 'failed',
+            version: '1.2.0',
+            error: 'Pi 更新已取消，原服务已恢复'
+          }
+          state.targets[0].server.status = 'running'
+          return
+        }
         state.environment.status = 'required'
         state.environment.components.forEach((item) => {
           item.download = null
@@ -511,6 +538,130 @@ function installLayoutFixture(desktopVersion) {
       }
     }
   })
+}
+
+async function validatePiUpdate(page) {
+  await until(
+    () => page.evaluate('typeof window.desktopLayoutReady === "function"'),
+    '控制状态已请求'
+  )
+  await page.evaluate(`window.desktopLayoutState.hideOnStartup=false;
+    window.desktopLayoutState.environment.components.find(item=>item.name==='pi').version='1.1.0';
+    window.desktopLayoutConfirmations=[];
+    window.confirm=message=>{window.desktopLayoutConfirmations.push(message);return window.desktopAcceptPiUpdate===true};
+    window.desktopLayoutReady()`)
+  await until(
+    () => page.evaluate(`document.body.innerText.includes('安装与版本')`),
+    '安装与版本入口'
+  )
+  await page.evaluate(click('安装与版本'))
+  await until(
+    () =>
+      page.evaluate(`!!document.querySelector('section[aria-label="Pi 更新"]')?.checkVisibility()`),
+    'Pi 更新区域'
+  )
+  await page.evaluate(click('检查 Pi 更新'))
+  await until(
+    () => page.evaluate(`document.body.innerText.includes('更新 Pi 1.2.0')`),
+    'Pi 候选版本'
+  )
+  assert.equal(
+    await page.evaluate('window.desktopLayoutConfirmations.length'),
+    0,
+    '检查更新不要求停止服务'
+  )
+  assert.equal(await page.evaluate('window.desktopLayoutState.targets[0].server.status'), 'running')
+  await page.evaluate(click('更新 Pi 1.2.0'))
+  assert.equal(
+    await page.evaluate(
+      `window.desktopLayoutCommands.some(item=>item.command==='update_pi_command')`
+    ),
+    false,
+    '取消确认不发更新请求'
+  )
+  assert.match(
+    await page.evaluate('window.desktopLayoutConfirmations[0]'),
+    /30333.*\/[\s\S]*聊天和任务会中断/u
+  )
+  assert.match(
+    await page.evaluate('window.desktopLayoutConfirmations[0]'),
+    /原已停止的服务不会启动/u
+  )
+  for (const [theme, width, height] of [
+    ['light', 960, 720],
+    ['dark', 720, 560]
+  ]) {
+    await page.theme(theme)
+    await page.viewport(width, height)
+    await page.evaluate(
+      `document.querySelector('section[aria-label="Pi 更新"]').scrollIntoView({block:'center'})`
+    )
+    await assertSetupFits(page, '更新 Pi 1.2.0')
+    await page.screenshot(`pi-update-available-${theme}.png`)
+  }
+  await page.evaluate('window.desktopAcceptPiUpdate=true')
+  await page.evaluate(click('更新 Pi 1.2.0'))
+  await until(
+    () => page.evaluate(`document.body.innerText.includes('正在安装 Pi 1.2.0')`),
+    '更新阶段'
+  )
+  assert.equal(
+    await page.evaluate(
+      `document.body.innerText.includes('首次使用准备') || document.body.innerText.includes('完成后自动打开')`
+    ),
+    false
+  )
+  assert.equal(
+    await page.evaluate(
+      `['打开 Pi Desk','重启','停止'].every(text=>[...document.querySelectorAll('button')].find(item=>item.textContent.trim()===text)?.disabled)`
+    ),
+    true
+  )
+  await page.evaluate(
+    `document.querySelector('section[aria-label="Pi 更新"]').scrollIntoView({block:'center'})`
+  )
+  await assertSetupFits(page, '取消 Pi 更新')
+  await page.screenshot('pi-update-installing-dark.png')
+  await page.evaluate(click('取消 Pi 更新'))
+  await until(
+    () => page.evaluate(`document.body.innerText.includes('Pi 更新已取消，原服务已恢复')`),
+    '取消后的实际结果'
+  )
+  assert.equal(await page.evaluate('window.desktopLayoutState.targets[0].server.status'), 'running')
+  await page.evaluate(`window.desktopLayoutState.environment.status='failed';
+    window.desktopLayoutState.environment.error='Pi 与服务不兼容';
+    window.desktopLayoutState.environment.piUpdate.error='Pi 校验未通过，本次暂停的服务未恢复：缺少 SDK 能力';
+    window.desktopLayoutState.targets[0].server.needsSetup=true;
+    window.desktopLayoutState.targets[0].server.status='stopped';
+    window.desktopLayoutState.environment.components.find(item=>item.name==='pi').status='invalid';
+    document.dispatchEvent(new Event('visibilitychange'))`)
+  await until(
+    () => page.evaluate(`document.body.innerText.includes('缺少 SDK 能力')`),
+    '兼容性失败结果'
+  )
+  assert.equal(await page.evaluate(`document.body.innerText.includes('首次使用准备')`), false)
+  await page.theme('light')
+  await page.viewport(960, 720)
+  await page.evaluate(
+    `document.querySelector('section[aria-label="Pi 更新"]').scrollIntoView({block:'center'})`
+  )
+  await page.screenshot('pi-update-failed-light.png')
+  await page.evaluate(click('检查 Pi 更新'))
+  await until(
+    () => page.evaluate(`document.body.innerText.includes('更新 Pi 1.2.0')`),
+    '失败后可重新检查'
+  )
+  const commands = await page.evaluate('window.desktopLayoutCommands')
+  assert.equal(commands.filter((item) => item.command === 'update_pi_command').length, 1)
+  assert.equal(
+    commands.some((item) =>
+      ['prepare_environment_command', 'update_package_command', 'stop_server_command'].includes(
+        item.command
+      )
+    ),
+    false,
+    'Pi 更新不串用服务安装入口'
+  )
 }
 
 async function validateDownloadSources(page) {
@@ -1373,7 +1524,8 @@ validation: try {
       `${targetUrl}desktop/`,
       `(${installLayoutFixture.toString()})(${JSON.stringify(desktopVersion)})`
     )
-    if (downloadSourceOnly) await validateDownloadSources(control)
+    if (piUpdateOnly) await validatePiUpdate(control)
+    else if (downloadSourceOnly) await validateDownloadSources(control)
     else if (environmentOnly) await validateEnvironmentChoices(control)
     else await validateLayout(control)
     assert.deepEqual(control.errors, [], '布局交互不应出现 JavaScript 异常')
@@ -1392,6 +1544,43 @@ validation: try {
     '内嵌页面地址'
   )
   const control = await connect(controlTarget)
+  if (nativePiUpdateOnly) {
+    await until(
+      () => control.evaluate(`typeof window.__TAURI_INTERNALS__?.invoke === 'function'`),
+      '原生 IPC 就绪'
+    )
+    await until(
+      () =>
+        control.evaluate(
+          `window.__TAURI_INTERNALS__.invoke('get_control_state').then(state=>state.environment.status!=='checking')`
+        ),
+      '原生环境检测结束'
+    )
+    const before = await control.evaluate(`window.__TAURI_INTERNALS__.invoke('get_control_state')`)
+    assert.deepEqual(before.environment.piUpdate, { status: 'idle', version: null, error: null })
+    const rejected = await control.evaluate(
+      `window.__TAURI_INTERNALS__.invoke('update_pi_command').then(()=>null,error=>String(error))`
+    )
+    assert.match(rejected, /请先检查 Pi 更新/u)
+    await control.evaluate(`window.__TAURI_INTERNALS__.invoke('check_pi_update_command')`)
+    const failed = await until(
+      () =>
+        control.evaluate(
+          `window.__TAURI_INTERNALS__.invoke('get_control_state').then(state=>state.environment.piUpdate.status==='failed'&&state)`
+        ),
+      '无Pi环境明确拒绝更新检查'
+    )
+    assert.match(failed.environment.piUpdate.error, /未找到当前 Pi 安装路径/u)
+    assert.equal(failed.environment.status, before.environment.status, 'Pi检查失败不覆盖原环境状态')
+    assert.deepEqual(
+      failed.targets.map((target) => target.server?.status),
+      before.targets.map((target) => target.server?.status)
+    )
+    await control.evaluate(`window.__TAURI_INTERNALS__.invoke('cancel_environment_command')`)
+    assert.deepEqual(control.errors, [])
+    passed = true
+    break validation
+  }
   if (startupOnly) {
     await validateStartupFlow(control)
     passed = true
@@ -2205,57 +2394,68 @@ await writeFile(
     layoutOnly
       ? {
           passed,
-          scope: environmentOnly ? 'desktop-environment-choices' : 'desktop-web-layout',
+          scope: piUpdateOnly
+            ? 'desktop-pi-update'
+            : environmentOnly
+              ? 'desktop-environment-choices'
+              : 'desktop-web-layout',
           mockedNativeIpc: true,
           controlViewport: { width: 960, height: 720 },
           minimumViewport: { width: 720, height: 560 },
           portsReleased: true
         }
-      : nativeDownloadOnly
+      : nativePiUpdateOnly
         ? {
             passed,
-            scope: 'desktop-download-source-native',
-            sourceScenario,
-            sourcePersisted: true,
-            duplicateSettingRemoved: true,
-            preparationOnlyUsesUrl: true,
-            portsReleased: true
+            scope: 'desktop-pi-update-native-ipc',
+            portsReleased: true,
+            isolatedEnvironment: true
           }
-        : startupOnly
+        : nativeDownloadOnly
           ? {
               passed,
-              scope: 'desktop-startup-window-flow',
-              portsReleased: true,
-              startupCheckNonBlocking: true,
-              preferencesPersisted: true,
-              remoteAndLocalWindowSwitching: true,
-              updateWakeAndQuietFailure: true
-            }
-          : {
-              passed,
-              frontendDirectoryAbsent: true,
-              controlAndBrowserVerified: !setupOnly,
-              settingsSavedAndReloaded: !setupOnly,
-              missingEnvironmentBlockedNpm: !setupOnly,
-              manualSetupAndRemoteAccessVerified: !setupOnly,
-              preparationFitsDefaultAndMinimumViewport: true,
-              preparationCurrentStatusVisible: true,
-              perComponentProgressAndHomeStable: true,
-              inlineAddressSavedAndReloaded: true,
-              preparationErrorVisibleAndCancelVerified: true,
-              controlViewport: { width: 960, height: 720 },
-              minimumViewport: { width: 720, height: 560 },
-              preparationUiUsesIsolatedFixture: true,
+              scope: 'desktop-download-source-native',
               sourceScenario,
-              countryRecommendationVerified: true,
-              sourceSelectedAndSavedInUnifiedSettings: true,
-              selectedSourceSavedThroughNativeCommand: true,
-              manualInstallCommandMatchesSource: true,
-              activeRuntimeProtected: !setupOnly,
-              shellArchitecture: 'ia32',
-              childArchitecture: process.arch,
+              sourcePersisted: true,
+              duplicateSettingRemoved: true,
+              preparationOnlyUsesUrl: true,
               portsReleased: true
-            },
+            }
+          : startupOnly
+            ? {
+                passed,
+                scope: 'desktop-startup-window-flow',
+                portsReleased: true,
+                startupCheckNonBlocking: true,
+                preferencesPersisted: true,
+                remoteAndLocalWindowSwitching: true,
+                updateWakeAndQuietFailure: true
+              }
+            : {
+                passed,
+                frontendDirectoryAbsent: true,
+                controlAndBrowserVerified: !setupOnly,
+                settingsSavedAndReloaded: !setupOnly,
+                missingEnvironmentBlockedNpm: !setupOnly,
+                manualSetupAndRemoteAccessVerified: !setupOnly,
+                preparationFitsDefaultAndMinimumViewport: true,
+                preparationCurrentStatusVisible: true,
+                perComponentProgressAndHomeStable: true,
+                inlineAddressSavedAndReloaded: true,
+                preparationErrorVisibleAndCancelVerified: true,
+                controlViewport: { width: 960, height: 720 },
+                minimumViewport: { width: 720, height: 560 },
+                preparationUiUsesIsolatedFixture: true,
+                sourceScenario,
+                countryRecommendationVerified: true,
+                sourceSelectedAndSavedInUnifiedSettings: true,
+                selectedSourceSavedThroughNativeCommand: true,
+                manualInstallCommandMatchesSource: true,
+                activeRuntimeProtected: !setupOnly,
+                shellArchitecture: 'ia32',
+                childArchitecture: process.arch,
+                portsReleased: true
+              },
     null,
     2
   )

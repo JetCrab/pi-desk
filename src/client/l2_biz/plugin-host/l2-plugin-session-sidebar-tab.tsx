@@ -2,6 +2,7 @@
 
 import type {
   BrowserFilePreviewOptions,
+  BrowserSessionSidebarHeaderAction,
   BrowserSessionSidebarTabTarget,
   PluginSource
 } from '@jetcrab/pi-desk-sdk/browser'
@@ -15,6 +16,7 @@ interface L2PluginSessionSidebarTabProps {
   cwd: string
   onPreviewFile: (path: string, options?: BrowserFilePreviewOptions) => void
   onRevealFile: (path: string) => Promise<void>
+  onHeaderActionsChange: (actions: readonly BrowserSessionSidebarHeaderAction[]) => void
 }
 
 export function L2PluginSessionSidebarTab({
@@ -23,13 +25,15 @@ export function L2PluginSessionSidebarTab({
   source,
   cwd,
   onPreviewFile,
-  onRevealFile
+  onRevealFile,
+  onHeaderActionsChange
 }: L2PluginSessionSidebarTabProps): React.JSX.Element {
   const target: BrowserSessionSidebarTabTarget = {
     kind: 'session-sidebar-tab',
     source,
     cwd,
-    files: { preview: onPreviewFile, reveal: onRevealFile }
+    files: { preview: onPreviewFile, reveal: onRevealFile },
+    setHeaderActions: onHeaderActionsChange
   }
   const targetKey = `${source.workId}\u0000${source.sessionId}\u0000${source.branchId}\u0000${cwd}`
 

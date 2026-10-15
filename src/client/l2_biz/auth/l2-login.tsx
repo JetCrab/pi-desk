@@ -96,7 +96,7 @@ export function L2Login(): React.JSX.Element {
                 name="password"
                 value={password}
                 autoComplete="current-password"
-                maxLength={256}
+                maxLength={64}
                 disabled={submitting}
                 aria-describedby={error ? 'login-error' : undefined}
                 onChange={(event) => setPassword(event.target.value)}

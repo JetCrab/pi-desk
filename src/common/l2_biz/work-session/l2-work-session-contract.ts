@@ -73,6 +73,14 @@ export const L2CreateWorkSessionResponseSchema = z
   })
   .strict()
 
+export const L2RenameWorkSessionRequestSchema = z
+  .object({
+    workId: L2WorkIdSchema,
+    sessionId: L2PiSessionIdSchema,
+    title: z.string().trim().min(1)
+  })
+  .strict()
+
 export const L2DeleteWorkSessionRequestSchema = z
   .object({
     workId: L2WorkIdSchema
@@ -125,4 +133,5 @@ export type L2WorkSessionListResponse = z.infer<typeof L2WorkSessionListResponse
 export type L2CreateWorkSessionRequest = z.infer<typeof L2CreateWorkSessionRequestSchema>
 export type L2CreateWorkSessionResponse = z.infer<typeof L2CreateWorkSessionResponseSchema>
 export type L2SortWorkSessionsRequest = z.infer<typeof L2SortWorkSessionsRequestSchema>
+export type L2RenameWorkSessionRequest = z.infer<typeof L2RenameWorkSessionRequestSchema>
 export type L2ReplaceWorkSessionRequest = z.infer<typeof L2ReplaceWorkSessionRequestSchema>

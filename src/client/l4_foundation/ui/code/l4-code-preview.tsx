@@ -156,7 +156,8 @@ function L4CodePreviewComponent(
           minimap: { enabled: false },
           stickyScroll: { enabled: false },
           scrollBeyondLastLine: false,
-          smoothScrolling: true,
+          // 只读预览避免把每格滚轮输入扩展为多帧重绘。
+          smoothScrolling: false,
           wordWrap: wrapLinesRef.current ? 'on' : 'off',
           wrappingIndent: 'same',
           ...getL4MonacoTypography(),

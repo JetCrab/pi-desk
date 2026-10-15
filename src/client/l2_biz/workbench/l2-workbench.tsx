@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next'
 import type {
   BrowserFilePreviewMode,
   BrowserFilePreviewOptions,
+  BrowserSessionSidebarHeaderAction,
   PluginSource
 } from '@jetcrab/pi-desk-sdk/browser'
 import {
@@ -110,6 +111,8 @@ import {
   type L2WorkSessionArrangement
 } from './l2-work-session-sidebar-order'
 import { useL2WorkbenchBranchPicker } from './hooks/l2-workbench-branch-picker'
+import { useL2WorkSessionRename } from './hooks/l2-work-session-rename'
+import { L2WorkSessionRenameDialog } from './views/l2-work-session-rename-dialog'
 import { useL2WorkbenchPluginHealth } from './hooks/l2-workbench-plugin-health'
 import { useL2WorkbenchSessionHistory } from './hooks/l2-workbench-session-history'
 import {
@@ -194,6 +197,7 @@ interface L2WorkbenchProps extends L2WorkbenchComposerSlots {
     cwd: string
     onPreviewFile: (path: string, options?: BrowserFilePreviewOptions) => void
     onRevealFile: (path: string) => Promise<void>
+    onHeaderActionsChange: (actions: readonly BrowserSessionSidebarHeaderAction[]) => void
   }) => ReactNode
   renderSettings: (input: {
     open: boolean
@@ -298,6 +302,10 @@ export function L2Workbench({
     setMobileDrawerOpen(false)
   }, [])
   const [sidebarMode, setSidebarMode] = useState<L2WorkSessionSidebarMode>('sessions')
+  const [pluginHeaderActions, setPluginHeaderActions] = useState<{
+    targetKey: string
+    actions: readonly BrowserSessionSidebarHeaderAction[]
+  } | null>(null)
   const [fileBrowserMounted, setFileBrowserMounted] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsInitialPage, setSettingsInitialPage] = useState<'model-presets' | undefined>()
@@ -317,6 +325,7 @@ export function L2Workbench({
   }, [])
   const [loadPhase, setLoadPhase] = useState<'initial' | 'refresh' | 'ready'>('initial')
   const loading = loadPhase !== 'ready'
+  const renameSession = useL2WorkSessionRename(workbenchBiz, loading)
   const [ordering, setOrdering] = useState(false)
   const [deletingWorkId, setDeletingWorkId] = useState<string | null>(null)
   const [directoryDialogOpen, setDirectoryDialogOpen] = useState(false)
@@ -472,6 +481,25 @@ export function L2Workbench({
           branchId: activePluginBranchId
         }
       : null
+  const pluginSidebarTargetKey = JSON.stringify([
+    sidebarMode,
+    activePluginWorkId,
+    activePluginSessionId,
+    activePluginBranchId,
+    activeCwd
+  ])
+  const updatePluginHeaderActions = useCallback(
+    (actions: readonly BrowserSessionSidebarHeaderAction[]): void => {
+      setPluginHeaderActions((current) =>
+        actions.length > 0
+          ? { targetKey: pluginSidebarTargetKey, actions }
+          : current?.targetKey === pluginSidebarTargetKey
+            ? null
+            : current
+      )
+    },
+    [pluginSidebarTargetKey]
+  )
   const activeFileWorkspace = fileRuntime.getWorkspace(activeWorkId)
 
   useEffect(() => {
@@ -1848,7 +1876,8 @@ export function L2Workbench({
           source: activePluginSource,
           cwd: activeWorkSession.cwd,
           onPreviewFile: previewPluginFile,
-          onRevealFile: revealPluginFile
+          onRevealFile: revealPluginFile,
+          onHeaderActionsChange: updatePluginHeaderActions
         }}
       />
     ) : null
@@ -1858,6 +1887,11 @@ export function L2Workbench({
       mobile={mobile}
       fileBrowser={fileBrowser}
       pluginTabContent={pluginTabContent}
+      pluginHeaderActions={
+        sidebarOpen && pluginHeaderActions?.targetKey === pluginSidebarTargetKey
+          ? pluginHeaderActions.actions
+          : []
+      }
       pluginSessionTabs={pluginSessionTabs}
       fileRefreshLoading={activeFileWorkspace?.directories.get('')?.status === 'loading'}
       canBrowseFiles={activeCwd !== null}
@@ -1893,6 +1927,7 @@ export function L2Workbench({
       onSelect={selectSidebarWorkSession}
       onTogglePin={togglePinnedWorkSession}
       onDelete={requestDeleteWorkSession}
+      onRename={renameSession.show}
       onArrangementChange={requestArrangementUpdate}
     />
   )
@@ -2056,6 +2091,16 @@ export function L2Workbench({
           onOpenChange: setSettingsOpen,
           onBeforeReload: () => chatInputRuntime.prepareForPageReload()
         }}
+      />
+      <L2WorkSessionRenameDialog
+        open={renameSession.open}
+        title={renameSession.title}
+        saving={renameSession.saving}
+        disabled={loading}
+        error={renameSession.error}
+        onTitleChange={renameSession.setTitle}
+        onSave={() => void renameSession.save()}
+        onClose={renameSession.close}
       />
       <L2WorkbenchPickerDialog
         open={directoryDialogOpen}

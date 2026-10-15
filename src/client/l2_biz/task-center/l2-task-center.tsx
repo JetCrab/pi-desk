@@ -14,7 +14,7 @@ import {
   XCircleIcon,
   XIcon
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   type L2TaskDetailBody,
@@ -50,7 +50,6 @@ import {
 } from '@client/l3_modules/conversation/l3-conversation-messages'
 import { L3ConversationTailSpacerObserver } from '@client/l3_modules/conversation/l3-conversation-viewport'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
-import { useL4WindowReveal } from '@client/l4_foundation/ui/l4-window-reveal'
 import type { L2TaskCenterRuntime } from './l2-task-center-runtime'
 
 interface L2TaskCenterProps {
@@ -443,8 +442,6 @@ function TaskCenterPanel({
   }, [runtime])
   useSyncExternalStore(runtime.subscribe, getPanelSnapshot, getPanelSnapshot)
   const state = runtime.getState()
-  const closeButtonRef = useRef<HTMLButtonElement>(null)
-  const desktopCloseButtonRef = useRef<HTMLButtonElement>(null)
   const [mobileDetail, setMobileDetail] = useState(false)
   const selectedTask = tasks.find((task) => task.taskId === state.selectedTaskId) ?? null
 
@@ -455,17 +452,6 @@ function TaskCenterPanel({
 
   const showMobileDetail = mobileDetail && state.selectedTaskId !== null
   const panelOpen = state.open && sameSource(state.source, source)
-  const listRef = useRef<HTMLDivElement>(null)
-  const detailRef = useRef<HTMLDivElement>(null)
-  useL4WindowReveal(listRef, panelOpen && !showMobileDetail ? 'task-list' : null)
-  useL4WindowReveal(
-    detailRef,
-    panelOpen ? `${state.selectedTaskId ?? 'no-task'}:${showMobileDetail}` : null
-  )
-
-  if (!state.open || !sameSource(state.source, source) || typeof document === 'undefined') {
-    return null
-  }
 
   const select = (taskId: string): void => {
     runtime.selectTask(taskId)
@@ -474,23 +460,17 @@ function TaskCenterPanel({
 
   return (
     <L4AppDialogRoot
-      open
+      open={panelOpen}
       onOpenChange={(open) => {
         if (!open) runtime.close()
       }}
     >
       <L4AppDialogContent
         aria-label={t('title')}
-        initialFocus={() =>
-          desktopCloseButtonRef.current?.getClientRects().length
-            ? desktopCloseButtonRef.current
-            : closeButtonRef.current
-        }
         showCloseButton={false}
-        className="h-[calc(100dvh-2rem)] max-w-[70rem] flex-row bg-background data-open:animate-none max-lg:h-dvh max-lg:max-h-dvh max-lg:w-dvw max-lg:max-w-none max-lg:rounded-none max-lg:border-0"
+        className="h-[calc(100dvh-2rem)] max-w-[70rem] flex-row bg-background max-lg:h-dvh max-lg:max-h-dvh max-lg:w-dvw max-lg:max-w-none max-lg:rounded-none max-lg:border-0"
       >
         <div
-          ref={listRef}
           className={cn(
             'flex min-w-0 flex-1 flex-col border-r bg-sidebar lg:max-w-80',
             showMobileDetail && 'hidden lg:flex'
@@ -505,7 +485,6 @@ function TaskCenterPanel({
               </p>
             </div>
             <Button
-              ref={showMobileDetail ? undefined : closeButtonRef}
               className="lg:hidden"
               type="button"
               variant="ghost"
@@ -576,10 +555,7 @@ function TaskCenterPanel({
           </div>
         </div>
 
-        <div
-          ref={detailRef}
-          className={cn('min-w-0 flex-1', !showMobileDetail && 'hidden lg:block')}
-        >
+        <div className={cn('min-w-0 flex-1', !showMobileDetail && 'hidden lg:block')}>
           <div className="flex h-full min-h-0 flex-col">
             <div className="flex min-h-12 items-center gap-2 border-b bg-muted/10 px-3 lg:hidden">
               <Button
@@ -595,7 +571,6 @@ function TaskCenterPanel({
                 {selectedTask?.title ?? t('detail')}
               </span>
               <Button
-                ref={showMobileDetail ? closeButtonRef : undefined}
                 type="button"
                 variant="ghost"
                 size="icon"
@@ -616,7 +591,6 @@ function TaskCenterPanel({
           </div>
         </div>
         <Button
-          ref={desktopCloseButtonRef}
           className="absolute right-4 top-3 z-10 hidden lg:inline-flex"
           type="button"
           variant="ghost"

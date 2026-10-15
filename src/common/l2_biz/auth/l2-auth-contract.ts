@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 export const L2AuthLoginRequestSchema = z
   .object({
-    password: z.string().min(1).max(256)
+    password: z.string().min(1).max(64)
   })
   .strict()
 
@@ -26,7 +26,7 @@ export const L2AuthSettingsGetResponseSchema = z
 export const L2AuthNewPasswordSchema = z
   .string()
   .min(12)
-  .max(256)
+  .max(64)
   .refine(
     (password) => password === password.trim() && !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(password)
   )

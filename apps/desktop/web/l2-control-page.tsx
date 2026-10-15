@@ -2,10 +2,12 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { useDesktopAction } from './hooks/l2-use-desktop-action'
 import { useAddressEditor } from './hooks/l2-use-address-editor'
 import { useEnvironmentSetup } from './hooks/l2-use-environment-setup'
+import { usePiUpdate } from './hooks/l2-use-pi-update'
 import { copyDesktopText, runDesktopAction, type DesktopAction } from './l2-desktop-biz'
 import type { ControlState, TargetSnapshot } from './l4-desktop-ipc'
 import { DesktopError, DesktopExpansion, DesktopHeader, DesktopIcon } from './l4-desktop-ui'
 import { EnvironmentView } from './views/l2-environment-view'
+import { PiUpdateView } from './views/l2-pi-update-view'
 import { AddressEditor } from './views/l2-address-editor'
 import { StartupPreferenceDialog } from './views/l2-startup-preference'
 
@@ -29,6 +31,9 @@ function TargetRow({
   onEdit,
   checking = false,
   environmentBusy = false,
+  piChecking = false,
+  piUpdating = false,
+  piFailed = false,
   preparing = false,
   optionsOpen = false,
   setupPanel,
@@ -42,6 +47,9 @@ function TargetRow({
   onEdit: (url: string) => void
   checking?: boolean
   environmentBusy?: boolean
+  piChecking?: boolean
+  piUpdating?: boolean
+  piFailed?: boolean
   preparing?: boolean
   optionsOpen?: boolean
   setupPanel?: ReactNode
@@ -68,9 +76,10 @@ function TargetRow({
   const launchLocked =
     action.busy ||
     working ||
-    Boolean(server && (checking || environmentBusy)) ||
+    Boolean(server && (checking || environmentBusy || piUpdating)) ||
+    Boolean(server && piChecking && server.status !== 'running') ||
     Boolean(server && installing)
-  const locked = launchLocked || updating
+  const locked = launchLocked || updating || piChecking || piUpdating
   const failure =
     action.error ||
     packageAction.error ||
@@ -79,19 +88,23 @@ function TargetRow({
     (server?.status === 'failed' ? server.detail : '') ||
     server?.update?.error ||
     ''
-  const status = checking
-    ? '正在检查组件…'
-    : environmentBusy
-      ? '正在准备组件'
-      : server?.needsSetup
-        ? '首次使用，需要准备以下组件'
-        : server?.status === 'running'
-          ? '已就绪'
-          : server?.status === 'starting'
-            ? '正在启动'
-            : server?.status === 'failed'
-              ? '未能启动'
-              : '已准备好'
+  const status = piUpdating
+    ? '正在更新 Pi'
+    : checking
+      ? '正在检查组件…'
+      : environmentBusy
+        ? '正在准备组件'
+        : server?.needsSetup
+          ? piFailed
+            ? '组件需要检查'
+            : '首次使用，需要准备以下组件'
+          : server?.status === 'running'
+            ? '已就绪'
+            : server?.status === 'starting'
+              ? '正在启动'
+              : server?.status === 'failed'
+                ? '未能启动'
+                : '已准备好'
   const run = (command: DesktopAction): void => {
     const commandAction =
       command === 'check-update' ? checkAction : command === 'update' ? packageAction : action
@@ -139,7 +152,9 @@ function TargetRow({
             <h2 className={server ? 'local-title' : 'target-title'}>{title}</h2>
             {server ? (
               <>
-                <p className={`status-line${server.status === 'running' ? ' good' : ''}`}>
+                <p
+                  className={`status-line${server.status === 'running' && !piUpdating ? ' good' : ''}`}
+                >
                   <span className="dot" />
                   {status}
                 </p>
@@ -205,6 +220,7 @@ function TargetRow({
             type="button"
             disabled={
               action.busy ||
+              piUpdating ||
               cancellation.busy ||
               packageAction.busy ||
               server.update?.status === 'switching' ||
@@ -215,7 +231,7 @@ function TargetRow({
             <DesktopIcon name="stop" />
             停止
           </button>
-          {working && !preparing && server.update?.status !== 'switching' && (
+          {working && !preparing && !piUpdating && server.update?.status !== 'switching' && (
             <button
               className="quiet"
               type="button"
@@ -247,7 +263,7 @@ function TargetRow({
                 安装更新
               </button>
             )}
-            {updating && !working && server.update.status !== 'switching' && (
+            {updating && !piUpdating && !working && server.update.status !== 'switching' && (
               <button
                 type="button"
                 disabled={cancellation.busy}
@@ -310,9 +326,9 @@ function TargetRow({
         </div>
       )}
       {server && (
-        <DesktopExpansion id={setupId} open={preparing || optionsOpen}>
+        <DesktopExpansion id={setupId} open={preparing || optionsOpen || piUpdating || piFailed}>
           <div className="target-panel">
-            {optionsOpen && !preparing && (
+            {(optionsOpen || piUpdating || piFailed) && !preparing && (
               <div className="panel-heading">
                 <div>
                   <h3>安装与版本</h3>
@@ -330,8 +346,8 @@ function TargetRow({
                   >
                     <DesktopIcon name="download" />
                     {server.update.status === 'available'
-                      ? `安装更新${server.update.version ? ` ${server.update.version}` : ''}`
-                      : '检查更新'}
+                      ? `更新 Pi Desk${server.update.version ? ` ${server.update.version}` : ''}`
+                      : '检查 Pi Desk 更新'}
                   </button>
                 )}
               </div>
@@ -385,6 +401,7 @@ export function ControlPage({
   const [choosingAccess, setChoosingAccess] = useState(false)
   const accessDialog = useRef<HTMLDialogElement>(null)
   const setup = useEnvironmentSetup(state, refresh)
+  const piUpdate = usePiUpdate(state, refresh)
   const added = useDesktopAction(refresh)
   const local = state?.targets.filter((target) => target.server) ?? []
   const remote = state?.targets.filter((target) => !target.server) ?? []
@@ -434,7 +451,7 @@ export function ControlPage({
             <span className="connection-badge connection-problem">连接失败</span>
           )}
         </button>
-        <button type="button" onClick={() => navigate('#/settings')}>
+        <button type="button" disabled={piUpdate.updating} onClick={() => navigate('#/settings')}>
           <DesktopIcon name="settings" />
           设置
         </button>
@@ -511,15 +528,18 @@ export function ControlPage({
           {local.length > 0 && (
             <div className="local-targets">
               {local.map((target) => {
-                const preparing = Boolean(
-                  setup.activeUrl === target.url ||
-                  (target.server?.status === 'starting' &&
-                    !target.server.version &&
-                    Boolean(target.server.update)) ||
-                  (state.environment.status !== 'checking' && target.server?.needsSetup) ||
-                  (['installing', 'failed'].includes(state.environment.status) &&
-                    target.url === (setup.activeUrl ?? local[0]?.url))
-                )
+                const preparing =
+                  !piUpdate.updating &&
+                  Boolean(
+                    setup.activeUrl === target.url ||
+                    (state.environment.piUpdate.status === 'idle' &&
+                      ((target.server?.status === 'starting' &&
+                        !target.server.version &&
+                        Boolean(target.server.update)) ||
+                        (state.environment.status !== 'checking' && target.server?.needsSetup) ||
+                        (['installing', 'failed'].includes(state.environment.status) &&
+                          target.url === (setup.activeUrl ?? local[0]?.url))))
+                  )
                 return (
                   <TargetRow
                     key={target.url}
@@ -535,20 +555,34 @@ export function ControlPage({
                     onEdit={editAddress}
                     checking={state.environment.status === 'checking'}
                     environmentBusy={state.environment.status === 'installing'}
+                    piChecking={piUpdate.checking}
+                    piUpdating={piUpdate.updating}
+                    piFailed={
+                      state.environment.piUpdate.status === 'failed' ||
+                      (state.environment.piUpdate.status !== 'idle' &&
+                        Boolean(target.server?.needsSetup))
+                    }
                     optionsOpen={setup.optionsUrl === target.url}
                     preparing={preparing}
                     setupPanel={
-                      <EnvironmentView
-                        {...setup.view}
-                        environment={state.environment}
-                        target={target}
-                        mode={preparing ? 'prepare' : 'options'}
-                        optionsOpen={setup.optionsUrl === target.url}
-                        onAction={(input) => setup.onAction(target, input)}
-                        onDownloadSettings={() =>
-                          navigate(`#/settings?url=${encodeURIComponent(target.url)}`)
-                        }
-                      />
+                      <>
+                        {(!preparing ||
+                          state.environment.components.some(
+                            (item) => item.name === 'pi' && item.path
+                          )) && <PiUpdateView {...piUpdate.view} environment={state.environment} />}
+                        <EnvironmentView
+                          {...setup.view}
+                          environment={state.environment}
+                          target={target}
+                          mode={preparing ? 'prepare' : 'options'}
+                          optionsOpen={setup.optionsUrl === target.url}
+                          piBusy={piUpdate.checking || piUpdate.updating}
+                          onAction={(input) => setup.onAction(target, input)}
+                          onDownloadSettings={() =>
+                            navigate(`#/settings?url=${encodeURIComponent(target.url)}`)
+                          }
+                        />
+                      </>
                     }
                   />
                 )

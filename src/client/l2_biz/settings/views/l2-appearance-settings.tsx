@@ -17,7 +17,6 @@ import {
   subscribeL4DisplaySize
 } from '@client/l4_foundation/ui/l4-display-size-provider'
 import { L3ConversationMarkdown } from '@client/l3_modules/conversation/l3-conversation-markdown'
-import { saveL4PowerSaving, useL4PowerSaving } from '@client/l4_foundation/ui/l4-power-saving'
 
 const THEME_OPTIONS = [
   { value: 'system', label: 'common:system', icon: MonitorIcon },
@@ -34,7 +33,6 @@ const DISPLAY_SIZE_OPTIONS = [
 export function L2AppearanceSettings(): React.JSX.Element {
   const { t } = useTranslation('settings')
   const theme = useSyncExternalStore(subscribeL4Theme, readL4Theme, () => L4_DEFAULT_THEME)
-  const powerSaving = useL4PowerSaving()
   const size = useSyncExternalStore(
     subscribeL4DisplaySize,
     readL4DisplaySize,
@@ -58,7 +56,7 @@ export function L2AppearanceSettings(): React.JSX.Element {
               onChange={saveL4Theme}
             />
           </div>
-          <div className="space-y-2 border-b pb-4">
+          <div className="space-y-2">
             <h3 className="text-sm font-medium">{t('displaySize')}</h3>
             <L4ChoiceGroup<L4DisplaySize>
               label={t('displaySize')}
@@ -69,19 +67,6 @@ export function L2AppearanceSettings(): React.JSX.Element {
                 label: t(option.label)
               }))}
               onChange={saveL4DisplaySize}
-            />
-          </div>
-          <div className="space-y-2">
-            <h3 className="text-sm font-medium">{t('powerSaving')}</h3>
-            <L4ChoiceGroup<'off' | 'on'>
-              label={t('powerSaving')}
-              layout="segmented"
-              value={powerSaving ? 'on' : 'off'}
-              options={[
-                { value: 'off', label: t('powerSavingOff'), testId: 'power-saving-off' },
-                { value: 'on', label: t('powerSavingOn'), testId: 'power-saving-on' }
-              ]}
-              onChange={(value) => saveL4PowerSaving(value === 'on')}
             />
           </div>
         </div>

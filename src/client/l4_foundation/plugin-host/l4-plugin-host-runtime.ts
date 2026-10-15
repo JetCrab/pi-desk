@@ -27,6 +27,7 @@ import {
   type BrowserPluginGlobalStateHost,
   type BrowserPluginHost,
   type BrowserPluginNotificationEventListener,
+  type BrowserSessionSidebarHeaderAction,
   type BrowserSessionSidebarTabContributionDefinition,
   type BrowserSessionSidebarTabTarget,
   type BrowserSettingsPageContributionDefinition,
@@ -759,6 +760,75 @@ export class L4PluginHostRuntime {
     const cancelled = new Promise<void>((resolve) => {
       controller.signal.addEventListener('abort', () => resolve(), { once: true })
     })
+    let target = input.target
+    if (target.kind === 'session-sidebar-tab' && target.setHeaderActions) {
+      const publishActions = target.setHeaderActions
+      let currentActions: readonly BrowserSessionSidebarHeaderAction[] = []
+      controller.signal.addEventListener(
+        'abort',
+        () => {
+          currentActions = []
+          publishActions([])
+        },
+        { once: true }
+      )
+      target = {
+        ...target,
+        setHeaderActions: (actions) => {
+          if (controller.signal.aborted || !registration.owner.active) return
+          if (!Array.isArray(actions)) throw new Error('侧栏操作必须为数组')
+          const nextActions: BrowserSessionSidebarHeaderAction[] = actions.map((action) => {
+            const label = parseLabel(action.label, 'Sidebar action label')
+            const icon = cloneIcon(action.icon)
+            const disabled = action.disabled === true
+            const busy = action.busy === true
+            const onSelect = action.onSelect
+            if (typeof onSelect !== 'function') throw new Error('侧栏操作缺少 onSelect 回调')
+            let running = false
+            return {
+              label,
+              icon,
+              disabled,
+              busy,
+              onSelect: () => {
+                if (
+                  controller.signal.aborted ||
+                  !registration.owner.active ||
+                  currentActions !== nextActions ||
+                  disabled ||
+                  busy ||
+                  running
+                )
+                  return
+                running = true
+                runPluginCallback(
+                  async () => {
+                    try {
+                      await onSelect()
+                    } catch (cause) {
+                      if (!controller.signal.aborted && registration.owner.active) {
+                        registration.owner.host.notify({
+                          level: 'error',
+                          title: label,
+                          description: cause instanceof Error ? cause.message : String(cause)
+                        })
+                      }
+                      throw cause
+                    } finally {
+                      running = false
+                    }
+                  },
+                  `sidebar-action:${label}`,
+                  input.pluginName
+                )
+              }
+            }
+          })
+          currentActions = nextActions
+          publishActions(nextActions)
+        }
+      }
+    }
     const mounting = Promise.resolve().then(async () => {
       if (controller.signal.aborted) throw new Error('插件视图已关闭')
       const implementation = await this.loadContribution(registration)
@@ -768,7 +838,7 @@ export class L4PluginHostRuntime {
       const mount = implementation.mount as unknown as BrowserMount<L4PluginContributionTarget>
       const result = await mount({
         container: input.container,
-        target: input.target,
+        target,
         host: registration.owner.host,
         signal: controller.signal
       })

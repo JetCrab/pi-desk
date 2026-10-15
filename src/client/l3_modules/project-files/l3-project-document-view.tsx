@@ -37,6 +37,8 @@ import type { L3ProjectGitBrowser } from './l3-project-git-runtime'
 import { useL3ProjectDocumentGit } from './l3-project-document-git'
 import { L3CodeSurfaceToolbarButton } from './l3-code-surface-toolbar-button'
 import { buildL3FilePreviewHtml } from './l3-file-preview-html'
+import { L3MarkdownPreview } from './l3-markdown-preview'
+import { getL3ProjectTextPreviewKind } from './l3-project-text-preview'
 
 function fileName(path: string): string {
   return path.replaceAll('\\', '/').split('/').at(-1) ?? path
@@ -67,8 +69,8 @@ export function L3ProjectDocumentView({
   useSyncExternalStore(runtime.subscribe, runtime.getRevision, runtime.getRevision)
   const { activeDiff, activePath } = runtime.state
   const document = !activeDiff && activePath ? runtime.state.documents.get(activePath) : null
-  const isHtml = Boolean(activePath && /\.html?$/i.test(activePath))
-  const showSource = document?.status === 'text' && (!isHtml || document.viewMode === 'source')
+  const previewKind = activePath ? getL3ProjectTextPreviewKind(activePath) : null
+  const showSource = document?.status === 'text' && (!previewKind || document.viewMode === 'source')
   const hostRef = useRef<HTMLDivElement>(null)
   const previewRef = useRef<L4CodePreviewHandle>(null)
   const diffRef = useRef<L4CodeDiffHandle>(null)
@@ -80,10 +82,12 @@ export function L3ProjectDocumentView({
     () => ({
       focus(): void {
         if (showSource) previewRef.current?.focus()
-        else diffRef.current?.focus()
+        else if (activeDiff) diffRef.current?.focus()
+        else
+          hostRef.current?.querySelector<HTMLElement>('[data-testid="markdown-preview"]')?.focus()
       }
     }),
-    [showSource]
+    [activeDiff, showSource]
   )
   useEffect(() => {
     const receive = (event: MessageEvent): void => {
@@ -150,7 +154,9 @@ export function L3ProjectDocumentView({
       onFocus={(event) => {
         if (event.target !== event.currentTarget) return
         if (showSource) previewRef.current?.focus()
-        else diffRef.current?.focus()
+        else if (activeDiff) diffRef.current?.focus()
+        else
+          hostRef.current?.querySelector<HTMLElement>('[data-testid="markdown-preview"]')?.focus()
       }}
     >
       {activeDiff || activePath ? (
@@ -215,8 +221,12 @@ export function L3ProjectDocumentView({
             </>
           ) : (
             <>
-              {isHtml && document?.status === 'text' && activePath ? (
-                <div className="mr-auto flex shrink-0" role="group" aria-label={t('htmlMode')}>
+              {previewKind && document?.status === 'text' && activePath ? (
+                <div
+                  className="mr-auto flex shrink-0"
+                  role="group"
+                  aria-label={t(previewKind === 'markdown' ? 'markdownMode' : 'htmlMode')}
+                >
                   {(['preview', 'source'] as const).map((mode) => (
                     <Button
                       key={mode}
@@ -372,7 +382,15 @@ export function L3ProjectDocumentView({
             slides={[{ src: document.objectUrl, alt: activePath }]}
             ariaLabel={t('imageViewer', { name: fileName(activePath) })}
           />
-        ) : isHtml && document.viewMode === 'preview' ? (
+        ) : previewKind === 'markdown' && document.viewMode === 'preview' ? (
+          <L3MarkdownPreview
+            key={activePath}
+            content={document.content}
+            label={t('markdownPreview', { name: activePath })}
+            savedScrollTop={document.previewScrollTop}
+            onScroll={(scrollTop) => runtime.savePreviewScrollTop(activePath, scrollTop)}
+          />
+        ) : previewKind === 'html' && document.viewMode === 'preview' ? (
           <iframe
             ref={iframeRef}
             className="block size-full border-0 bg-white"

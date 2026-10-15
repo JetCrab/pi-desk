@@ -91,6 +91,10 @@ export class WorkSession {
     return this.runtime.restoreQueuedMessages()
   }
 
+  async setTitle(title: string): Promise<void> {
+    await this.runtime.setTitle(title)
+  }
+
   async setModel(input: WorkSessionModelInput): Promise<void> {
     await this.runtime.setModel(input)
   }

@@ -59,12 +59,14 @@ import {
 import {
   L2CwdSchema,
   L2PiSessionIdSchema,
+  L2RenameWorkSessionRequestSchema,
   L2WorkIdSchema,
   L2WorkSessionListItemSchema,
   L2WorkSessionListResponseSchema,
   L2WorkSessionPinnedCountSchema,
   L2WorkSessionRecordSchema,
   L2WorkSessionRecordsSchema,
+  type L2RenameWorkSessionRequest,
   type L2WorkSessionListItem,
   type L2WorkSessionListResponse,
   type L2WorkSessionRecord,
@@ -557,6 +559,17 @@ export class WorkSessionManage {
         creationType: sessionId ? 'history' : 'empty'
       })
       return item
+    })
+  }
+
+  renameWorkSession(inputValue: L2RenameWorkSessionRequest): Promise<void> {
+    const input = L2RenameWorkSessionRequestSchema.parse(inputValue)
+    return this.runExclusive(async () => {
+      await this.ensureHydrated()
+      const current = this.workSessionsById.get(input.workId)
+      if (!current) throw new WorkSessionNotFoundError(input.workId)
+      this.assertSessionBinding(current, input.sessionId)
+      await this.chat.setTitle(current, input.title)
     })
   }
 

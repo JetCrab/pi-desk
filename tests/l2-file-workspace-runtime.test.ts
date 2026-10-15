@@ -265,21 +265,62 @@ test('文件和聊天的当前视图独立于窗口显隐，放大只保留一�
   runtime.dispose()
 })
 
-test('项目、消息及插件的HTML路径使用同一文档并可切换源码', async () => {
+for (const path of ['report.html', 'README.MD', 'guide.markdown']) {
+  test(`${path}默认预览，项目、消息及插件入口复用文档和源码模式`, async () => {
+    const runtime = new L2FileWorkspaceRuntime(fileBiz(), gitBiz())
+    try {
+      runtime.reconcileWorkSessions([workSession('a')])
+      runtime.openFile('a', path)
+      await waitImmediate()
+      const document = runtime.getWorkspace('a')?.documents.get(path)
+      assert.equal(document?.status, 'text')
+      if (document?.status === 'text') assert.equal(document.viewMode, 'preview')
+      runtime.setTextViewMode('a', path, 'source')
+      runtime.hideWindow('a')
+      runtime.openFile('a', path)
+      assert.equal(runtime.getWorkspace('a')?.documents.get(path), document)
+      if (document?.status === 'text') assert.equal(document.viewMode, 'source')
+      assert.deepEqual(runtime.getWorkspace('a')?.tabs, [path])
+    } finally {
+      runtime.dispose()
+    }
+  })
+}
+
+test('Markdown滚动不广播，切换与重读保留位置，关闭文件后释放', async () => {
   const runtime = new L2FileWorkspaceRuntime(fileBiz(), gitBiz())
-  runtime.reconcileWorkSessions([workSession('a')])
-  runtime.openFile('a', 'report.html')
-  await waitImmediate()
-  const document = runtime.getWorkspace('a')?.documents.get('report.html')
-  assert.equal(document?.status, 'text')
-  if (document?.status === 'text') assert.equal(document.viewMode, 'preview')
-  runtime.setTextViewMode('a', 'report.html', 'source')
-  runtime.hideWindow('a')
-  runtime.openFile('a', 'report.html')
-  assert.equal(runtime.getWorkspace('a')?.documents.get('report.html'), document)
-  if (document?.status === 'text') assert.equal(document.viewMode, 'source')
-  assert.deepEqual(runtime.getWorkspace('a')?.tabs, ['report.html'])
-  runtime.dispose()
+  try {
+    runtime.reconcileWorkSessions([workSession('a')])
+    runtime.openFile('a', 'guide.md')
+    await waitImmediate()
+    const files = runtime.getFileRuntime('a')
+    const revision = files.getRevision()
+    files.savePreviewScrollTop('guide.md', 640)
+    assert.equal(files.getRevision(), revision)
+    files.setTextViewMode('guide.md', 'source')
+    files.reloadFile('guide.md')
+    await waitImmediate()
+    const reloaded = files.state.documents.get('guide.md')
+    assert.equal(reloaded?.status, 'text')
+    if (reloaded?.status === 'text') {
+      assert.equal(reloaded.previewScrollTop, 640)
+      assert.equal(reloaded.viewMode, 'source')
+    }
+    files.closeTabs('guide.md', 'current')
+    files.openFile('guide.md')
+    await waitImmediate()
+    const reopened = files.state.documents.get('guide.md')
+    if (reopened?.status !== 'text') assert.fail('重新打开文档失败')
+    assert.equal(reopened.previewScrollTop, 0)
+    assert.equal(reopened.viewMode, 'preview')
+    files.openFile('code.ts')
+    await waitImmediate()
+    const code = files.state.documents.get('code.ts')
+    if (code?.status !== 'text') assert.fail('打开代码失败')
+    assert.equal(code.viewMode, 'source')
+  } finally {
+    runtime.dispose()
+  }
 })
 
 test('来源替换或删除中止请求，迟到正文不会重新进入工作区', async () => {

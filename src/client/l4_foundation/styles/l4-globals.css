@@ -447,25 +447,6 @@ body:has(.pi-desk-workbench) {
   background: color-mix(in oklab, var(--muted-foreground) 70%, transparent);
 }
 
-@keyframes pi-desk-chat-send-flight {
-  from {
-    transform: translate(-1px, 1px);
-  }
-  to {
-    transform: translate(2px, -2px);
-  }
-}
-
-.pi-desk-chat-send-icon {
-  animation: pi-desk-chat-send-flight 0.72s ease-in-out infinite alternate;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pi-desk-chat-send-icon {
-    animation: none;
-  }
-}
-
 @layer base {
   * {
     @apply border-border outline-ring/50;

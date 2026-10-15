@@ -53,11 +53,30 @@ pub(crate) struct DownloadSnapshot {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub(crate) struct PiUpdateSnapshot {
+    pub status: String,
+    pub version: Option<String>,
+    pub error: Option<String>,
+}
+
+impl Default for PiUpdateSnapshot {
+    fn default() -> Self {
+        Self {
+            status: "idle".into(),
+            version: None,
+            error: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct EnvironmentSnapshot {
     pub status: String,
     pub components: Vec<ComponentSnapshot>,
     pub step: String,
     pub error: Option<String>,
+    #[serde(rename = "piUpdate")]
+    pub pi_update: PiUpdateSnapshot,
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -164,6 +183,7 @@ impl EnvironmentState {
                         .collect(),
                     step: "正在检测本机环境".into(),
                     error: None,
+                    pi_update: PiUpdateSnapshot::default(),
                 },
             }),
         }
@@ -194,6 +214,12 @@ impl EnvironmentState {
         choices.download_source = Some(source);
         self.save_choices(&choices)?;
         data.choices = choices;
+        if !matches!(
+            data.snapshot.pi_update.status.as_str(),
+            "checking" | "updating"
+        ) {
+            data.snapshot.pi_update = PiUpdateSnapshot::default();
+        }
         Ok(())
     }
 
@@ -216,6 +242,19 @@ impl EnvironmentState {
 
     pub(crate) fn snapshot(&self) -> EnvironmentSnapshot {
         self.data.lock().unwrap().snapshot.clone()
+    }
+
+    pub(crate) fn set_pi_update(
+        &self,
+        status: &str,
+        version: Option<String>,
+        error: Option<String>,
+    ) {
+        self.data.lock().unwrap().snapshot.pi_update = PiUpdateSnapshot {
+            status: status.into(),
+            version,
+            error,
+        };
     }
 
     pub(crate) fn set_phase(&self, status: &str, step: &str, error: Option<String>) {

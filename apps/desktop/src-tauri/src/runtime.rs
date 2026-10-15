@@ -19,6 +19,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+#[path = "l2-runtime-pi-update.rs"]
+mod pi_update;
+
 const START_TIMEOUT: Duration = Duration::from_secs(120);
 const PORT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 const PACKAGE_UPDATE_INTERVAL: Duration = Duration::from_secs(60);
@@ -426,6 +429,9 @@ fn save_config(state: &ShellState, config: DesktopConfig) -> Result<(), String> 
 }
 
 fn require_idle(state: &ShellState, url: &str) -> Result<(), String> {
+    if state.environment.snapshot().pi_update.status == "updating" {
+        return Err("Pi 更新正在维护本机服务，请等待完成或取消后再修改地址".into());
+    }
     if state
         .target_runtimes
         .lock()
@@ -714,6 +720,22 @@ enum EnvironmentOperation {
     },
     Prepare(String, DownloadSource),
     Select(Component, bool),
+    CheckPiUpdate,
+    UpdatePi,
+}
+
+impl EnvironmentOperation {
+    fn is_pi_update(&self) -> bool {
+        matches!(self, Self::CheckPiUpdate | Self::UpdatePi)
+    }
+}
+
+pub(crate) fn check_pi_update(app: &AppHandle) -> Result<(), String> {
+    begin_environment_operation(app, EnvironmentOperation::CheckPiUpdate)
+}
+
+pub(crate) fn update_pi(app: &AppHandle) -> Result<(), String> {
+    begin_environment_operation(app, EnvironmentOperation::UpdatePi)
 }
 
 pub(crate) fn check_environment(app: &AppHandle, auto_start: bool) -> Result<(), String> {
@@ -786,6 +808,13 @@ pub(crate) fn save_download_source(
     state: &ShellState,
     source: DownloadSource,
 ) -> Result<(), String> {
+    let _guard = state.config_write.lock().map_err(|_| "配置写入不可用")?;
+    if matches!(
+        state.environment.snapshot().pi_update.status.as_str(),
+        "checking" | "updating"
+    ) {
+        return Err("Pi 更新操作正在进行，请完成或取消后再修改下载源".into());
+    }
     state.environment.save_download_source(source)?;
     write_shell_log(
         state,
@@ -841,12 +870,22 @@ fn begin_environment_operation(
     if runtimes.values().any(|runtime| runtime.operation.is_some()) {
         return Err("服务操作正在进行，请等待完成或取消后再准备环境".into());
     }
-    if !matches!(&operation, EnvironmentOperation::Check { .. })
-        && runtimes.values().any(|runtime| runtime.child.is_some())
+    if matches!(
+        &operation,
+        EnvironmentOperation::Prepare(..) | EnvironmentOperation::Select(..)
+    ) && runtimes.values().any(|runtime| runtime.child.is_some())
     {
         return Err("请先停止本机服务，再安装或更换运行环境；已运行的服务不会被自动中断".into());
     }
     let previous = state.environment.snapshot();
+    if matches!(operation, EnvironmentOperation::UpdatePi) {
+        if previous.pi_update.status != "available" || previous.pi_update.version.is_none() {
+            return Err("请先检查 Pi 更新，再确认安装可用版本".into());
+        }
+        if std::env::var_os("PI_DESK_DESKTOP_DATA_DIR").is_some() {
+            return Err("隔离模式禁止安装或修改全局 Pi".into());
+        }
+    }
     let cancel = Arc::new(AtomicBool::new(false));
     *active = Some(cancel.clone());
     if let EnvironmentOperation::Prepare(url, _) = &operation {
@@ -856,15 +895,34 @@ fn begin_environment_operation(
     }
     drop(runtimes);
     drop(active);
-    state.environment.set_phase(
-        if matches!(operation, EnvironmentOperation::Prepare(..)) {
-            "installing"
-        } else {
-            "checking"
-        },
-        "正在检测运行环境",
-        None,
-    );
+    if operation.is_pi_update() {
+        state.environment.set_pi_update(
+            if matches!(operation, EnvironmentOperation::UpdatePi) {
+                "updating"
+            } else {
+                "checking"
+            },
+            if matches!(operation, EnvironmentOperation::UpdatePi) {
+                previous.pi_update.version.clone()
+            } else {
+                None
+            },
+            None,
+        );
+    } else {
+        state.environment.set_pi_update("idle", None, None);
+        state.environment.set_phase(
+            if matches!(operation, EnvironmentOperation::Prepare(..)) {
+                "installing"
+            } else {
+                "checking"
+            },
+            "正在检测运行环境",
+            None,
+        );
+    }
+    let pi_operation = operation.is_pi_update();
+    let pi_version = previous.pi_update.version.clone();
     let worker_app = app.clone();
     let worker_cancel = cancel.clone();
     let handle = thread::Builder::new()
@@ -895,9 +953,19 @@ fn begin_environment_operation(
                     runtime.operation = None;
                 }
             }
-            state
-                .environment
-                .set_phase("failed", "无法创建环境后台操作", Some(error.to_string()));
+            if pi_operation {
+                state.environment.set_pi_update(
+                    "failed",
+                    pi_version,
+                    Some(format!("无法创建 Pi 更新后台操作：{error}")),
+                );
+            } else {
+                state.environment.set_phase(
+                    "failed",
+                    "无法创建环境后台操作",
+                    Some(error.to_string()),
+                );
+            }
             Err(format!("创建环境后台操作失败：{error}"))
         }
     }
@@ -960,12 +1028,27 @@ fn run_environment_operation(
         EnvironmentOperation::Prepare(url, _) => Some(url.clone()),
         _ => None,
     };
+    let pi_operation = operation.is_pi_update();
     let mut auto_start = false;
     let mut open_on_ready = false;
     let mut selection_cancelled = false;
     let mut started_service = false;
     let result = (|| -> Result<(), String> {
         match operation {
+            EnvironmentOperation::CheckPiUpdate => {
+                pi_update::check(&state, &cancelled)?;
+            }
+            EnvironmentOperation::UpdatePi => {
+                pi_update::update(
+                    &state,
+                    previous
+                        .pi_update
+                        .version
+                        .as_deref()
+                        .ok_or("缺少 Pi 更新版本")?,
+                    &cancelled,
+                )?;
+            }
             EnvironmentOperation::Check {
                 auto_start: enabled,
                 open_on_ready: open,
@@ -1041,7 +1124,15 @@ fn run_environment_operation(
         }
         Ok(())
     })();
-    if selection_cancelled {
+    if pi_operation {
+        if let Err(error) = &result {
+            write_shell_log(&state, "pi-update-failed", error);
+            let version = state.environment.snapshot().pi_update.version;
+            state
+                .environment
+                .set_pi_update("failed", version, Some(error.clone()));
+        }
+    } else if selection_cancelled {
         state
             .environment
             .set_phase(&previous.status, &previous.step, previous.error);
@@ -1185,6 +1276,9 @@ pub fn stop_server(app: &AppHandle, url: &str) -> Result<(), String> {
         .map_err(|_| "配置写入不可用".to_string())?;
     let url = config::normalize_target_url(url)?;
     configured_server(&state, &url)?;
+    if state.environment.snapshot().pi_update.status == "updating" {
+        return Err("Pi 更新正在维护本机服务，请使用取消更新并等待恢复完成".into());
+    }
     set_auto_start(&state, &url, false)?;
     {
         let mut runtimes = state

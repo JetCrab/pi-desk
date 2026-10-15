@@ -41,17 +41,12 @@ import type { L4PluginBrowserContributionDescriptor } from '@client/l4_foundatio
 import { useL4PluginRegistry } from '@client/l4_foundation/plugin-host/l4-plugin-host-context'
 import { L4PluginIcon } from '@client/l4_foundation/plugin-host/l4-plugin-icon'
 import {
-  getL3WorkSessionSurfacePresentation,
-  L3WorkSessionStatusBorder
-} from '@client/l3_modules/work-session-visual/l3-work-session-visual-view'
-import {
   PromptInputButton,
   PromptInputFooter,
   PromptInputTools
 } from '@client/l4_foundation/ui/ai-elements/prompt-input'
 import { L4ImageViewer, type L4ImageViewerSlide } from '@client/l4_foundation/ui/l4-image-viewer'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
-import { useL4PowerSaving } from '@client/l4_foundation/ui/l4-power-saving'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import {
   DropdownMenu,
@@ -186,7 +181,6 @@ function L2WorkbenchChatComposerComponent({
   const { t } = useTranslation('workbench')
   const toast = useL4AppToast()
   const pluginDescriptors = useL4PluginRegistry()
-  const powerSaving = useL4PowerSaving()
   const source = useMemo(
     () =>
       L2ChatSourceSchema.parse({
@@ -364,8 +358,6 @@ function L2WorkbenchChatComposerComponent({
       : t('selectModel')
   const modelTooltip = currentModel ? t('modelTooltip', { model: modelLabel }) : t('chooseModel')
   const displayedError = localError ?? inputState.error
-  const visualState = workSessionRunning ? 'running' : completionPending ? 'completed' : 'idle'
-  const surface = getL3WorkSessionSurfacePresentation(workSession.cwd)
 
   const runAction = useCallback(
     async (action: () => Promise<void>, successMessage?: string): Promise<void> => {
@@ -649,10 +641,9 @@ function L2WorkbenchChatComposerComponent({
               ? t('composerCompleted')
               : t('composer')
         }
-        className={cn(styles.inputFrame, surface.className)}
+        className={styles.inputFrame}
         data-composer-mobile={mobile ? 'true' : 'false'}
         data-composer-metadata-row={desktopMetadataRow ? 'true' : 'false'}
-        style={surface.style}
         onSubmit={handleSubmit}
         onDragOver={(event) => {
           if (event.dataTransfer.types.includes('Files')) event.preventDefault()
@@ -679,364 +670,356 @@ function L2WorkbenchChatComposerComponent({
             event.currentTarget.value = ''
           }}
         />
-        {/* 巡边与内容裁切分层，避免描线被裁细；禁用工具只弱化自身，不连带输入区。 */}
-        <div className="relative rounded-xl">
-          <InputGroup
-            className="relative z-[1] overflow-hidden rounded-xl border-border bg-card shadow-xs transition-[background-color,border-color] duration-150 ease-out has-disabled:bg-card has-disabled:opacity-100 dark:shadow-none motion-reduce:transition-none"
-            aria-busy={idleSending}
-          >
-            {composerImages.length > 0 ? (
-              <InputGroupAddon
-                align="block-start"
-                className="pi-desk-chat-scrollbar gap-2 overflow-x-auto px-3 pt-3 pb-1"
-              >
-                {composerImages.map((image) => (
-                  <div
-                    key={image.localId}
-                    className="relative size-16 shrink-0 overflow-hidden rounded-md border bg-muted"
-                    title={`${image.name} · ${image.width}×${image.height} · ${formatBytes(image.blob.size)}`}
+        {/* 禁用工具只弱化自身，不连带输入区。 */}
+        <InputGroup
+          className="overflow-hidden rounded-xl border-border bg-card shadow-xs transition-[background-color,border-color] duration-150 ease-out has-disabled:bg-card has-disabled:opacity-100 dark:shadow-none motion-reduce:transition-none"
+          aria-busy={idleSending}
+        >
+          {composerImages.length > 0 ? (
+            <InputGroupAddon
+              align="block-start"
+              className="pi-desk-chat-scrollbar gap-2 overflow-x-auto px-3 pt-3 pb-1"
+            >
+              {composerImages.map((image) => (
+                <div
+                  key={image.localId}
+                  className="relative size-16 shrink-0 overflow-hidden rounded-md border bg-muted"
+                  title={`${image.name} · ${image.width}×${image.height} · ${formatBytes(image.blob.size)}`}
+                >
+                  <button
+                    type="button"
+                    disabled={image.status !== 'ready'}
+                    aria-label={t('imagePreview', { name: image.name })}
+                    className="group size-full cursor-zoom-in outline-none disabled:cursor-default focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                    onClick={() => openImagePreview(image.localId)}
                   >
-                    <button
-                      type="button"
-                      disabled={image.status !== 'ready'}
-                      aria-label={t('imagePreview', { name: image.name })}
-                      className="group size-full cursor-zoom-in outline-none disabled:cursor-default focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                      onClick={() => openImagePreview(image.localId)}
-                    >
-                      {/* Blob 已在浏览器压缩，且 URL 会随 Draft 生命周期主动释放。 */}
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={image.objectUrl}
-                        alt={image.name}
-                        className="size-full object-cover transition-transform duration-200 group-hover:scale-105 motion-reduce:transition-none"
-                      />
-                    </button>
-                    {image.status === 'optimizing' ? (
-                      <div className="pointer-events-none absolute inset-0 grid place-items-center bg-background/85 text-xs">
-                        {t('imageProcessing')}
-                      </div>
-                    ) : null}
-                    {image.status === 'error' ? (
-                      <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-popover px-1 py-0.5 text-xs text-destructive">
-                        {t('imageFailed')}
-                      </div>
-                    ) : null}
-                    <button
-                      type="button"
-                      aria-label={t('imageRemove', { name: image.name })}
-                      aria-disabled={idleSending}
-                      className="absolute right-0.5 top-0.5 z-10 grid size-6 cursor-pointer place-items-center rounded-md bg-popover text-popover-foreground shadow-sm hover:bg-accent"
-                      onClick={() => {
-                        if (!idleSending) inputRuntime.removeImage(source, image.localId)
-                      }}
-                    >
-                      <XIcon className="size-3" />
-                    </button>
-                  </div>
-                ))}
-                <span className="self-end whitespace-nowrap text-xs text-muted-foreground">
-                  {composerImages.length}/10 · {formatBytes(composerImageBytes)}
-                </span>
-              </InputGroupAddon>
-            ) : null}
-
-            <InputGroupTextarea
-              value={composerText}
-              disabled={!inputState.loaded || inputState.loading}
-              readOnly={idleSending}
-              aria-disabled={idleSending}
-              aria-autocomplete="list"
-              aria-controls={slashCommands.open ? L2_WORKBENCH_SLASH_COMMAND_MENU_ID : undefined}
-              aria-expanded={slashCommands.open}
-              aria-activedescendant={
-                slashCommands.open && slashCommands.commands.length > 0
-                  ? getL2WorkbenchSlashCommandOptionId(slashCommands.activeIndex)
-                  : undefined
-              }
-              placeholder={
-                inputState.loading
-                  ? t('draftLoading')
-                  : !inputState.loaded && inputState.error
-                    ? t('draftFailed')
-                    : t('inputPlaceholder')
-              }
-              className={cn(
-                styles.inputText,
-                'pi-desk-chat-scrollbar max-h-48 min-h-9 overflow-y-auto px-3 pt-3 pb-1'
-              )}
-              onChange={(event) => inputRuntime.setText(source, event.currentTarget.value)}
-              onClick={slashCommands.reopen}
-              onBlur={slashCommands.dismiss}
-              onCompositionStart={slashCommands.handleCompositionStart}
-              onCompositionEnd={slashCommands.handleCompositionEnd}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-            />
-
-            <PromptInputFooter ref={footerRef} className={styles.footer}>
-              <PromptInputTools data-composer-tools="primary" className={styles.primaryTools}>
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={<PromptInputButton tooltip={t('more')} aria-label={t('moreActions')} />}
+                    {/* Blob 已在浏览器压缩，且 URL 会随 Draft 生命周期主动释放。 */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={image.objectUrl}
+                      alt={image.name}
+                      className="size-full object-cover transition-transform duration-200 group-hover:scale-105 motion-reduce:transition-none"
+                    />
+                  </button>
+                  {image.status === 'optimizing' ? (
+                    <div className="pointer-events-none absolute inset-0 grid place-items-center bg-background/85 text-xs">
+                      {t('imageProcessing')}
+                    </div>
+                  ) : null}
+                  {image.status === 'error' ? (
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-popover px-1 py-0.5 text-xs text-destructive">
+                      {t('imageFailed')}
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    aria-label={t('imageRemove', { name: image.name })}
+                    aria-disabled={idleSending}
+                    className="absolute right-0.5 top-0.5 z-10 grid size-6 cursor-pointer place-items-center rounded-md bg-popover text-popover-foreground shadow-sm hover:bg-accent"
+                    onClick={() => {
+                      if (!idleSending) inputRuntime.removeImage(source, image.localId)
+                    }}
                   >
-                    <EllipsisIcon className="size-4" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" side="top" className="w-52">
-                    <DropdownMenuGroup>
-                      <DropdownMenuLabel>{t('session')}</DropdownMenuLabel>
+                    <XIcon className="size-3" />
+                  </button>
+                </div>
+              ))}
+              <span className="self-end whitespace-nowrap text-xs text-muted-foreground">
+                {composerImages.length}/10 · {formatBytes(composerImageBytes)}
+              </span>
+            </InputGroupAddon>
+          ) : null}
+
+          <InputGroupTextarea
+            value={composerText}
+            disabled={!inputState.loaded || inputState.loading}
+            readOnly={idleSending}
+            aria-disabled={idleSending}
+            aria-autocomplete="list"
+            aria-controls={slashCommands.open ? L2_WORKBENCH_SLASH_COMMAND_MENU_ID : undefined}
+            aria-expanded={slashCommands.open}
+            aria-activedescendant={
+              slashCommands.open && slashCommands.commands.length > 0
+                ? getL2WorkbenchSlashCommandOptionId(slashCommands.activeIndex)
+                : undefined
+            }
+            placeholder={
+              inputState.loading
+                ? t('draftLoading')
+                : !inputState.loaded && inputState.error
+                  ? t('draftFailed')
+                  : t('inputPlaceholder')
+            }
+            className={cn(
+              styles.inputText,
+              'pi-desk-chat-scrollbar max-h-48 min-h-9 overflow-y-auto px-3 pt-3 pb-1'
+            )}
+            onChange={(event) => inputRuntime.setText(source, event.currentTarget.value)}
+            onClick={slashCommands.reopen}
+            onBlur={slashCommands.dismiss}
+            onCompositionStart={slashCommands.handleCompositionStart}
+            onCompositionEnd={slashCommands.handleCompositionEnd}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+          />
+
+          <PromptInputFooter ref={footerRef} className={styles.footer}>
+            <PromptInputTools data-composer-tools="primary" className={styles.primaryTools}>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={<PromptInputButton tooltip={t('more')} aria-label={t('moreActions')} />}
+                >
+                  <EllipsisIcon className="size-4" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" side="top" className="w-52">
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel>{t('session')}</DropdownMenuLabel>
+                    <DropdownMenuItem
+                      aria-label={t('switchBranch')}
+                      disabled={!chatReady || !inputState.loaded || inputState.loading}
+                      onClick={() => onOpenBranchPicker(workSession.workId)}
+                    >
+                      <GitBranchIcon className="size-4" />
+                      {t('sessionBranch')}
+                      <span className="ml-auto text-xs text-muted-foreground">
+                        {t('escapeTwice')}
+                      </span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      aria-label={t('clone')}
+                      disabled={!chatReady || cloneDisabled || clonePending}
+                      title={
+                        workSession.messageCounts.total === 0 ? t('cloneEmpty') : t('cloneTip')
+                      }
+                      onClick={onCloneWorkSession}
+                    >
+                      {clonePending ? (
+                        <LoaderCircleIcon className="size-4 animate-spin" />
+                      ) : (
+                        <CopyPlusIcon className="size-4" />
+                      )}
+                      {clonePending ? t('cloning') : t('clone')}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      aria-label={t('replaceSession')}
+                      aria-busy={newSessionPending}
+                      disabled={!chatReady || newSessionDisabled || newSessionPending}
+                      onClick={onNewSession}
+                    >
+                      {newSessionPending ? (
+                        <LoaderCircleIcon className="size-4 animate-spin" />
+                      ) : (
+                        <MessageSquarePlusIcon className="size-4" />
+                      )}
+                      {newSessionPending ? t('replacing') : t('replaceSession')}
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel>{t('tools')}</DropdownMenuLabel>
+                    {renderTaskMenu({
+                      source,
+                      cwd: workSession.cwd,
+                      pluginState: taskCenterPluginState
+                    })}
+                    <DropdownMenuItem
+                      aria-label={t('toolsAndContext', { defaultValue: '工具与上下文' })}
+                      disabled={!chatReady || hasNativeQuestion}
+                      onClick={() => setModelContextSourceKey(currentSourceKey)}
+                    >
+                      <FileTextIcon className="size-4" />
+                      {t('toolsAndContext', { defaultValue: '工具与上下文' })}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      aria-label={t('reloadPi')}
+                      disabled={
+                        !inputState.loaded ||
+                        inputState.loading ||
+                        !chatReady ||
+                        workSessionRunning ||
+                        actionPending ||
+                        reloadPending
+                      }
+                      title={t('reloadPiTip')}
+                      onClick={() => void reloadPi(false)}
+                    >
+                      {reloadPending ? (
+                        <LoaderCircleIcon className="size-4 animate-spin" />
+                      ) : (
+                        <RefreshCwIcon className="size-4" />
+                      )}
+                      {reloadPending ? t('reloadingPi') : t('reloadPi')}
+                    </DropdownMenuItem>
+                    {basicPresentation && !basicChat ? (
                       <DropdownMenuItem
-                        aria-label={t('switchBranch')}
-                        disabled={!chatReady || !inputState.loaded || inputState.loading}
-                        onClick={() => onOpenBranchPicker(workSession.workId)}
-                      >
-                        <GitBranchIcon className="size-4" />
-                        {t('sessionBranch')}
-                        <span className="ml-auto text-xs text-muted-foreground">
-                          {t('escapeTwice')}
-                        </span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        aria-label={t('clone')}
-                        disabled={!chatReady || cloneDisabled || clonePending}
-                        title={
-                          workSession.messageCounts.total === 0 ? t('cloneEmpty') : t('cloneTip')
+                        disabled={!chatReady || actionPending || reloadPending}
+                        onClick={() =>
+                          void runAction(() => chatRuntime.setPresentation(source, 'normal'))
                         }
-                        onClick={onCloneWorkSession}
-                      >
-                        {clonePending ? (
-                          <LoaderCircleIcon className="size-4 animate-spin" />
-                        ) : (
-                          <CopyPlusIcon className="size-4" />
-                        )}
-                        {clonePending ? t('cloning') : t('clone')}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        aria-label={t('replaceSession')}
-                        aria-busy={newSessionPending}
-                        disabled={!chatReady || newSessionDisabled || newSessionPending}
-                        onClick={onNewSession}
-                      >
-                        {newSessionPending ? (
-                          <LoaderCircleIcon className="size-4 animate-spin" />
-                        ) : (
-                          <MessageSquarePlusIcon className="size-4" />
-                        )}
-                        {newSessionPending ? t('replacing') : t('replaceSession')}
-                      </DropdownMenuItem>
-                    </DropdownMenuGroup>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuGroup>
-                      <DropdownMenuLabel>{t('tools')}</DropdownMenuLabel>
-                      {renderTaskMenu({
-                        source,
-                        cwd: workSession.cwd,
-                        pluginState: taskCenterPluginState
-                      })}
-                      <DropdownMenuItem
-                        aria-label={t('toolsAndContext', { defaultValue: '工具与上下文' })}
-                        disabled={!chatReady || hasNativeQuestion}
-                        onClick={() => setModelContextSourceKey(currentSourceKey)}
                       >
                         <FileTextIcon className="size-4" />
-                        {t('toolsAndContext', { defaultValue: '工具与上下文' })}
+                        {t('restorePluginPresentation')}
                       </DropdownMenuItem>
-                      <DropdownMenuItem
-                        aria-label={t('reloadPi')}
-                        disabled={
-                          !inputState.loaded ||
-                          inputState.loading ||
-                          !chatReady ||
-                          workSessionRunning ||
-                          actionPending ||
-                          reloadPending
-                        }
-                        title={t('reloadPiTip')}
-                        onClick={() => void reloadPi(false)}
-                      >
-                        {reloadPending ? (
-                          <LoaderCircleIcon className="size-4 animate-spin" />
-                        ) : (
-                          <RefreshCwIcon className="size-4" />
-                        )}
-                        {reloadPending ? t('reloadingPi') : t('reloadPi')}
-                      </DropdownMenuItem>
-                      {basicPresentation && !basicChat ? (
-                        <DropdownMenuItem
-                          disabled={!chatReady || actionPending || reloadPending}
-                          onClick={() =>
-                            void runAction(() => chatRuntime.setPresentation(source, 'normal'))
-                          }
-                        >
-                          <FileTextIcon className="size-4" />
-                          {t('restorePluginPresentation')}
-                        </DropdownMenuItem>
-                      ) : null}
-                    </DropdownMenuGroup>
-                    {pluginPanels.length > 0 ? (
-                      <>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuGroup>
-                          <DropdownMenuLabel>{t('plugins')}</DropdownMenuLabel>
-                          {pluginPanels.map((panel) => (
-                            <DropdownMenuItem
-                              key={`${panel.pluginName}:${panel.descriptor.contributionName}`}
-                              onClick={() =>
-                                setActivePluginPanel({
-                                  pluginName: panel.pluginName,
-                                  contributionName: panel.descriptor.contributionName,
-                                  sourceKey: currentSourceKey
-                                })
-                              }
-                            >
-                              <L4PluginIcon icon={panel.descriptor.icon} className="size-4" />
-                              <span className="truncate">{panel.descriptor.label}</span>
-                            </DropdownMenuItem>
-                          ))}
-                        </DropdownMenuGroup>
-                      </>
                     ) : null}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                  </DropdownMenuGroup>
+                  {pluginPanels.length > 0 ? (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuGroup>
+                        <DropdownMenuLabel>{t('plugins')}</DropdownMenuLabel>
+                        {pluginPanels.map((panel) => (
+                          <DropdownMenuItem
+                            key={`${panel.pluginName}:${panel.descriptor.contributionName}`}
+                            onClick={() =>
+                              setActivePluginPanel({
+                                pluginName: panel.pluginName,
+                                contributionName: panel.descriptor.contributionName,
+                                sourceKey: currentSourceKey
+                              })
+                            }
+                          >
+                            <L4PluginIcon icon={panel.descriptor.icon} className="size-4" />
+                            <span className="truncate">{panel.descriptor.label}</span>
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuGroup>
+                    </>
+                  ) : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
 
-                <PromptInputButton
-                  tooltip={t('addImage')}
-                  aria-label={t('addImage')}
-                  disabled={inputState.images.length >= 10}
-                  aria-disabled={idleSending || inputState.images.length >= 10}
-                  onClick={() => {
-                    if (!idleSending) fileInputRef.current?.click()
-                  }}
-                >
-                  <PaperclipIcon className="size-4" />
-                </PromptInputButton>
+              <PromptInputButton
+                tooltip={t('addImage')}
+                aria-label={t('addImage')}
+                disabled={inputState.images.length >= 10}
+                aria-disabled={idleSending || inputState.images.length >= 10}
+                onClick={() => {
+                  if (!idleSending) fileInputRef.current?.click()
+                }}
+              >
+                <PaperclipIcon className="size-4" />
+              </PromptInputButton>
 
-                {contextUsage && currentModelOption?.contextWindow !== null ? (
-                  <L2WorkbenchContextUsage
-                    sessionId={workSession.sessionId}
-                    cwd={workSession.cwd}
-                    tokens={contextUsage.tokens}
-                    contextWindow={contextUsage.contextWindow}
-                    contextIgnorePlugin={chatRuntimeState.plugins['context-ignore']}
-                    ignoreDisabled={!chatReady || mainRunning || actionPending}
-                    ignorePending={contextIgnorePending}
-                    compactDisabled={!chatReady || mainRunning || actionPending}
-                    compactPending={contextCompactPending}
-                    onIgnoreContext={ignoreContext}
-                    onCompactContext={compactContext}
-                  />
-                ) : currentModelOption?.contextWindow === null ? (
-                  <span className="px-1 text-xs text-muted-foreground">
-                    {t('modelContextUnknown', { defaultValue: '上下文未知' })}
-                  </span>
-                ) : null}
-              </PromptInputTools>
-
-              <PromptInputTools data-composer-tools="metadata" className={styles.metadataTools}>
-                <L2GitBranchButton
-                  workSession={workSession}
-                  runtime={gitRuntime}
-                  active={active}
-                  chatReady={chatReady}
-                  onOpen={onOpenGitBranchPicker}
+              {contextUsage && currentModelOption?.contextWindow !== null ? (
+                <L2WorkbenchContextUsage
+                  sessionId={workSession.sessionId}
+                  cwd={workSession.cwd}
+                  tokens={contextUsage.tokens}
+                  contextWindow={contextUsage.contextWindow}
+                  contextIgnorePlugin={chatRuntimeState.plugins['context-ignore']}
+                  ignoreDisabled={!chatReady || mainRunning || actionPending}
+                  ignorePending={contextIgnorePending}
+                  compactDisabled={!chatReady || mainRunning || actionPending}
+                  compactPending={contextCompactPending}
+                  onIgnoreContext={ignoreContext}
+                  onCompactContext={compactContext}
                 />
-
-                <L2WorkbenchCapabilityModePicker
-                  modes={capabilityModes}
-                  value={chatRuntimeState.capabilityMode}
-                  disabled={!chatReady}
-                  onChange={changeCapabilityMode}
-                />
-
-                <L2WorkbenchModelPicker
-                  key={currentSourceKey}
-                  source={source}
-                  runtime={inputRuntime}
-                  catalog={inputState.models}
-                  current={currentModel}
-                  label={modelLabel}
-                  title={modelTooltip}
-                  disabled={!chatReady || workSessionRunning || idleSending || actionPending}
-                  triggerClassName={styles.modelTrigger}
-                  detailsClassName={styles.modelTriggerDetails}
-                  onOpenSettings={onOpenSettings}
-                />
-              </PromptInputTools>
-
-              {mainRunning && idleSending ? (
-                <span
-                  ref={statusRef}
-                  className="min-w-0 truncate px-2 text-xs text-muted-foreground"
-                >
-                  {t('preparingContext')}
+              ) : currentModelOption?.contextWindow === null ? (
+                <span className="px-1 text-xs text-muted-foreground">
+                  {t('modelContextUnknown', { defaultValue: '上下文未知' })}
                 </span>
               ) : null}
+            </PromptInputTools>
 
-              <div ref={submitToolsRef} className={styles.submitTools}>
-                <L2WorkbenchQueuePreview
-                  queues={queues}
-                  disabled={!chatReady || actionPending}
-                  onRestore={() =>
-                    void runAction(() => inputRuntime.restoreQueue(source), t('queuesRestored'))
-                  }
-                />
+            <PromptInputTools data-composer-tools="metadata" className={styles.metadataTools}>
+              <L2GitBranchButton
+                workSession={workSession}
+                runtime={gitRuntime}
+                active={active}
+                chatReady={chatReady}
+                onOpen={onOpenGitBranchPicker}
+              />
 
-                {showRunningActions ? (
-                  <>
-                    <PromptInputButton
-                      tooltip={t('steerNow')}
-                      aria-label={t('steerNow')}
-                      variant="secondary"
-                      disabled={!canSend || sendActionPending}
-                      onClick={() => void send('auto')}
-                    >
-                      <ArrowRightIcon className="size-3.5" />
-                    </PromptInputButton>
-                    <PromptInputButton
-                      tooltip={t('sendFollowUp')}
-                      aria-label={t('sendFollowUp')}
-                      variant="outline"
-                      disabled={!canSend || sendActionPending}
-                      onClick={() => void send('follow_up')}
-                    >
-                      <ArrowUpToLineIcon className="size-3.5" />
-                    </PromptInputButton>
-                    <PromptInputButton
-                      tooltip={t('stopResponse')}
-                      aria-label={t('stopResponse')}
-                      variant="destructive"
-                      disabled={!chatReady || actionPending}
-                      onClick={() => void runAction(() => inputRuntime.interrupt(source))}
-                    >
-                      <SquareIcon className="size-3.5 fill-current" />
-                    </PromptInputButton>
-                  </>
-                ) : (
-                  <Button
-                    type={idleSending ? 'button' : 'submit'}
-                    size="icon"
-                    disabled={!idleSending && (!canSend || sendActionPending)}
-                    aria-disabled={idleSending || !canSend || sendActionPending}
-                    aria-busy={idleSending}
-                    aria-label={
-                      idleSending ? t('sending') : chatReady ? t('send') : t('synchronizing')
-                    }
+              <L2WorkbenchCapabilityModePicker
+                modes={capabilityModes}
+                value={chatRuntimeState.capabilityMode}
+                disabled={!chatReady}
+                onChange={changeCapabilityMode}
+              />
+
+              <L2WorkbenchModelPicker
+                key={currentSourceKey}
+                source={source}
+                runtime={inputRuntime}
+                catalog={inputState.models}
+                current={currentModel}
+                label={modelLabel}
+                title={modelTooltip}
+                disabled={!chatReady || workSessionRunning || idleSending || actionPending}
+                triggerClassName={styles.modelTrigger}
+                detailsClassName={styles.modelTriggerDetails}
+                onOpenSettings={onOpenSettings}
+              />
+            </PromptInputTools>
+
+            {mainRunning && idleSending ? (
+              <span ref={statusRef} className="min-w-0 truncate px-2 text-xs text-muted-foreground">
+                {t('preparingContext')}
+              </span>
+            ) : null}
+
+            <div ref={submitToolsRef} className={styles.submitTools}>
+              <L2WorkbenchQueuePreview
+                queues={queues}
+                disabled={!chatReady || actionPending}
+                onRestore={() =>
+                  void runAction(() => inputRuntime.restoreQueue(source), t('queuesRestored'))
+                }
+              />
+
+              {showRunningActions ? (
+                <>
+                  <PromptInputButton
+                    tooltip={t('steerNow')}
+                    aria-label={t('steerNow')}
+                    variant="secondary"
+                    disabled={!canSend || sendActionPending}
+                    onClick={() => void send('auto')}
                   >
-                    {idleSending ? (
-                      <SendIcon
-                        className={cn('size-4', !powerSaving && 'pi-desk-chat-send-icon')}
-                      />
-                    ) : !chatReady ? (
-                      <LoaderCircleIcon className="size-4 animate-spin" />
-                    ) : (
-                      <CornerDownLeftIcon />
-                    )}
-                  </Button>
-                )}
-              </div>
-            </PromptInputFooter>
-          </InputGroup>
-          <L3WorkSessionStatusBorder state={visualState} powerSaving={powerSaving} />
-        </div>
+                    <ArrowRightIcon className="size-3.5" />
+                  </PromptInputButton>
+                  <PromptInputButton
+                    tooltip={t('sendFollowUp')}
+                    aria-label={t('sendFollowUp')}
+                    variant="outline"
+                    disabled={!canSend || sendActionPending}
+                    onClick={() => void send('follow_up')}
+                  >
+                    <ArrowUpToLineIcon className="size-3.5" />
+                  </PromptInputButton>
+                  <PromptInputButton
+                    tooltip={t('stopResponse')}
+                    aria-label={t('stopResponse')}
+                    variant="destructive"
+                    disabled={!chatReady || actionPending}
+                    onClick={() => void runAction(() => inputRuntime.interrupt(source))}
+                  >
+                    <SquareIcon className="size-3.5 fill-current" />
+                  </PromptInputButton>
+                </>
+              ) : (
+                <Button
+                  type={idleSending ? 'button' : 'submit'}
+                  size="icon"
+                  disabled={!idleSending && (!canSend || sendActionPending)}
+                  aria-disabled={idleSending || !canSend || sendActionPending}
+                  aria-busy={idleSending}
+                  aria-label={
+                    idleSending ? t('sending') : chatReady ? t('send') : t('synchronizing')
+                  }
+                >
+                  {idleSending ? (
+                    <SendIcon className="size-4" />
+                  ) : !chatReady ? (
+                    <LoaderCircleIcon className="size-4 animate-spin" />
+                  ) : (
+                    <CornerDownLeftIcon />
+                  )}
+                </Button>
+              )}
+            </div>
+          </PromptInputFooter>
+        </InputGroup>
       </form>
       <L2NativeUiExtras snapshot={nativeUi.state.snapshot} placement="belowEditor" />
 

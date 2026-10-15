@@ -205,6 +205,21 @@ function DeliverablesView({
   }, [host, signal, target.source])
 
   useEffect(() => {
+    target.setHeaderActions?.([
+      {
+        label: '刷新交付物',
+        icon: {
+          type: 'svg',
+          content:
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11a9 9 0 0 1 15.4-6.4L21 7M21 3v4h-4M21 13a9 9 0 0 1-15.4 6.4L3 17M7 17H3v4"/></svg>'
+        },
+        busy: loading,
+        onSelect: loadSnapshot
+      }
+    ])
+  }, [loadSnapshot, loading, target])
+
+  useEffect(() => {
     let active = true
     const unsubscribePush = subscribeDeliverablePush((event) => {
       if (!active || !sameSource(event.source, target.source)) return

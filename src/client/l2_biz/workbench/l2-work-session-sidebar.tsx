@@ -25,6 +25,7 @@ import {
   MessageSquareTextIcon,
   PinIcon,
   PinOffIcon,
+  PencilIcon,
   PlusIcon,
   RefreshCwIcon,
   Repeat2Icon,
@@ -43,7 +44,10 @@ import {
   useState,
   type ReactNode
 } from 'react'
-import type { BrowserContributionIcon } from '@jetcrab/pi-desk-sdk/browser'
+import type {
+  BrowserContributionIcon,
+  BrowserSessionSidebarHeaderAction
+} from '@jetcrab/pi-desk-sdk/browser'
 import type { L2WorkSessionListItem } from '@common/l2_biz/work-session/l2-work-session-contract'
 import type { L3AppNotification } from '@common/l3_modules/app-runtime/l3-app-runtime-contract'
 import { copyL4BrowserText } from '@client/l4_foundation/lib/l4-browser-clipboard'
@@ -108,6 +112,7 @@ interface L2WorkSessionSidebarProps {
   mobile: boolean
   fileBrowser: ReactNode
   pluginTabContent: ReactNode
+  pluginHeaderActions?: readonly BrowserSessionSidebarHeaderAction[]
   pluginSessionTabs: readonly L2SidebarPluginSessionTab[]
   fileRefreshLoading: boolean
   canBrowseFiles: boolean
@@ -134,6 +139,7 @@ interface L2WorkSessionSidebarProps {
   onSelect: (workId: string) => void
   onTogglePin: (workId: string) => void
   onDelete: (workId: string) => void
+  onRename: (workSession: L2WorkSessionListItem) => void
   onArrangementChange: (arrangement: L2WorkSessionArrangement, movedWorkId: string) => void
 }
 
@@ -209,19 +215,22 @@ function SidebarHeaderGroup({
   className?: string
 }): React.JSX.Element {
   const { t } = useTranslation('workbench')
+  const overflow = appearance === 'action' && items.length > 3 ? items.slice(2) : []
+  const visibleItems = overflow.length > 0 ? items.slice(0, 2) : items
   return (
     <div
       className={cn('flex min-w-0 items-center gap-0', className)}
       role="group"
       aria-label={label}
     >
-      {items.map((item) => (
+      {visibleItems.map((item) => (
         <button
           key={item.key}
           data-testid={item.testId}
           type="button"
           disabled={item.disabled}
           aria-pressed={item.pressed}
+          aria-busy={item.busy || undefined}
           aria-label={
             appearance === 'mode' ? t('showSidebarMode', { name: item.label }) : item.label
           }
@@ -243,6 +252,30 @@ function SidebarHeaderGroup({
           </span>
         </button>
       ))}
+      {overflow.length > 0 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                type="button"
+                aria-label={label}
+                title={label}
+                className={SIDEBAR_HEADER_ACTION_BUTTON_CLASS}
+              >
+                <EllipsisIcon className="size-4" />
+              </button>
+            }
+          />
+          <DropdownMenuContent align="end">
+            {overflow.map((item) => (
+              <DropdownMenuItem key={item.key} disabled={item.disabled} onClick={item.onSelect}>
+                <span className="shrink-0 [&_svg]:size-4">{item.icon}</span>
+                {item.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
     </div>
   )
 }
@@ -309,7 +342,8 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
   now,
   onSelect,
   onTogglePin,
-  onDelete
+  onDelete,
+  onRename
 }: {
   workSession: L2WorkSessionListItem
   mobile: boolean
@@ -322,7 +356,10 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
   onSelect: (workId: string) => void
   onTogglePin: (workId: string) => void
   onDelete: (workId: string) => void
+  onRename: (workSession: L2WorkSessionListItem) => void
 }): React.JSX.Element {
+  const suppressTouchClick = useRef(false)
+  const lastPointer = useRef('')
   const actionsDisabled = disabled || ordering
   const {
     attributes,
@@ -518,9 +555,57 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
   )
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger render={row} />
+    <ContextMenu
+      onOpenChange={(open, details) => {
+        if (open && (lastPointer.current === 'touch' || details.event.type.startsWith('touch'))) {
+          suppressTouchClick.current = true
+        }
+      }}
+    >
+      <ContextMenuTrigger
+        render={row}
+        onPointerDown={(event) => {
+          lastPointer.current = event.pointerType
+          suppressTouchClick.current = false
+        }}
+        onTouchEndCapture={(event) => {
+          // 长按打开菜单后，松手不能派生为选择会话的点击。
+          if (suppressTouchClick.current && event.cancelable) event.preventDefault()
+        }}
+        onClickCapture={(event) => {
+          if (!suppressTouchClick.current) return
+          event.preventDefault()
+          event.stopPropagation()
+          suppressTouchClick.current = false
+        }}
+        onKeyDownCapture={(event) => {
+          if (event.target !== event.currentTarget || event.nativeEvent.isComposing) return
+          lastPointer.current = 'keyboard'
+          suppressTouchClick.current = false
+          if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return
+          event.preventDefault()
+          event.stopPropagation()
+          const rect = event.currentTarget.getBoundingClientRect()
+          event.currentTarget.dispatchEvent(
+            new MouseEvent('contextmenu', {
+              bubbles: true,
+              cancelable: true,
+              button: 2,
+              clientX: rect.left + rect.width / 2,
+              clientY: rect.top + rect.height / 2
+            })
+          )
+        }}
+      />
       <ContextMenuContent>
+        <ContextMenuItem
+          data-testid={`work-session-rename-${workSession.workId}`}
+          disabled={actionsDisabled || deleting}
+          onClick={() => onRename(workSession)}
+        >
+          <PencilIcon />
+          {t('renameSessionTitle')}
+        </ContextMenuItem>
         <ContextMenuItem
           data-testid={`work-session-copy-project-path-${workSession.workId}`}
           onClick={copyProjectPath}
@@ -562,6 +647,7 @@ function L2WorkSessionSidebarComponent({
   mobile,
   fileBrowser,
   pluginTabContent,
+  pluginHeaderActions = [],
   pluginSessionTabs,
   fileRefreshLoading,
   canBrowseFiles,
@@ -588,6 +674,7 @@ function L2WorkSessionSidebarComponent({
   onSelect,
   onTogglePin,
   onDelete,
+  onRename,
   onArrangementChange
 }: L2WorkSessionSidebarProps): React.JSX.Element {
   const { t } = useTranslation('workbench')
@@ -696,7 +783,20 @@ function L2WorkSessionSidebarComponent({
               onSelect: onRefreshFiles
             }
           ]
-        : []
+        : pluginHeaderActions.map((action, index) => ({
+            key: String(index),
+            label: action.label,
+            icon: action.busy ? (
+              <LoaderCircleIcon className="animate-spin" />
+            ) : (
+              <L4PluginIcon icon={action.icon} />
+            ),
+            disabled: action.disabled || action.busy,
+            busy: action.busy,
+            onSelect: () => {
+              void action.onSelect()
+            }
+          }))
 
   useLayoutEffect(() => {
     const container = shortcutContainerRef.current
@@ -787,6 +887,7 @@ function L2WorkSessionSidebarComponent({
         onSelect={onSelect}
         onTogglePin={onTogglePin}
         onDelete={onDelete}
+        onRename={onRename}
       />
     )
   })

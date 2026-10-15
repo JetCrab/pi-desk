@@ -77,7 +77,7 @@ plugin.addPreviewDirectory(directory, { default: true })
 
 `directory` 为服务端绝对目录；省略第二个参数只登记，`default: true` 同时设为默认预览目录，后登记的默认生效。原 CWD 始终可选；目录规范化后去重，最多登记 32 个。重复快照不会覆盖用户的手动选择。登记只在当前会话运行态内，插件在 `session_start`、`session_tree` 从自身数据恢复后重新登记；不要在普通查询时重复请求默认选择。
 
-调用不等待回执；非法路径或超限由宿主拒绝并记日志，实际目录内容按需读取。旧宿主或独立 Pi 不处理该登记；兼容旧 SDK 时使用 `plugin.addPreviewDirectory?.(...)`。`files.preview/reveal` 支持会话 CWD 下规范相对路径或服务端绝对文件路径（包括项目外文件）；`preview` 的 `imagePaths` 使用相同路径规则。宿主仍校验当前 Source，目录浏览边界不变。依赖项目外文件的插件需要同步更新宿主，旧宿主只接受项目内相对路径。`readImage` 仍只接受会话 CWD 下规范相对路径。
+调用不等待回执；非法路径或超限由宿主拒绝并记日志，实际目录内容按需读取。旧宿主或独立 Pi 不处理该登记；兼容旧 SDK 时使用 `plugin.addPreviewDirectory?.(...)`。`files.preview/reveal` 支持会话 CWD 下规范相对路径或服务端绝对文件路径（包括项目外文件）；`preview` 的 `imagePaths` 使用相同路径规则。宿主仍校验当前 Source，目录浏览边界不变。依赖项目外文件的插件需要同步更新宿主，旧宿主只接受项目内相对路径。`readImage` 仍只接受会话 CWD 下规范相对路径。`.md`、`.markdown` 在宿主文件查看器中默认以 Markdown 排版预览，可点击“源码”切换；会话文件视图与 `mode: 'standalone'` 独立查看器均支持，插件无需增加参数或自行渲染。
 
 ## Browser Entry 与懒界面
 
@@ -104,6 +104,26 @@ react-dom/client
 Application 使用 `chrome: 'host'` 让宿主负责 Dialog、标题、关闭、焦点、Escape、Loading/Error 和视口约束；内容自然决定尺寸，不替换工作台。React mount 使用 `createRoot`、`PluginHostProvider`、`PluginErrorBoundary` 和公共控件；disposer 调用 `root.unmount()`，释放自建 Listener、Timer、Observer、Object URL。宿主先 abort `signal`，迟到结果必须忽略。
 
 界面继承宿主明暗主题与字号，布局使用 `rem`、合理内边距和自身滚动；窄屏与触控可用，不以裁切或只靠 hover 隐藏必要操作。按钮、表单、加载/错误/重试优先复用 `/react/base`；需要 Markdown 时才加载 `/react/markdown`。
+
+### 侧栏顶部操作
+
+`session-sidebar-tab` 的 Lazy `mount({ target, host })` 内可为当前 Tab 设置顶部右侧按钮：
+
+```ts
+target.setHeaderActions?.([
+  {
+    label: '预览项目',
+    icon: { type: 'builtin', name: 'folder' },
+    onSelect: () => host.projects.preview(target.cwd)
+  }
+])
+```
+
+每次调用整体替换，`[]` 清空。按钮使用 `label` 作为可访问名称和提示，`icon` 复用 Contribution 图标；可选 `disabled` 禁用，`busy` 显示忙碌并禁用。状态变化时重新设置完整列表，不修改已提交对象。宿主保持列表顺序，超过三个操作时保留前两个，其余收进菜单。
+
+`onSelect` 可返回 `Promise<void>`；同一按钮回调尚未完成时不重复执行，异常由宿主记录并在当前挂载仍有效时提示。插件负责业务加载状态和结果展示；请求已经产生的副作用不因 Tab 关闭而回滚。
+
+按钮只属于当前挂载，切换 Tab、关闭侧栏／移动抽屉、Source 或 CWD 变化、挂载失败及插件重载时自动清空；旧按钮、迟到更新和旧 disposer 均不能操作新挂载。旧宿主可能没有此方法，使用可选调用，不自行访问宿主 DOM。`PluginPanelHeader.actions` 仍只作用于插件内容区标题，不是此顶栏入口。
 
 ## 通信、通知与后台
 

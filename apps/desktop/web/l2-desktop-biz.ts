@@ -21,6 +21,8 @@ export type DesktopAction =
   | 'stop-tunnel'
   | 'check-environment'
   | 'cancel-environment'
+  | 'check-pi-update'
+  | 'update-pi'
 
 const commands: Record<DesktopAction, string> = {
   open: 'open_target_command',
@@ -33,7 +35,9 @@ const commands: Record<DesktopAction, string> = {
   'start-tunnel': 'start_tunnel_command',
   'stop-tunnel': 'stop_tunnel_command',
   'check-environment': 'check_environment_command',
-  'cancel-environment': 'cancel_environment_command'
+  'cancel-environment': 'cancel_environment_command',
+  'check-pi-update': 'check_pi_update_command',
+  'update-pi': 'update_pi_command'
 }
 
 export async function runDesktopAction(action: DesktopAction, url?: string): Promise<void> {

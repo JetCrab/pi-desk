@@ -99,7 +99,7 @@ export function L2AuthSettings(): React.JSX.Element {
                   className="[&::-ms-reveal]:hidden"
                   autoComplete="new-password"
                   minLength={12}
-                  maxLength={256}
+                  maxLength={64}
                   required
                   disabled={busy}
                   value={state.password}
