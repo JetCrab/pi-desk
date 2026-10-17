@@ -28,7 +28,7 @@ test('package 同时声明原生 Extension 与 Pi Desk Browser Adapter', async (
     registry: 'https://registry.npmjs.org',
     access: 'public'
   })
-  assert.match(manifest.version ?? '', /^\d+\.\d+\.\d+$/u)
+  assert.match(manifest.version ?? '', /^\d+\.\d+\.\d+(?:-dev)?$/u)
   assert.deepEqual(manifest.pi?.extensions, ['./dist/index.js'])
   assert.deepEqual(manifest.pi?.skills, [
     './dist/skills/workspace-config-authoring',

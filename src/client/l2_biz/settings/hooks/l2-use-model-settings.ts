@@ -1,16 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { BrowserBeforeLeaveHandler } from '@jetcrab/pi-desk-sdk/browser'
 import type {
   L2AccountModelSelection,
   L2ModelPreset,
   L2ModelProviderConfig,
+  L2ModelReplacement,
   L2ModelSettingsGetResponse,
   L2ModelSettingsReplaceRequest
 } from '@common/l2_biz/model-settings/l2-model-settings-contract'
 import { useL4AppSocket } from '@client/l4_foundation/realtime/app-socket/l4-app-socket'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
 import { useL4ConfirmDialog } from '@client/l4_foundation/ui/l4-confirm-dialog'
+import { L2ModelReplacementPreview } from '../views/l2-model-replacement-preview'
 import { createL2ModelSettingsBiz, type L2ModelSettingsBiz } from '../l2-model-settings-biz'
 import {
   readL2ModelSettingsTab,
@@ -53,7 +55,7 @@ interface ModelSettingsState {
   setServiceDirty: (dirty: boolean) => void
   dialog: React.JSX.Element | null
   setProjectDefaultDirty: (dirty: boolean) => void
-  changeProviders: (providers: L2ModelProviderConfig[]) => void
+  changeProviders: (providers: L2ModelProviderConfig[], replacements: L2ModelReplacement[]) => void
   changePresets: (presets: L2ModelPreset[]) => void
   selectTab: (tab: ModelSettingsTab) => void
   retry: () => void
@@ -95,6 +97,7 @@ export function useL2ModelSettings(
   const [nativeText, setNativeText] = useState('')
   const [nativeError, setNativeError] = useState<string | null>(null)
   const savingRef = useRef(false)
+  const modelReplacements = useRef<L2ModelReplacement[]>([])
   const nativeBaseline = settings ? JSON.stringify(settings.nativeConfig, null, 2) : ''
   const nativeDirty = nativeOpen && nativeText !== nativeBaseline
   const formDirty = providersDirty || presetsDirty || accountModelsDirty || inputState.dirty
@@ -127,6 +130,7 @@ export function useL2ModelSettings(
   }, [dirty])
 
   const applySettings = useCallback((result: L2ModelSettingsGetResponse): void => {
+    modelReplacements.current = []
     setSettings(result)
     setProviders(structuredClone(result.providers))
     setPresets(structuredClone(result.presets))
@@ -218,7 +222,35 @@ export function useL2ModelSettings(
         return !originalModels.has(key) || currentModels.has(key)
       })
       const removedPresetCount = presets.length - nextPresets.length
-      if (
+      const input: L2ModelSettingsReplaceRequest = {
+        ...(providersDirty || inputState.dirty ? { providers } : {}),
+        ...(accountModelsDirty ? { accountModels } : {}),
+        ...(presetsDirty || removedPresetCount > 0 ? { presets: nextPresets } : {}),
+        ...(modelReplacements.current.length
+          ? { modelReplacements: modelReplacements.current }
+          : {})
+      }
+      const { projectDefaults } = modelReplacements.current.length
+        ? await biz.previewSettings(input)
+        : { projectDefaults: [] }
+      if (projectDefaults.length > 0) {
+        const description = [
+          t('replaceProjectDefaultsDescription'),
+          ...(removedPresetCount > 0
+            ? [t('removeInvalidPresets', { count: removedPresetCount })]
+            : [])
+        ].join(' ')
+        if (
+          !(await confirm({
+            title: t('replaceProjectDefaultsTitle'),
+            description,
+            content: createElement(L2ModelReplacementPreview, { projectDefaults }),
+            confirmLabel: t('confirmAndSaveModels'),
+            confirmVariant: 'default'
+          }))
+        )
+          return
+      } else if (
         removedPresetCount > 0 &&
         !(await confirm({
           title: t('removeInvalidPresetsTitle'),
@@ -229,11 +261,6 @@ export function useL2ModelSettings(
         return
       }
 
-      const input: L2ModelSettingsReplaceRequest = {
-        ...(providersDirty || inputState.dirty ? { providers } : {}),
-        ...(accountModelsDirty ? { accountModels } : {}),
-        ...(presetsDirty || removedPresetCount > 0 ? { presets: nextPresets } : {})
-      }
       await biz.replaceSettings(input)
       applySettings(await biz.getSettings())
       setProvidersDirty(false)
@@ -375,7 +402,8 @@ export function useL2ModelSettings(
     setServiceDirty,
     dialog,
     setProjectDefaultDirty,
-    changeProviders: (nextProviders) => {
+    changeProviders: (nextProviders, replacements) => {
+      modelReplacements.current = replacements
       setProviders(nextProviders)
       setProvidersDirty(JSON.stringify(nextProviders) !== JSON.stringify(settings?.providers))
     },

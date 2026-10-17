@@ -4,6 +4,7 @@ import {
   L2ModelCatalogListRequestSchema,
   L2ModelCatalogListResponseSchema,
   L2ModelSettingsGetResponseSchema,
+  L2ModelSettingsPreviewResponseSchema,
   L2ModelSettingsReplaceRequestSchema,
   L2ModelSettingsReplaceResponseSchema,
   L2ProjectModelDefaultGetResponseSchema,
@@ -12,6 +13,7 @@ import {
   type L2ModelCatalogListRequest,
   type L2ModelCatalogListResponse,
   type L2ModelSettingsGetResponse,
+  type L2ModelSettingsPreviewResponse,
   type L2ModelSettingsReplaceRequest,
   type L2ProjectModelDefaultGetResponse,
   type L2ProjectModelDefaultReplaceRequest
@@ -25,11 +27,27 @@ import { saveL2ProjectModelDefaultCache } from './l2-model-settings-cache'
 export interface L2ModelSettingsBiz {
   parseNativeConfig: (text: string) => L2ModelNativeConfig
   getSettings: () => Promise<L2ModelSettingsGetResponse>
+  previewSettings: (input: L2ModelSettingsReplaceRequest) => Promise<L2ModelSettingsPreviewResponse>
   replaceSettings: (input: L2ModelSettingsReplaceRequest) => Promise<void>
   listCatalog: (input: L2ModelCatalogListRequest) => Promise<L2ModelCatalogListResponse>
   listDirectories: () => Promise<z.infer<typeof L2PiDirectoryListResponseSchema>>
   getProjectDefault: (cwd: string) => Promise<L2ProjectModelDefaultGetResponse>
   replaceProjectDefault: (input: L2ProjectModelDefaultReplaceRequest) => Promise<void>
+}
+
+function parseSettingsInput(input: L2ModelSettingsReplaceRequest): L2ModelSettingsReplaceRequest {
+  const parsed = L2ModelSettingsReplaceRequestSchema.safeParse(input)
+  if (!parsed.success) {
+    const field = parsed.error.issues[0]?.path.at(-1)
+    if (field === 'modelId') {
+      throw new Error('请填写模型 ID 后再保存配置。')
+    }
+    if (field === 'provider') {
+      throw new Error('请填写 Provider ID 后再保存配置。')
+    }
+    throw new Error('模型配置不完整或格式不正确，请检查必填字段和数值。')
+  }
+  return parsed.data
 }
 
 export function createL2ModelSettingsBiz(clientId: string): L2ModelSettingsBiz {
@@ -52,22 +70,18 @@ export function createL2ModelSettingsBiz(clientId: string): L2ModelSettingsBiz {
       }
       return settingsRequest
     },
+    previewSettings: (input) =>
+      request(
+        clientId,
+        '/api/model-settings/preview',
+        parseSettingsInput(input),
+        L2ModelSettingsPreviewResponseSchema
+      ),
     async replaceSettings(input): Promise<void> {
-      const parsed = L2ModelSettingsReplaceRequestSchema.safeParse(input)
-      if (!parsed.success) {
-        const field = parsed.error.issues[0]?.path.at(-1)
-        if (field === 'modelId') {
-          throw new Error('请填写模型 ID 后再保存配置。')
-        }
-        if (field === 'provider') {
-          throw new Error('请填写 Provider ID 后再保存配置。')
-        }
-        throw new Error('模型配置不完整或格式不正确，请检查必填字段和数值。')
-      }
       await request(
         clientId,
         '/api/model-settings/replace',
-        parsed.data,
+        parseSettingsInput(input),
         L2ModelSettingsReplaceResponseSchema
       )
     },

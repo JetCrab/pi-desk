@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type {
   L2ModelConfig,
-  L2ModelProviderConfig
+  L2ModelProviderConfig,
+  L2ModelReplacement
 } from '@common/l2_biz/model-settings/l2-model-settings-contract'
 
 export interface ModelInputState {
@@ -45,7 +46,7 @@ function emptyModel(): L2ModelConfig {
 
 export function useL2ModelProviderSettings(
   providers: L2ModelProviderConfig[],
-  onChange: (providers: L2ModelProviderConfig[]) => void,
+  onChange: (providers: L2ModelProviderConfig[], replacements: L2ModelReplacement[]) => void,
   onInputState: (state: ModelInputState) => void,
   resetVersion: number
 ): {
@@ -79,6 +80,16 @@ export function useL2ModelProviderSettings(
     )
   )
   const nextKey = useRef(0)
+  const originalModels = useRef(
+    new Map(
+      providers.flatMap((provider, providerIndex) =>
+        provider.models.map((model, modelIndex) => [
+          `${providerIndex}:${modelIndex}`,
+          { provider: provider.provider, modelId: model.modelId }
+        ])
+      )
+    )
+  )
   const [inputStates, setInputStates] = useState<Record<string, ModelInputState>>({})
   const [serviceIndex, setServiceIndex] = useState<number | null>(null)
   const [newService, setNewService] = useState(false)
@@ -91,6 +102,14 @@ export function useL2ModelProviderSettings(
   useEffect(() => {
     queueMicrotask(() => {
       const current = latestProviders.current
+      originalModels.current = new Map(
+        current.flatMap((provider, providerIndex) =>
+          provider.models.map((model, modelIndex) => [
+            `${providerIndex}:${modelIndex}`,
+            { provider: provider.provider, modelId: model.modelId }
+          ])
+        )
+      )
       setInputStates({})
       setModelKeys(
         current.map((provider, providerIndex) =>
@@ -120,8 +139,22 @@ export function useL2ModelProviderSettings(
     )
   }
 
+  function changeProviders(next: L2ModelProviderConfig[], keys = modelKeys): void {
+    const replacements: L2ModelReplacement[] = []
+    next.forEach((provider, providerIndex) => {
+      provider.models.forEach((model, modelIndex) => {
+        const from = originalModels.current.get(keys[providerIndex][modelIndex])
+        const to = { provider: provider.provider.trim(), modelId: model.modelId.trim() }
+        if (from && (from.provider !== to.provider || from.modelId !== to.modelId)) {
+          replacements.push({ from, to })
+        }
+      })
+    })
+    onChange(next, replacements)
+  }
+
   function updateModel(providerIndex: number, modelIndex: number, model: L2ModelConfig): void {
-    onChange(
+    changeProviders(
       providers.map((provider, index) =>
         index === providerIndex
           ? {
@@ -155,10 +188,12 @@ export function useL2ModelProviderSettings(
     closeService,
     applyService: (provider) => {
       if (newService) {
-        onChange([...providers, provider])
+        changeProviders([...providers, provider], [...modelKeys, []])
         setModelKeys((keys) => [...keys, []])
       } else {
-        onChange(providers.map((current, index) => (index === serviceIndex ? provider : current)))
+        changeProviders(
+          providers.map((current, index) => (index === serviceIndex ? provider : current))
+        )
       }
       closeService()
     },
@@ -166,7 +201,10 @@ export function useL2ModelProviderSettings(
       if (serviceIndex === null) return
       removeInputKeys(modelKeys[serviceIndex])
       const nextProviders = providers.filter((_, index) => index !== serviceIndex)
-      onChange(nextProviders)
+      changeProviders(
+        nextProviders,
+        modelKeys.filter((_, index) => index !== serviceIndex)
+      )
       setModelKeys((keys) => keys.filter((_, index) => index !== serviceIndex))
       setSelection((current) => {
         if (!current || current.providerIndex === serviceIndex) {
@@ -182,14 +220,15 @@ export function useL2ModelProviderSettings(
     },
     addModel: (providerIndex) => {
       const provider = providers[providerIndex]
-      onChange(
+      const key = `new-${++nextKey.current}`
+      changeProviders(
         providers.map((current, index) =>
           index === providerIndex
             ? { ...current, models: [...current.models, emptyModel()] }
             : current
-        )
+        ),
+        modelKeys.map((current, index) => (index === providerIndex ? [...current, key] : current))
       )
-      const key = `new-${++nextKey.current}`
       setModelKeys((keys) =>
         keys.map((current, index) => (index === providerIndex ? [...current, key] : current))
       )
@@ -213,7 +252,12 @@ export function useL2ModelProviderSettings(
           ? { ...provider, models: provider.models.filter((_, index) => index !== modelIndex) }
           : provider
       )
-      onChange(nextProviders)
+      changeProviders(
+        nextProviders,
+        modelKeys.map((current, index) =>
+          index === providerIndex ? current.filter((_, index) => index !== modelIndex) : current
+        )
+      )
       setModelKeys((keys) =>
         keys.map((current, index) =>
           index === providerIndex ? current.filter((_, index) => index !== modelIndex) : current

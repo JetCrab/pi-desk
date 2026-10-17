@@ -16,7 +16,8 @@ import type {
   L2ModelSettingsGetResponse,
   L2ModelOption,
   L2ModelPreset,
-  L2ModelProviderConfig
+  L2ModelProviderConfig,
+  L2ModelReplacement
 } from '@common/l2_biz/model-settings/l2-model-settings-contract'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
@@ -61,7 +62,7 @@ interface Props {
   savedProviders: L2ModelProviderConfig[]
   presets: L2ModelPreset[]
   resetVersion: number
-  onChange: (providers: L2ModelProviderConfig[]) => void
+  onChange: (providers: L2ModelProviderConfig[], replacements: L2ModelReplacement[]) => void
   onPresetsChange: (presets: L2ModelPreset[]) => void
   onInputState: (state: ModelInputState) => void
   onServiceDirtyChange: (dirty: boolean) => void

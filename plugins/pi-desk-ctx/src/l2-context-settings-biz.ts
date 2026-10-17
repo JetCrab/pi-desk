@@ -28,13 +28,22 @@ export interface ProfileDraft {
   rules: RuleDraft[]
 }
 
+interface ImageBudgetDraft {
+  enabled: boolean
+  triggerMiB: string
+  targetMiB: string
+  keepAssistantTurns: string
+  keepTextTurns: string
+}
+
 interface SettingsDraft {
   enabled: boolean
   profiles: ProfileDraft[]
+  imageBudget: ImageBudgetDraft
 }
 
 interface DraftIssue {
-  profileKey: number
+  profileKey: number | null
   field: string
   message: string
 }
@@ -70,7 +79,17 @@ function profileToDraft(profile: ContextIgnoreProfile): ProfileDraft {
 }
 
 function settingsToDraft(settings: ContextIgnoreSettings): SettingsDraft {
-  return { enabled: settings.enabled, profiles: settings.profiles.map(profileToDraft) }
+  return {
+    enabled: settings.enabled,
+    profiles: settings.profiles.map(profileToDraft),
+    imageBudget: {
+      enabled: settings.imageBudget.enabled,
+      triggerMiB: String(settings.imageBudget.triggerBytes / (1024 * 1024)),
+      targetMiB: String(settings.imageBudget.targetBytes / (1024 * 1024)),
+      keepAssistantTurns: String(settings.imageBudget.keepAssistantTurns),
+      keepTextTurns: String(settings.imageBudget.keepTextTurns)
+    }
+  }
 }
 
 function readAmount(
@@ -78,7 +97,7 @@ function readAmount(
   minimum: number,
   maximum: number,
   scale: number,
-  profileKey: number,
+  profileKey: number | null,
   field: string,
   label: string
 ): number {
@@ -100,7 +119,51 @@ function readAmount(
   return amount
 }
 
+function readImageMiB(value: string, field: string, label: string): number {
+  const bytes = Math.round(Number(value) * 1024 * 1024)
+  if (value.trim() === '' || !Number.isInteger(bytes) || bytes < 1 || bytes > 1024 ** 3) {
+    throw new InvalidDraft({
+      profileKey: null,
+      field,
+      message: `${label}需大于 0 且不超过 1,024 MiB（至少 1 字节）`
+    })
+  }
+  return bytes
+}
+
 function draftToSettings(draft: SettingsDraft): ContextIgnoreSettings {
+  const triggerBytes = readImageMiB(draft.imageBudget.triggerMiB, 'triggerMiB', '触发大小')
+  const targetBytes = readImageMiB(draft.imageBudget.targetMiB, 'targetMiB', '目标大小')
+  if (targetBytes > triggerBytes) {
+    throw new InvalidDraft({
+      profileKey: null,
+      field: 'targetMiB',
+      message: '目标大小不能超过触发大小'
+    })
+  }
+  const imageBudget = {
+    enabled: draft.imageBudget.enabled,
+    triggerBytes,
+    targetBytes,
+    keepAssistantTurns: readAmount(
+      draft.imageBudget.keepAssistantTurns,
+      1,
+      100,
+      1,
+      null,
+      'keepAssistantTurns',
+      '最近有效助手轮数'
+    ),
+    keepTextTurns: readAmount(
+      draft.imageBudget.keepTextTurns,
+      1,
+      100,
+      1,
+      null,
+      'keepTextTurns',
+      '最近带正文的助手轮数'
+    )
+  }
   const limits = new Set<number>()
   const profiles = draft.profiles.map((profile): ContextIgnoreProfile => {
     const amount = (
@@ -166,7 +229,7 @@ function draftToSettings(draft: SettingsDraft): ContextIgnoreSettings {
       })
     }
   })
-  return parseContextIgnoreSettings({ enabled: draft.enabled, profiles })
+  return parseContextIgnoreSettings({ enabled: draft.enabled, profiles, imageBudget })
 }
 
 function sortProfiles(profiles: ProfileDraft[]): ProfileDraft[] {
@@ -182,7 +245,8 @@ function sortProfiles(profiles: ProfileDraft[]): ProfileDraft[] {
 function comparableDraft(draft: SettingsDraft): string {
   return JSON.stringify({
     enabled: draft.enabled,
-    profiles: draft.profiles.map(({ key: _key, ...profile }) => profile)
+    profiles: draft.profiles.map(({ key: _key, ...profile }) => profile),
+    imageBudget: draft.imageBudget
   })
 }
 
@@ -198,6 +262,7 @@ export interface ContextSettingsController {
   advancedOpen: boolean
   leaveOpen: boolean
   setEnabled(enabled: boolean): void
+  updateImageBudget(update: Partial<ImageBudgetDraft>): void
   selectProfile(key: number): void
   updateProfile(update: Partial<ProfileDraft>): void
   updateRule(index: number, update: Partial<RuleDraft>): void
@@ -324,8 +389,10 @@ export function useContextSettings(
     if (saving || !dirty) return
     if (!validation.settings) {
       if (validation.issue) {
-        setActiveKey(validation.issue.profileKey)
-        if (['maxContextK', 'checkpointK'].includes(validation.issue.field)) setAdvancedOpen(true)
+        if (validation.issue.profileKey !== null) {
+          setActiveKey(validation.issue.profileKey)
+          if (['maxContextK', 'checkpointK'].includes(validation.issue.field)) setAdvancedOpen(true)
+        }
       } else {
         setError(validation.error)
       }
@@ -365,6 +432,12 @@ export function useContextSettings(
     leaveOpen,
     setEnabled(enabled) {
       setDraft((current) => ({ ...current, enabled }))
+    },
+    updateImageBudget(update) {
+      setDraft((current) => ({
+        ...current,
+        imageBudget: { ...current.imageBudget, ...update }
+      }))
     },
     selectProfile: setActiveKey,
     updateProfile,

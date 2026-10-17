@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   L4AppDialogContent,
+  L4AppDialogBody,
   L4AppDialogDescription,
   L4AppDialogFooter,
   L4AppDialogHeader,
@@ -15,7 +16,9 @@ import { Button } from './shadcn/button'
 interface ConfirmOptions {
   title: string
   description: string
+  content?: React.ReactNode
   confirmLabel?: string
+  confirmVariant?: 'default' | 'destructive'
 }
 
 export function useL4ConfirmDialog(): {
@@ -67,11 +70,16 @@ export function useL4ConfirmDialog(): {
               {options.description}
             </L4AppDialogDescription>
           </L4AppDialogHeader>
+          {options.content ? (
+            <L4AppDialogBody className="grid grid-rows-[minmax(0,1fr)]">
+              {options.content}
+            </L4AppDialogBody>
+          ) : null}
           <L4AppDialogFooter>
             <Button ref={cancelRef} variant="outline" onClick={() => settle(false)}>
               {t('cancel')}
             </Button>
-            <Button variant="destructive" onClick={() => settle(true)}>
+            <Button variant={options.confirmVariant ?? 'destructive'} onClick={() => settle(true)}>
               {options.confirmLabel ?? t('delete')}
             </Button>
           </L4AppDialogFooter>

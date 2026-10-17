@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { createRequire } from 'node:module'
+import fs from 'node:fs'
+import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { createJiti } from 'jiti'
-import { ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent'
+import { CONFIG_DIR_NAME, ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent'
 import {
   L2ModelSettingsGetResponseSchema,
+  L2ModelSettingsPreviewResponseSchema,
   L2ModelSettingsReplaceRequestSchema
 } from '../src/common/l2_biz/model-settings/l2-model-settings-contract.ts'
 
@@ -479,6 +481,204 @@ test('账号模型：拒绝重复收录及用同 ID 自定义连接覆盖账号�
       /独立服务 ID/
     )
     assert.equal(await readFile(path, 'utf8'), before)
+  })
+})
+
+async function createKnownProject(
+  agentDir: string,
+  name: string,
+  settings: Config
+): Promise<{ cwd: string; path: string }> {
+  const cwd = join(agentDir, name)
+  const path = join(cwd, CONFIG_DIR_NAME, 'settings.json')
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, JSON.stringify(settings, null, 2))
+  const manager = SessionManager.create(cwd)
+  manager.appendMessage({ role: 'user', content: 'fixture', timestamp: Date.now() })
+  manager.appendMessage({
+    role: 'assistant',
+    api: 'openai-completions',
+    provider: 'fixture',
+    model: 'test-model',
+    content: [{ type: 'text', text: 'fixture' }],
+    stopReason: 'stop',
+    timestamp: Date.now(),
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+    }
+  })
+  return { cwd, path }
+}
+
+test('模型替换：预览只读，确认后同步已知项目并保留无关配置', async () => {
+  const initial = fixtureConfig()
+  const stable = structuredClone(modelOf(initial))
+  stable.id = 'keep-model'
+  ;(providerOf(initial).models as unknown[]).push(stable)
+  await withFixture(initial, async (store, path, agentDir) => {
+    const globalPath = join(agentDir, 'settings.json')
+    const globalSettings = {
+      defaultProvider: 'fixture',
+      defaultModel: 'test-model',
+      defaultThinkingLevel: 'high'
+    }
+    await writeFile(globalPath, JSON.stringify(globalSettings))
+    const defaults = {
+      defaultProvider: 'fixture',
+      defaultModel: 'test-model',
+      customProjectSetting: { keep: true }
+    }
+    const first = await createKnownProject(agentDir, 'project-first', {
+      ...defaults,
+      defaultThinkingLevel: 'high'
+    })
+    const second = await createKnownProject(agentDir, 'project-ignored', {
+      ...defaults,
+      defaultThinkingLevel: 'max'
+    })
+    const unrelated = await createKnownProject(agentDir, 'project-unrelated', {
+      ...defaults,
+      defaultModel: 'keep-model'
+    })
+    const following = await createKnownProject(agentDir, 'project-following', {
+      customProjectSetting: true
+    })
+    const ignoreStore = await jiti.import<
+      typeof import('../src/server/l4_foundation/pi/l4-pi-directory-ignore-store')
+    >('../src/server/l4_foundation/pi/l4-pi-directory-ignore-store.ts')
+    ignoreStore.replaceL4PiDirectoryIgnore(second.cwd, true)
+    const settings = await store.readL4ModelSettings()
+    const replacement = settings.providers[0].models[0]
+    replacement.modelId = 'new-model'
+    replacement.thinkingLevels = [
+      { level: 'off', providerValue: null },
+      { level: 'high', providerValue: null }
+    ]
+    const input = {
+      providers: settings.providers,
+      presets: [],
+      modelReplacements: [
+        {
+          from: { provider: 'fixture', modelId: 'test-model' },
+          to: { provider: 'fixture', modelId: 'new-model' }
+        }
+      ]
+    }
+    const paths = [path, first.path, second.path, unrelated.path, following.path, globalPath]
+    const before = await Promise.all(paths.map((item) => readFile(item, 'utf8')))
+    const preview = L2ModelSettingsPreviewResponseSchema.parse(
+      await store.previewL4ModelSettings(input)
+    )
+    assert.deepEqual(
+      new Set(preview.projectDefaults.map((item) => item.cwd)),
+      new Set([first.cwd, second.cwd])
+    )
+    assert.deepEqual(preview.projectDefaults.find((item) => item.cwd === first.cwd)?.to, {
+      provider: 'fixture',
+      modelId: 'new-model',
+      thinkingLevel: 'high'
+    })
+    assert.deepEqual(preview.projectDefaults.find((item) => item.cwd === second.cwd)?.to, {
+      provider: 'fixture',
+      modelId: 'new-model',
+      thinkingLevel: 'off'
+    })
+    assert.deepEqual(
+      await Promise.all(paths.map((item) => readFile(item, 'utf8'))),
+      before,
+      '预览或取消不写配置'
+    )
+    await assert.rejects(
+      store.replaceL4ModelSettings({ ...input, modelReplacements: undefined }),
+      /项目.*默认/
+    )
+    await assert.rejects(
+      store.replaceL4ModelSettings({
+        ...input,
+        modelReplacements: [
+          { ...input.modelReplacements[0], to: { provider: 'fixture', modelId: 'missing' } }
+        ]
+      }),
+      /替换目标/
+    )
+    await assert.rejects(
+      store.previewL4ModelSettings({
+        ...input,
+        modelReplacements: [...input.modelReplacements, ...input.modelReplacements]
+      }),
+      /来源.*重复/
+    )
+    assert.deepEqual(
+      await Promise.all(paths.map((item) => readFile(item, 'utf8'))),
+      before,
+      '校验失败不写配置'
+    )
+    await store.replaceL4ModelSettings(input)
+    for (const project of [first, second]) {
+      const next = preview.projectDefaults.find((item) => item.cwd === project.cwd)!.to
+      assert.deepEqual(await readConfig(project.path), {
+        ...defaults,
+        defaultProvider: next.provider,
+        defaultModel: next.modelId,
+        defaultThinkingLevel: next.thinkingLevel
+      })
+    }
+    assert.equal((await store.readL4ModelSettings()).providers[0].models[0].modelId, 'new-model')
+    for (const item of [unrelated.path, following.path, globalPath]) {
+      assert.equal(await readFile(item, 'utf8'), before[paths.indexOf(item)])
+    }
+  })
+})
+
+test('模型替换：最后一个文件写入失败会恢复已更新项目的原始文本', async (context) => {
+  await withFixture(fixtureConfig(), async (store, path, agentDir) => {
+    const first = await createKnownProject(agentDir, 'project-rollback', {
+      defaultProvider: 'fixture',
+      defaultModel: 'test-model',
+      defaultThinkingLevel: 'high',
+      retained: true
+    })
+    const before = await readFile(first.path, 'utf8')
+    const originalModels = await readFile(path, 'utf8')
+    const settings = await store.readL4ModelSettings()
+    settings.providers[0].models[0].modelId = 'new-model'
+    let projectWasChanged = false
+    const rename = fs.renameSync
+    const mocked = context.mock.method(fs, 'renameSync', (from, to): void => {
+      if (to === path) {
+        projectWasChanged =
+          JSON.parse(fs.readFileSync(first.path, 'utf8')).defaultModel === 'new-model'
+        throw new Error('fixture: model file write failed')
+      }
+      rename(from, to)
+    })
+    syncBuiltinESMExports()
+    try {
+      await assert.rejects(
+        store.replaceL4ModelSettings({
+          providers: settings.providers,
+          presets: [],
+          modelReplacements: [
+            {
+              from: { provider: 'fixture', modelId: 'test-model' },
+              to: { provider: 'fixture', modelId: 'new-model' }
+            }
+          ]
+        }),
+        /model file write failed/
+      )
+    } finally {
+      mocked.mock.restore()
+      syncBuiltinESMExports()
+    }
+    assert.equal(projectWasChanged, true, '必须真实覆盖项目已写入后的失败')
+    assert.equal(await readFile(first.path, 'utf8'), before)
+    assert.equal(await readFile(path, 'utf8'), originalModels)
   })
 })
 

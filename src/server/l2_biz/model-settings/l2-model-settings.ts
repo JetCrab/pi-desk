@@ -3,10 +3,12 @@ import 'server-only'
 import {
   L2ModelCatalogListResponseSchema,
   L2ModelSettingsGetResponseSchema,
+  L2ModelSettingsPreviewResponseSchema,
   L2ProjectModelDefaultGetResponseSchema,
   type L2ModelCatalogListRequest,
   type L2ModelCatalogListResponse,
   type L2ModelSettingsGetResponse,
+  type L2ModelSettingsPreviewResponse,
   type L2ModelSettingsReplaceRequest,
   type L2ProjectModelDefaultGetResponse,
   type L2ProjectModelDefaultReplaceRequest
@@ -15,12 +17,19 @@ import {
   listL4ModelCatalog,
   readL4ModelSettings,
   readL4ProjectModelDefault,
+  previewL4ModelSettings,
   replaceL4ModelSettings,
   replaceL4ProjectModelDefault
 } from '@server/l4_foundation/model-settings/l4-model-settings'
 
 export async function getL2ModelSettings(): Promise<L2ModelSettingsGetResponse> {
   return L2ModelSettingsGetResponseSchema.parse(await readL4ModelSettings())
+}
+
+export async function previewL2ModelSettings(
+  input: L2ModelSettingsReplaceRequest
+): Promise<L2ModelSettingsPreviewResponse> {
+  return L2ModelSettingsPreviewResponseSchema.parse(await previewL4ModelSettings(input))
 }
 
 export async function replaceL2ModelSettings(input: L2ModelSettingsReplaceRequest): Promise<void> {
