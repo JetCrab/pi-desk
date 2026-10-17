@@ -199,10 +199,12 @@ jobs:
           node .github/scripts/restore-sdk.mjs "$NPM_ARTIFACT_DIR/command-smoke/sdk.tgz" plugins/pi-desk-sdk
           pnpm test:pidesk
       - name: 验收同一批实际 tarball 的安装态命令
+        timeout-minutes: 20
         shell: bash
         run: node .github/scripts/verify-npm-install.mjs "$NPM_ARTIFACT_DIR/command-smoke/sdk.tgz" "$NPM_ARTIFACT_DIR/command-smoke/host.tgz"
       - name: 保留安装态验收失败现场
-        if: failure()
+        if: failure() || cancelled()
+        timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
           name: npm-install-failure-${{ matrix.os }}-${{ github.run_id }}
@@ -210,6 +212,8 @@ jobs:
           path: |
             temp/run/npm-release/
             temp/pi/npm-release/
+            !temp/run/npm-release/**/node_modules/**
+            !temp/run/npm-release/**/npm-cache/_cacache/**
           if-no-files-found: ignore
           retention-days: 7
 

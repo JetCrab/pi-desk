@@ -35,7 +35,7 @@ async function waitFor(check, label, diagnostics = () => '', timeout = 60_000) {
     if (await check()) return
     await delay(100)
   }
-  throw new Error(`等待超时：${label}\n${diagnostics()}`)
+  throw Object.assign(new Error(`等待超时：${label}\n${diagnostics()}`), { code: 'ETIMEDOUT' })
 }
 
 function extension(version) {
@@ -257,7 +257,7 @@ export async function createPiDeskCommandFixture(root, agentDir) {
           const id = randomUUID()
           const timer = setTimeout(() => {
             pending.delete(id)
-            rejectResponse(new Error(`请求超时：${path}`))
+            rejectResponse(Object.assign(new Error(`请求超时：${path}`), { code: 'ETIMEDOUT' }))
           }, 30_000)
           pending.set(id, { timer, resolve: resolveResponse, reject: rejectResponse })
           socket.send(JSON.stringify({ head: { op: 'req', path, requestId: id }, body }))
@@ -274,12 +274,13 @@ export async function createPiDeskCommandFixture(root, agentDir) {
       })
       const transcript = []
       try {
-        await once(socket, 'open')
+        await once(socket, 'open', { signal: AbortSignal.timeout(30_000) })
         await request('work-sessions/list', {})
         const added = await fetch(`${baseUrl}/api/work-sessions/add`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Pi-Desk-Client-Id': clientId },
-          body: JSON.stringify({ cwd: workspace })
+          body: JSON.stringify({ cwd: workspace }),
+          signal: AbortSignal.timeout(30_000)
         }).then((response) => response.json())
         assert.equal(added.code, 0, added.msg)
         const { workId, sessionId, branchId } = added.data.workSession
@@ -493,41 +494,60 @@ export async function createPiDeskCommandFixture(root, agentDir) {
   }
 }
 
-async function verifyBrowserModules({ root, baseUrl, entry, version }) {
+export async function verifyBrowserModules({ root, baseUrl, entry, version }) {
   assert.ok(entry, '安装后的插件必须提供 Browser Entry')
   const candidates =
     process.platform === 'win32'
       ? [
           'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-          'C:/Program Files/Microsoft/Edge/Application/msedge.exe'
+          'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+          'C:/Program Files/Google/Chrome/Application/chrome.exe',
+          'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'
         ]
       : ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser']
-  const executable = candidates.find(existsSync)
-  assert.ok(executable, '命令验收需要已安装的 Edge 或 Chromium')
+  const executables = candidates.filter(existsSync)
+  assert.ok(executables.length, '命令验收需要已安装的 Edge 或 Chromium')
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const executable = executables[Math.min(attempt - 1, executables.length - 1)]
+    try {
+      await verifyBrowserAttempt({ root, baseUrl, entry, version, executable, attempt })
+      return
+    } catch (error) {
+      if (attempt === 2 || error.code !== 'ETIMEDOUT') throw error
+      console.warn('[smoke:browser] 浏览器暂时无响应；已释放旧实例，重启浏览器继续当前验收')
+    }
+  }
+}
+
+async function verifyBrowserAttempt({ root, baseUrl, entry, version, executable, attempt }) {
   const cdpPort = await reservePort()
   const browser = spawnEdge(
     executable,
     cdpPort,
-    join(root, 'browser'),
+    join(root, `browser-${attempt}`),
     '1024,768',
     process.platform === 'win32' ? [] : ['--no-sandbox']
   )
   let client
+  let timer
   try {
-    try {
-      const diagnostics = await waitForBrowserReady(browser, cdpPort)
-      await writeFile(join(root, 'browser-startup.log'), `${diagnostics}\n`)
-    } catch (error) {
-      await writeFile(join(root, 'browser-startup.log'), `${error.stack ?? error}\n`).catch(
-        (logError) => console.error('保存浏览器启动日志失败：', logError)
-      )
-      throw error
-    }
-    client = await createCdpPage(cdpPort)
-    await navigate(client, baseUrl)
-    const result = await evaluate(
-      client,
-      `(async () => {
+    await Promise.race([
+      (async () => {
+        try {
+          const diagnostics = await waitForBrowserReady(browser, cdpPort)
+          await writeFile(join(root, `browser-startup-${attempt}.log`), `${diagnostics}\n`)
+        } catch (error) {
+          await writeFile(join(root, `browser-startup-${attempt}.log`), `${error.stack ?? error}\n`)
+          if (/验收浏览器启动超时|验收浏览器在就绪前退出/.test(error.message))
+            error.code = 'ETIMEDOUT'
+          throw error
+        }
+        client = await createCdpPage(cdpPort)
+        console.info(`[smoke:browser] 第 ${attempt} 次浏览器验收：加载页面`)
+        await navigate(client, baseUrl)
+        const result = await evaluate(
+          client,
+          `(async () => {
       const entry = await import(${JSON.stringify(entry.url)})
       let definition
       entry.default({ registerContribution(kind, name, contribution) { definition = contribution } })
@@ -546,10 +566,24 @@ async function verifyBrowserModules({ root, baseUrl, entry, version }) {
         return container.textContent
       } finally { controller.abort(); await dispose?.(); container.remove() }
     })()`
-    )
-    assert.ok(result.includes(`命令模块 ${version}`))
+        )
+        assert.ok(result.includes(`命令模块 ${version}`))
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              Object.assign(new Error('浏览器页面或 CDP 在 45 秒内未完成验收'), {
+                code: 'ETIMEDOUT'
+              })
+            ),
+          45_000
+        )
+      })
+    ])
     console.info('[smoke:pidesk] Browser Entry、Lazy Module、base/markdown 和挂载验收通过')
   } finally {
+    clearTimeout(timer)
     client?.close()
     await stopBrowserTree(browser, cdpPort)
   }
