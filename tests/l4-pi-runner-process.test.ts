@@ -164,6 +164,48 @@ setInterval(() => {}, 1000)
   assert.equal(await processExists(pids[1]!), false)
 })
 
+test('取消并行准备会先释放完整进程树，预取消不启动进程', { timeout: 30_000 }, async (context) => {
+  await mkdir(join(agentDir, 'sessions'), { recursive: true })
+  const marker = join(testRoot, 'canceled-process-tree.json')
+  const script = join(testRoot, 'cancel.mjs')
+  const controller = new AbortController()
+  let pids: number[] = []
+  context.after(async () => {
+    controller.abort()
+    for (const pid of pids) await terminateRemaining(pid)
+    await rm(testRoot, { recursive: true, force: true })
+  })
+  await writeFile(
+    script,
+    `import { spawn } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
+const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true })
+child.once('spawn', () => writeFileSync(${JSON.stringify(marker)}, JSON.stringify([process.pid, child.pid])))
+setInterval(() => {}, 1000)
+`
+  )
+  const input = {
+    args: [script],
+    agentDir,
+    env: {},
+    maxOutputBytes: 1024,
+    timeoutMs: 20_000,
+    signal: controller.signal,
+    timeoutError: () => new Error('取消验证超时'),
+    cleanupError: () => new Error('取消后进程树未释放')
+  }
+  const running = runL4PiRunnerProcess(input)
+  const rejected = assert.rejects(running, /操作已取消/)
+  pids = JSON.parse(await waitForFile(marker)) as number[]
+  controller.abort()
+  await rejected
+  assert.equal(pids.length, 2)
+  for (const pid of pids) assert.equal(await processExists(pid), false)
+  await rm(marker)
+  await assert.rejects(runL4PiRunnerProcess(input), /操作已取消/)
+  await assert.rejects(readFile(marker), { code: 'ENOENT' })
+})
+
 test.after(async () => {
   await rm(testRoot, { recursive: true, force: true })
 })

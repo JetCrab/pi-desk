@@ -89,7 +89,7 @@ fn pi_update_npm_commands_target_only_the_selected_package_and_confirmed_version
         .to_string();
     let node = bin.join(if cfg!(windows) { "node.exe" } else { "node" });
     #[cfg(windows)]
-    fs::hard_link(&actual_node, &node).unwrap();
+    fs::copy(&actual_node, &node).unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(&actual_node, &node).unwrap();
     let modules = fixture.0.join("global/node_modules");

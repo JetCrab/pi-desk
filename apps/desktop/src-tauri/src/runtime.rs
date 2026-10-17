@@ -124,6 +124,12 @@ struct ManagedChild {
     server: ServerConfig,
 }
 
+#[derive(Clone, Copy)]
+enum OpenDestination {
+    Desktop,
+    External,
+}
+
 #[derive(Default)]
 struct TargetRuntime {
     child: Option<ManagedChild>,
@@ -131,7 +137,7 @@ struct TargetRuntime {
     update: PackageUpdateSnapshot,
     operation: Option<Arc<AtomicBool>>,
     stop_requested: bool,
-    open_after_start: bool,
+    open_after_start: Option<OpenDestination>,
     tunnel_worker: Option<TunnelWorkerHandle>,
     tunnel_phase: TunnelPhase,
     last_check: Option<Instant>,
@@ -658,7 +664,7 @@ pub fn activate_desktop(app: &AppHandle) -> Result<(), String> {
     let Some(url) = url else {
         return open_control_window(app);
     };
-    if let Err(error) = open_target(app, &url) {
+    if let Err(error) = open_target(app, &url, false) {
         write_shell_log(
             &state,
             "desktop-open-failed",
@@ -701,15 +707,34 @@ pub fn workspace_window_closed(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-pub fn open_target(app: &AppHandle, url: &str) -> Result<(), String> {
+fn open_destination(
+    app: &AppHandle,
+    url: &str,
+    destination: OpenDestination,
+) -> Result<(), String> {
+    match destination {
+        OpenDestination::Desktop => open_workspace_window(app, url),
+        OpenDestination::External => {
+            let url = url::Url::parse(url).map_err(|_| "网页地址无效".to_string())?;
+            windows::open_external(app, &url, "control")
+        }
+    }
+}
+
+pub fn open_target(app: &AppHandle, url: &str, external: bool) -> Result<(), String> {
     let state = app.state::<ShellState>();
     let url = config::normalize_target_url(url)?;
     let target = configured_target(&state, &url)?;
+    let destination = if external {
+        OpenDestination::External
+    } else {
+        OpenDestination::Desktop
+    };
     if target.server.is_some() && !has_child(&state, &url) {
         set_auto_start(&state, &url, true)?;
-        begin_operation_with_open(app, &url, Operation::Start, true)
+        begin_operation_with_open(app, &url, Operation::Start, Some(destination))
     } else {
-        open_workspace_window(app, &url)
+        open_destination(app, &url, destination)
     }
 }
 
@@ -1298,14 +1323,14 @@ pub fn stop_server(app: &AppHandle, url: &str) -> Result<(), String> {
 }
 
 fn begin_operation(app: &AppHandle, url: &str, operation: Operation) -> Result<(), String> {
-    begin_operation_with_open(app, url, operation, false)
+    begin_operation_with_open(app, url, operation, None)
 }
 
 fn begin_operation_with_open(
     app: &AppHandle,
     url: &str,
     operation: Operation,
-    open_after_start: bool,
+    open_after_start: Option<OpenDestination>,
 ) -> Result<(), String> {
     let state = app.state::<ShellState>();
     let _config_guard = state
@@ -1342,12 +1367,17 @@ fn begin_operation_with_open(
             .map_err(|_| "运行状态不可用".to_string())?;
         let runtime = runtimes.entry(url.to_string()).or_default();
         if runtime.operation.is_some() {
-            if open_after_start && matches!(runtime.server_phase, ServerPhase::Starting(_)) {
-                runtime.open_after_start = true;
+            if open_after_start.is_some()
+                && matches!(runtime.server_phase, ServerPhase::Starting(_))
+            {
+                runtime.open_after_start = open_after_start;
                 return Ok(());
             }
-            if open_after_start && runtime.child.is_none() && runtime.update.status == "checking" {
-                runtime.open_after_start = true;
+            if open_after_start.is_some()
+                && runtime.child.is_none()
+                && runtime.update.status == "checking"
+            {
+                runtime.open_after_start = open_after_start;
                 runtime
                     .operation
                     .as_ref()
@@ -1397,6 +1427,7 @@ fn begin_operation_with_open(
             if let Ok(mut runtimes) = state.target_runtimes.lock() {
                 let runtime = runtimes.entry(url.to_string()).or_default();
                 runtime.operation = None;
+                runtime.open_after_start = None;
                 runtime.update = PackageUpdateSnapshot {
                     status: "failed".into(),
                     error: Some(error.to_string()),
@@ -1468,28 +1499,35 @@ fn run_operation(
         .lock()
         .map(|mut runtimes| {
             let runtime = runtimes.entry(url.to_string()).or_default();
-            let open = runtime.open_after_start
-                && runtime.child.is_some()
-                && result.is_ok()
-                && !cancelled();
-            let resume_start = runtime.open_after_start
-                && matches!(operation, Operation::Check)
-                && !stop_requested
-                && !state.closing.load(Ordering::Acquire);
-            runtime.open_after_start = false;
+            let destination = runtime.open_after_start.take();
+            let open =
+                destination.filter(|_| runtime.child.is_some() && result.is_ok() && !cancelled());
+            let resume_start = destination.filter(|_| {
+                matches!(operation, Operation::Check)
+                    && !stop_requested
+                    && !state.closing.load(Ordering::Acquire)
+            });
             (open, resume_start)
         })
-        .unwrap_or((false, false));
-    if resume_start {
-        if let Err(error) = begin_operation_with_open(app, url, Operation::Start, true) {
+        .unwrap_or((None, None));
+    if let Some(destination) = resume_start {
+        if let Err(error) = begin_operation_with_open(app, url, Operation::Start, Some(destination))
+        {
             write_shell_log(&state, "resume-start-failed", &error);
             let _ = open_control_window(app);
         }
     }
-    if open {
-        if let Err(error) = open_workspace_window(app, url) {
+    if let Some(destination) = open {
+        if let Err(error) = open_destination(app, url, destination) {
             write_shell_log(&state, "browser-open-failed", &error);
             let _ = open_control_window(app);
+            if matches!(destination, OpenDestination::External) {
+                rfd::MessageDialog::new()
+                    .set_title("无法打开浏览器")
+                    .set_description(&error)
+                    .set_level(rfd::MessageLevel::Error)
+                    .show();
+            }
         }
     }
     if !cancelled() {

@@ -165,15 +165,27 @@ function TargetRow({
             )}
           </div>
           {!server && (
-            <button
-              className="quiet forward"
-              type="button"
-              disabled={locked}
-              onClick={() => run('open')}
-            >
-              打开
-              <DesktopIcon name="arrow" />
-            </button>
+            <>
+              <button
+                className="quiet forward"
+                type="button"
+                disabled={locked}
+                onClick={() => run('open')}
+              >
+                打开
+                <DesktopIcon name="arrow" />
+              </button>
+              <button
+                className="quiet"
+                type="button"
+                title="使用系统默认浏览器打开"
+                disabled={locked}
+                onClick={() => run('open-external')}
+              >
+                <DesktopIcon name="globe" />
+                浏览器打开
+              </button>
+            </>
           )}
           <div className="target-row-actions">
             <button
@@ -211,6 +223,15 @@ function TargetRow({
           >
             <DesktopIcon name={working ? 'loader' : 'arrow'} spinning={working} />
             打开 Pi Desk
+          </button>
+          <button
+            type="button"
+            title={server.needsSetup ? '请先准备本机组件' : '使用系统默认浏览器打开'}
+            disabled={launchLocked || preparing || server.needsSetup}
+            onClick={() => run('open-external')}
+          >
+            <DesktopIcon name="globe" />
+            浏览器打开
           </button>
           <button type="button" disabled={locked || server.status !== 'running'} onClick={restart}>
             <DesktopIcon name="refresh" />

@@ -36,7 +36,8 @@ const L4PiPluginRuntimeDiagnosticsSchema = z
 export async function runL4PiPluginProbe(
   cwd: string,
   agentDir: string,
-  checkNative = false
+  checkNative = false,
+  signal?: AbortSignal
 ): Promise<L4PiPluginRuntimeDiagnostics> {
   const tsxImport = readL4PiTsxImport()
   const runnerPath = join(
@@ -59,6 +60,7 @@ export async function runL4PiPluginProbe(
     },
     maxOutputBytes: L4_PI_PLUGIN_PROBE_MAX_OUTPUT_BYTES,
     timeoutMs: L4_PI_PLUGIN_PROBE_TIMEOUT_MS,
+    signal,
     timeoutError: () => new Error('插件预检超时'),
     cleanupError: (output, error) =>
       new Error(`${output}\n插件预检进程树清理失败`, { cause: error })

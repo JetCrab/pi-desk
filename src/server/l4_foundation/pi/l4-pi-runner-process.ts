@@ -17,10 +17,15 @@ export function runL4PiRunnerProcess(input: {
   env: Record<string, string | undefined>
   maxOutputBytes: number
   timeoutMs: number
+  signal?: AbortSignal
   timeoutError: () => Error
   cleanupError: (stderr: string, error: unknown) => Error
 }): Promise<L4PiRunnerProcessResult> {
   return new Promise<L4PiRunnerProcessResult>((resolveRun, rejectRun) => {
+    if (input.signal?.aborted) {
+      rejectRun(new Error('操作已取消'))
+      return
+    }
     const runtimeImport = pathToFileURL(
       join(process.cwd(), 'src/server/l4_foundation/pi/l4-pi-runtime-register.mjs')
     ).href
@@ -46,6 +51,7 @@ export function runL4PiRunnerProcess(input: {
       if (settled) return
       settled = true
       if (timeout) clearTimeout(timeout)
+      input.signal?.removeEventListener('abort', onAbort)
       void terminateL4PiProcessTree(child).then(callback, (error: unknown) => {
         const failure = error instanceof Error ? error : new Error(String(error))
         const code = 'code' in failure ? String(failure.code) : failure.name
@@ -68,6 +74,7 @@ export function runL4PiRunnerProcess(input: {
         rejectRun(input.cleanupError(stderr.trim(), reason))
       })
     }
+    const onAbort = (): void => finish(() => rejectRun(new Error('操作已取消')))
     const append = (current: string, chunk: Buffer): string =>
       `${current}${chunk.toString('utf8')}`.slice(-input.maxOutputBytes)
 
@@ -86,5 +93,7 @@ export function runL4PiRunnerProcess(input: {
       finish(() => rejectRun(error))
     }, input.timeoutMs)
     timeout.unref()
+    input.signal?.addEventListener('abort', onAbort, { once: true })
+    if (input.signal?.aborted) onAbort()
   })
 }

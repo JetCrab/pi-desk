@@ -14,6 +14,7 @@
 | `pi-desk-tibo-monitor` | Tibo 动态与通知                           |
 | `pi-desk-tool-reason`  | 工具调用理由                              |
 | `pi-desk-remote-debug` | 开发页面远程调试                          |
+| `pi-desk-workspace`    | 可复用的隔离工作区池                      |
 
 ## 开发
 

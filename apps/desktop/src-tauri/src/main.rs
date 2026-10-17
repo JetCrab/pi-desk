@@ -358,9 +358,14 @@ async fn apply_tunnel_connection_command(
 }
 
 #[tauri::command]
-async fn open_target_command(app: AppHandle, window: Window, url: String) -> Result<(), String> {
+async fn open_target_command(
+    app: AppHandle,
+    window: Window,
+    url: String,
+    external: Option<bool>,
+) -> Result<(), String> {
     run_command(app, window, "open-target", move |app| {
-        runtime::open_target(app, &url)
+        runtime::open_target(app, &url, external.unwrap_or(false))
     })
     .await
 }

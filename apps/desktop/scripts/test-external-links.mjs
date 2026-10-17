@@ -15,6 +15,7 @@ import {
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const executable = resolve(process.argv[2] ?? '')
 const identifier = 'com.jetcrab.desktop.external-links-test'
+const openTargetOnly = process.env.DESKTOP_EXTERNAL_LINKS_SCOPE === 'open-target'
 assert.equal(process.platform, 'win32', '外部浏览器验收仅支持 Windows')
 assert.ok(process.argv[2], '请传入隔离构建的桌面 exe')
 assert.ok(
@@ -32,13 +33,14 @@ const reports = new Map()
 const requests = []
 let pageHtml = ''
 function handle(request, response) {
+  response.setHeader('Access-Control-Allow-Origin', '*')
   requests.push({ url: request.url, userAgent: request.headers['user-agent'] })
   if (request.method === 'POST' && request.url === '/report') {
     let body = ''
     request.on('data', (chunk) => (body += chunk))
     request.on('end', () => {
       const report = JSON.parse(body)
-      reports.set(report.name, report)
+      reports.set(report.name, { ...report, count: (reports.get(report.name)?.count ?? 0) + 1 })
       response.writeHead(204).end()
     })
     return
@@ -83,6 +85,7 @@ pageHtml = `<!doctype html><html lang="zh-CN"><title>外链验收</title><h1>外
 await writeFile(join(root, 'config.json'), JSON.stringify({ targets: [{ url: targetUrl }] }))
 const logPath = join(root, 'logs/desktop.log')
 const pages = []
+const servicePorts = []
 let child
 let exit
 let output = ''
@@ -184,6 +187,170 @@ async function connect(target) {
   return page
 }
 
+async function verifyControlOpening(control) {
+  const managedReservation = createServer()
+  const managedPort = await listen(managedReservation)
+  servicePorts.push(managedPort)
+  await new Promise((done) => managedReservation.close(done))
+  const managedUrl = `http://127.0.0.1:${managedPort}/opened/control-local`
+  const remoteUrl = `${targetUrl}opened/control-remote`
+  const readyFile = join(root, 'service-ready')
+  const probeFile = join(root, 'health-probed')
+  const serviceFile = join(root, 'managed-service.cjs')
+  const reportHtml = `<!doctype html><html><title>${task}</title><script>
+    fetch('${targetUrl}report', { method: 'POST', body: JSON.stringify({
+      name: 'control-local', native: Boolean(window.__TAURI_INTERNALS__), userAgent: navigator.userAgent
+    }) }).finally(() => window.close());
+  </script></html>`
+  await writeFile(
+    serviceFile,
+    `
+    const fs = require('node:fs');
+    require('node:http').createServer((request, response) => {
+      if (request.url === '/health') {
+        fs.writeFileSync(${JSON.stringify(probeFile)}, 'probed');
+        response.writeHead(fs.existsSync(${JSON.stringify(readyFile)}) ? 200 : 503).end();
+      } else {
+        response.setHeader('Content-Type', 'text/html; charset=utf-8');
+        response.end(${JSON.stringify(reportHtml)});
+      }
+    }).listen(Number(process.argv[2]), '127.0.0.1');
+  `
+  )
+  const invoke = (command, args = {}) =>
+    control.evaluate(
+      `window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)}, ${JSON.stringify(args)})`
+    )
+  const clickTarget = (url, label) =>
+    control.evaluate(`(() => {
+    const article = [...document.querySelectorAll('article')].find(item => item.dataset.testid === ${JSON.stringify(url)});
+    const button = [...(article?.querySelectorAll('button') ?? [])].find(item => item.textContent.trim() === ${JSON.stringify(label)});
+    if (!button || button.disabled) throw new Error('操作不可用：' + ${JSON.stringify(label)});
+    button.click();
+  })()`)
+  await until(
+    async () => (await invoke('get_control_state')).environment.status !== 'checking',
+    '环境检查结束'
+  )
+  for (const value of [
+    { url: remoteUrl, server: null, tunnel: null },
+    {
+      url: managedUrl,
+      server: {
+        startCommand: `"${process.execPath}" "${serviceFile}" {port}`,
+        readyPath: '/health',
+        package: null
+      },
+      tunnel: null
+    }
+  ])
+    await invoke('apply_target_command', { originalUrl: null, value })
+  await invoke('set_startup_preference_command', { hideOnStartup: false, hideOnOpen: true })
+  await until(
+    () =>
+      control.evaluate(
+        `[...document.querySelectorAll('button')].filter(item => item.textContent.trim() === '浏览器打开').length === 3`
+      ),
+    '本机和远程地址显示浏览器入口'
+  )
+  console.info('验收控制中心的远程浏览器打开入口')
+  await clickTarget(remoteUrl, '浏览器打开')
+  const remoteReport = await until(() => reports.get('control-remote'), '远程地址由系统浏览器访问')
+  assert.equal(remoteReport.native, false)
+  assert.ok(!(await targets()).some((item) => item.url === remoteUrl), '不得创建远程内置窗口')
+  console.info('验收本机服务就绪后才打开系统浏览器')
+  await clickTarget(managedUrl, '浏览器打开')
+  await until(
+    () =>
+      readFile(probeFile).then(
+        () => true,
+        () => false
+      ),
+    '本机服务已启动并等待健康检查'
+  )
+  assert.ok(!reports.has('control-local'), '健康检查通过前不得打开浏览器')
+  await writeFile(readyFile, 'ready')
+  const localReport = await until(() => reports.get('control-local'), '本机就绪后由系统浏览器访问')
+  assert.equal(localReport.native, false)
+  await until(
+    async () =>
+      (await invoke('get_control_state')).targets.find((item) => item.url === managedUrl)?.server
+        .status === 'running',
+    '本机服务保持运行'
+  )
+  assert.ok(!(await targets()).some((item) => item.url === managedUrl), '不得创建本机内置窗口')
+  const log = await readFile(logPath, 'utf8')
+  assert.ok(log.includes(`[browser-external-open] source=control url=${managedUrl}`))
+  await clickTarget(managedUrl, '浏览器打开')
+  await until(() => reports.get('control-local')?.count > 1, '运行中服务可再次用浏览器打开')
+  assert.equal(
+    (await readFile(logPath, 'utf8')).split('[server-spawn]').length,
+    log.split('[server-spawn]').length,
+    '再次打开不得重启服务'
+  )
+  assert.ok(await invoke('plugin:window|is_visible', { label: 'control' }), '外部打开保留控制页')
+  for (const theme of ['light', 'dark']) {
+    await control.send('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-color-scheme', value: theme }]
+    })
+    for (const [width, height] of [
+      [960, 720],
+      [720, 560]
+    ]) {
+      await control.send('Emulation.setDeviceMetricsOverride', {
+        width,
+        height,
+        deviceScaleFactor: 1,
+        mobile: false
+      })
+      const fits = await control.evaluate(`(() => {
+        const buttons = [...document.querySelectorAll('button')].filter(item => item.textContent.trim() === '浏览器打开');
+        return document.scrollingElement.scrollWidth <= innerWidth && buttons.every(button => {
+          const rect = button.getBoundingClientRect();
+          return rect.width >= button.scrollWidth && rect.left >= 0 && rect.right <= innerWidth;
+        });
+      })()`)
+      assert.ok(fits, `${theme} ${width} 浏览器按钮不得被裁切或横向溢出`)
+      await control.evaluate(
+        `(async () => { await document.fonts.ready; await new Promise(resolve => requestAnimationFrame(resolve)); })()`
+      )
+      const shot = await control.send('Page.captureScreenshot', { format: 'png' })
+      await writeFile(
+        join(root, `browser-open-${theme}-${width}.png`),
+        Buffer.from(shot.data, 'base64')
+      )
+    }
+  }
+  console.info('验收默认内置打开与地址校验仍然有效')
+  await clickTarget(targetUrl, '打开')
+  const browser = await connect(
+    await until(
+      async () => (await targets()).find((item) => item.url === targetUrl),
+      '原打开按钮仍创建内置窗口'
+    )
+  )
+  await until(
+    () => browser.evaluate(`document.querySelector('h1')?.textContent === '外链验收'`),
+    '默认内置网页就绪'
+  )
+  assert.equal(await browser.evaluate('Boolean(window.__TAURI_INTERNALS__)'), true)
+  for (const url of ['file:///C:/test', `${targetUrl}not-configured`]) {
+    const rejected = await control.evaluate(`(async () => {
+      try { await window.__TAURI_INTERNALS__.invoke('open_target_command', { url: ${JSON.stringify(url)}, external: true }); return false; }
+      catch { return true; }
+    })()`)
+    assert.equal(rejected, true, '非HTTP(S)或未配置地址必须拒绝')
+  }
+  await invoke('stop_server_command', { url: managedUrl })
+  await until(
+    async () =>
+      (await invoke('get_control_state')).targets.find((item) => item.url === managedUrl)?.server
+        .status === 'stopped',
+    '测试服务正常停止'
+  )
+  await assertPortReleased(managedPort)
+}
+
 try {
   child = spawn(executable, [], {
     cwd: root,
@@ -192,7 +359,8 @@ try {
       ...isolatedPiEnvironment(agent),
       PI_DESK_DESKTOP_DATA_DIR: root,
       WEBVIEW2_USER_DATA_FOLDER: join(root, 'webview'),
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${debugPort}`
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${debugPort}`,
+      ...(openTargetOnly ? { PI_DESK_DESKTOP_DISCOVERY_PATH: '' } : {})
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true
@@ -207,99 +375,108 @@ try {
     )
   )
   await until(
-    () =>
-      control.evaluate(
-        `[...document.querySelectorAll('button')].some(item => item.textContent === '打开')`
-      ),
-    '打开入口'
+    () => control.evaluate(`typeof window.__TAURI_INTERNALS__?.invoke === 'function'`),
+    '控制页 Tauri 桥就绪'
   )
-  await control.evaluate(
-    `[...document.querySelectorAll('button')].find(item => item.textContent === '打开').click()`
-  )
-  let browser = await connect(
-    await until(async () => (await targets()).find((item) => item.url === targetUrl), '目标网页')
-  )
-  await until(
-    () => browser.evaluate(`document.querySelector('h1')?.textContent === '外链验收'`),
-    '目标网页就绪'
-  )
-  if (process.env.DESKTOP_EXTERNAL_LINKS_SCOPE === 'recovery') {
-    console.info('验收网页进程退出后重新打开窗口')
-    const previousLoads = requests.filter((request) => request.url === '/').length
-    await browser.send('Page.crash').catch(() => undefined)
-    browser.close()
+  if (openTargetOnly) {
+    await verifyControlOpening(control)
+  } else {
+    await until(
+      () =>
+        control.evaluate(
+          `[...document.querySelectorAll('button')].some(item => item.textContent === '打开')`
+        ),
+      '打开入口'
+    )
     await control.evaluate(
       `[...document.querySelectorAll('button')].find(item => item.textContent === '打开').click()`
     )
-    await until(
-      () => requests.filter((request) => request.url === '/').length > previousLoads,
-      '失效网页在重新打开后恢复访问'
-    )
-    browser = await connect(
-      await until(
-        async () => (await targets()).find((item) => item.url === targetUrl),
-        '恢复后的网页'
-      )
+    let browser = await connect(
+      await until(async () => (await targets()).find((item) => item.url === targetUrl), '目标网页')
     )
     await until(
       () => browser.evaluate(`document.querySelector('h1')?.textContent === '外链验收'`),
-      '恢复后的网页就绪'
+      '目标网页就绪'
     )
-  }
-  for (const name of [
-    'open-secure',
-    'anchor-secure',
-    'open-plain',
-    'anchor-same-origin',
-    'anchor-cross-origin'
-  ]) {
-    console.info(`验收外部浏览器：${name}`)
-    await browser.click(name)
-    const report = await until(() => reports.get(name), `${name} 在真实浏览器访问`)
-    assert.equal(report.native, false, '外链必须由系统浏览器访问，不能留在桌面 WebView')
-    assert.equal(await browser.evaluate('location.href'), targetUrl, '外链不得替换当前工作台')
-    const log = await readFile(logPath, 'utf8')
-    assert.ok(
-      log.includes(
-        `[browser-external-open] source=${name === 'anchor-cross-origin' ? 'navigation' : 'new-window'} url=${name === 'anchor-same-origin' ? targetUrl : externalUrl}opened/${name}`
-      ),
-      '壳必须记录外部打开的真实结果'
+    if (process.env.DESKTOP_EXTERNAL_LINKS_SCOPE === 'recovery') {
+      console.info('验收网页进程退出后重新打开窗口')
+      const previousLoads = requests.filter((request) => request.url === '/').length
+      await browser.send('Page.crash').catch(() => undefined)
+      browser.close()
+      await control.evaluate(
+        `[...document.querySelectorAll('button')].find(item => item.textContent === '打开').click()`
+      )
+      await until(
+        () => requests.filter((request) => request.url === '/').length > previousLoads,
+        '失效网页在重新打开后恢复访问'
+      )
+      browser = await connect(
+        await until(
+          async () => (await targets()).find((item) => item.url === targetUrl),
+          '恢复后的网页'
+        )
+      )
+      await until(
+        () => browser.evaluate(`document.querySelector('h1')?.textContent === '外链验收'`),
+        '恢复后的网页就绪'
+      )
+    }
+    for (const name of [
+      'open-secure',
+      'anchor-secure',
+      'open-plain',
+      'anchor-same-origin',
+      'anchor-cross-origin'
+    ]) {
+      console.info(`验收外部浏览器：${name}`)
+      await browser.click(name)
+      const report = await until(() => reports.get(name), `${name} 在真实浏览器访问`)
+      assert.equal(report.native, false, '外链必须由系统浏览器访问，不能留在桌面 WebView')
+      assert.equal(await browser.evaluate('location.href'), targetUrl, '外链不得替换当前工作台')
+      const log = await readFile(logPath, 'utf8')
+      assert.ok(
+        log.includes(
+          `[browser-external-open] source=${name === 'anchor-cross-origin' ? 'navigation' : 'new-window'} url=${name === 'anchor-same-origin' ? targetUrl : externalUrl}opened/${name}`
+        ),
+        '壳必须记录外部打开的真实结果'
+      )
+    }
+    await browser.click('anchor-blocked')
+    await until(async () => {
+      const log = await readFile(logPath, 'utf8')
+      return log.includes('url=about:blank supported=false')
+    }, '拒绝非 HTTP(S) 新窗口并记录原因')
+    assert.equal(await browser.evaluate('location.href'), targetUrl)
+    const previousLoads = requests.filter((request) => request.url === '/').length
+    const previousCommands = (await readFile(logPath, 'utf8')).split(
+      '[command-end] command=open-target'
+    ).length
+    await control.evaluate(
+      `[...document.querySelectorAll('button')].find(item => item.textContent === '打开').click()`
     )
-  }
-  await browser.click('anchor-blocked')
-  await until(async () => {
-    const log = await readFile(logPath, 'utf8')
-    return log.includes('url=about:blank supported=false')
-  }, '拒绝非 HTTP(S) 新窗口并记录原因')
-  assert.equal(await browser.evaluate('location.href'), targetUrl)
-  const previousLoads = requests.filter((request) => request.url === '/').length
-  const previousCommands = (await readFile(logPath, 'utf8')).split(
-    '[command-end] command=open-target'
-  ).length
-  await control.evaluate(
-    `[...document.querySelectorAll('button')].find(item => item.textContent === '打开').click()`
-  )
-  await until(async () => {
-    const log = await readFile(logPath, 'utf8')
-    return log.split('[command-end] command=open-target').length > previousCommands
-  }, '正常窗口再次打开完成')
-  assert.equal(
-    requests.filter((request) => request.url === '/').length,
-    previousLoads,
-    '正常窗口再次打开不得重载网页'
-  )
-  await browser.click('anchor-internal')
-  await until(() => browser.evaluate('location.pathname === "/internal"'), '站内链接保留当前窗口')
-  assert.equal(await browser.evaluate('Boolean(window.__TAURI_INTERNALS__)'), true)
-  assert.equal(
-    await browser.evaluate(`(async () => {
+    await until(async () => {
+      const log = await readFile(logPath, 'utf8')
+      return log.split('[command-end] command=open-target').length > previousCommands
+    }, '正常窗口再次打开完成')
+    assert.equal(
+      requests.filter((request) => request.url === '/').length,
+      previousLoads,
+      '正常窗口再次打开不得重载网页'
+    )
+    await browser.click('anchor-internal')
+    await until(() => browser.evaluate('location.pathname === "/internal"'), '站内链接保留当前窗口')
+    assert.equal(await browser.evaluate('Boolean(window.__TAURI_INTERNALS__)'), true)
+    assert.equal(
+      await browser.evaluate(`(async () => {
     try { await window.__TAURI_INTERNALS__.invoke('get_control_state'); return false; }
     catch { return true; }
   })()`),
-    true,
-    '外部网页不能调用控制命令'
-  )
-  assert.deepEqual(browser.errors, [], '网页不得出现 JavaScript 异常')
+      true,
+      '外部网页不能调用控制命令'
+    )
+    assert.deepEqual(browser.errors, [], '网页不得出现 JavaScript 异常')
+  }
+  assert.deepEqual(control.errors, [], '控制中心不得出现 JavaScript 异常')
   passed = true
 } catch (error) {
   console.error(`外部浏览器验收失败，现场：${root}`)
@@ -339,6 +516,7 @@ try {
     await new Promise((done) => server.close(done))
     await assertPortReleased(port)
   }
+  for (const port of servicePorts) await assertPortReleased(port)
   if (passed) await rm(agentRoot, { recursive: true, force: true })
 }
 console.info(`桌面外链验收通过，进程树与端口已释放：${root}`)

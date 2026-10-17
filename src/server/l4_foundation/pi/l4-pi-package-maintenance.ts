@@ -50,6 +50,7 @@ export async function runL4PiPackageMaintenance(input: {
   maintenance: L4PiDeskPackageMaintenanceRequest
   agentDir: string
   cwd: string
+  signal?: AbortSignal
 }): Promise<void> {
   const tsxImport = readL4PiTsxImport()
   const runnerPath = join(
@@ -74,6 +75,7 @@ export async function runL4PiPackageMaintenance(input: {
     env: { PI_DESK_PACKAGE_MAINTENANCE_CWD: input.cwd },
     maxOutputBytes: L4_PI_PACKAGE_MAINTENANCE_MAX_OUTPUT_BYTES,
     timeoutMs: 120_000,
+    signal: input.signal,
     timeoutError: () =>
       new L4PiPackageMaintenanceError(
         'failed',

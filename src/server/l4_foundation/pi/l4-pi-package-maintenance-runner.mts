@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, readFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { L4PluginRegistrySchema } from '@common/l4_foundation/plugin/l4-plugin-package'
 import { createJiti } from 'jiti'
 import packageRootApi from '../process/l4-package-root.js'
@@ -86,75 +87,65 @@ async function main(): Promise<void> {
     join(agentDir, 'pi-desk', 'plugin-package-manager')
   await mkdir(cwd, { recursive: true })
 
-  let actions: Array<Exclude<PackageAction, 'reinstall'>>
-  if (action === 'reinstall') {
-    const packageName = /^npm:((?:@[^/]+\/)?[^@]+)(?:@.+)?$/.exec(source)?.[1]
-    if (!packageName) throw new Error('重装维护只接受 npm 包来源')
-    const { SettingsManager } = await import('@earendil-works/pi-coding-agent')
-    const settings = SettingsManager.create(cwd, agentDir, { projectTrusted: false })
-    const errors = settings.drainErrors()
-    if (errors.length) throw new Error(errors.map(({ error }) => error.message).join('; '))
-    const configured = settings.getGlobalSettings().packages ?? []
-    const installed = configured.some((item) => {
-      const value = typeof item === 'string' ? item : item.source
-      return /^npm:((?:@[^/]+\/)?[^@]+)(?:@.+)?$/.exec(value)?.[1] === packageName
-    })
-    actions = installed ? ['remove', 'install'] : ['install']
-  } else {
-    actions = [action]
+  if (action === 'reinstall' && !/^npm:((?:@[^/]+\/)?[^@]+)(?:@.+)?$/.test(source)) {
+    throw new Error('重装维护只接受 npm 包来源')
   }
-
-  for (const step of actions) {
-    const args = await commandArgs(step, source)
-    await new Promise<void>((resolveRun, rejectRun) => {
-      const child = spawn(process.execPath, args, {
-        cwd,
-        env: {
-          ...inheritedEnvironment,
-          ...registryEnvironment,
-          FORCE_COLOR: '0',
-          NO_COLOR: '1',
-          PI_CODING_AGENT_DIR: agentDir,
-          PI_CODING_AGENT_SESSION_DIR: join(agentDir, 'sessions')
-        },
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true
-      })
-      activeChild = child
-      let timedOut = false
-      let settled = false
-      const finish = (callback: () => void): void => {
-        if (settled) return
-        settled = true
-        activeChild = null
-        clearTimeout(timeout)
-        callback()
-      }
-
-      child.stdout.on('data', (chunk: Buffer) => process.stdout.write(chunk))
-      child.stderr.on('data', (chunk: Buffer) => process.stderr.write(chunk))
-      child.once('error', (error) => finish(() => rejectRun(error)))
-      child.once('close', (code) => {
-        finish(() => {
-          if (timedOut) {
-            rejectRun(new Error(`Pi ${step} ${source} 超时`))
-            return
-          }
-          if (code !== 0) {
-            rejectRun(new Error(`Pi ${step} ${source} 退出码 ${code ?? 'null'}`))
-            return
-          }
-          resolveRun()
-        })
-      })
-
-      const timeout = setTimeout(() => {
-        timedOut = true
-        void terminateProcessTree(child)
-      }, PACKAGE_CLI_TIMEOUT_MS)
-      timeout.unref()
+  const args =
+    action === 'reinstall'
+      ? [
+          ...process.execArgv,
+          fileURLToPath(new URL('./l4-pi-package-reinstall-runner.mts', import.meta.url)),
+          source
+        ]
+      : await commandArgs(action, source)
+  await new Promise<void>((resolveRun, rejectRun) => {
+    const child = spawn(process.execPath, args, {
+      cwd,
+      env: {
+        ...inheritedEnvironment,
+        ...registryEnvironment,
+        FORCE_COLOR: '0',
+        NO_COLOR: '1',
+        PI_CODING_AGENT_DIR: agentDir,
+        PI_CODING_AGENT_SESSION_DIR: join(agentDir, 'sessions')
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true
     })
-  }
+    activeChild = child
+    let timedOut = false
+    let settled = false
+    const finish = (callback: () => void): void => {
+      if (settled) return
+      settled = true
+      activeChild = null
+      clearTimeout(timeout)
+      callback()
+    }
+
+    child.stdout.on('data', (chunk: Buffer) => process.stdout.write(chunk))
+    child.stderr.on('data', (chunk: Buffer) => process.stderr.write(chunk))
+    child.once('error', (error) => finish(() => rejectRun(error)))
+    child.once('close', (code) => {
+      finish(() => {
+        if (timedOut) {
+          rejectRun(new Error(`Pi ${action} ${source} 超时`))
+          return
+        }
+        if (code !== 0) {
+          rejectRun(new Error(`Pi ${action} ${source} 退出码 ${code ?? 'null'}`))
+          return
+        }
+        resolveRun()
+      })
+    })
+
+    const timeout = setTimeout(() => {
+      timedOut = true
+      void terminateProcessTree(child)
+    }, PACKAGE_CLI_TIMEOUT_MS)
+    timeout.unref()
+  })
   const jiti = createJiti(import.meta.url, {
     nativeModules: [
       '@earendil-works/pi-coding-agent',

@@ -1,0 +1,57 @@
+schema: pi.workspace/v3
+
+definitions:
+  node-worktree:
+    description: Node.js 隔离开发工作区
+
+    provision:
+      description: 首次准备源码、依赖和基础编译环境
+      parameters:
+        type: object
+        additionalProperties: false
+        properties:
+          runtime:
+            type: string
+            required: false
+            default: node-22
+            enum: [node-20, node-22]
+      handler: .pi/workspace/provision.mjs
+      timeoutSeconds: 3600
+
+    commands:
+      test:
+        description: 执行当前工作区测试
+        from: [occupied]
+        onSuccess: occupied
+        parameters:
+          type: object
+          additionalProperties: false
+          properties:
+            scope:
+              type: string
+              required: false
+              default: related
+              enum: [related, full]
+        handler: .pi/workspace/commands/test.mjs
+        timeoutSeconds: 900
+
+      accept:
+        description: 记录当前需求已经人工验收通过
+        from: [occupied]
+        onSuccess: occupied
+        handler: .pi/workspace/commands/accept.mjs
+        timeoutSeconds: 60
+
+      reset:
+        description: 清理当前需求并恢复可复用基线
+        from: [occupied]
+        onSuccess: available
+        handler: .pi/workspace/commands/reset.mjs
+        timeoutSeconds: 900
+
+      remove:
+        description: 物理删除当前工作区
+        from: [available, occupied]
+        onSuccess: removed
+        handler: .pi/workspace/commands/remove.mjs
+        timeoutSeconds: 600

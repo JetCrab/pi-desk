@@ -12,7 +12,7 @@ import { createJiti } from 'jiti'
 const execFileAsync = promisify(execFile)
 const require = createRequire(import.meta.url)
 
-test('真实官方 CLI 首次安装、同版本重装、latest、降级和卸载', { timeout: 150_000 }, async (t) => {
+test('官方包管理首次安装、重装保留过滤、失败保留配置和卸载', { timeout: 150_000 }, async (t) => {
   const runId = `official-reinstall-${randomUUID()}`
   const root = resolve('temp/run/pidesk-maintenance', runId)
   const artifacts = resolve('temp/package/pidesk-maintenance', runId)
@@ -130,19 +130,42 @@ test('真实官方 CLI 首次安装、同版本重装、latest、降级和卸载
       JSON.parse(await readFile(join(installed, 'package.json'), 'utf8')).version as string
     await execute(`npm:${packageName}@1.0.0`)
     assert.equal(await version(), '1.0.0')
+    const filters = {
+      extensions: ['index.ts', '!ignored.ts'],
+      skills: [],
+      prompts: [],
+      themes: [],
+      autoload: false
+    }
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        theme: 'dark',
+        npmCommand: ['npm', '--loglevel=error'],
+        packages: [{ source: `npm:${packageName}@1.0.0`, ...filters }]
+      })
+    )
+    const assertSettings = async (source: string): Promise<void> => {
+      const settings = JSON.parse(await readFile(settingsPath, 'utf8'))
+      assert.equal(settings.theme, 'dark')
+      assert.deepEqual(settings.npmCommand, ['npm', '--loglevel=error'])
+      assert.deepEqual(settings.packages, [{ source, ...filters }])
+    }
     await writeFile(join(installed, 'index.ts'), 'tampered\n')
     await execute(`npm:${packageName}@1.0.0`)
     assert.match(await readFile(join(installed, 'index.ts'), 'utf8'), /marker = '1.0.0'/)
+    await assertSettings(`npm:${packageName}@1.0.0`)
     await execute(`npm:${packageName}`)
     assert.equal(await version(), '2.0.0')
-    assert.deepEqual(JSON.parse(await readFile(settingsPath, 'utf8')).packages, [
-      `npm:${packageName}`
-    ])
+    await assertSettings(`npm:${packageName}`)
     await execute(`npm:${packageName}@1.0.0`)
     assert.equal(await version(), '1.0.0')
-    assert.deepEqual(JSON.parse(await readFile(settingsPath, 'utf8')).packages, [
-      `npm:${packageName}@1.0.0`
-    ])
+    await assertSettings(`npm:${packageName}@1.0.0`)
+    await assert.rejects(execute(`npm:${packageName}@9.0.0`), /9\.0\.0/)
+    await assertSettings(`npm:${packageName}@1.0.0`)
+    await execute(`npm:${packageName}@1.0.0`)
+    assert.equal(await version(), '1.0.0')
+    await assertSettings(`npm:${packageName}@1.0.0`)
     await execute(`npm:${packageName}@1.0.0`, 'remove')
     assert.deepEqual(JSON.parse(await readFile(settingsPath, 'utf8')).packages, [])
     await assert.rejects(() => readFile(join(installed, 'package.json')), { code: 'ENOENT' })

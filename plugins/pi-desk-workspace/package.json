@@ -1,0 +1,73 @@
+{
+  "name": "@jetcrab/pi-desk-workspace",
+  "version": "1.1.1",
+  "description": "Reusable isolated workspace pool for Pi sessions with a Pi Desk sidebar",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JetCrab/pi-desk.git",
+    "directory": "plugins/pi-desk-workspace"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi-desk-plugin",
+    "workspace"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "skills": [
+      "./dist/skills/workspace-config-authoring",
+      "./dist/skills/workspace-usage"
+    ]
+  },
+  "piDesk": {
+    "entry": "./dist/pi-desk.js"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build-assets.mjs && esbuild src/browser-entry.ts --bundle --splitting --format=esm --platform=browser --target=es2022 --minify --define:process.env.NODE_ENV=\\\"production\\\" --external:react --external:react/jsx-runtime --external:react/jsx-dev-runtime --external:react-dom --external:react-dom/client --external:@jetcrab/pi-desk-sdk/react/base --external:@jetcrab/pi-desk-sdk/react/markdown --outdir=dist/browser --entry-names=entry --chunk-names=chunks/[name]-[hash]",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "pnpm run build && pnpm run test",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@jetcrab/pi-desk-sdk": "workspace:^",
+    "cross-spawn": "^7.0.6",
+    "yaml": "^2.8.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@base-ui/react": "^1.7.0",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "esbuild": "^0.25.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tsx": "^4.23.12",
+    "typescript": "^5"
+  }
+}

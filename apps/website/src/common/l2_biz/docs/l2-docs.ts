@@ -1,4 +1,4 @@
-export const documentGroups = ['开始使用', '使用指南', '插件', '帮助'] as const
+export const documentGroups = ['开始使用', '使用指南', '插件', '插件介绍', '帮助'] as const
 
 export const documents = {
   '/docs/': {
@@ -31,55 +31,55 @@ export const documents = {
     description: '按需安装官方插件，为 Pi Desk 增加工具和界面。',
     group: '插件'
   },
-  '/docs/background-tasks/': {
-    title: '后台任务',
-    description: '让命令在后台运行，前台继续独立工作，在任务中心查看日志和停止任务。',
-    group: '插件'
-  },
-  '/docs/subagents/': {
-    title: '子代理',
-    description: '将独立子任务交给不同角色，查看执行过程，让结论回到主会话。',
-    group: '插件'
-  },
-  '/docs/deliverables/': {
-    title: '交付物',
-    description: '让助手登记完成的项目文件，从会话侧栏集中查看与预览。',
-    group: '插件'
-  },
-  '/docs/usage/': {
-    title: '模型用量',
-    description: '查看消耗趋势与模型分布，分析单个会话中主代理和子代理的用量。',
-    group: '插件'
-  },
-  '/docs/context/': {
-    title: '上下文管理',
-    description: '查看上下文占用，保留对话，少带旧过程。',
-    group: '插件'
-  },
-  '/docs/quota/': {
-    title: '额度查看',
-    description: '配置支持的服务来源，集中查看账户余额、额度窗口与重置时间。',
-    group: '插件'
-  },
-  '/docs/tibo/': {
-    title: 'Tibo 动态',
-    description: '跟踪公开动态，阅读中文解读与原文，核对可能的 Codex 额度重置信号。',
-    group: '插件'
-  },
-  '/docs/tool-reason/': {
-    title: '工具调用理由',
-    description: '在工具消息旁阅读简短调用目的，结合路径、命令和输出核对这一步操作。',
-    group: '插件'
-  },
-  '/docs/remote-debug/': {
-    title: '远程调试',
-    description: '通过同机桌面端与已配置隧道，临时让其他设备访问项目开发网页。',
-    group: '插件'
-  },
   '/docs/development/': {
     title: '让 AI 开发插件',
     description: '说清需求，让 AI 参考 SDK 文档和现有项目完成开发。',
     group: '插件'
+  },
+  '/docs/background-tasks/': {
+    title: '后台任务',
+    description: '让命令在后台运行，前台继续独立工作，在任务中心查看日志和停止任务。',
+    group: '插件介绍'
+  },
+  '/docs/subagents/': {
+    title: '子代理',
+    description: '将独立子任务交给不同角色，查看执行过程，让结论回到主会话。',
+    group: '插件介绍'
+  },
+  '/docs/deliverables/': {
+    title: '交付物',
+    description: '让助手登记完成的项目文件，从会话侧栏集中查看与预览。',
+    group: '插件介绍'
+  },
+  '/docs/usage/': {
+    title: '模型用量',
+    description: '查看消耗趋势与模型分布，分析单个会话中主代理和子代理的用量。',
+    group: '插件介绍'
+  },
+  '/docs/context/': {
+    title: '上下文管理',
+    description: '查看上下文占用，保留对话，少带旧过程。',
+    group: '插件介绍'
+  },
+  '/docs/quota/': {
+    title: '额度查看',
+    description: '配置支持的服务来源，集中查看账户余额、额度窗口与重置时间。',
+    group: '插件介绍'
+  },
+  '/docs/tibo/': {
+    title: 'Tibo 动态',
+    description: '跟踪公开动态，阅读中文解读与原文，核对可能的 Codex 额度重置信号。',
+    group: '插件介绍'
+  },
+  '/docs/tool-reason/': {
+    title: '工具调用理由',
+    description: '在工具消息旁阅读简短调用目的，结合路径、命令和输出核对这一步操作。',
+    group: '插件介绍'
+  },
+  '/docs/remote-debug/': {
+    title: '远程调试',
+    description: '通过同机桌面端与已配置隧道，临时让其他设备访问项目开发网页。',
+    group: '插件介绍'
   },
   '/docs/faq/': {
     title: '常见问题',

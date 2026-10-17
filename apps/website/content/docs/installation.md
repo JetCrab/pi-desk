@@ -16,7 +16,7 @@
 
 在 Linux amd64 主机上，可使用 `ghcr.io/jetcrab/pi-desk` 正式镜像运行 Pi Desk 服务，无需在宿主机安装 Node.js 或 Pi。首次部署前请确认 GHCR 中已有正式版本标签。
 
-完整的 Compose 配置、数据目录、访问方式和升级备份步骤见 [Docker 部署与使用](/docs/docker/)。
+Compose 配置、数据目录和升级方法见 [Docker 部署与使用](/docs/docker/)。
 
 ## 通过 Node.js 安装
 
