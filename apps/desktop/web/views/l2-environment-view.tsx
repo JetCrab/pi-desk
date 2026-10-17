@@ -84,6 +84,7 @@ export type EnvironmentViewProps = {
   installCommand: string
   launching: boolean
   busy: boolean
+  piBusy?: boolean
   cancelling: boolean
   error: string
   copied: string
@@ -100,6 +101,7 @@ export function EnvironmentView({
   installCommand,
   launching,
   busy,
+  piBusy = false,
   cancelling,
   error,
   copied,
@@ -110,11 +112,11 @@ export function EnvironmentView({
   const checking = environment.status === 'checking'
   const starting = target.server?.status === 'starting'
   const working = installing || starting || launching
-  const locked = busy || working || checking
+  const locked = busy || working || checking || piBusy
   const optionsOnly = mode === 'options'
   const failure =
     error ||
-    environment.error ||
+    (optionsOnly && environment.piUpdate.status === 'failed' ? '' : environment.error) ||
     (!optionsOnly && target.server?.status === 'failed' ? target.server.detail : '')
   const canOpen = !target.server?.needsSetup && !checking
   const components = componentOrder.flatMap((name) =>

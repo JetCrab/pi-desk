@@ -31,6 +31,7 @@ import type {
   L4ModelPreset,
   L4ModelProviderConfig,
   L4ModelSelection,
+  L4ModelSettingsPreview,
   L4ModelSettingsReplaceInput
 } from './l4-model-settings-types'
 
@@ -99,14 +100,44 @@ function readJsonRecord(path: string): JsonRecord {
   return value
 }
 
-function writeJsonRecordAtomic(path: string, value: JsonRecord): void {
+function writeTextAtomic(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true })
   const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`
   try {
-    writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+    writeFileSync(temporaryPath, content, 'utf8')
     renameSync(temporaryPath, path)
   } finally {
     if (existsSync(temporaryPath)) unlinkSync(temporaryPath)
+  }
+}
+
+function writeJsonRecordAtomic(path: string, value: JsonRecord): void {
+  writeTextAtomic(path, `${JSON.stringify(value, null, 2)}\n`)
+}
+
+function writeRecordsWithRollback(files: Array<{ path: string; value: JsonRecord }>): void {
+  const originals = files.map(({ path }) => (existsSync(path) ? readFileSync(path, 'utf8') : null))
+  let written = 0
+  try {
+    for (const { path, value } of files) {
+      writeJsonRecordAtomic(path, value)
+      written += 1
+    }
+  } catch (cause) {
+    for (let index = written - 1; index >= 0; index -= 1) {
+      const path = files[index].path
+      const content = originals[index]
+      try {
+        if (content === null) unlinkSync(path)
+        else writeTextAtomic(path, content)
+      } catch (error) {
+        console.error('[Pi Desk][ModelSettings] 配置文件回滚失败', {
+          path,
+          message: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
+    throw cause
   }
 }
 
@@ -592,10 +623,41 @@ async function assertConnectionCredentials(
   }
 }
 
-async function assertRemovalReferences(current: JsonRecord, candidate: JsonRecord): Promise<void> {
+async function prepareProjectDefaultChanges(
+  current: JsonRecord,
+  candidate: JsonRecord,
+  input: L4ModelSettingsReplaceInput,
+  runtime: ModelRuntime,
+  models: L4ModelOption[]
+): Promise<{
+  projectDefaults: L4ModelSettingsPreview['projectDefaults']
+  files: Array<{ path: string; value: JsonRecord }>
+}> {
+  const previousKeys = collectedModelKeys(current)
   const nextKeys = collectedModelKeys(candidate)
-  const removed = new Set([...collectedModelKeys(current)].filter((key) => !nextKeys.has(key)))
-  if (!removed.size) return
+  const removed = new Set([...previousKeys].filter((key) => !nextKeys.has(key)))
+  const replacements = new Map<string, L4ModelOption>()
+  for (const { from, to } of input.modelReplacements ?? []) {
+    const fromKey = collectedModelKey(from.provider, from.modelId)
+    const toKey = collectedModelKey(to.provider, to.modelId)
+    if (fromKey === toKey) throw new Error('模型替换来源和目标不能相同')
+    if (replacements.has(fromKey)) throw new Error('模型替换来源不能重复')
+    if (!previousKeys.has(fromKey) || !removed.has(fromKey)) {
+      throw new Error(`替换来源 ${from.provider}/${from.modelId} 必须是本次移除的已收录模型`)
+    }
+    const target = models.find(
+      (model) => model.provider === to.provider && model.modelId === to.modelId
+    )
+    if (!nextKeys.has(toKey) || !target) {
+      throw new Error(`替换目标 ${to.provider}/${to.modelId} 未收录或不可用`)
+    }
+    replacements.set(fromKey, target)
+  }
+  const result: {
+    projectDefaults: L4ModelSettingsPreview['projectDefaults']
+    files: Array<{ path: string; value: JsonRecord }>
+  } = { projectDefaults: [], files: [] }
+  if (!removed.size) return result
   for (const preset of normalizePresets(candidate)) {
     if (removed.has(collectedModelKey(preset.provider, preset.modelId))) {
       throw new Error(
@@ -606,17 +668,60 @@ async function assertRemovalReferences(current: JsonRecord, candidate: JsonRecor
   // 仅在移除模型时检查已知项目，不扫描文件系统寻找任意项目配置。
   const projects = await listL4PiDirectorySummaries(true)
   for (const { cwd } of projects) {
-    const settings = readJsonRecord(join(cwd, CONFIG_DIR_NAME, 'settings.json'))
+    const path = join(cwd, CONFIG_DIR_NAME, 'settings.json')
+    const settings = readJsonRecord(path)
     if (
-      typeof settings.defaultProvider === 'string' &&
-      typeof settings.defaultModel === 'string' &&
-      removed.has(collectedModelKey(settings.defaultProvider, settings.defaultModel))
+      !['defaultProvider', 'defaultModel', 'defaultThinkingLevel'].some((key) =>
+        Object.hasOwn(settings, key)
+      )
     ) {
+      continue
+    }
+    const merged = SettingsManager.create(cwd, getAgentDir())
+    const provider = merged.getDefaultProvider()
+    const modelId = merged.getDefaultModel()
+    if (!provider || !modelId || !removed.has(collectedModelKey(provider, modelId))) continue
+    const target = replacements.get(collectedModelKey(provider, modelId))
+    if (!target) {
       throw new Error(
-        `项目“${cwd}”仍将 ${settings.defaultProvider}/${settings.defaultModel} 设为默认模型，请先在“项目默认”中调整`
+        `项目“${cwd}”仍将 ${provider}/${modelId} 设为默认模型，请先在“项目默认”中调整`
       )
     }
+    const projectModels = await availableModelOptions(runtime, cwd, candidate)
+    if (
+      !projectModels.some(
+        (model) => model.provider === target.provider && model.modelId === target.modelId
+      )
+    ) {
+      throw new Error(`替换目标 ${target.provider}/${target.modelId} 在项目“${cwd}”中不可用`)
+    }
+    const from: L4ModelSelection = {
+      provider,
+      modelId,
+      thinkingLevel: merged.getDefaultThinkingLevel() ?? 'off'
+    }
+    const thinkingLevel = target.thinkingLevels.includes(from.thinkingLevel)
+      ? from.thinkingLevel
+      : target.thinkingLevels[0]
+    if (!thinkingLevel)
+      throw new Error(`替换目标 ${target.provider}/${target.modelId} 没有可用思考等级`)
+    const to: L4ModelSelection = {
+      provider: target.provider,
+      modelId: target.modelId,
+      thinkingLevel
+    }
+    result.projectDefaults.push({ cwd, from, to })
+    result.files.push({
+      path,
+      value: {
+        ...settings,
+        defaultProvider: to.provider,
+        defaultModel: to.modelId,
+        defaultThinkingLevel: to.thinkingLevel
+      }
+    })
   }
+  return result
 }
 
 export async function readL4ModelSettings(): Promise<{
@@ -654,37 +759,55 @@ export async function readL4ModelSettings(): Promise<{
   return result
 }
 
+async function prepareModelSettings(input: L4ModelSettingsReplaceInput): Promise<{
+  projectDefaults: L4ModelSettingsPreview['projectDefaults']
+  files: Array<{ path: string; value: JsonRecord }>
+}> {
+  const path = modelsPath()
+  let current: JsonRecord
+  try {
+    current = readJsonRecord(path)
+  } catch (error) {
+    if (input.nativeConfig === undefined) throw error
+    // 原生编辑是损坏配置的修复入口，不能要求旧文件先成功解析。
+    current = {}
+  }
+  let candidate: JsonRecord
+  if (input.nativeConfig !== undefined) {
+    candidate = input.nativeConfig
+  } else {
+    const currentRuntime = await ModelRuntime.create({ allowModelNetwork: false })
+    const error = currentRuntime.getError()
+    if (error) throw new Error(`当前模型配置不可用，请先通过原生配置修正：${error}`)
+    const defaults =
+      input.accountModels === undefined
+        ? currentRuntime
+        : await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
+    candidate = mergeModelsRoot(current, input, currentRuntime, defaults)
+  }
+  const runtime = await validateModelsRoot(candidate)
+  const models = await availableModelOptions(runtime, undefined, candidate)
+  await assertConnectionCredentials(current, candidate, runtime)
+  assertPresetsValid(normalizePresets(candidate), models, normalizePresets(current))
+  const result = await prepareProjectDefaultChanges(current, candidate, input, runtime, models)
+  result.files.push({ path, value: candidate })
+  return result
+}
+
+export async function previewL4ModelSettings(
+  input: L4ModelSettingsReplaceInput
+): Promise<L4ModelSettingsPreview> {
+  return serializeWrite(async () => {
+    const { projectDefaults } = await prepareModelSettings(input)
+    return { projectDefaults }
+  })
+}
+
 export async function replaceL4ModelSettings(input: L4ModelSettingsReplaceInput): Promise<void> {
   await serializeWrite(async () => {
-    const path = modelsPath()
     try {
-      let current: JsonRecord
-      try {
-        current = readJsonRecord(path)
-      } catch (error) {
-        if (input.nativeConfig === undefined) throw error
-        // 原生编辑是损坏配置的修复入口，不能要求旧文件先成功解析。
-        current = {}
-      }
-      let candidate: JsonRecord
-      if (input.nativeConfig !== undefined) {
-        candidate = input.nativeConfig
-      } else {
-        const currentRuntime = await ModelRuntime.create({ allowModelNetwork: false })
-        const error = currentRuntime.getError()
-        if (error) throw new Error(`当前模型配置不可用，请先通过原生配置修正：${error}`)
-        const defaults =
-          input.accountModels === undefined
-            ? currentRuntime
-            : await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
-        candidate = mergeModelsRoot(current, input, currentRuntime, defaults)
-      }
-      const runtime = await validateModelsRoot(candidate)
-      const models = await availableModelOptions(runtime, undefined, candidate)
-      await assertConnectionCredentials(current, candidate, runtime)
-      await assertRemovalReferences(current, candidate)
-      assertPresetsValid(normalizePresets(candidate), models, normalizePresets(current))
-      writeJsonRecordAtomic(path, candidate)
+      const { files } = await prepareModelSettings(input)
+      writeRecordsWithRollback(files)
     } catch (cause) {
       console.error('[Pi Desk][ModelSettings] 模型配置保存失败', {
         message: cause instanceof Error ? cause.message : String(cause)

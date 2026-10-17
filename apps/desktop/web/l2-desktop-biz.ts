@@ -11,6 +11,7 @@ import {
 
 export type DesktopAction =
   | 'open'
+  | 'open-external'
   | 'stop'
   | 'restart'
   | 'delete'
@@ -21,9 +22,12 @@ export type DesktopAction =
   | 'stop-tunnel'
   | 'check-environment'
   | 'cancel-environment'
+  | 'check-pi-update'
+  | 'update-pi'
 
 const commands: Record<DesktopAction, string> = {
   open: 'open_target_command',
+  'open-external': 'open_target_command',
   stop: 'stop_server_command',
   restart: 'restart_server_command',
   delete: 'delete_target_command',
@@ -33,11 +37,16 @@ const commands: Record<DesktopAction, string> = {
   'start-tunnel': 'start_tunnel_command',
   'stop-tunnel': 'stop_tunnel_command',
   'check-environment': 'check_environment_command',
-  'cancel-environment': 'cancel_environment_command'
+  'cancel-environment': 'cancel_environment_command',
+  'check-pi-update': 'check_pi_update_command',
+  'update-pi': 'update_pi_command'
 }
 
 export async function runDesktopAction(action: DesktopAction, url?: string): Promise<void> {
-  await desktopCommand(commands[action], url ? { url } : undefined)
+  await desktopCommand(commands[action], {
+    ...(url ? { url } : {}),
+    ...(action === 'open-external' ? { external: true } : {})
+  })
 }
 
 export async function saveStartupPreference(preferences: StartupPreferences): Promise<void> {

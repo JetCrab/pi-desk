@@ -6,6 +6,12 @@ export type PackageUpdate = {
   error: string | null
 }
 
+export type PiUpdate = {
+  status: 'idle' | 'checking' | 'available' | 'current' | 'updating' | 'failed'
+  version: string | null
+  error: string | null
+}
+
 export type ServerSnapshot = {
   status: 'stopped' | 'starting' | 'running' | 'failed'
   detail: string
@@ -45,6 +51,7 @@ export type EnvironmentSnapshot = {
   components: EnvironmentComponent[]
   step: string
   error: string | null
+  piUpdate: PiUpdate
 }
 
 export type ControlState = {

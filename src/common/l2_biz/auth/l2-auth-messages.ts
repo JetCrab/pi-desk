@@ -10,7 +10,7 @@ export const L2_AUTH_MESSAGES = {
     setPassword: 'Set a password',
     newPassword: 'New password',
     passwordHint:
-      '12–256 characters; use at least three of: uppercase letters, lowercase letters, numbers and symbols. No leading/trailing spaces, line breaks or invisible control characters.',
+      '12–64 characters; use at least three of: uppercase letters, lowercase letters, numbers and symbols. No leading/trailing spaces, line breaks or invisible control characters.',
     generatePassword: 'Generate password',
     generatePasswordHint: 'Generate a random 16-character password',
     generatePasswordFailed: 'Unable to generate a password. Please try again.',
@@ -60,7 +60,7 @@ export const L2_AUTH_MESSAGES = {
     setPassword: '设置密码',
     newPassword: '新密码',
     passwordHint:
-      '12–256 个字符，至少包含大写字母、小写字母、数字、符号中的三类；不能有首尾空白、换行或不可见控制字符。',
+      '12–64 个字符，至少包含大写字母、小写字母、数字、符号中的三类；不能有首尾空白、换行或不可见控制字符。',
     generatePassword: '生成密码',
     generatePasswordHint: '随机生成 16 位密码',
     generatePasswordFailed: '生成密码失败，请重试。',

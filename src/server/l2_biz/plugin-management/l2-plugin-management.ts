@@ -97,6 +97,20 @@ interface L2PluginPackageMetadata {
 
 type L2PluginMutation = 'add' | 'update' | 'del' | 'enable' | 'disable'
 
+interface L2PluginMutationInput {
+  mutation: L2PluginMutation
+  source: string
+  operationSource: string
+  reinstall: boolean
+  options: Omit<L2PluginManagementInstallRequest, 'source'>
+}
+
+interface L2PluginPreparedMutation {
+  request: L4PiDeskPackageMaintenanceRequest | null
+  updateTag: string | null
+  pluginName: string | null
+}
+
 export interface L2PluginManagementWorkSessions {
   refreshPluginMessages: () => void
   runPluginRestart: <T>(operation: () => Promise<T>) => Promise<T>
@@ -402,6 +416,9 @@ export class L2PluginManagement {
     this.assertOpen()
     const results: L2PluginManagementBatchResponse['results'] = []
     const seen = new Set<string>()
+    const snapshot =
+      input.action === 'add' || input.action === 'update' ? await this.readSources() : null
+    const mutations: L2PluginMutationInput[] = []
     const items = input.action === 'add' ? input.items : input.sources.map((source) => ({ source }))
     for (const item of items) {
       try {
@@ -413,9 +430,9 @@ export class L2PluginManagement {
         seen.add(identity)
         if (input.action === 'add') {
           const { source: _source, ...options } = item
-          await this.reinstall(source, undefined, options)
+          mutations.push(this.acceptMutation('add', source, snapshot!, true, undefined, options))
         } else if (input.action === 'update') {
-          await this.update(source)
+          mutations.push(this.acceptMutation('update', source, snapshot!))
         } else if (input.action === 'del') {
           await this.del(source)
         } else {
@@ -426,6 +443,7 @@ export class L2PluginManagement {
         results.push({ source: item.source, error: errorMessage(error).slice(0, 4000) })
       }
     }
+    if (mutations.length > 0) this.enqueueMutations(mutations)
     return { snapshot: await this.readSnapshot(false), results }
   }
 
@@ -673,7 +691,13 @@ export class L2PluginManagement {
   }
 
   reload(mode?: 'normal' | 'basic'): Promise<L2PluginManagementSnapshot> {
-    if (this.activeSource) {
+    if (
+      this.activeSource ||
+      [...this.operations].some(
+        ([source, operation]) =>
+          operation.phase !== 'failed' && !this.deferredMaintenance.has(source)
+      )
+    ) {
       return Promise.reject(
         new L2PluginManagementOperationConflictError('维护仍在执行或等待，请先完成当前操作')
       )
@@ -692,13 +716,33 @@ export class L2PluginManagement {
     options: Omit<L2PluginManagementInstallRequest, 'source'> = {}
   ): Promise<L2PluginManagementSnapshot> {
     this.assertOpen()
+    const snapshot = await this.readSources()
+    const input = this.acceptMutation(
+      mutation,
+      source,
+      snapshot,
+      reinstall,
+      previousSource,
+      options
+    )
+    this.enqueueMutations([input])
+    return this.readSnapshot(false)
+  }
+
+  private acceptMutation(
+    mutation: L2PluginMutation,
+    source: string,
+    snapshot: L4PiPluginSourceSnapshot,
+    reinstall = false,
+    previousSource?: string,
+    options: Omit<L2PluginManagementInstallRequest, 'source'> = {}
+  ): L2PluginMutationInput {
+    this.assertOpen()
     if (isL4PiDeskSafeMode()) {
       throw new L2PluginManagementOperationConflictError(
         '基础模式不执行插件维护，请通过基础聊天修复或正常启动后维护'
       )
     }
-    const snapshot = await this.readSources()
-    this.assertOpen()
     const existing = snapshot.sources.find(
       (item) => l2PluginSourceIdentity(item.source) === l2PluginSourceIdentity(source)
     )
@@ -733,36 +777,66 @@ export class L2PluginManagement {
     this.operations.set(operationSource, { action: mutation, phase: 'queued', message: null })
     this.updates.clear(operationSource)
     this.updates.clear(source)
-    this.publish()
-    void this.runExclusive(async () => {
-      this.activeSource = operationSource
-      try {
-        await this.executeMutation(mutation, source, operationSource, reinstall, options)
-        if (!this.deferredMaintenance.has(operationSource)) this.operations.delete(operationSource)
-      } catch (error) {
-        this.setOperation(operationSource, 'failed', errorMessage(error))
-      } finally {
-        this.updates.clear(operationSource)
-        this.updates.clear(source)
-        this.sourceCache = null
-        this.activeSource = null
-        this.publish()
-      }
-    }).catch((error: unknown) => {
-      if (!this.disposed) this.setOperation(operationSource, 'failed', errorMessage(error))
-    })
-    return this.readSnapshot(false)
+    return { mutation, source, operationSource, reinstall, options }
   }
 
-  private async executeMutation(
-    mutation: L2PluginMutation,
-    source: string,
-    operationSource: string,
-    reinstall: boolean,
-    options: Omit<L2PluginManagementInstallRequest, 'source'>
-  ): Promise<void> {
-    const runtime = getL4PiGlobalPluginRuntime()
-    const waiting = (reason: string): void => this.setOperation(operationSource, 'waiting', reason)
+  private enqueueMutations(inputs: readonly L2PluginMutationInput[]): void {
+    void this.runExclusive(async () => {
+      const startedAt = performance.now()
+      // 本批全部准备收尾后才写正式目录；错误按项收集，不让早退遗留预检进程。
+      const candidates = await Promise.all(
+        inputs.map(async (input) => {
+          try {
+            const prepared = await this.prepareMutation(input)
+            this.assertOpen()
+            this.setOperation(input.operationSource, 'queued', '候选检查完成，等待应用')
+            return { input, prepared }
+          } catch (error) {
+            this.setOperation(input.operationSource, 'failed', errorMessage(error))
+            return null
+          }
+        })
+      )
+      if (inputs.length > 1) {
+        console.info('[Pi Desk][PluginManagement] 批量并行准备收尾', {
+          count: inputs.length,
+          failedCount: candidates.filter((item) => item === null).length,
+          durationMs: Math.round(performance.now() - startedAt)
+        })
+      }
+      for (const candidate of candidates) {
+        if (!candidate) continue
+        const { input, prepared } = candidate
+        const { source, operationSource } = input
+        this.activeSource = operationSource
+        try {
+          this.assertOpen()
+          if (prepared) await this.executeMutation(input, prepared)
+          if (!this.deferredMaintenance.has(operationSource))
+            this.operations.delete(operationSource)
+        } catch (error) {
+          this.setOperation(operationSource, 'failed', errorMessage(error))
+        } finally {
+          this.updates.clear(operationSource)
+          this.updates.clear(source)
+          this.sourceCache = null
+          this.activeSource = null
+          this.publish()
+        }
+      }
+    }).catch((error: unknown) => {
+      if (this.disposed) return
+      for (const input of inputs)
+        this.setOperation(input.operationSource, 'failed', errorMessage(error))
+    })
+    this.publish()
+  }
+
+  private async prepareMutation(
+    input: L2PluginMutationInput
+  ): Promise<L2PluginPreparedMutation | null> {
+    const { mutation, source, operationSource, reinstall, options } = input
+    this.assertOpen()
     const current = this.createPackageManager()
     this.throwSettingsErrors(current.settingsManager)
     const configured = current.packageManager
@@ -771,10 +845,12 @@ export class L2PluginManagement {
     const target = configured.find((item) => item.source === operationSource)
     let request: L4PiDeskPackageMaintenanceRequest | null = null
     let updateTag: string | null = null
+    let pluginName: string | null = null
     if (mutation !== 'enable' && mutation !== 'disable') {
       const packageRootError = await readL4PiPackageRootConsistencyError({
         agentDir: this.agentDir,
-        configured
+        configured,
+        repairSource: mutation === 'add' && reinstall ? operationSource : undefined
       })
       if (packageRootError) throw new L2PluginManagementPackageRootError(packageRootError)
       if (mutation !== 'add' && !target) throw new L2PluginManagementNotFoundError(source)
@@ -796,7 +872,7 @@ export class L2PluginManagement {
         const version = resolved.source.slice(resolved.source.lastIndexOf('@') + 1)
         if (!installed.version)
           throw new L2PluginManagementInvalidPackageError('无法读取插件已安装版本')
-        if (!isL2PluginNewerVersion(version, installed.version)) return
+        if (!isL2PluginNewerVersion(version, installed.version)) return null
       }
       request = {
         ...(npmName && mutation !== 'del' && (reinstall || target || mutation === 'update')
@@ -805,7 +881,22 @@ export class L2PluginManagement {
         ...('registry' in resolved && resolved.registry ? { registry: resolved.registry } : {})
       }
       if (mutation !== 'del')
-        await this.probeCandidate(resolved.source, operationSource, request.registry)
+        pluginName = await this.probeCandidate(resolved.source, request.registry)
+    }
+    return { request, updateTag, pluginName }
+  }
+
+  private async executeMutation(
+    input: L2PluginMutationInput,
+    prepared: L2PluginPreparedMutation
+  ): Promise<void> {
+    const { mutation, source, operationSource } = input
+    const { request, updateTag, pluginName } = prepared
+    const runtime = getL4PiGlobalPluginRuntime()
+    const waiting = (reason: string): void => this.setOperation(operationSource, 'waiting', reason)
+    if (request) {
+      // 先前项可能安装失败或注册同名插件，不能依赖并行准备时的旧结论。
+      this.assertPluginNameAvailable(pluginName, operationSource)
       if (updateTag) {
         setL4PiPluginUpdateTag(operationSource, updateTag, this.agentDir)
         this.updates.clear(operationSource)
@@ -820,6 +911,20 @@ export class L2PluginManagement {
     await runtime.withSourceIdle(
       operationSource,
       async () => {
+        if (request) {
+          const current = this.createPackageManager()
+          this.throwSettingsErrors(current.settingsManager)
+          const configured = current.packageManager
+            .listConfiguredPackages()
+            .filter((item) => item.scope === 'user')
+          const rootError = await readL4PiPackageRootConsistencyError({
+            agentDir: this.agentDir,
+            configured,
+            repairSource: mutation === 'add' && input.reinstall ? operationSource : undefined
+          })
+          if (rootError) throw new L2PluginManagementPackageRootError(rootError)
+        }
+        this.assertOpen()
         this.setOperation(
           operationSource,
           'applying',
@@ -997,11 +1102,7 @@ export class L2PluginManagement {
     return writing() && this.sourceCache ? this.sourceCache : snapshot
   }
 
-  private async probeCandidate(
-    source: string,
-    activeSource: string,
-    registry?: string
-  ): Promise<void> {
+  private async probeCandidate(source: string, registry?: string): Promise<string | null> {
     const root = join(this.stagingRoot, randomUUID())
     const stagingAgentDir = join(root, 'agent')
     const stagingCwd = join(root, 'workspace')
@@ -1031,7 +1132,8 @@ export class L2PluginManagement {
       await runL4PiPackageMaintenance({
         maintenance: { action: 'install', source, ...(registry ? { registry } : {}) },
         agentDir: stagingAgentDir,
-        cwd: stagingCwd
+        cwd: stagingCwd,
+        signal: this.lifetime.signal
       })
 
       this.assertOpen()
@@ -1047,7 +1149,12 @@ export class L2PluginManagement {
 
       await this.verifyPackageVersion(source, candidate.installedPath)
 
-      const diagnostics = await runL4PiPluginProbe(stagingCwd, stagingAgentDir, true)
+      const diagnostics = await runL4PiPluginProbe(
+        stagingCwd,
+        stagingAgentDir,
+        true,
+        this.lifetime.signal
+      )
       if (diagnostics.loadError) {
         throw new L2PluginManagementInvalidPackageError(diagnostics.loadError)
       }
@@ -1056,21 +1163,10 @@ export class L2PluginManagement {
         throw new L2PluginManagementInvalidPackageError(failed.error.message)
       }
 
-      const candidatePluginName = diagnostics.packages[0]?.pluginName
-      if (candidatePluginName) {
-        const conflict = getL4PiGlobalPluginRuntime()
-          .readDiagnostics()
-          .packages.find(
-            (item) => item.source !== activeSource && item.pluginName === candidatePluginName
-          )
-        if (conflict) {
-          throw new L2PluginManagementInvalidPackageError(
-            `pluginName 已由其他 Package 注册：${candidatePluginName}`
-          )
-        }
-      }
+      const candidatePluginName = diagnostics.packages[0]?.pluginName ?? null
       this.assertOpen()
       console.info('[Pi Desk][PluginManagement] 候选插件隔离预检通过', { source })
+      return candidatePluginName
     } catch (error) {
       if (error instanceof L2PluginManagementInvalidPackageError) throw error
       throw new L2PluginManagementInvalidPackageError(errorMessage(error))
@@ -1082,6 +1178,17 @@ export class L2PluginManagement {
         })
       })
     }
+  }
+
+  private assertPluginNameAvailable(pluginName: string | null, source: string): void {
+    if (!pluginName) return
+    const conflict = getL4PiGlobalPluginRuntime()
+      .readDiagnostics()
+      .packages.some((item) => item.source !== source && item.pluginName === pluginName)
+    if (conflict)
+      throw new L2PluginManagementInvalidPackageError(
+        `pluginName 已由其他 Package 注册：${pluginName}`
+      )
   }
 
   private restartWhenQuiet(mode?: 'normal' | 'basic'): Promise<L2PluginManagementSnapshot> {

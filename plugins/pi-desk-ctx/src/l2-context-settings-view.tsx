@@ -54,6 +54,7 @@ const SETTINGS_STYLES = `
 .pi-desk-ctx-field { display: grid; min-width: 0; align-content: start; gap: .25rem; }
 .pi-desk-ctx-label { display: flex; min-height: 2rem; align-items: center; font-weight: 500; }
 .pi-desk-ctx-amount { display: grid; min-width: 0; grid-template-columns: 1rem minmax(0,1fr) 1.25rem; align-items: center; gap: .25rem; }
+.pi-desk-ctx-amount-mib { grid-template-columns: 1rem minmax(0,1fr) 2rem; }
 .pi-desk-ctx-operator { text-align: center; }
 .pi-desk-ctx-unit { color: var(--muted-foreground); font-size: .75rem; }
 .pi-desk-ctx-and { display: grid; height: 2rem; align-items: center; margin-top: 2.25rem; color: var(--muted-foreground); }
@@ -116,7 +117,7 @@ function AmountField({
 }: {
   label: string
   value: string
-  unit?: 'k' | '轮'
+  unit?: 'k' | '轮' | 'MiB'
   operator?: string
   enabled?: boolean
   disabled: boolean
@@ -143,7 +144,7 @@ function AmountField({
           {label}
         </label>
       )}
-      <div className="pi-desk-ctx-amount">
+      <div className={`pi-desk-ctx-amount${unit === 'MiB' ? ' pi-desk-ctx-amount-mib' : ''}`}>
         <span className="pi-desk-ctx-operator" aria-hidden="true">
           {enabled ? operator : ''}
         </span>
@@ -170,6 +171,77 @@ function AmountField({
         </span>
       ) : null}
     </div>
+  )
+}
+
+function ImageBudgetFields({
+  settings
+}: {
+  settings: ContextSettingsController
+}): React.JSX.Element {
+  const { imageBudget } = settings.draft
+  const disabled = settings.saving || !imageBudget.enabled
+  const fieldError = (field: string): string | undefined =>
+    settings.issue?.profileKey === null && settings.issue.field === field
+      ? settings.issue.message
+      : undefined
+
+  return (
+    <PluginSection
+      title="图片整理"
+      description="超限时先按两个助手轮次窗口的交集保留历史图片，再按目标大小收紧。新图自身超限时停止发送并提示分批；原图和聊天历史不变。"
+      action={
+        <label className="pi-desk-ctx-check">
+          <PluginCheckbox
+            checked={imageBudget.enabled}
+            disabled={settings.saving}
+            onChange={(event) => settings.updateImageBudget({ enabled: event.target.checked })}
+          />
+          自动整理
+        </label>
+      }
+    >
+      <div className="pi-desk-ctx-retain">
+        <AmountField
+          label="触发大小"
+          unit="MiB"
+          operator=">"
+          value={imageBudget.triggerMiB}
+          disabled={disabled}
+          error={fieldError('triggerMiB')}
+          onChange={(triggerMiB) => settings.updateImageBudget({ triggerMiB })}
+        />
+        <AmountField
+          label="目标大小"
+          unit="MiB"
+          value={imageBudget.targetMiB}
+          disabled={disabled}
+          error={fieldError('targetMiB')}
+          onChange={(targetMiB) => settings.updateImageBudget({ targetMiB })}
+        />
+        <AmountField
+          label="最近有效助手轮数"
+          unit="轮"
+          operator=""
+          value={imageBudget.keepAssistantTurns}
+          disabled={disabled}
+          error={fieldError('keepAssistantTurns')}
+          onChange={(keepAssistantTurns) => settings.updateImageBudget({ keepAssistantTurns })}
+        />
+        <AmountField
+          label="最近带正文的助手轮数"
+          unit="轮"
+          operator=""
+          value={imageBudget.keepTextTurns}
+          disabled={disabled}
+          error={fieldError('keepTextTurns')}
+          onChange={(keepTextTurns) => settings.updateImageBudget({ keepTextTurns })}
+        />
+      </div>
+      <p className="pi-desk-ctx-note">
+        有效轮包含正文或工具调用；正文轮不含内部思考。错误、取消和空回应不计入轮数。
+      </p>
+    </PluginSection>
   )
 }
 
@@ -356,7 +428,7 @@ export function ContextIgnoreSettingsPage({
               disabled={settings.loading || settings.saving}
               onChange={(event) => settings.setEnabled(event.target.checked)}
             />
-            自动忽略
+            自动忽略过程
           </label>
         }
       />
@@ -443,6 +515,7 @@ export function ContextIgnoreSettingsPage({
             >
               <ProfileFields settings={settings} />
             </div>
+            <ImageBudgetFields settings={settings} />
           </form>
         </PluginLoadingState>
       </PluginScroll>

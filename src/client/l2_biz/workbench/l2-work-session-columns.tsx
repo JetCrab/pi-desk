@@ -16,7 +16,6 @@ import type { L2ChatSource } from '@common/l2_biz/chat/l2-chat-contract'
 import type { L3CapabilityModeNames } from '@common/l3_modules/capability-modes/l3-capability-modes-contract'
 import type { L2WorkSessionListItem } from '@common/l2_biz/work-session/l2-work-session-contract'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
-import { useL4WindowReveal } from '@client/l4_foundation/ui/l4-window-reveal'
 import {
   ResizableHandle,
   ResizablePanel,
@@ -52,7 +51,6 @@ import {
 import styles from './l2-work-session-columns.module.css'
 import motionStyles from './l2-workbench-motion.module.css'
 import { useL2WorkSessionColumnCapacity } from './hooks/l2-work-session-column-capacity'
-import { useL2WorkSessionColumnMotion } from './hooks/l2-work-session-column-motion'
 import type { L2FileWorkspaceRuntime } from './file-workspace/l2-file-workspace-runtime'
 import { L2WorkSessionFileLayout } from './file-workspace/l2-work-session-file-layout'
 import { Button, buttonVariants } from '@client/l4_foundation/ui/shadcn/button'
@@ -212,10 +210,6 @@ const WorkSessionColumn = memo(function WorkSessionColumn({
 }: WorkSessionColumnProps): React.JSX.Element {
   const { t } = useTranslation('workbench')
   const columnRef = useRef<HTMLElement>(null)
-  useL4WindowReveal(
-    columnRef,
-    `${workSession.workId}:${workSession.sessionId}:${workSession.branchId}`
-  )
   const initializationIssue = useL2WorkbenchInitializationIssue(workSession, chatRuntime)
   useSyncExternalStore(fileRuntime.subscribe, fileRuntime.getRevision, fileRuntime.getRevision)
   const fileWorkspace = fileRuntime.getWorkspace(workSession.workId)
@@ -566,11 +560,6 @@ export function L2WorkSessionColumns({
   const panelGroupRef = useGroupRef()
   const panelIdsJson = JSON.stringify(columnItems.map((item) => item.key))
   const columnModesKey = columnModes.map((mode) => (mode === 'expanded' ? 'e' : 'c')).join('')
-  useL2WorkSessionColumnMotion(
-    containerRef,
-    `${panelIdsJson}:${columnModesKey}:${primaryWorkId}`,
-    !mobile
-  )
 
   useLayoutEffect(() => {
     const panelIds = JSON.parse(panelIdsJson) as string[]

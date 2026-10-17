@@ -315,6 +315,11 @@ export class L4PiWorkSessionRuntime {
     return this.chatWorker.restoreQueuedMessages()
   }
 
+  async setTitle(title: string): Promise<void> {
+    this.assertActive()
+    await this.chatWorker.setTitle(title)
+  }
+
   async setModel(input: L4PiChatModelInput): Promise<void> {
     this.assertActive()
     await this.chatWorker.setModel(input)

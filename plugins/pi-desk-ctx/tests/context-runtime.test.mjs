@@ -125,6 +125,8 @@ function createHarness(branch, contextUsage, settings = defaultSettings(), cwd =
   let settingsLoadCount = 0
   const sentMessages = []
   const sentUserMessages = []
+  const notifications = []
+  let aborted = false
   const pi = {
     on(name, handler) {
       const current = handlers.get(name) ?? []
@@ -162,12 +164,21 @@ function createHarness(branch, contextUsage, settings = defaultSettings(), cwd =
 
   const ctx = {
     cwd,
+    hasUI: true,
+    ui: {
+      notify(message, level) {
+        notifications.push({ message, level })
+      }
+    },
     model: { contextWindow: 600_000 },
     getContextUsage() {
       return contextUsage.current
     },
     isIdle() {
       return true
+    },
+    abort() {
+      aborted = true
     },
     sessionManager: {
       getBranch() {
@@ -188,7 +199,11 @@ function createHarness(branch, contextUsage, settings = defaultSettings(), cwd =
     tools,
     sentMessages,
     sentUserMessages,
+    notifications,
     toolRegistrations,
+    get aborted() {
+      return aborted
+    },
     get settingsLoadCount() {
       return settingsLoadCount
     },
@@ -213,6 +228,67 @@ function sessionMethodRegistration(emittedEvents, method) {
         event.registration.method === method
     )?.registration
 }
+
+test('图片整理不依赖token自动忽略或成功agent_end，每次context重试均生效', async () => {
+  const image = (size) => ({ type: 'image', mimeType: 'image/png', data: 'A'.repeat(size) })
+  const messages = [user([image(20)], 1), assistant(2, 'stop', 50), user([image(8)], 3)]
+  const branch = messages.map((message, index) =>
+    messageEntry(`m-${index}`, index ? `m-${index - 1}` : null, message)
+  )
+  const settings = {
+    ...defaultSettings(),
+    enabled: false,
+    imageBudget: {
+      enabled: true,
+      triggerBytes: 24,
+      targetBytes: 12,
+      keepAssistantTurns: 12,
+      keepTextTurns: 3
+    }
+  }
+  const harness = createHarness(branch, { current: { tokens: 50 } }, settings)
+  await harness.handlers.get('session_start')[0]({}, harness.ctx)
+  const handler = harness.handlers.get('context')[0]
+  const first = await handler({ messages }, harness.ctx)
+  const second = await handler({ messages }, harness.ctx)
+  const images = first.messages.flatMap((m) =>
+    Array.isArray(m.content) ? m.content.filter((b) => b.type === 'image') : []
+  )
+  assert.equal(images.length, 1)
+  assert.equal(images[0].data.length, 8)
+  assert.deepEqual(first, second)
+  assert.equal(harness.aborted, false)
+  assert.equal(harness.appendedEntries.length, 0)
+  assert.equal(messages[0].content[0].type, 'image')
+})
+
+test('图片关闭时不处理中止；开启后新图批次超限中止且不写历史', async () => {
+  const messages = [user([{ type: 'image', mimeType: 'image/png', data: 'A'.repeat(28) }], 1)]
+  const imageBudget = {
+    enabled: false,
+    triggerBytes: 24,
+    targetBytes: 12,
+    keepAssistantTurns: 12,
+    keepTextTurns: 3
+  }
+  for (const enabled of [false, true]) {
+    const harness = createHarness(
+      [],
+      { current: { tokens: 1 } },
+      { ...defaultSettings(), imageBudget: { ...imageBudget, enabled } }
+    )
+    await harness.handlers.get('session_start')[0]({}, harness.ctx)
+    await harness.handlers.get('context')[0]({ messages }, harness.ctx)
+    assert.equal(harness.aborted, enabled)
+    assert.equal(harness.appendedEntries.length, 0)
+    await harness.handlers.get('context')[0]({ messages }, harness.ctx)
+    assert.equal(harness.notifications.length, enabled ? 1 : 0)
+    if (enabled) {
+      assert.match(harness.notifications[0].message, /缩小图片或分批发送/)
+      assert.equal(harness.notifications[0].level, 'warning')
+    }
+  }
+})
 
 test('手动 ignore 方法应用当前候选并立即发布有效上下文预计', async () => {
   const messages = [

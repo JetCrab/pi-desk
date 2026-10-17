@@ -122,7 +122,7 @@ pub fn open_browser(app: &AppHandle, value: &str) -> Result<(), String> {
             if !matches!(next.scheme(), "http" | "https") {
                 return false;
             }
-            !open_external(&navigate_app, next, "navigation")
+            open_external(&navigate_app, next, "navigation").is_err()
         })
         .on_new_window(move |next, _| {
             let state = popup_app.state::<ShellState>();
@@ -135,7 +135,7 @@ pub fn open_browser(app: &AppHandle, value: &str) -> Result<(), String> {
             if !supported {
                 return NewWindowResponse::Deny;
             }
-            if open_external(&popup_app, &next, "new-window") {
+            if open_external(&popup_app, &next, "new-window").is_ok() {
                 NewWindowResponse::Deny
             } else {
                 NewWindowResponse::Allow
@@ -268,7 +268,7 @@ fn watch_process(window: &WebviewWindow, invalid: Arc<AtomicBool>) -> Result<(),
         .map_err(|error| format!("监听网页进程失败：{error}"))
 }
 
-fn open_external(app: &AppHandle, url: &Url, source: &str) -> bool {
+pub fn open_external(app: &AppHandle, url: &Url, source: &str) -> Result<(), String> {
     let state = app.state::<ShellState>();
     match webbrowser::open(url.as_str()) {
         Ok(()) => {
@@ -277,7 +277,7 @@ fn open_external(app: &AppHandle, url: &Url, source: &str) -> bool {
                 "browser-external-open",
                 &format!("source={source} url={url}"),
             );
-            true
+            Ok(())
         }
         Err(error) => {
             logging::write(
@@ -285,7 +285,7 @@ fn open_external(app: &AppHandle, url: &Url, source: &str) -> bool {
                 "browser-external-open-failed",
                 &format!("source={source} url={url} error={error}"),
             );
-            false
+            Err(format!("无法使用系统默认浏览器打开 {url}：{error}"))
         }
     }
 }

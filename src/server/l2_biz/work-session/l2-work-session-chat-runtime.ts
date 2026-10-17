@@ -564,6 +564,11 @@ export class L2WorkSessionChatRuntime {
     return this.enqueueCommand(record, () => record.workSession.restoreQueuedMessages())
   }
 
+  setTitle(workSession: WorkSession, title: string): Promise<void> {
+    const record = this.recordFor(workSession)
+    return this.enqueueCommand(record, () => record.workSession.setTitle(title))
+  }
+
   setModel(input: L2ChatModelSetRequest): Promise<void> {
     const record = this.currentRecord(input.source)
     return this.enqueueCommand(record, () => record.workSession.setModel(input.model))

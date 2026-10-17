@@ -6,6 +6,8 @@ import {
   type BrowserEntryFactory,
   type BrowserFilePreviewOptions,
   type BrowserPluginHost,
+  type BrowserSessionSidebarHeaderAction,
+  type BrowserSessionSidebarTabTarget,
   type PiNativeBrowserChannel,
   type PiDeskBrowserChannel,
   type PluginPushMessage
@@ -178,6 +180,163 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolveImmediate) => setImmediate(resolveImmediate))
   }
   throw new Error('等待宿主测试状态超时')
+}
+
+test('侧栏顶部操作整体替换，禁用、忙碌及旧按钮不可执行', async (context) => {
+  const descriptor = entry()
+  let target!: BrowserSessionSidebarTabTarget
+  let displayed: readonly BrowserSessionSidebarHeaderAction[] = []
+  let executions = 0
+  const runtime = createL4PluginHostRuntime(
+    createTransport([descriptor]),
+    createImporter(
+      new Map([
+        [
+          descriptor.url,
+          (plugin) => {
+            plugin.registerContribution('session-sidebar-tab', 'sidebar', {
+              label: '侧栏',
+              load: async () => ({
+                mount: (input) => {
+                  target = input.target
+                }
+              })
+            })
+          }
+        ]
+      ])
+    )
+  )
+  context.after(() => runtime.dispose())
+  await initialize(runtime)
+  await runtime.mountContribution({
+    pluginName: 'fixture-plugin',
+    kind: 'session-sidebar-tab',
+    contributionName: 'sidebar',
+    container: {} as HTMLElement,
+    target: {
+      kind: 'session-sidebar-tab',
+      source,
+      cwd: '/project',
+      files: { preview: () => undefined, reveal: async () => undefined },
+      setHeaderActions: (actions) => {
+        displayed = actions
+      }
+    }
+  })
+  const action: BrowserSessionSidebarHeaderAction = {
+    label: '刷新',
+    onSelect: () => {
+      executions += 1
+    }
+  }
+  target.setHeaderActions!([action])
+  const oldButton = displayed[0]
+  await displayed[0].onSelect()
+  assert.equal(executions, 1)
+  target.setHeaderActions!([
+    { ...action, disabled: true },
+    { ...action, busy: true }
+  ])
+  await oldButton.onSelect()
+  for (const button of displayed) await button.onSelect()
+  assert.equal(executions, 1)
+  assert.throws(() => target.setHeaderActions!([{ ...action, label: '' }]), /Sidebar action label/)
+  assert.equal(displayed.length, 2, '无效输入不覆盖已有按钮')
+  target.setHeaderActions!([])
+  assert.deepEqual(displayed, [])
+})
+
+for (const invalidation of ['abort', 'reload', 'mount-failure'] as const) {
+  test(`侧栏顶部操作在 ${invalidation} 时立即清空，迟到更新不影响新挂载`, async (context) => {
+    const descriptor = entry()
+    const transport = createTransport([descriptor])
+    const targets: BrowserSessionSidebarTabTarget[] = []
+    let displayed: readonly BrowserSessionSidebarHeaderAction[] = []
+    let executions = 0
+    let releaseMount!: () => void
+    const pendingMount = new Promise<void>((resolve) => {
+      releaseMount = resolve
+    })
+    const action: BrowserSessionSidebarHeaderAction = {
+      label: '刷新',
+      onSelect: () => {
+        executions += 1
+      }
+    }
+    const factory: BrowserEntryFactory = (plugin) => {
+      plugin.registerContribution('session-sidebar-tab', 'sidebar', {
+        label: '侧栏',
+        load: async () => ({
+          mount: async ({ target }) => {
+            targets.push(target)
+            target.setHeaderActions!([action])
+            if (invalidation === 'mount-failure' && targets.length === 1) {
+              await pendingMount
+              throw new Error('挂载失败')
+            }
+            return () => {
+              target.setHeaderActions!([action])
+            }
+          }
+        })
+      })
+    }
+    const next = entry('fixture-plugin', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
+    const runtime = createL4PluginHostRuntime(
+      transport,
+      createImporter(
+        new Map([
+          [descriptor.url, factory],
+          [next.url, factory]
+        ])
+      )
+    )
+    context.after(() => runtime.dispose())
+    await initialize(runtime)
+    const controller = new AbortController()
+    const input = {
+      pluginName: 'fixture-plugin',
+      kind: 'session-sidebar-tab' as const,
+      contributionName: 'sidebar',
+      container: {} as HTMLElement,
+      target: {
+        kind: 'session-sidebar-tab' as const,
+        source,
+        cwd: '/project',
+        files: { preview: () => undefined, reveal: async () => undefined },
+        setHeaderActions: (actions: readonly BrowserSessionSidebarHeaderAction[]) => {
+          displayed = actions
+        }
+      }
+    }
+    const mounting = runtime.mountContribution({ ...input, signal: controller.signal })
+    const mountFailure =
+      invalidation === 'mount-failure' ? assert.rejects(mounting, /挂载失败/) : null
+    await waitFor(() => displayed.length === 1)
+    const oldButton = displayed[0]
+    if (mountFailure) {
+      releaseMount()
+      await mountFailure
+    } else {
+      await mounting
+      if (invalidation === 'abort') controller.abort()
+      else {
+        transport.setEntries([next])
+        await runtime.refreshEntries()
+      }
+    }
+    assert.equal(displayed.length, 0)
+    await runtime.mountContribution(input)
+    const newButton = displayed[0]
+    assert.ok(newButton)
+    targets[0].setHeaderActions!([])
+    await oldButton.onSelect()
+    assert.equal(displayed[0], newButton)
+    assert.equal(executions, 0)
+    await newButton.onSelect()
+    assert.equal(executions, 1)
+  })
 }
 
 test('插件读取宿主当前语言和时区，旧 Host 失效后不能读取', async (context) => {

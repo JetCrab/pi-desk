@@ -4,11 +4,6 @@ import type { CSSProperties } from 'react'
 import { getL3WorkSessionProjectColor } from './l3-work-session-visual'
 import styles from './l3-work-session-visual-effects.module.css'
 
-export {
-  L3WorkSessionStatusBorder,
-  type L3WorkSessionVisualState
-} from './l3-work-session-status-border'
-
 interface L3WorkSessionPresentation {
   className: string
   style: CSSProperties

@@ -1,15 +1,18 @@
-use crate::config::{PackageConfig, ReleaseChannel, ServerConfig, UpdatePolicy};
+use crate::config::ServerConfig;
 use crate::environment::{self, Component, EnvironmentState};
 use crate::environment_arch::{native_architecture, WindowsArchitecture};
 use crate::environment_download::{client, download};
 #[cfg(windows)]
 use crate::environment_installer;
 use crate::environment_source::DownloadSource;
-use crate::{logging, packages};
+use crate::logging;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use crate::packages;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::time::Duration;
 
 pub(crate) struct NodeDownload {
@@ -658,85 +661,8 @@ fn prepare_pi(
 ) -> Result<(), String> {
     let started = std::time::Instant::now();
     state.set_component_step(Component::Pi, "正在查询 Pi 最新正式版本");
-    let npm = state.npm_command()?;
-    let package = PackageConfig {
-        name: environment::PI_PACKAGE.into(),
-        registry: Some(download_source.npm_registry().into()),
-        startup_update: UpdatePolicy::None,
-        periodic_update: UpdatePolicy::None,
-        channel: ReleaseChannel::Stable,
-    };
-    let version = packages::query_version_with_environment(
-        &package,
-        log,
-        cancelled,
-        &npm,
-        &state.child_environment(),
-    )?;
-    let root = state.run_npm(
-        &["root", "-g"],
-        Some(work),
-        Duration::from_secs(10),
-        cancelled,
-        log,
-    )?;
-    let installed = PathBuf::from(root).join(environment::PI_PACKAGE);
-    if state.is_private_path(&installed) {
-        return Err("npm 全局目录指向旧桌面私有环境，请调整 npm prefix 后重试".into());
-    }
-    state.set_component_step(Component::Pi, &format!("正在安装 Pi {version}"));
-    logging::write(
-        log,
-        "environment-pi-install",
-        &format!(
-            "version={version} registry={}",
-            download_source.npm_registry()
-        ),
-    );
-    let installing = std::time::Instant::now();
-    let installation = packages::with_registry_fallback(
-        &package,
-        log,
-        cancelled,
-        &npm,
-        &state.child_environment(),
-        |source| {
-            state.run_npm(
-                &[
-                    "install",
-                    "-g",
-                    "--ignore-scripts",
-                    "--no-audit",
-                    "--no-fund",
-                    "--progress=false",
-                    "--registry",
-                    source,
-                    "--replace-registry-host=never",
-                    &format!("--@earendil-works:registry={source}"),
-                    &format!("{}@{version}", environment::PI_PACKAGE),
-                ],
-                Some(work),
-                Duration::from_secs(600),
-                cancelled,
-                log,
-            )
-        },
-    );
-    logging::write(
-        log,
-        "environment-pi-install-end",
-        &format!(
-            "Pi npm 安装 success={} elapsed_ms={}",
-            installation.is_ok(),
-            installing.elapsed().as_millis()
-        ),
-    );
-    installation?;
-    let actual_version = state.probe(Component::Pi, &installed, cancelled, log)?;
-    if actual_version != version {
-        return Err("Pi 实际版本与查询的正式版本不一致，已停止安装".into());
-    }
-    state.use_installed(Component::Pi, &installed, cancelled, log)?;
+    let version = crate::environment_pi::query_version(state, download_source, cancelled, log)?;
+    crate::environment_pi::install_version(state, work, download_source, &version, cancelled, log)?;
     logging::write(
         log,
         "environment-pi-prepared",

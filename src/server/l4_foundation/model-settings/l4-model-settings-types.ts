@@ -91,11 +91,21 @@ export interface L4ModelAccount {
   models: L4ModelConfig[]
 }
 
+export interface L4ModelReplacement {
+  from: { provider: string; modelId: string }
+  to: { provider: string; modelId: string }
+}
+
+export interface L4ModelSettingsPreview {
+  projectDefaults: Array<{ cwd: string; from: L4ModelSelection; to: L4ModelSelection }>
+}
+
 export type L4ModelSettingsReplaceInput =
   | {
       providers?: L4ModelProviderConfig[]
       presets?: L4ModelPreset[]
       accountModels?: L4AccountModelSelection[]
+      modelReplacements?: L4ModelReplacement[]
       nativeConfig?: never
     }
   | {
@@ -103,6 +113,7 @@ export type L4ModelSettingsReplaceInput =
       providers?: never
       presets?: never
       accountModels?: never
+      modelReplacements?: never
     }
 
 export interface L4ModelCatalogRequest {

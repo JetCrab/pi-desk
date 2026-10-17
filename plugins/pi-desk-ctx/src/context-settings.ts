@@ -12,13 +12,29 @@ export interface ContextIgnoreProfile {
   rules: ContextIgnoreRule[]
 }
 
+export interface ContextImageBudgetSettings {
+  enabled: boolean
+  triggerBytes: number
+  targetBytes: number
+  keepAssistantTurns: number
+  keepTextTurns: number
+}
+
 export interface ContextIgnoreSettings {
   enabled: boolean
   profiles: ContextIgnoreProfile[]
+  imageBudget: ContextImageBudgetSettings
 }
 
 export const RECOMMENDED_CONTEXT_IGNORE_SETTINGS: ContextIgnoreSettings = {
   enabled: true,
+  imageBudget: {
+    enabled: false,
+    triggerBytes: 24 * 1024 * 1024,
+    targetBytes: 12 * 1024 * 1024,
+    keepAssistantTurns: 12,
+    keepTextTurns: 3
+  },
   profiles: [
     {
       maxContextTokens: 400_000,
@@ -121,6 +137,32 @@ function parseProfile(value: unknown, index: number): ContextIgnoreProfile {
   }
 }
 
+function parseImageBudget(value: unknown): ContextImageBudgetSettings {
+  if (value === undefined) return { ...RECOMMENDED_CONTEXT_IGNORE_SETTINGS.imageBudget }
+  if (!isRecord(value)) throw new Error('imageBudget 必须是对象')
+  if (typeof value.enabled !== 'boolean') throw new Error('imageBudget.enabled 必须是布尔值')
+  const triggerBytes = requiredInteger(value.triggerBytes, 'imageBudget.triggerBytes', 1, 1024 ** 3)
+  const targetBytes = requiredInteger(value.targetBytes, 'imageBudget.targetBytes', 1, 1024 ** 3)
+  if (targetBytes > triggerBytes) throw new Error('图片整理目标不能大于触发大小')
+  return {
+    enabled: value.enabled,
+    triggerBytes,
+    targetBytes,
+    keepAssistantTurns: requiredInteger(
+      value.keepAssistantTurns,
+      'imageBudget.keepAssistantTurns',
+      1,
+      MAX_KEEP_TURNS
+    ),
+    keepTextTurns: requiredInteger(
+      value.keepTextTurns,
+      'imageBudget.keepTextTurns',
+      1,
+      MAX_KEEP_TURNS
+    )
+  }
+}
+
 export function normalizeContextIgnoreSettings(
   settings: ContextIgnoreSettings
 ): ContextIgnoreSettings {
@@ -141,7 +183,11 @@ export function normalizeContextIgnoreSettings(
       if (right.maxContextTokens === undefined) return -1
       return left.maxContextTokens - right.maxContextTokens
     })
-  return { enabled: settings.enabled, profiles }
+  return {
+    enabled: settings.enabled,
+    profiles,
+    imageBudget: { ...(settings.imageBudget ?? RECOMMENDED_CONTEXT_IGNORE_SETTINGS.imageBudget) }
+  }
 }
 
 export function parseContextIgnoreSettings(value: unknown): ContextIgnoreSettings {
@@ -166,7 +212,11 @@ export function parseContextIgnoreSettings(value: unknown): ContextIgnoreSetting
     throw new Error('模型窗口上限不能重复')
   }
 
-  return normalizeContextIgnoreSettings({ enabled: value.enabled, profiles })
+  return normalizeContextIgnoreSettings({
+    enabled: value.enabled,
+    profiles,
+    imageBudget: parseImageBudget(value.imageBudget)
+  })
 }
 
 export function defaultContextIgnoreSettings(): ContextIgnoreSettings {

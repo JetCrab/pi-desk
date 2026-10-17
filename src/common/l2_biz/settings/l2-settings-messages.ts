@@ -32,9 +32,6 @@ export const L2_SETTINGS_MESSAGES = {
     theme: 'Theme',
     themeLight: 'Light',
     themeDark: 'Dark',
-    powerSaving: 'Power saving',
-    powerSavingOff: 'Off',
-    powerSavingOn: 'On',
     displaySize: 'Display size',
     sizeCompact: 'Compact',
     sizeStandard: 'Standard',
@@ -111,6 +108,10 @@ export const L2_SETTINGS_MESSAGES = {
     removeInvalidPresets_other:
       '{{count}} common combinations refer to removed models. Saving will remove them.',
     removeAndSave: 'Remove and save',
+    replaceProjectDefaultsTitle: 'Update project default models',
+    replaceProjectDefaultsDescription:
+      'The following projects will use the new model settings. Confirm to save all changes together.',
+    confirmAndSaveModels: 'Confirm and save',
     modelSaved: 'Model configuration saved.',
     modelSaveFailed: 'Could not save the model configuration',
     catalogUpdatedAt: 'Reference catalog updated at {{time}}',
@@ -327,9 +328,6 @@ export const L2_SETTINGS_MESSAGES = {
     theme: '界面主题',
     themeLight: '浅色',
     themeDark: '深色',
-    powerSaving: '省电模式',
-    powerSavingOff: '关闭',
-    powerSavingOn: '开启',
     displaySize: '显示大小',
     sizeCompact: '紧凑',
     sizeStandard: '标准',
@@ -406,6 +404,10 @@ export const L2_SETTINGS_MESSAGES = {
     removeInvalidPresets_other:
       '有 {{count}} 个常用组合引用了已删除模型，保存配置将同时删除这些组合。',
     removeAndSave: '删除并保存',
+    replaceProjectDefaultsTitle: '同步项目默认模型',
+    replaceProjectDefaultsDescription:
+      '以下项目的默认模型将替换为本次设置的新模型，确认后一起保存。',
+    confirmAndSaveModels: '确认并保存',
     modelSaved: '模型配置已保存。',
     modelSaveFailed: '模型配置保存失败',
     catalogUpdatedAt: '参考目录更新于 {{time}}',

@@ -11,6 +11,7 @@ import type { L4CodePreviewState } from '@client/l4_foundation/ui/code/l4-code-p
 import type { L4CodeDiffState } from '@client/l4_foundation/ui/code/l4-code-diff'
 import { saveL4CodePreferences } from '@client/l4_foundation/ui/code/l4-code-preferences'
 import { L3ProjectRequestError, type L3ProjectFileReader } from './l3-project-reader'
+import { getL3ProjectTextPreviewKind } from './l3-project-text-preview'
 import type { L3ProjectRevealTargetType } from '@common/l3_modules/project-files/l3-project-files-contract'
 import {
   compactL3ProjectDirectory,
@@ -41,6 +42,7 @@ export type L3FileDocument =
       size: number
       editorState: L4CodePreviewState | null
       viewMode: 'source' | 'preview'
+      previewScrollTop: number
       comparison?: L3FileComparison
     }
   | { status: 'image'; mimeType: L4ProjectFileImageMimeType; size: number; objectUrl: string }
@@ -146,6 +148,7 @@ export class L3ProjectFileRuntime {
   private readonly restoredTabs = new Set<string>()
   private readonly restoredEditorStates = new Map<string, L4CodePreviewState>()
   private readonly restoredFileViewModes = new Map<string, 'source' | 'preview'>()
+  private readonly restoredPreviewScrollTops = new Map<string, number>()
   private searchRequest: AbortController | null = null
   private diffRequest: AbortController | null = null
   private revision = 0
@@ -430,6 +433,7 @@ export class L3ProjectFileRuntime {
       state.documents.delete(path)
       this.restoredEditorStates.delete(path)
       this.restoredFileViewModes.delete(path)
+      this.restoredPreviewScrollTops.delete(path)
       this.closeMissing.delete(path)
       this.restoredTabs.delete(path)
     }
@@ -478,7 +482,11 @@ export class L3ProjectFileRuntime {
               editorState: this.restoredEditorStates.get(path) ?? null,
               viewMode:
                 this.restoredFileViewModes.get(path) ??
-                (this.options.htmlPreview && /\.html?$/i.test(path) ? 'preview' : 'source')
+                (getL3ProjectTextPreviewKind(path) === 'markdown' ||
+                (this.options.htmlPreview && getL3ProjectTextPreviewKind(path) === 'html')
+                  ? 'preview'
+                  : 'source'),
+              previewScrollTop: this.restoredPreviewScrollTops.get(path) ?? 0
             }
           : {
               status: 'image',
@@ -634,6 +642,11 @@ export class L3ProjectFileRuntime {
     const document = this.state.documents.get(path)
     if (document?.status === 'text') document.editorState = state
   }
+  savePreviewScrollTop(path: string, scrollTop: number): void {
+    const document = this.state.documents.get(path)
+    if (document?.status !== 'text') return
+    document.previewScrollTop = scrollTop
+  }
   setWrapLines(path: string, wrapLines: boolean): void {
     if (this.state.documents.get(path)?.status === 'text') saveL4CodePreferences({ wrapLines })
   }
@@ -654,6 +667,7 @@ export class L3ProjectFileRuntime {
     this.clearDiff()
     for (const document of this.state.documents.values()) this.releaseDocument(document)
     this.state.documents.clear()
+    this.restoredPreviewScrollTops.clear()
     this.listeners.clear()
   }
   private async ensureDiff(): Promise<void> {
@@ -704,6 +718,7 @@ export class L3ProjectFileRuntime {
     if (document?.status === 'text') {
       if (document.editorState) this.restoredEditorStates.set(path, document.editorState)
       this.restoredFileViewModes.set(path, document.viewMode)
+      this.restoredPreviewScrollTops.set(path, document.previewScrollTop)
     }
     this.releaseDocument(document)
     this.state.documents.set(path, { status: 'unloaded' })

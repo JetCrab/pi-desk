@@ -19,6 +19,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+#[path = "l2-runtime-pi-update.rs"]
+mod pi_update;
+
 const START_TIMEOUT: Duration = Duration::from_secs(120);
 const PORT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 const PACKAGE_UPDATE_INTERVAL: Duration = Duration::from_secs(60);
@@ -121,6 +124,12 @@ struct ManagedChild {
     server: ServerConfig,
 }
 
+#[derive(Clone, Copy)]
+enum OpenDestination {
+    Desktop,
+    External,
+}
+
 #[derive(Default)]
 struct TargetRuntime {
     child: Option<ManagedChild>,
@@ -128,7 +137,7 @@ struct TargetRuntime {
     update: PackageUpdateSnapshot,
     operation: Option<Arc<AtomicBool>>,
     stop_requested: bool,
-    open_after_start: bool,
+    open_after_start: Option<OpenDestination>,
     tunnel_worker: Option<TunnelWorkerHandle>,
     tunnel_phase: TunnelPhase,
     last_check: Option<Instant>,
@@ -426,6 +435,9 @@ fn save_config(state: &ShellState, config: DesktopConfig) -> Result<(), String> 
 }
 
 fn require_idle(state: &ShellState, url: &str) -> Result<(), String> {
+    if state.environment.snapshot().pi_update.status == "updating" {
+        return Err("Pi 更新正在维护本机服务，请等待完成或取消后再修改地址".into());
+    }
     if state
         .target_runtimes
         .lock()
@@ -652,7 +664,7 @@ pub fn activate_desktop(app: &AppHandle) -> Result<(), String> {
     let Some(url) = url else {
         return open_control_window(app);
     };
-    if let Err(error) = open_target(app, &url) {
+    if let Err(error) = open_target(app, &url, false) {
         write_shell_log(
             &state,
             "desktop-open-failed",
@@ -695,15 +707,34 @@ pub fn workspace_window_closed(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-pub fn open_target(app: &AppHandle, url: &str) -> Result<(), String> {
+fn open_destination(
+    app: &AppHandle,
+    url: &str,
+    destination: OpenDestination,
+) -> Result<(), String> {
+    match destination {
+        OpenDestination::Desktop => open_workspace_window(app, url),
+        OpenDestination::External => {
+            let url = url::Url::parse(url).map_err(|_| "网页地址无效".to_string())?;
+            windows::open_external(app, &url, "control")
+        }
+    }
+}
+
+pub fn open_target(app: &AppHandle, url: &str, external: bool) -> Result<(), String> {
     let state = app.state::<ShellState>();
     let url = config::normalize_target_url(url)?;
     let target = configured_target(&state, &url)?;
+    let destination = if external {
+        OpenDestination::External
+    } else {
+        OpenDestination::Desktop
+    };
     if target.server.is_some() && !has_child(&state, &url) {
         set_auto_start(&state, &url, true)?;
-        begin_operation_with_open(app, &url, Operation::Start, true)
+        begin_operation_with_open(app, &url, Operation::Start, Some(destination))
     } else {
-        open_workspace_window(app, &url)
+        open_destination(app, &url, destination)
     }
 }
 
@@ -714,6 +745,22 @@ enum EnvironmentOperation {
     },
     Prepare(String, DownloadSource),
     Select(Component, bool),
+    CheckPiUpdate,
+    UpdatePi,
+}
+
+impl EnvironmentOperation {
+    fn is_pi_update(&self) -> bool {
+        matches!(self, Self::CheckPiUpdate | Self::UpdatePi)
+    }
+}
+
+pub(crate) fn check_pi_update(app: &AppHandle) -> Result<(), String> {
+    begin_environment_operation(app, EnvironmentOperation::CheckPiUpdate)
+}
+
+pub(crate) fn update_pi(app: &AppHandle) -> Result<(), String> {
+    begin_environment_operation(app, EnvironmentOperation::UpdatePi)
 }
 
 pub(crate) fn check_environment(app: &AppHandle, auto_start: bool) -> Result<(), String> {
@@ -786,6 +833,13 @@ pub(crate) fn save_download_source(
     state: &ShellState,
     source: DownloadSource,
 ) -> Result<(), String> {
+    let _guard = state.config_write.lock().map_err(|_| "配置写入不可用")?;
+    if matches!(
+        state.environment.snapshot().pi_update.status.as_str(),
+        "checking" | "updating"
+    ) {
+        return Err("Pi 更新操作正在进行，请完成或取消后再修改下载源".into());
+    }
     state.environment.save_download_source(source)?;
     write_shell_log(
         state,
@@ -841,12 +895,22 @@ fn begin_environment_operation(
     if runtimes.values().any(|runtime| runtime.operation.is_some()) {
         return Err("服务操作正在进行，请等待完成或取消后再准备环境".into());
     }
-    if !matches!(&operation, EnvironmentOperation::Check { .. })
-        && runtimes.values().any(|runtime| runtime.child.is_some())
+    if matches!(
+        &operation,
+        EnvironmentOperation::Prepare(..) | EnvironmentOperation::Select(..)
+    ) && runtimes.values().any(|runtime| runtime.child.is_some())
     {
         return Err("请先停止本机服务，再安装或更换运行环境；已运行的服务不会被自动中断".into());
     }
     let previous = state.environment.snapshot();
+    if matches!(operation, EnvironmentOperation::UpdatePi) {
+        if previous.pi_update.status != "available" || previous.pi_update.version.is_none() {
+            return Err("请先检查 Pi 更新，再确认安装可用版本".into());
+        }
+        if std::env::var_os("PI_DESK_DESKTOP_DATA_DIR").is_some() {
+            return Err("隔离模式禁止安装或修改全局 Pi".into());
+        }
+    }
     let cancel = Arc::new(AtomicBool::new(false));
     *active = Some(cancel.clone());
     if let EnvironmentOperation::Prepare(url, _) = &operation {
@@ -856,15 +920,34 @@ fn begin_environment_operation(
     }
     drop(runtimes);
     drop(active);
-    state.environment.set_phase(
-        if matches!(operation, EnvironmentOperation::Prepare(..)) {
-            "installing"
-        } else {
-            "checking"
-        },
-        "正在检测运行环境",
-        None,
-    );
+    if operation.is_pi_update() {
+        state.environment.set_pi_update(
+            if matches!(operation, EnvironmentOperation::UpdatePi) {
+                "updating"
+            } else {
+                "checking"
+            },
+            if matches!(operation, EnvironmentOperation::UpdatePi) {
+                previous.pi_update.version.clone()
+            } else {
+                None
+            },
+            None,
+        );
+    } else {
+        state.environment.set_pi_update("idle", None, None);
+        state.environment.set_phase(
+            if matches!(operation, EnvironmentOperation::Prepare(..)) {
+                "installing"
+            } else {
+                "checking"
+            },
+            "正在检测运行环境",
+            None,
+        );
+    }
+    let pi_operation = operation.is_pi_update();
+    let pi_version = previous.pi_update.version.clone();
     let worker_app = app.clone();
     let worker_cancel = cancel.clone();
     let handle = thread::Builder::new()
@@ -895,9 +978,19 @@ fn begin_environment_operation(
                     runtime.operation = None;
                 }
             }
-            state
-                .environment
-                .set_phase("failed", "无法创建环境后台操作", Some(error.to_string()));
+            if pi_operation {
+                state.environment.set_pi_update(
+                    "failed",
+                    pi_version,
+                    Some(format!("无法创建 Pi 更新后台操作：{error}")),
+                );
+            } else {
+                state.environment.set_phase(
+                    "failed",
+                    "无法创建环境后台操作",
+                    Some(error.to_string()),
+                );
+            }
             Err(format!("创建环境后台操作失败：{error}"))
         }
     }
@@ -960,12 +1053,27 @@ fn run_environment_operation(
         EnvironmentOperation::Prepare(url, _) => Some(url.clone()),
         _ => None,
     };
+    let pi_operation = operation.is_pi_update();
     let mut auto_start = false;
     let mut open_on_ready = false;
     let mut selection_cancelled = false;
     let mut started_service = false;
     let result = (|| -> Result<(), String> {
         match operation {
+            EnvironmentOperation::CheckPiUpdate => {
+                pi_update::check(&state, &cancelled)?;
+            }
+            EnvironmentOperation::UpdatePi => {
+                pi_update::update(
+                    &state,
+                    previous
+                        .pi_update
+                        .version
+                        .as_deref()
+                        .ok_or("缺少 Pi 更新版本")?,
+                    &cancelled,
+                )?;
+            }
             EnvironmentOperation::Check {
                 auto_start: enabled,
                 open_on_ready: open,
@@ -1041,7 +1149,15 @@ fn run_environment_operation(
         }
         Ok(())
     })();
-    if selection_cancelled {
+    if pi_operation {
+        if let Err(error) = &result {
+            write_shell_log(&state, "pi-update-failed", error);
+            let version = state.environment.snapshot().pi_update.version;
+            state
+                .environment
+                .set_pi_update("failed", version, Some(error.clone()));
+        }
+    } else if selection_cancelled {
         state
             .environment
             .set_phase(&previous.status, &previous.step, previous.error);
@@ -1185,6 +1301,9 @@ pub fn stop_server(app: &AppHandle, url: &str) -> Result<(), String> {
         .map_err(|_| "配置写入不可用".to_string())?;
     let url = config::normalize_target_url(url)?;
     configured_server(&state, &url)?;
+    if state.environment.snapshot().pi_update.status == "updating" {
+        return Err("Pi 更新正在维护本机服务，请使用取消更新并等待恢复完成".into());
+    }
     set_auto_start(&state, &url, false)?;
     {
         let mut runtimes = state
@@ -1204,14 +1323,14 @@ pub fn stop_server(app: &AppHandle, url: &str) -> Result<(), String> {
 }
 
 fn begin_operation(app: &AppHandle, url: &str, operation: Operation) -> Result<(), String> {
-    begin_operation_with_open(app, url, operation, false)
+    begin_operation_with_open(app, url, operation, None)
 }
 
 fn begin_operation_with_open(
     app: &AppHandle,
     url: &str,
     operation: Operation,
-    open_after_start: bool,
+    open_after_start: Option<OpenDestination>,
 ) -> Result<(), String> {
     let state = app.state::<ShellState>();
     let _config_guard = state
@@ -1248,12 +1367,17 @@ fn begin_operation_with_open(
             .map_err(|_| "运行状态不可用".to_string())?;
         let runtime = runtimes.entry(url.to_string()).or_default();
         if runtime.operation.is_some() {
-            if open_after_start && matches!(runtime.server_phase, ServerPhase::Starting(_)) {
-                runtime.open_after_start = true;
+            if open_after_start.is_some()
+                && matches!(runtime.server_phase, ServerPhase::Starting(_))
+            {
+                runtime.open_after_start = open_after_start;
                 return Ok(());
             }
-            if open_after_start && runtime.child.is_none() && runtime.update.status == "checking" {
-                runtime.open_after_start = true;
+            if open_after_start.is_some()
+                && runtime.child.is_none()
+                && runtime.update.status == "checking"
+            {
+                runtime.open_after_start = open_after_start;
                 runtime
                     .operation
                     .as_ref()
@@ -1303,6 +1427,7 @@ fn begin_operation_with_open(
             if let Ok(mut runtimes) = state.target_runtimes.lock() {
                 let runtime = runtimes.entry(url.to_string()).or_default();
                 runtime.operation = None;
+                runtime.open_after_start = None;
                 runtime.update = PackageUpdateSnapshot {
                     status: "failed".into(),
                     error: Some(error.to_string()),
@@ -1374,28 +1499,35 @@ fn run_operation(
         .lock()
         .map(|mut runtimes| {
             let runtime = runtimes.entry(url.to_string()).or_default();
-            let open = runtime.open_after_start
-                && runtime.child.is_some()
-                && result.is_ok()
-                && !cancelled();
-            let resume_start = runtime.open_after_start
-                && matches!(operation, Operation::Check)
-                && !stop_requested
-                && !state.closing.load(Ordering::Acquire);
-            runtime.open_after_start = false;
+            let destination = runtime.open_after_start.take();
+            let open =
+                destination.filter(|_| runtime.child.is_some() && result.is_ok() && !cancelled());
+            let resume_start = destination.filter(|_| {
+                matches!(operation, Operation::Check)
+                    && !stop_requested
+                    && !state.closing.load(Ordering::Acquire)
+            });
             (open, resume_start)
         })
-        .unwrap_or((false, false));
-    if resume_start {
-        if let Err(error) = begin_operation_with_open(app, url, Operation::Start, true) {
+        .unwrap_or((None, None));
+    if let Some(destination) = resume_start {
+        if let Err(error) = begin_operation_with_open(app, url, Operation::Start, Some(destination))
+        {
             write_shell_log(&state, "resume-start-failed", &error);
             let _ = open_control_window(app);
         }
     }
-    if open {
-        if let Err(error) = open_workspace_window(app, url) {
+    if let Some(destination) = open {
+        if let Err(error) = open_destination(app, url, destination) {
             write_shell_log(&state, "browser-open-failed", &error);
             let _ = open_control_window(app);
+            if matches!(destination, OpenDestination::External) {
+                rfd::MessageDialog::new()
+                    .set_title("无法打开浏览器")
+                    .set_description(&error)
+                    .set_level(rfd::MessageLevel::Error)
+                    .show();
+            }
         }
     }
     if !cancelled() {

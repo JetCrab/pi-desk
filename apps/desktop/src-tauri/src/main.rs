@@ -10,6 +10,8 @@ mod environment_download;
 mod environment_install;
 #[path = "l4-environment-installer.rs"]
 mod environment_installer;
+#[path = "l4-environment-pi.rs"]
+mod environment_pi;
 #[path = "l4-environment-source.rs"]
 mod environment_source;
 mod logging;
@@ -82,6 +84,8 @@ fn main() {
             update_package_command,
             cancel_package_update_command,
             check_environment_command,
+            check_pi_update_command,
+            update_pi_command,
             prepare_environment_command,
             cancel_environment_command,
             select_environment_command,
@@ -354,9 +358,14 @@ async fn apply_tunnel_connection_command(
 }
 
 #[tauri::command]
-async fn open_target_command(app: AppHandle, window: Window, url: String) -> Result<(), String> {
+async fn open_target_command(
+    app: AppHandle,
+    window: Window,
+    url: String,
+    external: Option<bool>,
+) -> Result<(), String> {
     run_command(app, window, "open-target", move |app| {
-        runtime::open_target(app, &url)
+        runtime::open_target(app, &url, external.unwrap_or(false))
     })
     .await
 }
@@ -423,6 +432,16 @@ async fn check_environment_command(app: AppHandle, window: Window) -> Result<(),
         runtime::check_environment(app, false)
     })
     .await
+}
+
+#[tauri::command]
+async fn check_pi_update_command(app: AppHandle, window: Window) -> Result<(), String> {
+    run_command(app, window, "check-pi-update", runtime::check_pi_update).await
+}
+
+#[tauri::command]
+async fn update_pi_command(app: AppHandle, window: Window) -> Result<(), String> {
+    run_command(app, window, "update-pi", runtime::update_pi).await
 }
 
 #[tauri::command]

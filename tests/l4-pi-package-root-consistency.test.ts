@@ -106,6 +106,41 @@ test('npm 根中未被 Settings 配置的 Package 不阻止操作', async () => 
   )
 })
 
+test('显式重装仅放行目标缺失，其他包或npm根损坏仍阻断', async () => {
+  const agentDir = resolve(root, 'repair-one-package')
+  const healthy = resolve(agentDir, 'npm/node_modules/healthy')
+  await mkdir(healthy, { recursive: true })
+  const manifest = resolve(agentDir, 'npm/package.json')
+  await writeFile(manifest, JSON.stringify({ dependencies: { healthy: '1.0.0' } }))
+  const input = {
+    agentDir,
+    configured: [
+      { source: 'npm:repair@1.0.0' },
+      { source: 'npm:healthy@1.0.0', installedPath: healthy }
+    ]
+  }
+  assert.ok(await readL4PiPackageRootConsistencyError(input))
+  assert.equal(
+    await readL4PiPackageRootConsistencyError({ ...input, repairSource: 'npm:repair@2.0.0' }),
+    null
+  )
+  assert.ok(await readL4PiPackageRootConsistencyError({ ...input, repairSource: 'npm:healthy' }))
+  await rm(healthy, { recursive: true })
+  assert.match(
+    (await readL4PiPackageRootConsistencyError({ ...input, repairSource: 'npm:repair' }))!.message,
+    /healthy/
+  )
+  await writeFile(manifest, '{broken')
+  assert.match(
+    (await readL4PiPackageRootConsistencyError({
+      agentDir,
+      configured: [{ source: 'npm:repair' }],
+      repairSource: 'npm:repair'
+    }))!.message,
+    /npm 根不可用/
+  )
+})
+
 test('没有 npm Package 时不要求 npm 根存在', async () => {
   assert.equal(
     await readL4PiPackageRootConsistencyError({

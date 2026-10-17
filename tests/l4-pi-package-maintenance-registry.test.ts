@@ -164,6 +164,11 @@ test('scoped插件使用指定源，公共SDK和普通依赖保留默认源', { 
       agentDir,
       cwd: root
     })
+    await run({
+      maintenance: { action: 'reinstall', source: `npm:${pluginName}@1.0.0`, registry: urls[0]! },
+      agentDir,
+      cwd: root
+    })
     const installed = join(agentDir, 'npm', 'node_modules', pluginName)
     const installedManifest = JSON.parse(await readFile(join(installed, 'package.json'), 'utf8'))
     assert.equal(installedManifest.version, '1.0.0')

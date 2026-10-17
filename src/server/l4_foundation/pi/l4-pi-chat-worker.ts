@@ -1128,6 +1128,13 @@ export class L4PiChatWorker {
     }
   }
 
+  async setTitle(title: string): Promise<void> {
+    const session = await this.ensureSession()
+    const name = title.replace(/[\r\n]+/g, ' ').trim()
+    if (this.sessionManager.getSessionName() === name) return
+    session.setSessionName(name)
+  }
+
   async setModel(input: L4PiChatModelInput): Promise<void> {
     if (this.startingAcceptedInput || this.acceptedInputs.length > 0) {
       throw new Error('主 Agent 正在接管聊天输入，不能切换模型')
@@ -1692,9 +1699,13 @@ export class L4PiChatWorker {
       case 'entry_appended':
         if (!this.treeNavigation) this.onEntryAppended(event.entry)
         return
-      case 'session_info_changed':
+      case 'session_info_changed': {
+        // SDK 改名只发 session_info_changed，仍需增量确认刚追加的 session_info。
+        const entry = this.sessionManager.getLeafEntry()
+        if (!this.treeNavigation && entry?.type === 'session_info') this.onEntryAppended(entry)
         this.emit({ type: 'session_info_changed', sessionTitle: event.name?.trim() || null })
         return
+      }
       case 'bash_execution_update':
         if (event.id) this.updateBash(event.id, event.delta)
         return

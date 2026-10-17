@@ -14,8 +14,10 @@ import {
   type RecentProcessCandidate
 } from './context-analysis.js'
 import { transformCompactionPreparation } from './context-compaction.js'
+import { applyImageBudget } from './context-image-budget.js'
 import {
   defaultContextIgnoreSettings,
+  normalizeContextIgnoreSettings,
   findMatchingContextIgnoreRule,
   selectContextIgnoreProfile,
   type ContextIgnoreProfile,
@@ -147,6 +149,7 @@ export function registerContextIgnore(
   let skillBaseDirs: string[] = []
   let skillFilePaths: string[] = []
   let lengthContinuationCount = 0
+  let lastImageDecision: string | undefined
 
   registerHistoryToolResult(pi, () => activeToolReferences)
 
@@ -160,7 +163,7 @@ export function registerContextIgnore(
 
   async function reloadSettings(ctx: ExtensionContext): Promise<void> {
     try {
-      settings = await loadSettings()
+      settings = normalizeContextIgnoreSettings(await loadSettings())
     } catch (error) {
       console.warn('[context-ignore] 配置读取失败，继续使用最近一次有效配置', {
         sessionId: ctx.sessionManager.getSessionId(),
@@ -417,6 +420,7 @@ export function registerContextIgnore(
     activeToolReferences = new Map()
     pendingCheckpoint = undefined
     lengthContinuationCount = 0
+    lastImageDecision = undefined
     state = loadContextIgnoreState(ctx.sessionManager)
     skillBaseDirs = state.skillBaseDirs ?? []
     skillFilePaths = state.skillFilePaths ?? []
@@ -435,7 +439,10 @@ export function registerContextIgnore(
 
   pi.on('input', (event) => {
     // 自动续写本身也会触发 input；只在真实用户开始新任务时重置上限。
-    if (event.source !== 'extension') lengthContinuationCount = 0
+    if (event.source !== 'extension') {
+      lengthContinuationCount = 0
+      lastImageDecision = undefined
+    }
   })
 
   pi.on('agent_end', (event, ctx) => {
@@ -563,18 +570,48 @@ export function registerContextIgnore(
 
   pi.on('context', (event, ctx) => {
     const sourceMessages = filterCheckpointMessages(event.messages, pendingCheckpoint !== undefined)
+    let messages = sourceMessages
     try {
       const transformed = transformContextMessages(sourceMessages, state, getTransformOptions(ctx))
       activeToolReferences = transformed.toolReferences
-      return { messages: transformed.messages }
+      messages = transformed.messages
     } catch (error) {
       activeToolReferences = new Map()
       console.error('[context-ignore] 上下文转换失败，已回退原始消息', {
         sessionId: ctx.sessionManager.getSessionId(),
         errorName: error instanceof Error ? error.name : 'UnknownError'
       })
-      return { messages: sourceMessages }
     }
+
+    const images = applyImageBudget(messages, settings.imageBudget)
+    if (images.blocked) ctx.abort()
+    if (images.removedImages > 0 || images.blocked) {
+      const decision = `${images.beforeBytes}:${images.afterBytes}:${images.removedImages}:${images.blocked}`
+      if (decision !== lastImageDecision) {
+        lastImageDecision = decision
+        const info = {
+          sessionId: ctx.sessionManager.getSessionId(),
+          beforeBytes: images.beforeBytes,
+          afterBytes: images.afterBytes,
+          unseenBytes: images.unseenBytes,
+          removedImages: images.removedImages
+        }
+        if (images.blocked) {
+          console.warn('[context-ignore] 新图片批次超限，已中止请求', info)
+          if (ctx.hasUI) {
+            ctx.ui.notify(
+              `本批新图片约 ${(images.unseenBytes / 1024 / 1024).toFixed(1)} MiB，超过图片发送上限 ${(settings.imageBudget.triggerBytes / 1024 / 1024).toFixed(1)} MiB。请缩小图片或分批发送，本次未发送模型请求。`,
+              'warning'
+            )
+          }
+        } else {
+          console.info('[context-ignore] 已整理历史图片', info)
+        }
+      }
+    } else {
+      lastImageDecision = undefined
+    }
+    return { messages: images.messages }
   })
 
   pi.on('session_before_compact', (event, ctx) => {
@@ -677,6 +714,7 @@ export function registerContextIgnore(
     unregisterIgnoreMethod()
     pendingCheckpoint = undefined
     activeToolReferences = new Map()
+    lastImageDecision = undefined
     plugin.setState(null)
   })
 }

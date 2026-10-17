@@ -38,7 +38,7 @@ test('登录与设置仅接收密码并拒绝用户名及额外字段', () => {
   assert.equal(L2AuthSettingsReplaceRequestSchema.safeParse({ username: null }).success, false)
 })
 
-test('新密码至少12位且满足三类字符，旧密码仍可登录', () => {
+test('新密码为12–64位且满足三类字符，旧短密码仍可登录', () => {
   for (const password of [
     'OnlylettersHere',
     '123456789012',
@@ -48,7 +48,7 @@ test('新密码至少12位且满足三类字符，旧密码仍可登录', () => 
     'abcDEF123456\n',
     'abcDEF123456\t',
     'abcDEF123456\u200b',
-    `Ab1${'x'.repeat(254)}`
+    `Ab1${'x'.repeat(62)}`
   ]) {
     assert.equal(
       L2AuthNewPasswordSchema.safeParse(password).success,
@@ -63,7 +63,7 @@ test('新密码至少12位且满足三类字符，旧密码仍可登录', () => 
     'Abcdefghijk!',
     'Abcd efgh12!',
     'Password123!',
-    `Ab1${'x'.repeat(253)}`
+    `Ab1${'x'.repeat(61)}`
   ]) {
     assert.equal(
       L2AuthNewPasswordSchema.safeParse(password).success,
@@ -76,6 +76,23 @@ test('新密码至少12位且满足三类字符，旧密码仍可登录', () => 
     L2AuthSettingsReplaceRequestSchema.safeParse({ password: 'old-pass' }).success,
     false
   )
+})
+
+test('登录和设置请求允许64位密码并拒绝超长密码', () => {
+  for (const [length, accepted] of [
+    [64, true],
+    [65, false],
+    [256, false],
+    [1000, false]
+  ] as const) {
+    const input = { password: `Ab1${'x'.repeat(length - 3)}` }
+    assert.equal(L2AuthLoginRequestSchema.safeParse(input).success, accepted, `${length}位登录密码`)
+    assert.equal(
+      L2AuthSettingsReplaceRequestSchema.safeParse(input).success,
+      accepted,
+      `${length}位设置密码`
+    )
+  }
 })
 
 test('签名会话绑定密钥、校验过期时间并安全解析 Cookie', () => {

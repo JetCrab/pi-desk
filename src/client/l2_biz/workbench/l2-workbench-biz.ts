@@ -40,6 +40,7 @@ import type {
   L2CreateWorkSessionRequest,
   L2CreateWorkSessionResponse,
   L2ReplaceWorkSessionRequest,
+  L2RenameWorkSessionRequest,
   L2SortWorkSessionsRequest,
   L2WorkSessionListResponse
 } from '@common/l2_biz/work-session/l2-work-session-contract'
@@ -110,6 +111,7 @@ export interface L2WorkbenchBiz {
   applyAppRuntimeUpdate: (input: L3AppRuntimeApplyRequest) => Promise<void>
   sortWorkSessions: (input: L2SortWorkSessionsRequest) => Promise<L2WorkSessionListResponse>
   deleteWorkSession: (workId: string) => Promise<L2WorkSessionListResponse>
+  renameWorkSession: (input: L2RenameWorkSessionRequest) => Promise<void>
   listDirectories: (forceRefresh: boolean) => Promise<L2PiDirectoryListResponse>
   listIgnoredDirectories: (forceRefresh: boolean) => Promise<L2PiDirectoryIgnoreListResponse>
   replaceDirectoryIgnore: (input: L2PiDirectoryIgnoreReplaceRequest) => Promise<void>
@@ -205,6 +207,9 @@ export function createL2WorkbenchBiz(
       request<L2WorkSessionListResponse>('/api/work-sessions/sort', input),
     deleteWorkSession: (workId) =>
       request<L2WorkSessionListResponse>('/api/work-sessions/del', { workId }),
+    async renameWorkSession(input): Promise<void> {
+      await request<Record<string, never>>('/api/work-sessions/rename', input)
+    },
     async listDirectories(forceRefresh): Promise<L2PiDirectoryListResponse> {
       const response = await request<L2PiDirectoryListResponse>('/api/pi/directories/list', {
         forceRefresh

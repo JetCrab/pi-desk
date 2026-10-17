@@ -37,6 +37,7 @@ async function directoryExists(path: string): Promise<boolean> {
 export async function readL4PiPackageRootConsistencyError(input: {
   agentDir: string
   configured: readonly L4PiConfiguredPackageLocation[]
+  repairSource?: string
 }): Promise<L4PiPackageRootConsistencyError | null> {
   const npmPackages = input.configured.flatMap((item) => {
     const name = npmPackageName(item.source)
@@ -62,11 +63,14 @@ export async function readL4PiPackageRootConsistencyError(input: {
     }
   }
 
-  const expected = new Set(npmPackages.map((item) => item.name))
+  // 重装失败仍保留 Pi 声明；仅显式重装的目标可以缺失，安装根本身仍须可读。
+  const repairName = input.repairSource ? npmPackageName(input.repairSource) : null
+  const requiredPackages = npmPackages.filter((item) => item.name !== repairName)
+  const expected = new Set(requiredPackages.map((item) => item.name))
   const actual = new Set(Object.keys(dependencies))
   const missing = [...expected].filter((name) => !actual.has(name))
   const missingDirectories: string[] = []
-  for (const { name, item } of npmPackages) {
+  for (const { name, item } of requiredPackages) {
     if (!item.installedPath || !(await directoryExists(item.installedPath))) {
       missingDirectories.push(name)
     }

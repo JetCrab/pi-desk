@@ -109,6 +109,33 @@ test('标题更新和清除只携带标题，相同标题不推送', async (cont
   ])
 })
 
+test('改名拒绝失效绑定和空标题，合法请求只推送规范化后的标题', async (context) => {
+  const { manage, workId, updates, emit } = await createFixture(context)
+  const [{ WorkSessionBindingChangedError, WorkSessionNotFoundError }] = await modulesPromise
+  const workSession = await manage.getWorkSession(workId)
+  assert.ok(workSession)
+  const setTitle = context.mock.method(workSession, 'setTitle', async (title: string) => {
+    emit({ type: 'session_info_changed', sessionTitle: title })
+  })
+  const input = { workId, sessionId: workSession.sessionId, title: '  用户指定标题  ' }
+
+  await assert.rejects(
+    manage.renameWorkSession({ ...input, sessionId: randomUUID() }),
+    WorkSessionBindingChangedError
+  )
+  await assert.rejects(
+    manage.renameWorkSession({ ...input, workId: 'missing-session' }),
+    WorkSessionNotFoundError
+  )
+  assert.throws(() => manage.renameWorkSession({ ...input, title: ' \n ' }))
+  assert.equal(setTitle.mock.callCount(), 0)
+  assert.deepEqual(updates, [])
+
+  await manage.renameWorkSession(input)
+  assert.deepEqual(setTitle.mock.calls[0]?.arguments, ['用户指定标题'])
+  assert.deepEqual(updates, [{ type: 'update', workId, changes: { sessionTitle: '用户指定标题' } }])
+})
+
 test('消息提交只推送发生变化的标题、计数和时间', async (context) => {
   const { workId, updates, emit } = await createFixture(context)
   const firstTempId = randomUUID()

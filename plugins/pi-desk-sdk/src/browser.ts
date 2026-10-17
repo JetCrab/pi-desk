@@ -271,11 +271,21 @@ export interface BrowserSessionFileHost {
   reveal(path: string): Promise<void>
 }
 
+export interface BrowserSessionSidebarHeaderAction {
+  label: string
+  icon?: import('./shared.js').BrowserContributionIcon
+  disabled?: boolean
+  busy?: boolean
+  onSelect(): void | Promise<void>
+}
+
 export interface BrowserSessionSidebarTabTarget {
   kind: 'session-sidebar-tab'
   source: PluginSource
   cwd: string
   files: BrowserSessionFileHost
+  // 整体替换当前挂载的顶部操作；旧宿主可能缺少此能力。
+  setHeaderActions?(actions: readonly BrowserSessionSidebarHeaderAction[]): void
 }
 
 export interface TemporaryMessageLocation {

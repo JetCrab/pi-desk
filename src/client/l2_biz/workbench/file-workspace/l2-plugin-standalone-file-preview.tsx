@@ -7,7 +7,12 @@ import type { PluginSource } from '@jetcrab/pi-desk-sdk/browser'
 import type { L2WorkSessionFileGetResponse } from '@common/l2_biz/work-session/l2-work-session-file-contract'
 import { createL4Base64ImageBlob } from '@client/l4_foundation/media/l4-base64-image'
 import { readL3ImagePreviewMode } from '@client/l3_modules/preferences/l3-work-session-file-preferences'
-import { L4CodePreview } from '@client/l4_foundation/ui/code/l4-code-preview'
+import {
+  L4CodePreview,
+  type L4CodePreviewState
+} from '@client/l4_foundation/ui/code/l4-code-preview'
+import { L3MarkdownPreview } from '@client/l3_modules/project-files/l3-markdown-preview'
+import { getL3ProjectTextPreviewKind } from '@client/l3_modules/project-files/l3-project-text-preview'
 import {
   L4AppDialogContent,
   L4AppDialogRoot,
@@ -56,7 +61,14 @@ export function L2PluginStandaloneFilePreview({
   onClose: () => void
 }): React.JSX.Element | null {
   const { t } = useTranslation('workbench')
+  const { t: filesT } = useTranslation('projectFiles')
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  const [view, setView] = useState<{ mode: 'preview' | 'source'; scrollTop: number }>({
+    mode: 'preview',
+    scrollTop: 0
+  })
+  const previewScrollTop = useRef(0)
+  const [editorState, setEditorState] = useState<L4CodePreviewState | null>(null)
   const [retry, setRetry] = useState(0)
   const [document, setDocument] = useState<StandaloneFileDocument>(() => {
     const url =
@@ -129,7 +141,7 @@ export function L2PluginStandaloneFilePreview({
 
   if (!target) return null
   const path = target.imagePaths?.[imageIndex] ?? target.path
-  const isHtml = /\.html?$/i.test(path)
+  const previewKind = getL3ProjectTextPreviewKind(path)
   return (
     <L4AppDialogRoot
       open
@@ -150,8 +162,8 @@ export function L2PluginStandaloneFilePreview({
           className="flex size-full min-h-0 min-w-0 flex-col overflow-hidden bg-background"
           aria-label={t('standaloneViewer', { name: target.projectName })}
         >
-          <header className="flex min-h-14 shrink-0 items-center border-b pl-3 pr-14 pt-[env(safe-area-inset-top)]">
-            <div className="min-w-0">
+          <header className="flex min-h-14 shrink-0 items-center gap-3 border-b pl-3 pr-14 pt-[env(safe-area-inset-top)]">
+            <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold" title={fileName(path)}>
                 {fileName(path)}
               </p>
@@ -162,6 +174,23 @@ export function L2PluginStandaloneFilePreview({
                 {target.projectName} · {path}
               </p>
             </div>
+            {previewKind === 'markdown' && document.status === 'text' ? (
+              <div className="flex shrink-0" role="group" aria-label={filesT('markdownMode')}>
+                {(['preview', 'source'] as const).map((mode) => (
+                  <Button
+                    key={mode}
+                    size="sm"
+                    variant={view.mode === mode ? 'secondary' : 'ghost'}
+                    aria-pressed={view.mode === mode}
+                    onClick={() => {
+                      if (view.mode !== mode) setView({ mode, scrollTop: previewScrollTop.current })
+                    }}
+                  >
+                    {filesT(mode === 'preview' ? 'previewMode' : 'sourceMode')}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
           </header>
           <div className="min-h-0 flex-1 overflow-hidden pb-[env(safe-area-inset-bottom)]">
             {target.imagePaths ? (
@@ -197,7 +226,16 @@ export function L2PluginStandaloneFilePreview({
                 slides={[{ src: document.objectUrl, alt: target.path }]}
                 ariaLabel={t('standaloneImage', { name: fileName(target.path) })}
               />
-            ) : isHtml ? (
+            ) : previewKind === 'markdown' && view.mode === 'preview' ? (
+              <L3MarkdownPreview
+                content={document.content}
+                label={filesT('markdownPreview', { name: path })}
+                savedScrollTop={view.scrollTop}
+                onScroll={(scrollTop) => {
+                  previewScrollTop.current = scrollTop
+                }}
+              />
+            ) : previewKind === 'html' ? (
               <iframe
                 ref={iframeRef}
                 className="block size-full border-0 bg-white"
@@ -210,8 +248,8 @@ export function L2PluginStandaloneFilePreview({
                 path={target.path}
                 content={document.content}
                 size={document.size}
-                savedState={null}
-                onSaveState={() => undefined}
+                savedState={editorState}
+                onSaveState={(_path, state) => setEditorState(state)}
                 onEscape={onClose}
               />
             )}

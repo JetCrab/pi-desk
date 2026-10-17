@@ -184,11 +184,20 @@ export const L2ModelSettingsGetResponseSchema = z
   })
   .strict()
 
+const L2ModelIdentitySchema = z
+  .object({ provider: L2ModelProviderIdSchema, modelId: L2ModelIdSchema })
+  .strict()
+
+export const L2ModelReplacementSchema = z
+  .object({ from: L2ModelIdentitySchema, to: L2ModelIdentitySchema })
+  .strict()
+
 const L2ModelSettingsReplaceFormSchema = z
   .object({
     providers: z.array(L2ModelProviderConfigSchema).optional(),
     presets: z.array(L2ModelPresetSchema).optional(),
-    accountModels: z.array(L2AccountModelSelectionSchema).optional()
+    accountModels: z.array(L2AccountModelSelectionSchema).optional(),
+    modelReplacements: z.array(L2ModelReplacementSchema).optional()
   })
   .strict()
   .refine(
@@ -207,6 +216,17 @@ export const L2ModelSettingsReplaceRequestSchema = z.union([
 ])
 
 export const L2ModelSettingsReplaceResponseSchema = z.object({}).strict()
+
+export const L2ModelSettingsPreviewRequestSchema = L2ModelSettingsReplaceRequestSchema
+export const L2ModelSettingsPreviewResponseSchema = z
+  .object({
+    projectDefaults: z.array(
+      z
+        .object({ cwd: L3PiCwdSchema, from: L2ModelSelectionSchema, to: L2ModelSelectionSchema })
+        .strict()
+    )
+  })
+  .strict()
 
 export const L2ModelCatalogListRequestSchema = z
   .object({
@@ -299,6 +319,8 @@ export type L2ModelPreset = z.infer<typeof L2ModelPresetSchema>
 export type L2ModelOption = z.infer<typeof L2ModelOptionSchema>
 export type L2ModelSelection = z.infer<typeof L2ModelSelectionSchema>
 export type L2ModelSettingsGetResponse = z.infer<typeof L2ModelSettingsGetResponseSchema>
+export type L2ModelReplacement = z.infer<typeof L2ModelReplacementSchema>
+export type L2ModelSettingsPreviewResponse = z.infer<typeof L2ModelSettingsPreviewResponseSchema>
 export type L2ModelSettingsReplaceRequest = z.infer<typeof L2ModelSettingsReplaceRequestSchema>
 export type L2ModelCatalogListRequest = z.infer<typeof L2ModelCatalogListRequestSchema>
 export type L2ModelCatalogSource = z.infer<typeof L2ModelCatalogSourceSchema>

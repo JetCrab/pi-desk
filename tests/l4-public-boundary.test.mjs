@@ -14,7 +14,8 @@ const pluginNames = [
   'pi-desk-subagent',
   'pi-desk-tibo-monitor',
   'pi-desk-tool-reason',
-  'pi-desk-usage'
+  'pi-desk-usage',
+  'pi-desk-workspace'
 ]
 
 async function manifest(directory) {

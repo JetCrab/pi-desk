@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -129,6 +129,65 @@ test('配置拒绝无条件规则、重复上限和缺少通用配置', () => {
       }),
     /通用配置/
   )
+})
+
+test('旧配置缺少图片设置时默认关闭并补全宽松参数，不改变token开关', () => {
+  const legacy = settingsFixture()
+  const original = structuredClone(legacy)
+  const parsed = parseContextIgnoreSettings(legacy)
+  assert.deepEqual(parsed.imageBudget, {
+    enabled: false,
+    triggerBytes: 24 * 1024 * 1024,
+    targetBytes: 12 * 1024 * 1024,
+    keepAssistantTurns: 12,
+    keepTextTurns: 3
+  })
+  assert.equal(parsed.enabled, true)
+  assert.deepEqual(legacy, original)
+})
+
+test('图片设置独立于token开关，关闭时仍保留用户填写的参数', async (context) => {
+  const runs = join(process.cwd(), 'temp', 'run', 'ctx-image-settings')
+  await mkdir(runs, { recursive: true })
+  const root = await mkdtemp(join(runs, 'image-budget-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const path = join(root, 'pi-desk-ctx.json')
+  const imageBudget = {
+    enabled: true,
+    triggerBytes: 16 * 1024 * 1024,
+    targetBytes: 8 * 1024 * 1024,
+    keepAssistantTurns: 6,
+    keepTextTurns: 2
+  }
+  await writeContextIgnoreSettings({ ...settingsFixture(), enabled: false, imageBudget }, path)
+  assert.deepEqual((await readContextIgnoreSettings(path)).imageBudget, imageBudget)
+  const disabled = { ...imageBudget, enabled: false }
+  await writeContextIgnoreSettings({ ...settingsFixture(), imageBudget: disabled }, path)
+  assert.deepEqual((await readContextIgnoreSettings(path)).imageBudget, disabled)
+})
+
+test('图片设置拒绝负数、非整数、超范围和目标大于触发值', () => {
+  const imageBudget = parseContextIgnoreSettings(settingsFixture()).imageBudget
+  for (const update of [
+    { enabled: 'true' },
+    { triggerBytes: 0 },
+    { triggerBytes: 1.5 },
+    { triggerBytes: 1024 ** 3 + 1 },
+    { targetBytes: -1 },
+    { targetBytes: imageBudget.triggerBytes + 1 },
+    { keepAssistantTurns: 0 },
+    { keepTextTurns: 101 },
+    { keepTextTurns: 1.5 }
+  ]) {
+    assert.throws(
+      () =>
+        parseContextIgnoreSettings({
+          ...settingsFixture(),
+          imageBudget: { ...imageBudget, ...update }
+        }),
+      /imageBudget|图片/
+    )
+  }
 })
 
 test('旧配置文件首次访问复制到 Pi Desk 路径并保留原文件', async (context) => {
