@@ -81,6 +81,11 @@ export const documents = {
     description: '通过同机桌面端与已配置隧道，临时让其他设备访问项目开发网页。',
     group: '插件介绍'
   },
+  '/docs/workspace/': {
+    title: '隔离工作区',
+    description: '',
+    group: '插件介绍'
+  },
   '/docs/faq/': {
     title: '常见问题',
     description: '定位启动、模型、插件和访问问题。',

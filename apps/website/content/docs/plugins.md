@@ -23,6 +23,7 @@
 | **[Tibo 动态](/docs/tibo/)** · `pi-desk-tibo-monitor`          | 跟踪 Tibo 动态、翻译内容，提示 Codex 额度重置消息 |
 | **[工具调用理由](/docs/tool-reason/)** · `pi-desk-tool-reason` | 让 AI 在文件和命令工具调用中说明目的              |
 | **[远程调试](/docs/remote-debug/)** · `pi-desk-remote-debug`   | 将本机开发页面临时开放给其他设备测试              |
+| **[隔离工作区](/docs/workspace/)** · `pi-desk-workspace`       |                                                   |
 
 额度和动态等插件需先在对应设置页完成配置。公网远程调试依赖同机 Pi Desk 桌面端托管及已配置的[桌面隧道](/docs/devices/#配置桌面端)，平台以桌面端实际支持为准。它用于测试项目，不是远程访问 Pi Desk。
 

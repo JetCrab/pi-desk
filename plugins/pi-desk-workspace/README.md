@@ -2,6 +2,8 @@
 
 为 Pi 会话分配可复用的隔离工作目录，并在 Pi Desk 会话侧栏中查看和管理工作区。项目通过 `.pi/workspace.yml` 和 Node Handler 定义初始化与项目命令。
 
+官方说明：[使用说明](https://pidesk.dev/docs/workspace/)
+
 工作区是目录隔离，不是容器或权限沙箱。源码准备方式、依赖安装、端口分配和清理策略由项目 Handler 决定。
 
 ## 安装

@@ -13,7 +13,7 @@ class RemoteDebugRuntime extends Runtime {
     plugin: PiDeskPluginFacade,
     dependencies: ConstructorParameters<typeof Runtime>[1] = {}
   ) {
-    super(plugin, { assertPortsAvailable: async () => undefined, ...dependencies })
+    super(plugin, { preparePorts: async () => [], ...dependencies })
   }
 }
 import type { ManagedTunnelClient, TunnelClientResult } from '../src/tunnel-client.js'
@@ -134,6 +134,7 @@ test('运行到公网就绪后可显式停止并完整清理', async () => {
   })
 
   const started = await runtime.start(cwd, 'web')
+  assert.ok('runId' in started)
   await waitFor(() => runtime.state().runs[0]?.status === 'running')
   assert.equal(runtime.state().runs[0]?.publicUrl, 'http://tunnel.example:43333')
   assert.equal(runtime.state().runs[0]?.localUrl, 'http://127.0.0.1:30333')
@@ -168,6 +169,7 @@ test('Run 仅按 cwd 启动，不依赖 WorkSession 继续存在', async () => {
   })
 
   const started = await runtime.start(cwd, 'web')
+  assert.ok('runId' in started)
   await waitFor(() => runtime.state().runs[0]?.status === 'running')
   assert.equal(runtime.state().runs[0]?.runId, started.runId)
   const projects = await runtime.catalog([])
@@ -188,6 +190,7 @@ test('活动 Run 使用相同公网端口时明确拒绝', async () => {
   })
 
   const started = await runtime.start(cwd, 'web')
+  assert.ok('runId' in started)
   await waitFor(() => runtime.state().runs[0]?.status === 'running')
   await assert.rejects(runtime.start(cwd, 'api'), /公网端口 43333 正在被 web 使用/)
   await runtime.stop(started.runId)
@@ -210,6 +213,7 @@ test('项目命令在入口就绪前退出时收敛失败且不启动 Gateway', 
   })
 
   const started = await runtime.start(cwd, 'web')
+  assert.ok('runId' in started)
   command.resolve({ exitCode: 2, signal: null, error: null })
   await waitFor(() => runtime.state().runs[0]?.status === 'failed')
 
@@ -355,7 +359,7 @@ test('实际端口占用时不执行项目命令，也不停止外部服务', as
   let commandStarts = 0
   let checkedPorts: readonly number[] = []
   const runtime = new RemoteDebugRuntime(pluginFacade([]), {
-    assertPortsAvailable: async (ports) => {
+    preparePorts: async (ports) => {
       checkedPorts = ports
       throw new Error('本机端口 30333 已被占用')
     },
@@ -369,6 +373,45 @@ test('实际端口占用时不执行项目命令，也不停止外部服务', as
     assert.deepEqual(new Set(checkedPorts), new Set([30333, 8080]))
     assert.equal(commandStarts, 0)
     assert.deepEqual(runtime.state().runs, [])
+  } finally {
+    await runtime.dispose()
+  }
+})
+
+test('端口冲突先返回确认清单，确认重试才创建Run并启动命令', async () => {
+  const conflicts = [{ port: 30333, pid: 3456, processName: 'fixture' }]
+  const command = deferredCommand()
+  const tunnel = deferredTunnel('tunnel.example:43333')
+  let commandStarts = 0
+  let loggerCreates = 0
+  const runtime = new RemoteDebugRuntime(pluginFacade([]), {
+    preparePorts: async (_ports, confirmed) => {
+      if (confirmed?.length === 0) return conflicts
+      assert.deepEqual(confirmed, [{ port: 30333, pid: 3456 }])
+      return []
+    },
+    createLogger: async () => {
+      loggerCreates += 1
+      return testLogger(() => undefined)
+    },
+    startCommand: () => {
+      commandStarts += 1
+      return command.handle
+    },
+    waitForPort: async () => undefined,
+    startGateway: async () => ({ port: 39128, close: async () => undefined }),
+    startTunnel: () => tunnel.handle
+  })
+  try {
+    assert.deepEqual(await runtime.start(cwd, 'web'), { conflicts })
+    assert.deepEqual(runtime.state().runs, [])
+    assert.equal(commandStarts, 0)
+    assert.equal(loggerCreates, 0)
+    const result = await runtime.start(cwd, 'web', [{ port: 30333, pid: 3456 }])
+    assert.ok('runId' in result)
+    await waitFor(() => runtime.state().runs[0]?.status === 'running')
+    assert.equal(commandStarts, 1)
+    assert.equal(loggerCreates, 1)
   } finally {
     await runtime.dispose()
   }

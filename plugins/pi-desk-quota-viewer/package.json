@@ -1,11 +1,12 @@
 {
   "name": "@jetcrab/pi-desk-quota-viewer",
+  "homepage": "https://pidesk.dev/docs/quota/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JetCrab/pi-desk.git",
     "directory": "plugins/pi-desk-quota-viewer"
   },
-  "version": "1.1.6",
+  "version": "1.1.7",
   "license": "Apache-2.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

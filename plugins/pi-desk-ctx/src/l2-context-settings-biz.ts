@@ -259,7 +259,6 @@ export interface ContextSettingsController {
   loaded: boolean
   saving: boolean
   dirty: boolean
-  advancedOpen: boolean
   leaveOpen: boolean
   setEnabled(enabled: boolean): void
   updateImageBudget(update: Partial<ImageBudgetDraft>): void
@@ -271,7 +270,6 @@ export interface ContextSettingsController {
   deleteProfile(): void
   addRule(): void
   removeRule(index: number): void
-  setAdvancedOpen(open: boolean): void
   cancel(): void
   restoreRecommended(): void
   save(): void
@@ -288,7 +286,6 @@ export function useContextSettings(
   const [baseline, setBaseline] = useState(initialDraft)
   const [draft, setDraft] = useState(initialDraft)
   const [activeKey, setActiveKey] = useState(initialDraft.profiles[1]!.key)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loaded, setLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -391,7 +388,6 @@ export function useContextSettings(
       if (validation.issue) {
         if (validation.issue.profileKey !== null) {
           setActiveKey(validation.issue.profileKey)
-          if (['maxContextK', 'checkpointK'].includes(validation.issue.field)) setAdvancedOpen(true)
         }
       } else {
         setError(validation.error)
@@ -428,7 +424,6 @@ export function useContextSettings(
     loaded,
     saving,
     dirty,
-    advancedOpen,
     leaveOpen,
     setEnabled(enabled) {
       setDraft((current) => ({ ...current, enabled }))
@@ -457,7 +452,6 @@ export function useContextSettings(
       next.maxContextK = ''
       setDraft((current) => ({ ...current, profiles: sortProfiles([...current.profiles, next]) }))
       setActiveKey(next.key)
-      setAdvancedOpen(true)
     },
     deleteProfile() {
       const next = draft.profiles.filter((candidate) => candidate.key !== profile.key)
@@ -475,7 +469,6 @@ export function useContextSettings(
     removeRule(index) {
       updateProfile({ rules: profile.rules.filter((_, ruleIndex) => ruleIndex !== index) })
     },
-    setAdvancedOpen,
     cancel() {
       setDraft(baseline)
       setError(null)
@@ -484,7 +477,6 @@ export function useContextSettings(
       const next = settingsToDraft(defaultContextIgnoreSettings())
       setDraft(next)
       setActiveKey(next.profiles[1]!.key)
-      setAdvancedOpen(false)
       setError(null)
     },
     save,

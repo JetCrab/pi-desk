@@ -93,6 +93,23 @@ export function QuotaSettingsPage({
               {t('添加来源')}
             </PluginButton>
           ) : null}
+          <a
+            href="https://pidesk.dev/docs/quota/"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              minHeight: '2rem',
+              color: 'var(--muted-foreground)',
+              fontSize: '.875rem',
+              whiteSpace: 'nowrap',
+              textDecoration: 'underline',
+              textUnderlineOffset: '.2em'
+            }}
+          >
+            {t('使用说明 ↗', 'Usage guide ↗')}
+          </a>
         </div>
       </div>
       {displayEditing ? (

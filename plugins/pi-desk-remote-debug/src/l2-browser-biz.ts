@@ -2,6 +2,9 @@ import type { BrowserPluginHost, PluginJsonObject } from '@jetcrab/pi-desk-sdk/b
 import {
   remoteDebugRangesSchema,
   remoteDebugSettingsSchema,
+  remoteDebugStartResultSchema,
+  type RemoteDebugPortProcess,
+  type RemoteDebugStartResult,
   type RemoteDebugSettings,
   type RemoteDebugRegistration
 } from './l4-remote-debug-contract.js'
@@ -89,18 +92,28 @@ export function isActiveRun(run: RemoteDebugRun): boolean {
 export async function startProfile(
   host: BrowserPluginHost,
   cwd: string,
-  profile: string
-): Promise<void> {
-  await host.piDesk.invokeGlobal('run-start', { cwd, profile })
+  profile: string,
+  confirmedProcesses?: readonly RemoteDebugPortProcess[]
+): Promise<RemoteDebugStartResult> {
+  return remoteDebugStartResultSchema.parse(
+    await host.piDesk.invokeGlobal('run-start', {
+      cwd,
+      profile,
+      ...(confirmedProcesses ? { confirmedProcesses: [...confirmedProcesses] } : {})
+    })
+  )
 }
 
 export async function stopRun(host: BrowserPluginHost, runId: string): Promise<void> {
   await host.piDesk.invokeGlobal('run-stop', { runId })
 }
 
-export async function restartProfile(host: BrowserPluginHost, run: RemoteDebugRun): Promise<void> {
+export async function restartProfile(
+  host: BrowserPluginHost,
+  run: RemoteDebugRun
+): Promise<RemoteDebugStartResult> {
   await stopRun(host, run.runId)
-  await startProfile(host, run.cwd, run.profile)
+  return startProfile(host, run.cwd, run.profile)
 }
 
 export async function sendFailureToAi(host: BrowserPluginHost, run: RemoteDebugRun): Promise<void> {

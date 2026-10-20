@@ -6,6 +6,7 @@ import type {
   BrowserSettingsPageTarget
 } from '@jetcrab/pi-desk-sdk/browser'
 import {
+  PluginActionRow,
   PluginAlert,
   PluginButton,
   PluginCheckbox,
@@ -222,9 +223,28 @@ function Settings({
         title="子代理"
         description="全局默认配置，项目设置优先。"
         actions={
-          <PluginButton disabled={!dirty || saving} onClick={() => void save()}>
-            {saving ? '保存中…' : '保存设置'}
-          </PluginButton>
+          <PluginActionRow>
+            <a
+              href="https://pidesk.dev/docs/subagents/"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                minHeight: '2rem',
+                color: 'var(--muted-foreground)',
+                fontSize: '.875rem',
+                whiteSpace: 'nowrap',
+                textDecoration: 'underline',
+                textUnderlineOffset: '.2em'
+              }}
+            >
+              使用说明 ↗
+            </a>
+            <PluginButton disabled={!dirty || saving} onClick={() => void save()}>
+              {saving ? '保存中…' : '保存设置'}
+            </PluginButton>
+          </PluginActionRow>
         }
       />
       <div className="subagent-settings-content">

@@ -20,18 +20,13 @@ import {
   PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
 import type { RemoteDebugBrowserEvents } from './l4-browser-events.js'
-import {
-  isActiveRun,
-  readRuns,
-  restartProfile,
-  sendFailureToAi,
-  startProfile,
-  stopRun
-} from './l2-browser-biz.js'
+import { isActiveRun, readRuns, sendFailureToAi, stopRun } from './l2-browser-biz.js'
 import { useCatalog } from './hooks/l2-use-catalog.js'
 import { useProfileActions } from './hooks/l2-use-profile-actions.js'
+import { useProfileStart } from './hooks/l2-use-profile-start.js'
 import { getRemoteDebugRegion, subscribeRemoteDebugRegion } from './browser-time.js'
 import { ProfileCard } from './views/l2-profile-card.js'
+import { PortConflictDialog } from './views/l2-port-conflict-dialog.js'
 import { REMOTE_DEBUG_LAYOUT } from './views/l4-browser-ui.js'
 
 function RemoteDebugApplication({
@@ -54,6 +49,7 @@ function RemoteDebugApplication({
   const runs = useMemo(() => readRuns(rawState), [rawState])
   const [selectedCwd, setSelectedCwd] = useState(target.initialContext?.cwd ?? '')
   const { pending, action } = useProfileActions(host, signal)
+  const profileStart = useProfileStart(host, signal)
   const [region, setRegion] = useState(() => getRemoteDebugRegion(host))
   useEffect(
     () => subscribeRemoteDebugRegion(host, () => setRegion(getRemoteDebugRegion(host))),
@@ -114,16 +110,35 @@ function RemoteDebugApplication({
               if (value) setSelectedCwd(value)
             }}
           />
-          <PluginButton
-            size="sm"
-            variant="ghost"
-            disabled={catalog.loading}
-            onClick={() => {
-              void catalog.refresh()
-            }}
-          >
-            {catalog.loading ? '同步中…' : '刷新'}
-          </PluginButton>
+          <div className="remote-debug-actions">
+            <a
+              href="https://pidesk.dev/docs/remote-debug/"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                minHeight: '2rem',
+                color: 'var(--muted-foreground)',
+                fontSize: '.875rem',
+                whiteSpace: 'nowrap',
+                textDecoration: 'underline',
+                textUnderlineOffset: '.2em'
+              }}
+            >
+              使用说明 ↗
+            </a>
+            <PluginButton
+              size="sm"
+              variant="ghost"
+              disabled={catalog.loading}
+              onClick={() => {
+                void catalog.refresh()
+              }}
+            >
+              {catalog.loading ? '同步中…' : '刷新'}
+            </PluginButton>
+          </div>
         </div>
         {catalog.error ? <PluginAlert tone="error">{catalog.error}</PluginAlert> : null}
         {!catalog.loading && (!selectedProject || selectedProject.status === 'unconfigured') ? (
@@ -154,12 +169,12 @@ function RemoteDebugApplication({
                   timeZone={region.timeZone}
                   onStart={() => {
                     void action(profileKey, `start:${profileKey}`, () =>
-                      startProfile(host, selectedProject.cwd, profile.name)
+                      profileStart.start(selectedProject.cwd, profile.name)
                     )
                   }}
                   onRestart={(run) => {
                     void action(profileKey, `restart:${profileKey}`, () =>
-                      restartProfile(host, run)
+                      profileStart.restart(run)
                     )
                   }}
                   onStop={(run) => {
@@ -174,6 +189,13 @@ function RemoteDebugApplication({
           </PluginScroll>
         ) : null}
       </PluginSplitView>
+      <PortConflictDialog
+        confirmation={profileStart.confirmation}
+        pending={profileStart.pending}
+        error={profileStart.error}
+        onConfirm={profileStart.confirm}
+        onCancel={profileStart.cancel}
+      />
     </PluginSurface>
   )
 }

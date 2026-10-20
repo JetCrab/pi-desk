@@ -1,4 +1,4 @@
-import { Fragment, useId, useRef } from 'react'
+import { useId, useRef, useState } from 'react'
 import type { BrowserPluginHost, BrowserSettingsPageTarget } from '@jetcrab/pi-desk-sdk/browser'
 import {
   PluginActionRow,
@@ -10,7 +10,6 @@ import {
   PluginLoadingState,
   PluginPanelHeader,
   PluginScroll,
-  PluginSection,
   PluginSurface,
   PluginTab,
   PluginTabList
@@ -20,91 +19,93 @@ import {
   type ContextSettingsController,
   type ProfileDraft
 } from './l2-context-settings-biz.js'
+import { CONTEXT_SETTINGS_STYLES } from './l2-context-settings-styles.js'
 
-const SETTINGS_STYLES = `
-.pi-desk-ctx-settings {
-  display: flex;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  flex-direction: column;
+const pages = [
+  { key: 'process', label: '过程忽略', icon: 'layers' },
+  { key: 'images', label: '图片整理', icon: 'image' }
+] as const
+
+type SettingsPage = (typeof pages)[number]['key']
+
+function Icon({
+  name
+}: {
+  name: 'layers' | 'image' | 'plus' | 'trash' | 'arrow'
+}): React.JSX.Element {
+  return (
+    <svg
+      className="pi-desk-ctx-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {name === 'layers' ? <path d="m12 3 10 5-10 5L2 8Zm-10 9 10 5 10-5M2 16l10 5 10-5" /> : null}
+      {name === 'image' ? (
+        <>
+          <rect x="3" y="3" width="18" height="18" rx="3" />
+          <circle cx="8" cy="8" r="1.5" />
+          <path d="m21 15-5-5L5 21" />
+        </>
+      ) : null}
+      {name === 'plus' ? <path d="M12 5v14M5 12h14" /> : null}
+      {name === 'trash' ? <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" /> : null}
+      {name === 'arrow' ? <path d="M4 12h16m-6-6 6 6-6 6" /> : null}
+    </svg>
+  )
 }
-.pi-desk-ctx-scroll { min-height: 0; flex: 1; }
-.pi-desk-ctx-viewport { padding: 1.5rem; }
-.pi-desk-ctx-form { display: grid; max-width: 40rem; gap: 1.5rem; }
-.pi-desk-ctx-check { display: flex; min-height: 2rem; align-items: center; gap: .5rem; cursor: pointer; }
-.pi-desk-ctx-models { display: grid; gap: .5rem; }
-.pi-desk-ctx-model-heading { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
-.pi-desk-ctx-model-heading strong { font-weight: 600; }
-.pi-desk-ctx-note { color: var(--muted-foreground); font-size: .75rem; }
-.pi-desk-ctx-tab-error { color: var(--destructive); }
-.pi-desk-ctx-rules { display: grid; gap: .5rem; }
-.pi-desk-ctx-rule {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0,1fr) auto minmax(0,1fr) auto;
-  align-items: start;
-  gap: .75rem;
-  margin: 0;
-  border: 0;
-  border-radius: .5rem;
-  padding: .75rem;
-  background: var(--muted);
-}
-.pi-desk-ctx-field { display: grid; min-width: 0; align-content: start; gap: .25rem; }
-.pi-desk-ctx-label { display: flex; min-height: 2rem; align-items: center; font-weight: 500; }
-.pi-desk-ctx-amount { display: grid; min-width: 0; grid-template-columns: 1rem minmax(0,1fr) 1.25rem; align-items: center; gap: .25rem; }
-.pi-desk-ctx-amount-mib { grid-template-columns: 1rem minmax(0,1fr) 2rem; }
-.pi-desk-ctx-operator { text-align: center; }
-.pi-desk-ctx-unit { color: var(--muted-foreground); font-size: .75rem; }
-.pi-desk-ctx-and { display: grid; height: 2rem; align-items: center; margin-top: 2.25rem; color: var(--muted-foreground); }
-.pi-desk-ctx-remove { margin-top: 2.25rem; }
-.pi-desk-ctx-or { display: flex; align-items: center; gap: .75rem; color: var(--muted-foreground); font-size: .75rem; }
-.pi-desk-ctx-or::before,.pi-desk-ctx-or::after { content: ''; height: 1px; flex: 1; background: var(--border); }
-.pi-desk-ctx-error { color: var(--destructive); font-size: .875rem; }
-.pi-desk-ctx-rule > .pi-desk-ctx-error { grid-column: 1/-1; }
-.pi-desk-ctx-retain { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .75rem; }
-.pi-desk-ctx-empty { color: var(--muted-foreground); padding: .75rem 0; }
-.pi-desk-ctx-advanced { border-top: 1px solid var(--border); }
-.pi-desk-ctx-advanced > summary { display: flex; min-height: 2rem; align-items: center; gap: .5rem; border-radius: .375rem; padding: .5rem 0; color: var(--muted-foreground); cursor: pointer; list-style: none; }
-.pi-desk-ctx-advanced > summary::-webkit-details-marker { display: none; }
-.pi-desk-ctx-advanced > summary:hover { color: var(--foreground); }
-.pi-desk-ctx-advanced > summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
-.pi-desk-ctx-chevron { width: 1rem; height: 1rem; flex: none; transition: transform 150ms ease-out; }
-.pi-desk-ctx-advanced[open] .pi-desk-ctx-chevron { transform: rotate(90deg); }
-.pi-desk-ctx-advanced-content { display: grid; gap: 1rem; padding-top: .5rem; }
-.pi-desk-ctx-checkpoint { display: grid; max-width: 19rem; gap: .25rem; }
-.pi-desk-ctx-range { display: flex; align-items: start; gap: .75rem; }
-.pi-desk-ctx-range > .pi-desk-ctx-field { flex: 1; max-width: 19rem; }
-.pi-desk-ctx-range-delete { margin-top: 2.25rem; }
-.pi-desk-ctx-footer { flex: none; border-top: 1px solid var(--border); padding: .75rem 1rem; }
-.pi-desk-ctx-footer-end { margin-left: auto; }
-.pi-desk-ctx-unsaved { color: var(--muted-foreground); font-size: .75rem; }
-.pi-desk-ctx-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-@container (max-width:38rem) {
-  .pi-desk-ctx-rule { grid-template-columns: minmax(0,1fr) auto; gap: .25rem .75rem; }
-  .pi-desk-ctx-and { grid-column: 1; height: 1.5rem; margin: 0; justify-content: center; }
-  .pi-desk-ctx-rule > .pi-desk-ctx-field { grid-column: 1; }
-  .pi-desk-ctx-remove { grid-column: 2; grid-row: 1; }
-}
-@container (max-width:32rem) {
-  .pi-desk-ctx-viewport { padding: 1rem; }
-  .pi-desk-ctx-retain { grid-template-columns: minmax(0,1fr); }
-  .pi-desk-ctx-unsaved { display: none; }
-}
-@media (prefers-reduced-motion:reduce) { .pi-desk-ctx-chevron { transition: none; } }
-`
 
 function rangeLabel(profiles: ProfileDraft[], index: number): string {
   const profile = profiles[index]!
-  if (profile.maxContextK === null) return '其他模型'
+  if (profile.maxContextK === null) return '默认'
   if (profile.maxContextK === '') return '新范围'
   const previous = profiles[index - 1]?.maxContextK
   return previous ? `${previous}k–${profile.maxContextK}k` : `≤ ${profile.maxContextK}k`
 }
 
+function nextTabIndex(key: string, index: number, count: number): number | null {
+  if (key === 'ArrowRight') return (index + 1) % count
+  if (key === 'ArrowLeft') return (index + count - 1) % count
+  if (key === 'Home') return 0
+  if (key === 'End') return count - 1
+  return null
+}
+
+function Toggle({
+  label,
+  checked,
+  disabled,
+  hideLabel = false,
+  onChange
+}: {
+  label: string
+  checked: boolean
+  disabled: boolean
+  hideLabel?: boolean
+  onChange(checked: boolean): void
+}): React.JSX.Element {
+  return (
+    <label className="pi-desk-ctx-toggle">
+      <span className={hideLabel ? 'pi-desk-ctx-hidden' : 'pi-desk-ctx-toggle-label'}>{label}</span>
+      <PluginCheckbox
+        role="switch"
+        className="pi-desk-ctx-switch"
+        checked={checked}
+        disabled={disabled}
+        aria-label={label}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+    </label>
+  )
+}
+
 function AmountField({
   label,
+  description,
   value,
   unit = 'k',
   operator = '≤',
@@ -116,6 +117,7 @@ function AmountField({
   toggle
 }: {
   label: string
+  description?: string
   value: string
   unit?: 'k' | '轮' | 'MiB'
   operator?: string
@@ -144,12 +146,20 @@ function AmountField({
           {label}
         </label>
       )}
-      <div className={`pi-desk-ctx-amount${unit === 'MiB' ? ' pi-desk-ctx-amount-mib' : ''}`}>
-        <span className="pi-desk-ctx-operator" aria-hidden="true">
-          {enabled ? operator : ''}
+      {description ? (
+        <span className="pi-desk-ctx-field-description" id={`${id}-description`}>
+          {description}
         </span>
+      ) : null}
+      <div className="pi-desk-ctx-amount">
+        {enabled && operator ? (
+          <span className="pi-desk-ctx-operator" aria-hidden="true">
+            {operator}
+          </span>
+        ) : null}
         <PluginInput
           id={id}
+          className="pi-desk-ctx-input"
           type={enabled ? 'number' : 'text'}
           inputMode={enabled ? (unit === '轮' ? 'numeric' : 'decimal') : undefined}
           step={unit === '轮' ? 1 : 0.001}
@@ -157,13 +167,15 @@ function AmountField({
           disabled={disabled || !enabled}
           aria-label={`${label}（${unit}）`}
           aria-invalid={Boolean(error)}
-          aria-describedby={error ? `${id}-error` : undefined}
+          aria-describedby={error ? `${id}-error` : description ? `${id}-description` : undefined}
           onChange={(event) => onChange(event.target.value)}
           onBlur={onBlur}
         />
-        <span className="pi-desk-ctx-unit" aria-hidden="true">
-          {enabled ? unit : ''}
-        </span>
+        {enabled ? (
+          <span className="pi-desk-ctx-unit" aria-hidden="true">
+            {unit}
+          </span>
+        ) : null}
       </div>
       {error ? (
         <span className="pi-desk-ctx-error" id={`${id}-error`}>
@@ -187,23 +199,23 @@ function ImageBudgetFields({
       : undefined
 
   return (
-    <PluginSection
-      title="图片整理"
-      description="超限时先按两个助手轮次窗口的交集保留历史图片，再按目标大小收紧。新图自身超限时停止发送并提示分批；原图和聊天历史不变。"
-      action={
-        <label className="pi-desk-ctx-check">
-          <PluginCheckbox
-            checked={imageBudget.enabled}
-            disabled={settings.saving}
-            onChange={(event) => settings.updateImageBudget({ enabled: event.target.checked })}
-          />
-          自动整理
-        </label>
-      }
-    >
-      <div className="pi-desk-ctx-retain">
+    <>
+      <div className="pi-desk-ctx-activation">
+        <div>
+          <h3>自动整理图片</h3>
+          <p className="pi-desk-ctx-note">限制发送给模型的图片总量，原图与聊天历史不变。</p>
+        </div>
+        <Toggle
+          label="自动整理图片"
+          hideLabel
+          checked={imageBudget.enabled}
+          disabled={settings.saving}
+          onChange={(enabled) => settings.updateImageBudget({ enabled })}
+        />
+      </div>
+      <div className="pi-desk-ctx-image-budget">
         <AmountField
-          label="触发大小"
+          label="图片总量超过"
           unit="MiB"
           operator=">"
           value={imageBudget.triggerMiB}
@@ -211,68 +223,132 @@ function ImageBudgetFields({
           error={fieldError('triggerMiB')}
           onChange={(triggerMiB) => settings.updateImageBudget({ triggerMiB })}
         />
+        <span className="pi-desk-ctx-image-arrow">
+          <Icon name="arrow" />
+        </span>
         <AmountField
-          label="目标大小"
+          label="收紧至不超过"
           unit="MiB"
           value={imageBudget.targetMiB}
           disabled={disabled}
           error={fieldError('targetMiB')}
           onChange={(targetMiB) => settings.updateImageBudget({ targetMiB })}
         />
-        <AmountField
-          label="最近有效助手轮数"
-          unit="轮"
-          operator=""
-          value={imageBudget.keepAssistantTurns}
-          disabled={disabled}
-          error={fieldError('keepAssistantTurns')}
-          onChange={(keepAssistantTurns) => settings.updateImageBudget({ keepAssistantTurns })}
-        />
-        <AmountField
-          label="最近带正文的助手轮数"
-          unit="轮"
-          operator=""
-          value={imageBudget.keepTextTurns}
-          disabled={disabled}
-          error={fieldError('keepTextTurns')}
-          onChange={(keepTextTurns) => settings.updateImageBudget({ keepTextTurns })}
-        />
       </div>
-      <p className="pi-desk-ctx-note">
-        有效轮包含正文或工具调用；正文轮不含内部思考。错误、取消和空回应不计入轮数。
-      </p>
-    </PluginSection>
+      <section className="pi-desk-ctx-section" aria-label="历史图片保留范围">
+        <h3>历史图片保留范围</h3>
+        <p className="pi-desk-ctx-note">先保留同时位于以下两个窗口内的图片，再按目标大小收紧。</p>
+        <div className="pi-desk-ctx-image-retain">
+          <AmountField
+            label="最近有效助手轮数"
+            description="包含正文或工具调用的助手回应"
+            unit="轮"
+            operator=""
+            value={imageBudget.keepAssistantTurns}
+            disabled={disabled}
+            error={fieldError('keepAssistantTurns')}
+            onChange={(keepAssistantTurns) => settings.updateImageBudget({ keepAssistantTurns })}
+          />
+          <AmountField
+            label="最近带正文的助手轮数"
+            description="仅计算有正文的回应，不含内部思考"
+            unit="轮"
+            operator=""
+            value={imageBudget.keepTextTurns}
+            disabled={disabled}
+            error={fieldError('keepTextTurns')}
+            onChange={(keepTextTurns) => settings.updateImageBudget({ keepTextTurns })}
+          />
+        </div>
+        <p className="pi-desk-ctx-note">错误、取消和空回应不计入轮数。</p>
+      </section>
+      <div className="pi-desk-ctx-image-notice">
+        <h3>新图片自身超限时，不会直接丢弃</h3>
+        <p className="pi-desk-ctx-note">
+          系统将停止本次发送，并提示分批提交。图片整理只影响发送给模型的内容，不修改原图或聊天历史。
+        </p>
+      </div>
+    </>
   )
 }
 
-function ProfileFields({ settings }: { settings: ContextSettingsController }): React.JSX.Element {
+function ProfileFields({
+  settings,
+  onDelete
+}: {
+  settings: ContextSettingsController
+  onDelete(): void
+}): React.JSX.Element {
   const { profile, saving, issue } = settings
+  const profileIndex = settings.draft.profiles.findIndex(
+    (candidate) => candidate.key === profile.key
+  )
+  const previous = settings.draft.profiles[profileIndex - 1]?.maxContextK
   const fieldError = (field: string): string | undefined =>
     issue?.profileKey === profile.key && issue.field === field ? issue.message : undefined
 
   return (
     <>
-      <PluginSection
-        title="何时忽略"
-        action={
+      <div className="pi-desk-ctx-range">
+        {profile.maxContextK === null ? (
+          <p className="pi-desk-ctx-note">未匹配到以上范围的模型使用此配置。</p>
+        ) : (
+          <>
+            <div className="pi-desk-ctx-range-expression">
+              <span>{previous ? `${previous}k < 模型容量` : '模型容量'}</span>
+              <div className="pi-desk-ctx-range-field" data-range-input="">
+                <AmountField
+                  label="模型容量上限"
+                  value={profile.maxContextK}
+                  disabled={saving}
+                  error={fieldError('maxContextK')}
+                  onChange={(maxContextK) => settings.updateProfile({ maxContextK })}
+                  onBlur={settings.sortProfiles}
+                />
+              </div>
+            </div>
+            <PluginButton
+              variant="ghost"
+              className="pi-desk-ctx-delete"
+              disabled={saving}
+              onClick={onDelete}
+            >
+              删除范围
+            </PluginButton>
+          </>
+        )}
+      </div>
+      <section className="pi-desk-ctx-section" aria-label="触发条件">
+        <div className="pi-desk-ctx-heading">
+          <div className="pi-desk-ctx-heading-copy">
+            <h3>触发条件</h3>
+            <span className="pi-desk-ctx-note">满足任一规则即可触发</span>
+          </div>
           <PluginButton
             variant="ghost"
             disabled={saving || profile.rules.length >= 50}
             onClick={settings.addRule}
           >
-            + 添加规则
+            <Icon name="plus" />
+            添加规则
           </PluginButton>
-        }
-      >
+        </div>
         <div className="pi-desk-ctx-rules">
           {profile.rules.length === 0 ? (
-            <div className="pi-desk-ctx-empty">尚未设置自动忽略条件</div>
+            <div className="pi-desk-ctx-empty">暂无触发规则。添加规则后才会自动忽略过程。</div>
           ) : (
             profile.rules.map((rule, index) => (
-              <Fragment key={index}>
-                {index > 0 ? <div className="pi-desk-ctx-or">或</div> : null}
-                <fieldset className="pi-desk-ctx-rule">
+              <div className="pi-desk-ctx-rule-wrap" key={index}>
+                {index > 0 ? <span className="pi-desk-ctx-or">或</span> : null}
+                <fieldset
+                  className="pi-desk-ctx-rule"
+                  tabIndex={-1}
+                  aria-invalid={Boolean(fieldError(`rule-${index}`))}
+                >
                   <legend className="pi-desk-ctx-hidden">忽略条件 {index + 1}</legend>
+                  <span className="pi-desk-ctx-rule-number" aria-hidden="true">
+                    {String(index + 1).padStart(2, '0')}
+                  </span>
                   <AmountField
                     label="当前用量"
                     operator="≥"
@@ -283,7 +359,9 @@ function ProfileFields({ settings }: { settings: ContextSettingsController }): R
                     onChange={(currentK) => settings.updateRule(index, { currentK })}
                     toggle={(currentEnabled) => settings.updateRule(index, { currentEnabled })}
                   />
-                  <span className="pi-desk-ctx-and">且</span>
+                  <span className="pi-desk-ctx-and">
+                    {rule.currentEnabled && rule.projectedEnabled ? '且' : '—'}
+                  </span>
                   <AmountField
                     label="忽略后预计"
                     value={rule.projectedK}
@@ -295,12 +373,13 @@ function ProfileFields({ settings }: { settings: ContextSettingsController }): R
                   />
                   <PluginButton
                     variant="ghost"
-                    className="pi-desk-ctx-remove"
+                    className="pi-desk-ctx-icon-button pi-desk-ctx-delete"
                     aria-label={`移除规则 ${index + 1}`}
+                    title={`移除规则 ${index + 1}`}
                     disabled={saving}
                     onClick={() => settings.removeRule(index)}
                   >
-                    移除
+                    <Icon name="trash" />
                   </PluginButton>
                   {fieldError(`rule-${index}`) ? (
                     <span className="pi-desk-ctx-error" role="alert">
@@ -308,13 +387,16 @@ function ProfileFields({ settings }: { settings: ContextSettingsController }): R
                     </span>
                   ) : null}
                 </fieldset>
-              </Fragment>
+              </div>
             ))
           )}
         </div>
-      </PluginSection>
-
-      <PluginSection title="保留最近的过程" description="对话与结论始终保留">
+      </section>
+      <section className="pi-desk-ctx-section" aria-label="保留最近的过程">
+        <div className="pi-desk-ctx-heading pi-desk-ctx-retain-heading">
+          <h3>保留最近的过程</h3>
+          <span className="pi-desk-ctx-note">对话与结论始终保留</span>
+        </div>
         <div className="pi-desk-ctx-retain">
           <AmountField
             label="最近对话轮数"
@@ -332,73 +414,32 @@ function ProfileFields({ settings }: { settings: ContextSettingsController }): R
             onChange={(processBudgetK) => settings.updateProfile({ processBudgetK })}
           />
         </div>
-      </PluginSection>
-
-      <details
-        className="pi-desk-ctx-advanced"
-        open={settings.advancedOpen}
-        onToggle={(event) => settings.setAdvancedOpen(event.currentTarget.open)}
-      >
-        <summary>
-          <svg className="pi-desk-ctx-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="m9 6 6 6-6 6" stroke="currentColor" strokeWidth="2" />
-          </svg>
-          高级设置
-        </summary>
-        <div className="pi-desk-ctx-advanced-content">
-          <div className="pi-desk-ctx-checkpoint">
-            <label className="pi-desk-ctx-check">
-              <PluginCheckbox
-                checked={profile.checkpointEnabled}
-                disabled={saving}
-                onChange={(event) =>
-                  settings.updateProfile({ checkpointEnabled: event.target.checked })
-                }
-              />
-              任务中记录进展
-            </label>
-            {profile.checkpointEnabled ? (
-              <AmountField
-                label="达到用量"
-                operator="≥"
-                value={profile.checkpointK}
-                disabled={saving}
-                error={fieldError('checkpointK')}
-                onChange={(checkpointK) => settings.updateProfile({ checkpointK })}
-              />
-            ) : null}
-          </div>
-          {profile.maxContextK !== null ? (
-            <div className="pi-desk-ctx-range">
-              <AmountField
-                label="模型容量上限"
-                value={profile.maxContextK}
-                disabled={saving}
-                error={fieldError('maxContextK')}
-                onChange={(maxContextK) => settings.updateProfile({ maxContextK })}
-                onBlur={settings.sortProfiles}
-              />
-              <PluginButton
-                variant="ghost"
-                className="pi-desk-ctx-range-delete"
-                disabled={saving}
-                onClick={settings.deleteProfile}
-              >
-                删除配置
-              </PluginButton>
-            </div>
-          ) : null}
-          <PluginActionRow>
-            <PluginButton
-              variant="ghost"
-              disabled={saving || settings.draft.profiles.length >= 20}
-              onClick={settings.addProfile}
-            >
-              + 添加模型范围
-            </PluginButton>
-          </PluginActionRow>
+      </section>
+      <section className="pi-desk-ctx-checkpoint" aria-label="任务中记录进展">
+        <div>
+          <h3>任务中记录进展</h3>
+          <p className="pi-desk-ctx-note">达到指定用量时，先记录当前任务进展。</p>
         </div>
-      </details>
+        <div className="pi-desk-ctx-checkpoint-controls">
+          <div className="pi-desk-ctx-checkpoint-amount">
+            <AmountField
+              label="记录进展触发用量"
+              operator="≥"
+              value={profile.checkpointK}
+              disabled={saving || !profile.checkpointEnabled}
+              error={fieldError('checkpointK')}
+              onChange={(checkpointK) => settings.updateProfile({ checkpointK })}
+            />
+          </div>
+          <Toggle
+            label="任务中记录进展"
+            hideLabel
+            checked={profile.checkpointEnabled}
+            disabled={saving}
+            onChange={(checkpointEnabled) => settings.updateProfile({ checkpointEnabled })}
+          />
+        </div>
+      </section>
     </>
   )
 }
@@ -414,27 +455,82 @@ export function ContextIgnoreSettingsPage({
 }): React.JSX.Element {
   const settings = useContextSettings(target, host, signal)
   const form = useRef<HTMLFormElement>(null)
+  const viewport = useRef<HTMLDivElement>(null)
+  const scrollPositions = useRef({ process: 0, images: 0 })
+  const [page, setPage] = useState<SettingsPage>('process')
+  const [confirmation, setConfirmation] = useState<'delete' | 'restore' | null>(null)
   const tabId = useId()
+
+  const selectPage = (next: SettingsPage): void => {
+    if (next === page) return
+    scrollPositions.current[page] = viewport.current?.scrollTop ?? 0
+    setPage(next)
+    requestAnimationFrame(() => {
+      viewport.current?.scrollTo({ top: scrollPositions.current[next] })
+    })
+  }
+  const focusInvalid = (): void => {
+    requestAnimationFrame(() => {
+      form.current
+        ?.querySelector<HTMLElement>('[role="tabpanel"]:not([hidden]) [aria-invalid="true"]')
+        ?.focus()
+    })
+  }
 
   return (
     <PluginSurface className="pi-desk-ctx-settings" data-pi-desk-ctx-settings="">
-      <style>{SETTINGS_STYLES}</style>
+      <style>{CONTEXT_SETTINGS_STYLES}</style>
       <PluginPanelHeader
+        className="pi-desk-ctx-header"
         title="上下文忽略"
+        description="减少历史过程占用，为当前任务留出空间。"
         actions={
-          <label className="pi-desk-ctx-check">
-            <PluginCheckbox
-              checked={settings.draft.enabled}
-              disabled={settings.loading || settings.saving}
-              onChange={(event) => settings.setEnabled(event.target.checked)}
-            />
-            自动忽略过程
-          </label>
+          <a
+            href="https://pidesk.dev/docs/context/"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              minHeight: '2rem',
+              color: 'var(--muted-foreground)',
+              fontSize: '.875rem',
+              whiteSpace: 'nowrap',
+              textDecoration: 'underline',
+              textUnderlineOffset: '.2em'
+            }}
+          >
+            使用说明 ↗
+          </a>
         }
       />
+      <PluginTabList className="pi-desk-ctx-pages" label="上下文忽略设置类别">
+        {pages.map((item, index) => (
+          <PluginTab
+            key={item.key}
+            id={`${tabId}-${item.key}`}
+            active={page === item.key}
+            aria-controls={`${tabId}-${item.key}-panel`}
+            disabled={settings.saving}
+            tabIndex={page === item.key ? 0 : -1}
+            onClick={() => selectPage(item.key)}
+            onKeyDown={(event) => {
+              const next = nextTabIndex(event.key, index, pages.length)
+              if (next === null) return
+              event.preventDefault()
+              selectPage(pages[next]!.key)
+              document.getElementById(`${tabId}-${pages[next]!.key}`)?.focus()
+            }}
+          >
+            <Icon name={item.icon} />
+            {item.label}
+          </PluginTab>
+        ))}
+      </PluginTabList>
       <PluginScroll
         className="pi-desk-ctx-scroll"
         viewportClassName="pi-desk-ctx-viewport"
+        viewportRef={viewport}
         aria-label="上下文忽略设置"
       >
         <PluginLoadingState
@@ -449,73 +545,107 @@ export function ContextIgnoreSettingsPage({
             noValidate
             onSubmit={(event) => {
               event.preventDefault()
+              if (settings.issue)
+                selectPage(settings.issue.profileKey === null ? 'images' : 'process')
               settings.save()
-              if (settings.issue) {
-                requestAnimationFrame(() => {
-                  form.current?.querySelector<HTMLInputElement>('[aria-invalid="true"]')?.focus()
-                })
-              }
+              if (settings.issue) focusInvalid()
             }}
           >
-            {settings.error ? (
-              <PluginAlert tone="error" density="compact">
-                {settings.error}
-              </PluginAlert>
-            ) : null}
-            <div className="pi-desk-ctx-models">
-              <div className="pi-desk-ctx-model-heading">
-                <strong>模型上下文容量</strong>
-                <span className="pi-desk-ctx-note">1k = 1,000 tokens</span>
+            {settings.error ? <PluginAlert tone="error">{settings.error}</PluginAlert> : null}
+            <div
+              className="pi-desk-ctx-panel"
+              role="tabpanel"
+              id={`${tabId}-process-panel`}
+              aria-labelledby={`${tabId}-process`}
+              hidden={page !== 'process'}
+            >
+              <div className="pi-desk-ctx-heading">
+                <div className="pi-desk-ctx-heading-copy">
+                  <h3>模型上下文容量</h3>
+                  <span className="pi-desk-ctx-note">1k = 1,000 tokens</span>
+                </div>
+                <Toggle
+                  label="自动忽略过程"
+                  checked={settings.draft.enabled}
+                  disabled={settings.saving}
+                  onChange={settings.setEnabled}
+                />
               </div>
-              <PluginTabList label="模型上下文容量">
-                {settings.draft.profiles.map((profile, index) => (
-                  <PluginTab
-                    key={profile.key}
-                    id={`${tabId}-${profile.key}`}
-                    active={settings.profile.key === profile.key}
-                    aria-controls={`${tabId}-fields`}
-                    disabled={settings.saving}
-                    tabIndex={settings.profile.key === profile.key ? 0 : -1}
-                    onKeyDown={(event) => {
-                      const lastIndex = settings.draft.profiles.length - 1
-                      const nextIndex =
-                        event.key === 'ArrowRight'
-                          ? (index + 1) % (lastIndex + 1)
-                          : event.key === 'ArrowLeft'
-                            ? (index + lastIndex) % (lastIndex + 1)
-                            : event.key === 'Home'
-                              ? 0
-                              : event.key === 'End'
-                                ? lastIndex
-                                : null
-                      if (nextIndex === null) return
-                      event.preventDefault()
-                      const nextProfile = settings.draft.profiles[nextIndex]!
-                      settings.selectProfile(nextProfile.key)
-                      document.getElementById(`${tabId}-${nextProfile.key}`)?.focus()
+              {!settings.draft.enabled ? (
+                <p className="pi-desk-ctx-paused">自动忽略已暂停。以下配置会保留，仍可继续编辑。</p>
+              ) : null}
+              <div className="pi-desk-ctx-model-scroll">
+                <div className="pi-desk-ctx-model-row">
+                  <PluginTabList className="pi-desk-ctx-model-tabs" label="模型上下文容量">
+                    {settings.draft.profiles.map((profile, index) => (
+                      <PluginTab
+                        key={profile.key}
+                        className="pi-desk-ctx-model-tab"
+                        id={`${tabId}-range-${profile.key}`}
+                        active={settings.profile.key === profile.key}
+                        aria-controls={`${tabId}-fields`}
+                        disabled={settings.saving}
+                        tabIndex={settings.profile.key === profile.key ? 0 : -1}
+                        onKeyDown={(event) => {
+                          const nextIndex = nextTabIndex(
+                            event.key,
+                            index,
+                            settings.draft.profiles.length
+                          )
+                          if (nextIndex === null) return
+                          event.preventDefault()
+                          const next = settings.draft.profiles[nextIndex]!
+                          settings.selectProfile(next.key)
+                          document.getElementById(`${tabId}-range-${next.key}`)?.focus()
+                        }}
+                        onClick={() => settings.selectProfile(profile.key)}
+                      >
+                        {rangeLabel(settings.draft.profiles, index)}
+                        {settings.issue?.profileKey === profile.key ? (
+                          <span className="pi-desk-ctx-tab-error" aria-label="配置待完善">
+                            {' '}
+                            · !
+                          </span>
+                        ) : null}
+                      </PluginTab>
+                    ))}
+                  </PluginTabList>
+                  <PluginButton
+                    variant="ghost"
+                    className="pi-desk-ctx-icon-button"
+                    aria-label="添加模型范围"
+                    title="添加模型范围"
+                    disabled={settings.saving || settings.draft.profiles.length >= 20}
+                    onClick={() => {
+                      settings.addProfile()
+                      requestAnimationFrame(() =>
+                        form.current
+                          ?.querySelector<HTMLInputElement>('[data-range-input] input')
+                          ?.focus()
+                      )
                     }}
-                    onClick={() => settings.selectProfile(profile.key)}
                   >
-                    {rangeLabel(settings.draft.profiles, index)}
-                    {settings.issue?.profileKey === profile.key ? (
-                      <span className="pi-desk-ctx-tab-error" aria-label="配置待完善">
-                        {' '}
-                        · !
-                      </span>
-                    ) : null}
-                  </PluginTab>
-                ))}
-              </PluginTabList>
+                    <Icon name="plus" />
+                  </PluginButton>
+                </div>
+              </div>
+              <div
+                role="tabpanel"
+                id={`${tabId}-fields`}
+                aria-labelledby={`${tabId}-range-${settings.profile.key}`}
+              >
+                <ProfileFields settings={settings} onDelete={() => setConfirmation('delete')} />
+              </div>
             </div>
             <div
+              className="pi-desk-ctx-panel"
               role="tabpanel"
-              id={`${tabId}-fields`}
-              aria-labelledby={`${tabId}-${settings.profile.key}`}
-              className="pi-desk-ctx-form"
+              id={`${tabId}-images-panel`}
+              aria-labelledby={`${tabId}-images`}
+              hidden={page !== 'images'}
             >
-              <ProfileFields settings={settings} />
+              <ImageBudgetFields settings={settings} />
             </div>
-            <ImageBudgetFields settings={settings} />
           </form>
         </PluginLoadingState>
       </PluginScroll>
@@ -524,16 +654,18 @@ export function ContextIgnoreSettingsPage({
           <PluginButton
             variant="ghost"
             disabled={settings.saving}
-            onClick={settings.restoreRecommended}
+            onClick={() => setConfirmation('restore')}
           >
             恢复推荐
           </PluginButton>
           <PluginActionRow className="pi-desk-ctx-footer-end">
-            {settings.dirty ? <span className="pi-desk-ctx-unsaved">未保存</span> : null}
             {settings.dirty ? (
-              <PluginButton disabled={settings.saving} onClick={settings.cancel}>
-                取消修改
-              </PluginButton>
+              <>
+                <span className="pi-desk-ctx-unsaved">未保存</span>
+                <PluginButton disabled={settings.saving} onClick={settings.cancel}>
+                  撤销修改
+                </PluginButton>
+              </>
             ) : null}
             <PluginButton
               variant="primary"
@@ -541,11 +673,35 @@ export function ContextIgnoreSettingsPage({
               form={`${tabId}-form`}
               disabled={!settings.dirty || settings.saving}
             >
-              {settings.saving ? '保存中…' : '保存'}
+              {settings.saving ? '保存中…' : '保存设置'}
             </PluginButton>
           </PluginActionRow>
         </PluginActionRow>
       ) : null}
+      <PluginConfirmDialog
+        open={confirmation !== null}
+        title={confirmation === 'delete' ? '删除当前模型范围？' : '恢复全部推荐设置？'}
+        description={
+          confirmation === 'delete'
+            ? '仅移除这个范围的配置。对应模型将使用下一个适用范围；保存后生效。'
+            : '过程忽略和图片整理都将恢复推荐值，当前修改会被替换。点击保存后才会生效。'
+        }
+        confirmLabel={confirmation === 'delete' ? '删除范围' : '恢复推荐'}
+        tone={confirmation === 'delete' ? 'danger' : undefined}
+        onConfirm={() => {
+          if (confirmation === 'delete') settings.deleteProfile()
+          else settings.restoreRecommended()
+          setConfirmation(null)
+          requestAnimationFrame(() =>
+            form.current
+              ?.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')
+              ?.focus()
+          )
+        }}
+        onOpenChange={(open) => {
+          if (!open) setConfirmation(null)
+        }}
+      />
       <PluginConfirmDialog
         open={settings.leaveOpen}
         title="放弃未保存的更改？"

@@ -1,6 +1,25 @@
 import { z } from 'zod'
 
 export const remoteDebugPortSchema = z.number().int().min(1).max(65_535)
+export const remoteDebugPortProcessSchema = z.strictObject({
+  port: remoteDebugPortSchema,
+  pid: z.number().int().positive()
+})
+export const remoteDebugPortConflictSchema = remoteDebugPortProcessSchema.extend({
+  processName: z.string().min(1)
+})
+export const remoteDebugStartSchema = z.strictObject({
+  cwd: z.string().trim().min(1),
+  profile: z.string().trim().min(1),
+  confirmedProcesses: z.array(remoteDebugPortProcessSchema).optional()
+})
+export const remoteDebugStartResultSchema = z.union([
+  z.strictObject({ runId: z.string().min(1) }),
+  z.strictObject({ conflicts: z.array(remoteDebugPortConflictSchema).min(1) })
+])
+export type RemoteDebugPortProcess = z.infer<typeof remoteDebugPortProcessSchema>
+export type RemoteDebugPortConflict = z.infer<typeof remoteDebugPortConflictSchema>
+export type RemoteDebugStartResult = z.infer<typeof remoteDebugStartResultSchema>
 export const remoteDebugRangeSchema = z
   .strictObject({
     start: remoteDebugPortSchema,
