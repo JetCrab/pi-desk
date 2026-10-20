@@ -84,14 +84,33 @@ function WorkspaceView({
           }
           density="compact"
           actions={
-            <PluginButton
-              size="sm"
-              variant="ghost"
-              disabled={busy || biz.refreshing || !biz.connectionReady}
-              onClick={() => void biz.refresh()}
-            >
-              {biz.refreshing ? '刷新中…' : '刷新'}
-            </PluginButton>
+            <PluginActionRow align="end" style={{ maxWidth: '50cqw' }}>
+              <PluginButton
+                size="sm"
+                variant="ghost"
+                disabled={busy || biz.refreshing || !biz.connectionReady}
+                onClick={() => void biz.refresh()}
+              >
+                {biz.refreshing ? '刷新中…' : '刷新'}
+              </PluginButton>
+              <a
+                href="https://pidesk.dev/docs/workspace/"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  minHeight: '2rem',
+                  color: 'var(--muted-foreground)',
+                  fontSize: '.875rem',
+                  whiteSpace: 'nowrap',
+                  textDecoration: 'underline',
+                  textUnderlineOffset: '.2em'
+                }}
+              >
+                使用说明 ↗
+              </a>
+            </PluginActionRow>
           }
         />
         <PluginScroll

@@ -640,6 +640,23 @@ function UsageDashboard({
           >
             {reportLoading ? '统计中…' : '刷新'}
           </PluginButton>
+          <a
+            href="https://pidesk.dev/docs/usage/"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              minHeight: '2rem',
+              color: 'var(--muted-foreground)',
+              fontSize: '.875rem',
+              whiteSpace: 'nowrap',
+              textDecoration: 'underline',
+              textUnderlineOffset: '.2em'
+            }}
+          >
+            使用说明 ↗
+          </a>
         </div>
       </div>
       {reportError ? <PluginAlert tone="error">{reportError}</PluginAlert> : null}

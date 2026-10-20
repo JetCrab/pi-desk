@@ -9,7 +9,8 @@ import {
   type RemoteDebugProfile,
   type RemoteDebugRoute
 } from './config.js'
-import { assertLocalPortsAvailable } from './l4-remote-debug-ports.js'
+import { prepareLocalPorts } from './l4-remote-debug-ports.js'
+import type { RemoteDebugPortProcess, RemoteDebugStartResult } from './l4-remote-debug-contract.js'
 import { RemoteDebugSettingsStore } from './l4-remote-debug-settings.js'
 import { startManagedCommand, type CommandResult, type ManagedCommand } from './command.js'
 import { startDebugGateway, type DebugGatewayHandle } from './gateway.js'
@@ -65,7 +66,7 @@ interface RuntimeDependencies {
   waitForPort(port: number, signal: AbortSignal): Promise<void>
   createLogger(path: string, command: string): Promise<RunLogger>
   settingsStore: RemoteDebugSettingsStore
-  assertPortsAvailable(ports: readonly number[]): Promise<void>
+  preparePorts: typeof prepareLocalPorts
 }
 
 interface ActiveRun {
@@ -95,6 +96,7 @@ export class RemoteDebugRuntime {
   private readonly runs = new Map<string, RemoteDebugRun>()
   private readonly active = new Map<string, ActiveRun>()
   private readonly dependencies: RuntimeDependencies
+  private readonly lifetime = new AbortController()
   private disposed = false
   private pruneQueue: Promise<void> = Promise.resolve()
   private startQueue: Promise<void> = Promise.resolve()
@@ -110,7 +112,7 @@ export class RemoteDebugRuntime {
       waitForPort: dependencies.waitForPort ?? waitForTcpPort,
       createLogger: dependencies.createLogger ?? RunLogger.create,
       settingsStore: dependencies.settingsStore ?? new RemoteDebugSettingsStore(),
-      assertPortsAvailable: dependencies.assertPortsAvailable ?? assertLocalPortsAvailable
+      preparePorts: dependencies.preparePorts ?? prepareLocalPorts
     }
     this.publishState()
   }
@@ -141,9 +143,15 @@ export class RemoteDebugRuntime {
     return { runs: [...this.runs.values()].map((run) => structuredClone(run)) }
   }
 
-  start(cwd: string, profileName: string): Promise<{ runId: string }> {
+  start(
+    cwd: string,
+    profileName: string,
+    confirmedProcesses: readonly RemoteDebugPortProcess[] = []
+  ): Promise<RemoteDebugStartResult> {
     // 串行直到 active 登记，包含 logger 的异步准备；dispose 不等待准备队列。
-    const pending = this.startQueue.then(() => this.prepareStart(cwd, profileName))
+    const pending = this.startQueue.then(() =>
+      this.prepareStart(cwd, profileName, confirmedProcesses)
+    )
     this.startQueue = pending.then(
       () => undefined,
       () => undefined
@@ -151,7 +159,11 @@ export class RemoteDebugRuntime {
     return pending
   }
 
-  private async prepareStart(cwd: string, profileName: string): Promise<{ runId: string }> {
+  private async prepareStart(
+    cwd: string,
+    profileName: string,
+    confirmedProcesses: readonly RemoteDebugPortProcess[]
+  ): Promise<RemoteDebugStartResult> {
     if (this.disposed) throw new Error('Remote Debug Runtime 已关闭')
     cwd = await realpath(cwd)
     await this.dependencies.settingsStore.syncProject(cwd)
@@ -185,8 +197,13 @@ export class RemoteDebugRuntime {
         throw new Error(`本机端口 ${overlap} 正在被 ${active.run.profile} 使用`)
       }
     }
-    await this.dependencies.assertPortsAvailable(ports)
+    const conflicts = await this.dependencies.preparePorts(
+      ports,
+      confirmedProcesses,
+      this.lifetime.signal
+    )
     if (this.disposed) throw new Error('Remote Debug Runtime 已关闭')
+    if (conflicts.length > 0) return { conflicts }
 
     const runId = makeRunId()
     const runDirectory = join(cwd, 'temp', 'pi', 'remote-debug', runId)
@@ -255,6 +272,7 @@ export class RemoteDebugRuntime {
   async dispose(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
+    this.lifetime.abort()
     for (const active of this.active.values()) {
       active.stopRequested = true
       active.run.status = 'stopping'

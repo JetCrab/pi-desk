@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -61,6 +62,8 @@ let passed = false
 const registryOnly = process.env.REMOTE_DEBUG_VISUAL_SCOPE === 'registry'
 const settingsOnly = registryOnly || process.env.REMOTE_DEBUG_VISUAL_SCOPE === 'settings'
 const launchOnly = process.env.REMOTE_DEBUG_VISUAL_SCOPE === 'launch'
+const portConflictOnly = process.env.REMOTE_DEBUG_VISUAL_SCOPE === 'port-conflict'
+let occupyingRuntime
 const captures = []
 
 async function buildPackages() {
@@ -400,7 +403,123 @@ async function main() {
         ),
         '未启动项应保持单行高度'
       )
-      captures.push([outputs.idle, await screenshot(client)])
+      if (!portConflictOnly) captures.push([outputs.idle, await screenshot(client)])
+
+      if (portConflictOnly) {
+        console.log('[remote-debug] 验收端口占用确认、取消与强制结束后启动')
+        const child = spawn(
+          process.execPath,
+          [join(projectDir, 'fixture-server.mjs'), String(entryPort)],
+          {
+            cwd: projectDir,
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe']
+          }
+        )
+        occupyingRuntime = { child, exit: once(child, 'exit'), port: entryPort }
+        await waitForHttp(`http://127.0.0.1:${entryPort}`, 10_000, '测试端口占用服务')
+        await clickProfileAction('Web开发', '启动')
+        const conflictDialog = `[...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].find(element => element.textContent.includes('端口被占用，强制结束进程？'))`
+        await waitFor(client, `Boolean(${conflictDialog})`, '端口冲突确认', () => serverOutput)
+        const description = await evaluate(client, `${conflictDialog}.innerText`)
+        for (const value of [
+          String(entryPort),
+          String(child.pid),
+          'node',
+          '未保存的数据可能丢失'
+        ]) {
+          assert.ok(description.includes(value), `确认中缺少 ${value}`)
+        }
+        assert.equal(child.exitCode, null, '确认前不能停止占用进程')
+        await clickText(client, '取消')
+        await waitFor(client, `!${conflictDialog}`, '取消端口确认', () => serverOutput)
+        await waitForHttp(`http://127.0.0.1:${entryPort}`, 10_000, '取消后原服务仍可访问')
+        assert.equal(child.exitCode, null)
+
+        await clickProfileAction('Web开发', '启动')
+        await waitFor(client, `Boolean(${conflictDialog})`, '再次确认端口冲突', () => serverOutput)
+        captures.push([join(testRoot, 'port-conflict-desktop.png'), await screenshot(client)])
+        await setViewport(client, 390, 844, true)
+        await waitFor(
+          client,
+          `Boolean(document.querySelector('[data-remote-debug-profile="Web开发"]'))`,
+          '窄屏插件重新挂载完成',
+          () => serverOutput
+        )
+        await clickProfileAction('Web开发', '启动')
+        await waitFor(client, `Boolean(${conflictDialog})`, '窄屏端口冲突确认', () => serverOutput)
+        const dialogBounds = await evaluate(
+          client,
+          `(() => {
+          const dialog = ${conflictDialog};
+          const box = dialog.getBoundingClientRect();
+          return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: innerWidth, height: innerHeight, overflow: document.documentElement.scrollWidth > innerWidth + 1 };
+        })()`
+        )
+        assert.equal(dialogBounds.overflow, false)
+        assert.ok(dialogBounds.left >= 0 && dialogBounds.right <= dialogBounds.width)
+        assert.ok(dialogBounds.top >= 0 && dialogBounds.bottom <= dialogBounds.height)
+        captures.push([join(testRoot, 'port-conflict-mobile.png'), await screenshot(client)])
+        await clickText(client, '强制结束并启动')
+        await waitFor(
+          client,
+          `!${conflictDialog} && document.querySelector('[data-remote-debug-profile="Web开发"] [role="status"]')?.textContent === '运行中'`,
+          '强制结束占用进程后启动成功',
+          () => serverOutput
+        )
+        await occupyingRuntime.exit
+        assert.notEqual(child.exitCode, null, '原占用进程必须已退出')
+
+        const restartPort = await reservePort()
+        const restartChild = spawn(
+          process.execPath,
+          [join(projectDir, 'fixture-server.mjs'), String(restartPort)],
+          { cwd: projectDir, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
+        )
+        occupyingRuntime = {
+          child: restartChild,
+          exit: once(restartChild, 'exit'),
+          port: restartPort
+        }
+        await waitForHttp(`http://127.0.0.1:${restartPort}`, 10_000, '重启时路由端口占用服务')
+        await writeFile(
+          join(projectDir, '.pi', 'remote_debug.yaml'),
+          originalProjectConfig.replace(`/api: ${entryPort}`, `/api: ${restartPort}`)
+        )
+        await clickProfileAction('Web开发', '重启')
+        await waitFor(
+          client,
+          `Boolean(${conflictDialog})`,
+          '重启同样弹出占用确认',
+          () => serverOutput
+        )
+        const restartDescription = await evaluate(client, `${conflictDialog}.innerText`)
+        assert.ok(restartDescription.includes(String(restartPort)))
+        assert.ok(restartDescription.includes(String(restartChild.pid)))
+        assert.equal(restartChild.exitCode, null, '重启也必须等待确认才结束占用者')
+        await clickText(client, '强制结束并启动')
+        await waitFor(
+          client,
+          `!${conflictDialog} && document.querySelector('[data-remote-debug-profile="Web开发"] [role="status"]')?.textContent === '运行中'`,
+          '重启确认后启动成功',
+          () => serverOutput
+        )
+        await occupyingRuntime.exit
+        assert.notEqual(restartChild.exitCode, null)
+        await assertPortReleased(restartPort)
+        await clickProfileAction('Web开发', '停止')
+        await waitFor(
+          client,
+          `document.querySelector('[data-remote-debug-profile="Web开发"]')?.innerText.includes('已停止')`,
+          '端口确认场景停止',
+          () => serverOutput
+        )
+        await assertPortReleased(entryPort)
+        await publishScreenshots(captures)
+        for (const [path] of captures) console.log(`screenshot=${path}`)
+        passed = true
+        return
+      }
 
       console.log('[remote-debug] 验收启停、访问地址与按需详情')
       await clickProfileAction('Web开发', '启动')
@@ -856,6 +975,7 @@ async function main() {
     client?.close()
     await stopBrowserTree(browserProcess, cdpPort)
     if (serverRuntime) await stopE2eServerTree(serverRuntime)
+    if (occupyingRuntime) await stopE2eServerTree(occupyingRuntime)
     if (entryPort > 0) {
       await assertPortReleased(entryPort).catch((error) => {
         serverOutput += `\nentry-port-release-error=${error instanceof Error ? error.message : String(error)}`

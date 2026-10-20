@@ -44,16 +44,35 @@ function Settings({
       <style>{REMOTE_DEBUG_LAYOUT}</style>
       <div className="remote-debug-heading">
         <h2>远程调试</h2>
-        <PluginButton
-          size="sm"
-          variant="ghost"
-          disabled={state.loading || state.busy}
-          onClick={() => {
-            void state.refresh()
-          }}
-        >
-          {state.loading ? '同步中…' : '刷新'}
-        </PluginButton>
+        <div className="remote-debug-actions">
+          <a
+            href="https://pidesk.dev/docs/remote-debug/"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              minHeight: '2rem',
+              color: 'var(--muted-foreground)',
+              fontSize: '.875rem',
+              whiteSpace: 'nowrap',
+              textDecoration: 'underline',
+              textUnderlineOffset: '.2em'
+            }}
+          >
+            使用说明 ↗
+          </a>
+          <PluginButton
+            size="sm"
+            variant="ghost"
+            disabled={state.loading || state.busy}
+            onClick={() => {
+              void state.refresh()
+            }}
+          >
+            {state.loading ? '同步中…' : '刷新'}
+          </PluginButton>
+        </div>
       </div>
       <PluginTabList label="远程调试设置" className="remote-debug-settings-tabs">
         <PluginTab active={tab === 'connection'} onClick={() => setTab('connection')}>

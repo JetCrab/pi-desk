@@ -6,6 +6,7 @@ import type {
   BrowserSettingsPageTarget
 } from '@jetcrab/pi-desk-sdk/browser'
 import {
+  PluginActionRow,
   PluginConfirmDialog,
   PluginErrorBoundary,
   PluginLoadingState,
@@ -59,22 +60,41 @@ function Settings({
         title={tiboText(region, 'Tibo 动态', 'Tibo posts')}
         density="compact"
         actions={
-          <PluginTabList label={tiboText(region, 'Tibo 页面', 'Tibo pages')}>
-            <PluginTab
-              active={state.view === 'posts'}
-              disabled={!state.snapshot || state.saving}
-              onClick={() => void state.showPosts()}
+          <PluginActionRow align="end" style={{ maxWidth: '50cqw' }}>
+            <PluginTabList label={tiboText(region, 'Tibo 页面', 'Tibo pages')}>
+              <PluginTab
+                active={state.view === 'posts'}
+                disabled={!state.snapshot || state.saving}
+                onClick={() => void state.showPosts()}
+              >
+                {tiboText(region, '动态', 'Posts')}
+              </PluginTab>
+              <PluginTab
+                active={state.view === 'settings'}
+                disabled={!state.snapshot || state.saving}
+                onClick={state.showSettings}
+              >
+                {tiboText(region, '设置', 'Settings')}
+              </PluginTab>
+            </PluginTabList>
+            <a
+              href="https://pidesk.dev/docs/tibo/"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                minHeight: '2rem',
+                color: 'var(--muted-foreground)',
+                fontSize: '.875rem',
+                whiteSpace: 'nowrap',
+                textDecoration: 'underline',
+                textUnderlineOffset: '.2em'
+              }}
             >
-              {tiboText(region, '动态', 'Posts')}
-            </PluginTab>
-            <PluginTab
-              active={state.view === 'settings'}
-              disabled={!state.snapshot || state.saving}
-              onClick={state.showSettings}
-            >
-              {tiboText(region, '设置', 'Settings')}
-            </PluginTab>
-          </PluginTabList>
+              {tiboText(region, '使用说明 ↗', 'Usage guide ↗')}
+            </a>
+          </PluginActionRow>
         }
       />
       <PluginLoadingState

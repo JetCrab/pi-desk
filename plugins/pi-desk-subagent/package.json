@@ -1,11 +1,12 @@
 {
   "name": "@jetcrab/pi-desk-subagent",
+  "homepage": "https://pidesk.dev/docs/subagents/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JetCrab/pi-desk.git",
     "directory": "plugins/pi-desk-subagent"
   },
-  "version": "1.1.6",
+  "version": "1.1.7",
   "license": "Apache-2.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

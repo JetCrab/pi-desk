@@ -1,5 +1,6 @@
 {
   "name": "@jetcrab/pi-desk-tool-reason",
+  "homepage": "https://pidesk.dev/docs/tool-reason/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JetCrab/pi-desk.git",

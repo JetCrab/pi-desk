@@ -1,5 +1,6 @@
 {
   "name": "@jetcrab/pi-desk-bg-run",
+  "homepage": "https://pidesk.dev/docs/background-tasks/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JetCrab/pi-desk.git",

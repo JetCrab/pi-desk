@@ -9,6 +9,7 @@ import {
   type PluginSource
 } from '@jetcrab/pi-desk-sdk/browser'
 import {
+  PluginActionRow,
   PluginAlert,
   PluginButton,
   PluginContextMenu,
@@ -310,7 +311,26 @@ function DeliverablesView({
     <PluginSurface className="deliverables">
       <style>{STYLES}</style>
       <header className="deliverables-head">
-        <span className="deliverables-title">交付物</span>
+        <PluginActionRow align="between">
+          <span className="deliverables-title">交付物</span>
+          <a
+            href="https://pidesk.dev/docs/deliverables/"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              minHeight: '2rem',
+              color: 'var(--muted-foreground)',
+              fontSize: '.875rem',
+              whiteSpace: 'nowrap',
+              textDecoration: 'underline',
+              textUnderlineOffset: '.2em'
+            }}
+          >
+            使用说明 ↗
+          </a>
+        </PluginActionRow>
         <span className="deliverables-muted">当前会话分支 · 最新交付排在最前</span>
       </header>
       <PluginScroll

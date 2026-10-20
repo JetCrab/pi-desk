@@ -3,7 +3,8 @@ import { PluginMethodError } from '@jetcrab/pi-desk-sdk/errors'
 import type { ZodType } from 'zod'
 import {
   remoteDebugRangesSchema,
-  remoteDebugRegistrationDeleteSchema
+  remoteDebugRegistrationDeleteSchema,
+  remoteDebugStartSchema
 } from './l4-remote-debug-contract.js'
 import { RemoteDebugSettingsStore } from './l4-remote-debug-settings.js'
 import { RemoteDebugRuntime } from './runtime.js'
@@ -64,9 +65,11 @@ export default definePiDeskPlugin({
     })
     plugin.registerMethod('run-start', async (input, context) => {
       if (context.signal.aborted) throw new PluginMethodError(409, '启动请求已取消')
-      const fields = stringFields(input, ['cwd', 'profile'])
+      const fields = parseInput(remoteDebugStartSchema, input)
       try {
-        return jsonObject(await runtime.start(fields.cwd!, fields.profile!))
+        return jsonObject(
+          await runtime.start(fields.cwd, fields.profile, fields.confirmedProcesses)
+        )
       } catch (error) {
         throw methodError(error)
       }

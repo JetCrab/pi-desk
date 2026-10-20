@@ -306,6 +306,23 @@ export function SessionAnalysisPanel({
           <PluginButton variant="secondary" disabled={loading} onClick={() => void load()}>
             {loading ? '分析中…' : '刷新'}
           </PluginButton>
+          <a
+            href="https://pidesk.dev/docs/usage/"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              minHeight: '2rem',
+              color: 'var(--muted-foreground)',
+              fontSize: '.875rem',
+              whiteSpace: 'nowrap',
+              textDecoration: 'underline',
+              textUnderlineOffset: '.2em'
+            }}
+          >
+            使用说明 ↗
+          </a>
         </div>
       </div>
       <PluginScroll

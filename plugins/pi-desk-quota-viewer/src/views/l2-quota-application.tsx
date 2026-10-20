@@ -112,6 +112,23 @@ export function QuotaApplication({
             >
               {t(requesting || refreshing ? '刷新中…' : '刷新')}
             </PluginButton>
+            <a
+              href="https://pidesk.dev/docs/quota/"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                minHeight: '2rem',
+                color: 'var(--muted-foreground)',
+                fontSize: '.875rem',
+                whiteSpace: 'nowrap',
+                textDecoration: 'underline',
+                textUnderlineOffset: '.2em'
+              }}
+            >
+              {t('使用说明 ↗', 'Usage guide ↗')}
+            </a>
           </>
         }
       />
