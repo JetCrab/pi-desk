@@ -407,68 +407,130 @@ export function assertDevelopmentTags(tags, name, version) {
   if (version) assert.equal(tags.dev, version, `${name} 的 dev 标签未指向本次版本`)
 }
 
-async function readTags(name) {
-  const response = await fetch(
-    `${registry}/-/package/${encodeURIComponent(name)}/dist-tags?validation=${Date.now()}`,
-    {
-      headers: { 'cache-control': 'no-cache' },
-      signal: AbortSignal.timeout(30_000)
+async function readRegistry(url, { method = 'GET', deadline = Date.now() + 96_000 } = {}) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const remaining = deadline - Date.now()
+    assert.ok(remaining > 0, `Registry 读取已超出总时限：${method} ${url}`)
+    let retryable = false
+    let retryAfterMs = 0
+    try {
+      const response = await fetch(url, {
+        method,
+        headers: { accept: 'application/json', 'cache-control': 'no-cache' },
+        signal: AbortSignal.timeout(Math.min(30_000, remaining))
+      })
+      retryable = [408, 429].includes(response.status) || response.status >= 500
+      if (retryable) {
+        const retryAfter = response.headers.get('retry-after')
+        if (retryAfter) {
+          const seconds = Number(retryAfter)
+          const delay = Number.isFinite(seconds)
+            ? seconds * 1000
+            : Date.parse(retryAfter) - Date.now()
+          if (Number.isFinite(delay)) retryAfterMs = Math.max(0, delay)
+        }
+        await response.body?.cancel()
+        throw new Error(`HTTP ${response.status}`)
+      }
+      if (method === 'HEAD' || !response.ok || response.status === 202) {
+        await response.body?.cancel()
+        return { status: response.status, data: null }
+      }
+      return { status: response.status, data: await response.json() }
+    } catch (error) {
+      const code = error.cause?.code ?? error.code
+      retryable ||=
+        ['TimeoutError', 'AbortError'].includes(error.name) ||
+        [
+          'ECONNRESET',
+          'ECONNREFUSED',
+          'ETIMEDOUT',
+          'EAI_AGAIN',
+          'ENOTFOUND',
+          'ENETUNREACH',
+          'UND_ERR_CONNECT_TIMEOUT',
+          'UND_ERR_HEADERS_TIMEOUT',
+          'UND_ERR_BODY_TIMEOUT',
+          'UND_ERR_SOCKET'
+        ].includes(code) ||
+        (error instanceof TypeError && ['fetch failed', 'terminated'].includes(error.message))
+      const detail = [error.message, error.cause?.message, code].filter(Boolean).join('；')
+      const delayMs = Math.max(2_000 * 2 ** (attempt - 1), retryAfterMs)
+      if (!retryable || attempt === 3 || Date.now() + delayMs >= deadline) {
+        const limit = retryable && attempt < 3 ? '，重试将超出总时限' : ''
+        throw new Error(`Registry ${method} ${url} 失败（${attempt}/3${limit}）：${detail}`, {
+          cause: error
+        })
+      }
+      console.warn(
+        `Registry ${method} ${url} 第 ${attempt}/3 次失败：${detail}；${delayMs / 1000} 秒后重试`
+      )
+      await new Promise((done) => setTimeout(done, delayMs))
     }
+  }
+}
+
+async function readPackageMetadata(name, deadline) {
+  const result = await readRegistry(
+    `${registry}/${encodeURIComponent(name)}?validation=${Date.now()}`,
+    { deadline }
   )
-  if (response.status === 404) return {}
-  assert.ok(response.ok, `无法核对 ${name} 标签：HTTP ${response.status}`)
-  return response.json()
+  assert.ok(
+    [200, 202, 404].includes(result.status),
+    `无法核对 ${name} 元数据：HTTP ${result.status}`
+  )
+  if (result.status === 200) {
+    assert.equal(result.data?.name, name, `Registry 包元数据身份不符：${name}`)
+    for (const field of ['dist-tags', 'versions']) {
+      assert.ok(
+        result.data[field] &&
+          typeof result.data[field] === 'object' &&
+          !Array.isArray(result.data[field]),
+        `Registry 包元数据缺少 ${field}：${name}`
+      )
+    }
+  }
+  return result
 }
 
 export async function waitForNpmTags(name, version, tag) {
   const deadline = Date.now() + 10 * 60_000
   let nextLogAt = 0
-  while (true) {
-    const tags = await readTags(name)
-    if (tag === 'dev') assertDevelopmentTags(tags, name)
+  while (Date.now() < deadline) {
+    const { status, data } = await readPackageMetadata(name, deadline)
+    const tags = data?.['dist-tags'] ?? {}
+    if (tag === 'dev' && status !== 202) assertDevelopmentTags(tags, name)
     if (tags[tag] === version) {
       console.info(`${tag} 标签校验通过：${name}@${version}`)
       return
     }
     const now = Date.now()
-    if (now >= deadline) {
-      assert.equal(tags[tag], version, `等待 ${tag} 标签同步超时（10 分钟）：${name}@${version}`)
-    }
+    if (now >= deadline) break
     if (now >= nextLogAt) {
       console.info(
         `等待 ${tag} 标签同步：${name}@${version}，当前值=${tags[tag] ?? '未设置'}；每 5 秒检查，最多等待 10 分钟`
       )
       nextLogAt = now + 60_000
     }
-    await new Promise((resolve) => setTimeout(resolve, 5_000))
+    await new Promise((done) => setTimeout(done, Math.min(5_000, deadline - now)))
   }
+  throw new Error(`等待 ${tag} 标签同步超时（10 分钟）：${name}@${version}`)
 }
 
 export async function waitForRegistryPackage(name, version) {
   const deadline = Date.now() + 10 * 60_000
-  while (true) {
-    const response = await fetch(
-      `${registry}/${encodeURIComponent(name)}/${version}?validation=${Date.now()}`,
-      { headers: { 'cache-control': 'no-cache' }, signal: AbortSignal.timeout(30_000) }
-    )
-    if (response.status === 404 || response.status === 202) {
-      await response.body?.cancel()
-    } else {
-      assert.ok(response.ok, `无法核对 ${name}@${version}：HTTP ${response.status}`)
-      const metadata = await response.json()
+  while (Date.now() < deadline) {
+    const { data } = await readPackageMetadata(name, deadline)
+    const metadata = data?.versions?.[version]
+    if (metadata) {
       assert.equal(metadata.version, version, 'Registry 版本与本批不一致')
       assert.ok(
         typeof metadata.dist?.tarball === 'string' &&
           metadata.dist.tarball.startsWith(`${registry}/`),
         'Registry 未提供有效 tarball'
       )
-      const archive = await fetch(metadata.dist.tarball, {
-        method: 'HEAD',
-        headers: { 'cache-control': 'no-cache' },
-        signal: AbortSignal.timeout(30_000)
-      })
-      await archive.body?.cancel()
-      if (archive.ok && archive.status !== 202) {
+      const archive = await readRegistry(metadata.dist.tarball, { method: 'HEAD', deadline })
+      if (archive.status >= 200 && archive.status < 300 && archive.status !== 202) {
         console.info(`Registry 版本和安装包已就绪：${name}@${version}`)
         return
       }
@@ -477,10 +539,12 @@ export async function waitForRegistryPackage(name, version) {
         `无法核对 ${name} tarball：HTTP ${archive.status}`
       )
     }
-    assert.ok(Date.now() < deadline, `等待 Registry 可安装状态超时：${name}@${version}`)
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) break
     console.info(`等待 Registry 可安装状态：${name}@${version}`)
-    await new Promise((done) => setTimeout(done, 5_000))
+    await new Promise((done) => setTimeout(done, Math.min(5_000, remaining)))
   }
+  throw new Error(`等待 Registry 可安装状态超时（10 分钟）：${name}@${version}`)
 }
 
 export async function publish(entries, output) {
@@ -500,16 +564,15 @@ export async function publish(entries, output) {
     const existing = new Set()
     await runPackageTasks(entries, async (entry) => {
       const packed = await verifyArchive(entry, output)
+      const { status, data } = await readPackageMetadata(packed.name)
+      assert.notEqual(status, 202, `Registry 包元数据尚未就绪：${packed.name}`)
       if (npmTagFor(process.env.GITHUB_REF, packed.version) === 'dev') {
         // npm 首次发布可能补充 latest；发布授权不一定允许随后删除标签。
-        assertDevelopmentTags(await readTags(packed.name), packed.name)
+        assertDevelopmentTags(data?.['dist-tags'] ?? {}, packed.name)
       }
-      const response = await fetch(
-        `${registry}/${encodeURIComponent(packed.name)}/${packed.version}`,
-        { signal: AbortSignal.timeout(30_000) }
-      )
-      if (response.ok) {
-        const metadata = await response.json()
+      const metadata = data?.versions?.[packed.version]
+      if (metadata) {
+        assert.equal(metadata.version, packed.version, 'Registry 版本与本批不一致')
         const integrity = `sha512-${createHash('sha512')
           .update(await readFile(archivePath(entry, output)))
           .digest('base64')}`
@@ -521,13 +584,6 @@ export async function publish(entries, output) {
         existing.add(packed.name)
         return
       }
-      assert.equal(
-        response.status,
-        404,
-        response.ok
-          ? `${packed.name}@${packed.version} 已发布，不覆盖；请选择尚未发布的包`
-          : `Registry 查询失败：HTTP ${response.status}`
-      )
       for (const [name, version] of Object.entries(packed.dependencies ?? {})) {
         if (name.startsWith('@jetcrab/') && !selected.has(name)) {
           await runAsync(

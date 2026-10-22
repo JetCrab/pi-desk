@@ -102,8 +102,14 @@ test('SDK发布后的Registry版本和tarball都可用才允许消费者发布',
     metadataReads += 1
     if (metadataReads === 1) return new Response('', { status: 404 })
     return Response.json({
-      version: '1.0.1-dev.2',
-      dist: { tarball: 'https://registry.npmjs.org/fixture-sdk.tgz' }
+      name: '@jetcrab/pi-desk-sdk',
+      'dist-tags': { latest: '1.0.0' },
+      versions: {
+        '1.0.1-dev.2': {
+          version: '1.0.1-dev.2',
+          dist: { tarball: 'https://registry.npmjs.org/fixture-sdk.tgz' }
+        }
+      }
     })
   })
   let ready = false
