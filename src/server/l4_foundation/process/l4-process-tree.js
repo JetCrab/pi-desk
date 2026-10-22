@@ -2,6 +2,7 @@
 
 // CLI、服务端与隔离探针共用的原生 Node 实现，不依赖 Next 的 react-server 导出条件。
 const { execFile } = require('node:child_process')
+const { performance } = require('node:perf_hooks')
 const { promisify } = require('node:util')
 const execFileAsync = promisify(execFile)
 
@@ -22,6 +23,8 @@ async function stopWindowsOrphans(pid) {
     "$ProgressPreference = 'SilentlyContinue'",
     "$ErrorActionPreference = 'Stop'",
     `$rootPid = ${pid}`,
+    '$clock = [System.Diagnostics.Stopwatch]::StartNew()',
+    '[Console]::Out.WriteLine("powershell-ready: $($clock.ElapsedMilliseconds)ms")',
     String.raw`Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -90,7 +93,9 @@ public static class PiDeskProcessSnapshot
 }
 '@
 `,
+    '[Console]::Out.WriteLine("snapshot-compiled: $($clock.ElapsedMilliseconds)ms")',
     '$all = [PiDeskProcessSnapshot]::ReadParents()',
+    '[Console]::Out.WriteLine("snapshot-read: $($clock.ElapsedMilliseconds)ms")',
     '$root = Get-Process -Id $rootPid -ErrorAction SilentlyContinue',
     'if ($root -and -not $root.HasExited) { throw "Managed PID is still present; refusing orphan cleanup" }',
     '$ids = [System.Collections.Generic.HashSet[int]]::new()',
@@ -109,6 +114,7 @@ public static class PiDeskProcessSnapshot
         }
     }
 } while ($added)`,
+    '[Console]::Out.WriteLine("descendants-selected: $($clock.ElapsedMilliseconds)ms count=$($descendants.Count)")',
     String.raw`for ($i = $descendants.Count - 1; $i -ge 0; $i--) {
     $pidToStop = $descendants[$i]
     if (-not $created.ContainsKey($pidToStop)) {
@@ -132,6 +138,7 @@ public static class PiDeskProcessSnapshot
     }
 }`
   ].join('; ')
+  const startedAt = performance.now()
   try {
     await execFileAsync(
       'powershell.exe',
@@ -149,7 +156,7 @@ public static class PiDeskProcessSnapshot
     )
   } catch (error) {
     throw new Error(
-      `清理 Windows 孤儿进程失败：rootPid=${pid}，code=${error.code}，signal=${error.signal ?? '无'}，超时终止=${error.killed === true}；${error.stderr?.trim() ?? ''}`,
+      `清理 Windows 孤儿进程失败：rootPid=${pid}，code=${error.code}，signal=${error.signal ?? '无'}，超时终止=${error.killed === true}，耗时=${Math.round(performance.now() - startedAt)}ms；${error.stderr?.trim().slice(-2000) ?? ''}\n${error.stdout?.trim().slice(-2000) ?? ''}`,
       { cause: error }
     )
   }

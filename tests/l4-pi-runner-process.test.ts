@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { join, resolve } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
 import { runL4PiRunnerProcess } from '../src/server/l4_foundation/pi/l4-pi-runner-process'
 
 const execFileAsync = promisify(execFile)
+// 就绪轮询使用真实时间，不随 Runner 的模拟时钟暂停。
+const pollDelay = delay
 const testRoot = resolve('temp', 'pi', 'l4-pi-runner-process', `host-review-${process.pid}`)
 const agentDir = join(testRoot, 'agent')
 
@@ -19,7 +23,7 @@ async function waitForFile(path: string): Promise<string> {
       if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) {
         throw error
       }
-      await new Promise((resolveWait) => setTimeout(resolveWait, 20))
+      await pollDelay(20)
     }
   }
   throw new Error(`等待Runner fixture启动超时：${path}`)
@@ -148,6 +152,7 @@ setInterval(() => {}, 1000)
     'utf8'
   )
 
+  context.mock.timers.enable({ apis: ['setTimeout'] })
   const running = runL4PiRunnerProcess({
     args: [script],
     agentDir,
@@ -157,8 +162,10 @@ setInterval(() => {}, 1000)
     timeoutError: () => new Error('controlled timeout'),
     cleanupError: () => new Error('Runner清理失败')
   })
+  const rejected = assert.rejects(running, /controlled timeout/)
   const pids = JSON.parse(await waitForFile(marker)) as number[]
-  await assert.rejects(running, /controlled timeout/)
+  context.mock.timers.tick(1_000)
+  await rejected
   assert.ok(pids.length === 2)
   assert.equal(await processExists(pids[0]!), false)
   assert.equal(await processExists(pids[1]!), false)
@@ -204,6 +211,42 @@ setInterval(() => {}, 1000)
   await rm(marker)
   await assert.rejects(runL4PiRunnerProcess(input), /操作已取消/)
   await assert.rejects(readFile(marker), { code: 'ENOENT' })
+})
+
+test('共享Runner保留清理模块的原始原因与异常链', async (context) => {
+  const require = createRequire(import.meta.url)
+  const runtime = require('../src/server/l4_foundation/process/l4-process-tree.js') as {
+    terminateManagedTree: (child: import('node:child_process').ChildProcess) => Promise<void>
+  }
+  const failure = new Error('清理 Windows 孤儿进程失败：rootPid=123，超时终止=true', {
+    cause: new Error('受控清理超时')
+  })
+  context.mock.method(runtime, 'terminateManagedTree', async (): Promise<void> => {
+    throw failure
+  })
+  const diagnostic = context.mock.method(console, 'error', (): void => {})
+  await assert.rejects(
+    runL4PiRunnerProcess({
+      args: ['-e', 'process.exit(0)'],
+      agentDir,
+      env: {
+        PI_DESK_PI_PACKAGE_DIR: resolve('node_modules/@earendil-works/pi-coding-agent')
+      },
+      maxOutputBytes: 1024,
+      timeoutMs: 5_000,
+      timeoutError: () => new Error('Runner超时'),
+      cleanupError: (_stderr, error) =>
+        new Error(`进程树未确认释放：${String(error)}`, { cause: error })
+    }),
+    (error: unknown): boolean => {
+      assert.ok(error instanceof Error)
+      assert.match(error.message, /rootPid=123，超时终止=true/)
+      assert.equal(error.cause, failure)
+      return true
+    }
+  )
+  assert.equal(diagnostic.mock.calls.length, 1)
+  assert.equal(diagnostic.mock.calls[0]!.arguments[1].reason, failure.message)
 })
 
 test.after(async () => {

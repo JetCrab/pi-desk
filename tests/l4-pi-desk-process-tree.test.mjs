@@ -255,6 +255,46 @@ test(
   }
 )
 
+test('Windows孤儿清理失败保留执行阶段、耗时及底层异常', async () => {
+  const source = await readFile(
+    new URL('../src/server/l4_foundation/process/l4-process-tree.js', import.meta.url),
+    'utf8'
+  )
+  const failure = Object.assign(new Error('受控 PowerShell 超时'), {
+    code: null,
+    signal: 'SIGTERM',
+    killed: true,
+    stdout: 'powershell-ready: 0ms\n',
+    stderr: '受控编译阻塞'
+  })
+  const runtime = { exports: {} }
+  runInNewContext(source, {
+    module: runtime,
+    process: { platform: 'win32' },
+    Buffer,
+    require(name) {
+      if (name !== 'node:child_process') return require(name)
+      return {
+        execFile(_file, _args, _options, callback) {
+          queueMicrotask(() => callback(failure))
+        }
+      }
+    }
+  })
+  await assert.rejects(
+    runtime.exports.terminateManagedTree({ pid: 123, exitCode: 0, signalCode: null }),
+    (error) => {
+      assert.equal(error.cause, failure)
+      assert.match(error.message, /rootPid=123/)
+      assert.match(error.message, /超时终止=true/)
+      assert.match(error.message, /耗时=\d+ms/)
+      assert.match(error.message, /powershell-ready: 0ms/)
+      assert.match(error.message, /受控编译阻塞/)
+      return true
+    }
+  )
+})
+
 test.after(async () => {
   for (const pid of spawnedChildren) {
     if (await processExists(pid)) {

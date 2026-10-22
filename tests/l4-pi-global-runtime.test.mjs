@@ -177,7 +177,7 @@ test('全局 Pi 缺失时检查返回 missing，启动拒绝本地回退', async
     }
   )
   await assert.rejects(run([join(root, 'bin/pi-desk-preflight.js')], missing), (error) => {
-    assert.equal(error.code, 78)
+    assert.equal(error.code, 78, `${error.message}\n${error.stdout}\n${error.stderr}`)
     assert.match(error.stderr, /候选服务提前退出：78/)
     return true
   })
