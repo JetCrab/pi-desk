@@ -99,6 +99,8 @@ react-dom/client
 @jetcrab/pi-desk-sdk/react/markdown
 ```
 
+`PluginMarkdown` 会高亮带语言标记的代码块（例如 `sql`），语言和主题资源按需加载；插件不需要另装高亮库。它只负责展示，不格式化代码；SQL 等业务格式化依赖由对应插件维护。
+
 复用宿主 React 与 UI，不复制或打包第二套公共运行时。`/browser` 不在白名单中：普通函数无需包装；`copyBrowserText` 等 SDK Browser 运行函数需要构建时打入插件模块，不能原样留下裸 import。其他业务依赖也需构建为相对模块。无构建示例用 JS `createElement`；TSX、TypeScript 浏览器文件需要先编译为 JS。
 
 Application 使用 `chrome: 'host'` 让宿主负责 Dialog、标题、关闭、焦点、Escape、Loading/Error 和视口约束；内容自然决定尺寸，不替换工作台。React mount 使用 `createRoot`、`PluginHostProvider`、`PluginErrorBoundary` 和公共控件；disposer 调用 `root.unmount()`，释放自建 Listener、Timer、Observer、Object URL。宿主先 abort `signal`，迟到结果必须忽略。

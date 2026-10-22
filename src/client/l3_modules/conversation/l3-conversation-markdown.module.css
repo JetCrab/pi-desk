@@ -1,6 +1,7 @@
 .markdown {
   font-size: var(--chat-body-font-size, 0.875rem);
   line-height: 1.7;
+  overflow-wrap: anywhere;
 }
 
 .markdown > * {

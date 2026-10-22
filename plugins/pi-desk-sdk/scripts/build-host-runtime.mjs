@@ -30,5 +30,6 @@ await build({
 await build({
   ...commonOptions,
   entryPoints: [join(sourceRoot, 'host-runtime', 'markdown.ts')],
+  splitting: true,
   external: ['react', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-dom', 'react-dom/client']
 })
