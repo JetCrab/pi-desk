@@ -82,6 +82,7 @@ export function QuotaGuideSettings({
                       </button>
                       <span>CommandCode</span>
                       <span>Codex（通过 CPA）</span>
+                      <span>Devin（通过 CPA）</span>
                     </div>
                   </div>
                 ) : (

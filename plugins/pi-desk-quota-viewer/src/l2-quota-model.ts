@@ -18,6 +18,10 @@ export interface QuotaRecord {
 }
 
 const accountOrder = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })
+const CPA_FEATURES: Readonly<Record<string, string>> = {
+  'cpa-codex': 'codex',
+  'cpa-devin': 'devin'
+}
 
 export function groupChannels<T extends { adapter: string }>(items: readonly T[]): T[][] {
   const channels = new Map<string, T[]>()
@@ -76,10 +80,9 @@ export function quotaRecords(
       for (const resource of source.resources) {
         if (hiddenKeys.has(resourceVisibilityKey(source.adapter, resource))) continue
         const account = resource.scope.account?.trim() || null
-        const identity =
-          source.adapter === 'cpa-codex'
-            ? `cpa:${cpaAccountKey(resource) ?? resource.key}`
-            : (account ?? 'source')
+        const identity = CPA_FEATURES[source.adapter]
+          ? `cpa:${cpaAccountKey(resource) ?? resource.key}`
+          : (account ?? 'source')
         const key = JSON.stringify([source.sourceId, identity])
         const current = groups.get(key)
         if (current) current.resources.push(resource)
@@ -103,7 +106,7 @@ export function recordLabel(record: QuotaRecord): string {
 }
 
 export function recordIndex(record: QuotaRecord): string | null {
-  if (record.source.adapter !== 'cpa-codex' || !record.resources[0]) return null
+  if (!CPA_FEATURES[record.source.adapter] || !record.resources[0]) return null
   const key = cpaAccountKey(record.resources[0])
   return key === null ? null : decodeURIComponent(key)
 }
@@ -148,8 +151,10 @@ export function summaryResources(record: QuotaRecord): QuotaResource[] {
   if (keys) {
     preferred = keys.flatMap((key) => resources.filter((resource) => resource.key === key))
     count = keys.length
-  } else if (record.source.adapter === 'cpa-codex') {
-    preferred = resources.filter((resource) => resource.key.split('/')[1] === 'codex')
+  } else if (CPA_FEATURES[record.source.adapter]) {
+    preferred = resources.filter(
+      (resource) => resource.key.split('/')[1] === CPA_FEATURES[record.source.adapter]
+    )
     count = 2
   } else {
     preferred = resources.filter(
@@ -170,12 +175,12 @@ export function summarySlots(record: QuotaRecord): Array<QuotaResource | null> {
   let slots: Array<QuotaResource | null>
   if (keys) {
     slots = keys.map((key) => summary.find((resource) => resource.key === key) ?? null)
-  } else if (record.source.adapter === 'cpa-codex') {
+  } else if (CPA_FEATURES[record.source.adapter]) {
     slots = ['primary', 'secondary'].map(
       (position) =>
         summary.find((resource) => {
           const parts = resource.key.split('/')
-          return parts[1] === 'codex' && parts[2] === position
+          return parts[1] === CPA_FEATURES[record.source.adapter] && parts[2] === position
         }) ?? null
     )
   } else if (record.source.adapter === 'zhipu-coding-plan') {

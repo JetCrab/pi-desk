@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { QuotaResource } from '../protocol.js'
+import { accountDisplay, cpaConfigSchema, managementBaseUrl } from './cpa.js'
 import { QuotaHttpError, requestJson } from './http.js'
 import {
   errorMessage,
@@ -18,32 +19,15 @@ import type { QuotaAdapter } from './types.js'
 const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
 const MIN_REFRESH_INTERVAL_MS = 10 * 1000
 
-const configSchema = z
-  .object({
-    managementUrl: z.string().trim().url('Management URL 必须是有效 URL'),
-    managementKey: z.string().trim().min(1, 'Management Key 不能为空'),
-    /** 仅用于兼容旧配置，读取后不再参与账号筛选。 */
-    accounts: z.string().max(10_000, '账号列表过长').optional()
-  })
-  .strict()
-
-function managementBaseUrl(value: string): string {
-  const url = new URL(value)
-  url.search = ''
-  url.hash = ''
-  const path = url.pathname.replace(/\/+$/, '')
-  url.pathname = path.endsWith('/v0/management') ? path : `${path}/v0/management`
-  return url.toString().replace(/\/$/, '')
-}
+const configSchema = cpaConfigSchema.extend({
+  /** 仅用于兼容旧配置，读取后不再参与账号筛选。 */
+  accounts: z.string().max(10_000, '账号列表过长').optional()
+})
 
 function isCodex(file: Record<string, unknown>): boolean {
   const provider = stringValue(file.provider)?.toLowerCase()
   const type = stringValue(file.type)?.toLowerCase()
   return provider === 'codex' || type === 'codex'
-}
-
-function accountDisplay(file: Record<string, unknown>, fallback: string): string {
-  return stringValue(file.email) ?? stringValue(file.account) ?? stringValue(file.name) ?? fallback
 }
 
 function authFileAccountId(file: Record<string, unknown>): string | null {

@@ -1,5 +1,6 @@
 import { commandCodeAdapter } from './commandcode.js'
 import { cpaCodexAdapter } from './cpa-codex.js'
+import { cpaDevinAdapter } from './cpa-devin.js'
 import { moonshotAdapter } from './moonshot.js'
 import { openCodeGoAdapter } from './opencode-go.js'
 import { openRouterAdapter } from './openrouter.js'
@@ -14,7 +15,8 @@ export const quotaAdapters: readonly QuotaAdapter[] = Object.freeze([
   zhipuCodingPlanAdapter,
   openCodeGoAdapter,
   commandCodeAdapter,
-  cpaCodexAdapter
+  cpaCodexAdapter,
+  cpaDevinAdapter
 ])
 
 export const quotaAdapterRegistry: ReadonlyMap<string, QuotaAdapter> = new Map(

@@ -8,6 +8,8 @@ import {
   resourceVisibilityKey,
   quotaRecords,
   quotaPrimaryValue,
+  recordIndex,
+  resourceLabel,
   summaryResources,
   summarySlots
 } from '../src/l2-quota-model.js'
@@ -92,25 +94,49 @@ test('渠道按首次出现顺序分组，source 顺序和账号排序稳定', (
 })
 
 test('CPA 使用资源 key 第一段作为账号身份，不按邮箱或 source 合并', () => {
-  const records = quotaRecords([
-    source(sourceIds.cpa, 'cpa-codex', 'CPA', [
-      balance('auth-a/codex/primary', '主功能', 'same@example.com'),
-      balance('auth-a/codex/secondary', '备用功能', 'same@example.com'),
-      balance('auth-b/codex/primary', '主功能', 'same@example.com')
-    ]),
-    source(sourceIds.openrouterA, 'cpa-codex', '另一个 CPA', [
-      balance('auth-a/codex/primary', '主功能', 'same@example.com')
+  for (const [adapter, feature] of [
+    ['cpa-codex', 'codex'],
+    ['cpa-devin', 'devin']
+  ]) {
+    const records = quotaRecords([
+      source(sourceIds.cpa, adapter, 'CPA', [
+        balance(`auth-a/${feature}/primary`, '主功能', 'same@example.com'),
+        balance(`auth-a/${feature}/secondary`, '备用功能', 'same@example.com'),
+        balance(`auth-b/${feature}/primary`, '主功能', 'same@example.com')
+      ]),
+      source(sourceIds.openrouterA, adapter, '另一个 CPA', [
+        balance(`auth-a/${feature}/primary`, '主功能', 'same@example.com')
+      ])
     ])
-  ])
 
-  assert.equal(records.length, 3)
+    assert.equal(records.length, 3)
+    assert.deepEqual(
+      records.map((record) => record.resources.length),
+      [2, 1, 1]
+    )
+    assert.deepEqual(
+      records.map((record) => record.source.name),
+      ['CPA', 'CPA', '另一个 CPA']
+    )
+    assert.deepEqual(records.map(recordIndex), ['auth-a', 'auth-b', 'auth-a'])
+  }
+})
+
+test('CPA Devin 摘要按日周排列，隐藏日额度不移动周额度位置', () => {
+  const weekly = quota('auth-a/devin/secondary', '周额度', 'same@example.com')
+  const daily = quota('auth-a/devin/primary', '日额度', 'same@example.com')
+  const devin = source(sourceIds.cpa, 'cpa-devin', 'CPA', [weekly, daily])
+  const records = quotaRecords([devin])
+  assert.equal(records.length, 1)
   assert.deepEqual(
-    records.map((record) => record.resources.length),
-    [2, 1, 1]
+    summarySlots(records[0]).map((resource) => resource?.key ?? null),
+    [daily.key, weekly.key]
   )
+  assert.equal(resourceLabel(daily, 'en'), 'Daily quota')
+  const hidden = quotaRecords([devin], new Set([resourceVisibilityKey('cpa-devin', daily)]))
   assert.deepEqual(
-    records.map((record) => record.source.name),
-    ['CPA', 'CPA', '另一个 CPA']
+    summarySlots(hidden[0]).map((resource) => resource?.key ?? null),
+    [null, weekly.key]
   )
 })
 

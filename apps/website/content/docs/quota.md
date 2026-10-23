@@ -8,7 +8,7 @@
 
 <!-- quota-principle -->
 
-目前支持 OpenRouter、Moonshot / Kimi API、SiliconFlow、智谱 Coding Plan、OpenCode Go、CommandCode 和 Codex（通过 CPA）。不是所有模型服务都支持；Codex 来源需 CPA 管理端，各渠道也需要对应的查询权限或套餐。
+目前支持 OpenRouter、Moonshot / Kimi API、SiliconFlow、智谱 Coding Plan、OpenCode Go、CommandCode、Codex（通过 CPA）和 Devin（通过 CPA）。不是所有模型服务都支持；Codex、Devin 来源需 CPA 管理端，各渠道也需要对应的查询权限或套餐。
 
 当前实现没有 Windows 专属限制。请求由运行 Pi Desk 的电脑发出，这台电脑必须能访问对应服务，手机只负责查看界面。
 
@@ -30,6 +30,8 @@
 <!-- quota-config -->
 
 OpenCode Go 需要有效的对应套餐，其他渠道字段会不同。例如 OpenRouter 的 Management Key 读取账户 Credits，API Key 读取当前 Key 额度，至少填一项，不能互相替代。
+
+Devin 选择 **Devin（通过 CPA）**，填写 CPA 的 Management URL 与 Management Key；插件自动查询其中启用的 Devin 账号，显示每日、每周剩余百分比、重置时间和返回的套餐名称，不推算金额或 ACU。CPA 后端需支持请求正文中的 Token 替换；现有 Codex 渠道能用，不代表旧版后端一定支持 Devin 查询。
 
 在“显示设置”中，重置时间可选“倒计时”或“具体时间”。应用里可搜索渠道、来源或账号，按渠道筛选，用“显示项”隐藏暂时不看的额度；隐藏只改变展示，不停用来源。
 

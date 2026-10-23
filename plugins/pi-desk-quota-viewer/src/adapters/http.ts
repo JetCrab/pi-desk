@@ -10,7 +10,7 @@ export class QuotaHttpError extends Error {
   }
 }
 
-function parseRetryAt(value: string | null, now: number): number | null {
+export function parseRetryAt(value: string | null, now: number): number | null {
   if (!value) return null
   const seconds = Number(value)
   if (Number.isFinite(seconds) && seconds >= 0) return now + seconds * 1000
