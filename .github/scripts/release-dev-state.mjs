@@ -185,15 +185,24 @@ export async function loadDevArtifactSources(github) {
 }
 
 /** 上传原始 npm 制品后调用；不推进发布成功状态。 @returns {Promise<void>} */
-export async function recordDevArtifactSources(github, batch) {
+export async function recordDevArtifactSources(
+  github,
+  batch,
+  savedIds = batch.selected.filter((name) => !nativeUnits.has(name))
+) {
   validateBatch(batch)
+  assert.ok(
+    Array.isArray(savedIds) &&
+      savedIds.every((id) => batch.selected.includes(id) && !nativeUnits.has(id)),
+    '原始制品列表必须属于当前批次的 npm 单元'
+  )
   const saved = await loadDevBatch(github, batch.runId)
   assert.ok(isDeepStrictEqual(saved, batch), '制品来源必须引用已保存的固定开发批次')
   await updateFile(github, artifactSourcesPath, async (previous) => {
     const sources = previous ? validateArtifactSources(previous) : {}
     const next = { ...sources }
     const batches = new Map()
-    for (const id of batch.selected.filter((name) => !nativeUnits.has(name))) {
+    for (const id of savedIds) {
       assert.ok(Object.hasOwn(batch.npmVersions, id), `缺少原始制品的 npm 开发版本：${id}`)
       const oldRunId = sources[id]
       if (oldRunId) {
@@ -227,8 +236,15 @@ export async function saveDevBatch(github, batch) {
 }
 
 /** @returns {Promise<void>} */
-export async function completeDevBatch(github, batch, results) {
+export async function completeDevBatch(github, batch, results, publishedIds = []) {
   validateBatch(batch)
+  assert.ok(
+    Array.isArray(publishedIds) &&
+      publishedIds.every(
+        (id) => batch.selected.includes(id) && Object.hasOwn(batch.npmVersions, id)
+      ),
+    '发布成功列表必须属于当前批次的 npm 单元'
+  )
   await updateFile(github, statePath, async (previous) => {
     const state = previous ? validateState(previous) : { checks: null, units: {} }
     const next = { checks: state.checks, units: { ...state.units } }
@@ -250,10 +266,10 @@ export async function completeDevBatch(github, batch, results) {
         }
       }
     }
-    const npmSuccess = ['checks', 'npm-build', 'npm-publish'].every(
-      (name) => results[name] === 'success'
-    )
+    const npmValidated = ['checks', 'npm-build'].every((name) => results[name] === 'success')
     for (const id of batch.selected) {
+      const npmSuccess =
+        npmValidated && (results['npm-publish'] === 'success' || publishedIds.includes(id))
       if (nativeUnits.has(id) ? results[id] !== 'success' : !npmSuccess) continue
       if (!nativeUnits.has(id)) {
         assert.ok(Object.hasOwn(batch.npmVersions, id), `缺少已发布的npm开发版本：${id}`)

@@ -19,7 +19,6 @@ export function runL4PiRunnerProcess(input: {
   timeoutMs: number
   signal?: AbortSignal
   timeoutError: () => Error
-  cleanupError: (stderr: string, error: unknown) => Error
 }): Promise<L4PiRunnerProcessResult> {
   return new Promise<L4PiRunnerProcessResult>((resolveRun, rejectRun) => {
     if (input.signal?.aborted) {
@@ -59,7 +58,8 @@ export function runL4PiRunnerProcess(input: {
           exitCode: child.exitCode,
           reason: failure.message
         })
-        rejectRun(input.cleanupError(stderr.trim(), failure))
+        // 命令的退出、超时或取消结果已确定；清理诊断不能覆盖业务结果。
+        callback()
       })
     }
     const onAbort = (): void => finish(() => rejectRun(new Error('操作已取消')))

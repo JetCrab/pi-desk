@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import childProcess from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import fs, { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { promisify } from 'node:util'
 import { syncBuiltinESMExports } from 'node:module'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import test from 'node:test'
 import { verifyNpmInstall } from '../.github/scripts/verify-npm-install.mjs'
 import { waitForPortReleased } from './l4-browser-cdp-runtime.mjs'
@@ -11,6 +12,7 @@ import { selectCiChecks } from '../.github/scripts/select-ci-checks.mjs'
 import { evaluateWorkflowCondition, readWorkflow } from './fixtures/l4-workflow-test-runtime.mjs'
 
 const workflow = await readWorkflow('release-npm')
+const execute = promisify(childProcess.execFile)
 
 function canPublish({
   packages = ['pi-desk'],
@@ -124,7 +126,9 @@ async function withVerificationWorker(t, scenarios, check) {
         \`], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], detached: process.platform !== 'win32' })
         child.once('message', ({ port }) => {
           writeFileSync(join(directory, 'state.json'), JSON.stringify({ pid: child.pid, port }))
-          if (phase === 'cleanup') {
+          if (kind === 'verified') {
+            process.send({ phase: 'commands', status: 'complete' })
+          } else if (phase === 'cleanup') {
             writeFileSync(join(directory, 'failure.log'), '最初的验收错误\\n')
             process.send({ phase: 'commands', status: 'failed', recoverable: false })
           }
@@ -184,8 +188,16 @@ async function withVerificationWorker(t, scenarios, check) {
 async function assertWorkerReleased(launch, state) {
   await launch.closed
   assert.ok(launch.worker.exitCode !== null || launch.worker.signalCode !== null)
-  assert.throws(() => process.kill(state.pid, 0), { code: 'ESRCH' })
   await waitForPortReleased(state.port)
+  if (process.platform === 'win32') {
+    assert.throws(() => process.kill(state.pid, 0), { code: 'ESRCH' })
+  } else {
+    const status = await execute('ps', ['-o', 'stat=', '-p', String(state.pid)]).catch((error) => {
+      if (error.code === 1) return { stdout: '' }
+      throw error
+    })
+    assert.ok(!status.stdout.trim() || status.stdout.trim().startsWith('Z'), '后代不能继续运行')
+  }
 }
 
 for (const [phase, timeout, label] of [
@@ -285,6 +297,46 @@ test('确定性的校验失败不重试，也不能因清理超时掩盖原始�
       )
     )
   })
+})
+
+test('功能验收通过后收尾卡住，强制释放成功就保留验收结果', { timeout: 30_000 }, async (t) => {
+  await withVerificationWorker(
+    t,
+    ['verified:cleanup'],
+    async ({ verification, next, launches }) => {
+      const first = await next()
+      await first.ready
+      const state = JSON.parse(await readFile(join(first.attemptDirectory, 'state.json'), 'utf8'))
+      t.mock.timers.tick(90_000)
+      await verification
+      t.mock.timers.reset()
+      await assertWorkerReleased(first, state)
+      assert.equal(launches.length, 1, '已完成的功能验收不重做')
+    }
+  )
+})
+
+test('验收成功后临时目录删除失败只告警，不推翻验收', { timeout: 30_000 }, async (t) => {
+  const remove = fs.rm
+  const replacement = t.mock.method(fs, 'rm', async (path, options) => {
+    if (basename(String(path)).startsWith('installed-')) {
+      throw Object.assign(new Error('受控目录占用'), { code: 'EBUSY' })
+    }
+    return remove(path, options)
+  })
+  syncBuiltinESMExports()
+  t.after(() => {
+    replacement.mock.restore()
+    syncBuiltinESMExports()
+  })
+  const warning = t.mock.method(console, 'warn', () => {})
+  await withVerificationWorker(t, ['success'], async ({ verification }) => {
+    await verification
+  })
+  assert.equal(warning.mock.calls.length, 2)
+  assert.ok(
+    warning.mock.calls.every(({ arguments: args }) => args[0].includes('临时目录清理未完成'))
+  )
 })
 
 test('明确的版本断言失败直接阻断，不盲目重试', { timeout: 30_000 }, async (t) => {

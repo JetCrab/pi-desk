@@ -120,6 +120,42 @@ test('发布成功但记录写入重试是幂等的，取消不抹掉成功结�
   assert.deepEqual(await loadDevState(github), first)
 })
 
+test('独立npm包部分发布成功时，只推进已有验证结果的单元', async () => {
+  const { github } = githubFixture()
+  const plan = {
+    ...batch(),
+    versions: { ...batch().versions, 'pi-desk-usage': '1.0.2' },
+    npmVersions: { ...batch().npmVersions, 'pi-desk-usage': '1.0.2-dev' },
+    selected: [...batch().selected, 'pi-desk-usage']
+  }
+  const results = { checks: 'success', 'npm-build': 'success', 'npm-publish': 'failure' }
+  await completeDevBatch(github, plan, results, ['pi-desk-usage'])
+  const state = await loadDevState(github)
+  assert.equal(state.units['pi-desk-usage'].version, '1.0.2')
+  assert.equal(state.units['pi-desk'], undefined)
+  assert.deepEqual(selectDevUnits(plan.versions, state), ['pi-desk', 'windows', 'macos'])
+  await completeDevBatch(github, plan, results, ['pi-desk-usage'])
+  assert.deepEqual(await loadDevState(github), state)
+})
+
+test('逐包发布结果不能绕过源码与安装验收门禁', async () => {
+  for (const failed of ['checks', 'npm-build']) {
+    const { github } = githubFixture()
+    await completeDevBatch(
+      github,
+      batch(),
+      {
+        checks: 'success',
+        'npm-build': 'success',
+        'npm-publish': 'failure',
+        [failed]: 'failure'
+      },
+      ['pi-desk']
+    )
+    assert.equal((await loadDevState(github)).units['pi-desk'], undefined)
+  }
+})
+
 test('构建通过但源码检查失败，不推进受该检查约束的npm单元', async () => {
   const { github } = githubFixture()
   await completeDevBatch(github, batch(), {

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import childProcess, { execFileSync } from 'node:child_process'
+import { EventEmitter } from 'node:events'
+import { syncBuiltinESMExports } from 'node:module'
+import { PassThrough } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -52,7 +55,8 @@ async function fixture(t) {
       if (path.startsWith('/contents/dev/artifact-sources.json'))
         return encode({ 'pi-desk': '123' })
       if (path.startsWith('/contents/dev/batches/123.json')) return encode(old)
-      if (path.startsWith('/actions/runs/123/artifacts')) return { total_count: 0, artifacts: [] }
+      if (/^\/actions\/runs\/(123|124)\/artifacts/.test(path))
+        return { total_count: 0, artifacts: [] }
       throw Error('未预期接口：' + path)
     }
   }
@@ -108,6 +112,49 @@ test('旧Actions制品过期时恢复Registry原字节，同版本不重新打�
   await assert.rejects(restoreDevPackages(f.root, options), /拒绝覆盖/)
   assert.equal(await readFile(join(f.directory, f.filename), 'utf8'), 'different bytes')
 })
+
+for (const name of ['npm-packages-124', 'npm-partial-124', 'npm-partial-123']) {
+  test(`${name}缺少其他附件时仍恢复原始tarball`, async (t) => {
+    const f = await fixture(t)
+    const request = f.github.request.bind(f.github)
+    t.mock.method(f.github, 'request', async (path, options) => {
+      if (path.startsWith(`/actions/runs/${name.split('-').at(-1)}/artifacts`)) {
+        return { total_count: 1, artifacts: [{ name, expired: false }] }
+      }
+      return request(path, options)
+    })
+    const spawn = childProcess.spawn
+    const replacement = t.mock.method(childProcess, 'spawn', (command, args, options) => {
+      if (command !== 'gh') return spawn(command, args, options)
+      assert.ok(args.includes(name))
+      const child = new EventEmitter()
+      child.stdout = null
+      child.stderr = new PassThrough()
+      const target = args[args.indexOf('--dir') + 1]
+      writeFile(join(target, f.filename), f.bytes).then(
+        () => child.emit('close', 0, null),
+        (error) => child.emit('error', error)
+      )
+      return child
+    })
+    syncBuiltinESMExports()
+    t.after(() => {
+      replacement.mock.restore()
+      syncBuiltinESMExports()
+    })
+    assert.deepEqual(
+      await restoreDevPackages(f.root, {
+        github: f.github,
+        batch: f.batch,
+        directory: f.directory,
+        repository: 'fixture/repo'
+      }),
+      ['pi-desk']
+    )
+    assert.deepEqual(await readFile(join(f.directory, f.filename)), f.bytes)
+    assert.equal(f.requests(), 0, '同批原包存在时不改用Registry包或重新构建')
+  })
+}
 
 test('源码生产变化没有升版时，先拒绝复用而不是下载旧包掩盖变化', async (t) => {
   const f = await fixture(t)

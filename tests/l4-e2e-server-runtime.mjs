@@ -177,7 +177,16 @@ export async function stopE2eServerTree(runtime) {
 
   await Promise.race([runtime.exit.catch(() => undefined), delay(processExitTimeoutMs)])
   assert.equal(processHasExited(child), true, 'E2E 服务进程树未在截止时间内退出')
-  await assertPortReleased(runtime.port)
+  const deadline = Date.now() + processExitTimeoutMs
+  while (true) {
+    try {
+      await assertPortReleased(runtime.port)
+      break
+    } catch (error) {
+      if (error.code !== 'EADDRINUSE' || Date.now() >= deadline) throw error
+      await delay(100)
+    }
+  }
   runtime.restoreNextEnv?.()
 }
 

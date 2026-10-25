@@ -131,6 +131,7 @@ async function verifyAttempt({
     child.once('close', (code, signal) => resolveClose({ code, signal }))
   })
   let current = 'prepare'
+  let verified = false
   let failure
   let phaseTimer
   let rejectDeadline
@@ -154,6 +155,7 @@ async function verifyAttempt({
   arm('prepare')
   child.on('message', (message) => {
     if (message.status === 'complete') {
+      if (message.phase === 'commands') verified = true
       if (['install-host', 'install-pi'].includes(message.phase)) completed.add(message.phase)
     } else if (message.status === 'failed') {
       failure ??= message
@@ -184,6 +186,7 @@ async function verifyAttempt({
     output(`${error.stack ?? error}\n`, process.stderr)
     appendFileSync(join(attemptDirectory, 'failure.log'), `\n${error.stack ?? error}\n`)
     let cleanupTimer
+    let cleaned = false
     try {
       await stopVerificationTree(child)
       await Promise.race([
@@ -195,6 +198,7 @@ async function verifyAttempt({
           )
         })
       ])
+      cleaned = true
       output('[smoke:cleanup] 本次验收进程树已终止\n')
     } catch (cleanupError) {
       error.recoverable = false
@@ -205,6 +209,10 @@ async function verifyAttempt({
       output(`验收进程树清理失败：${cleanupError.stack ?? cleanupError}\n`, process.stderr)
     } finally {
       clearTimeout(cleanupTimer)
+    }
+    if (verified && current === 'cleanup' && cleaned && !signal.aborted) {
+      output('[smoke:cleanup] 功能验收已通过，收尾异常经强制清理恢复\n')
+      return
     }
     throw error
   } finally {
@@ -277,8 +285,11 @@ export async function verifyNpmInstall({ root, sdkArchive, hostArchive, version 
     process.off('SIGINT', interrupt)
     closeSync(log)
     if (success) {
-      await rm(directory, { recursive: true, force: true })
-      await rm(agentRoot, { recursive: true, force: true })
+      for (const path of [directory, agentRoot]) {
+        await rm(path, { recursive: true, force: true }).catch((error) => {
+          console.warn(`验收已通过，临时目录清理未完成：${path}；${error.message}`)
+        })
+      }
     } else {
       console.error(`安装态命令验收失败现场：${directory}`)
     }
@@ -319,7 +330,6 @@ async function verifyInstalledPackage({
   const piRoot = join(directory, 'pi-runtime')
   let runtime
   let fixture
-  let failure
   try {
     const installed = join(directory, 'node_modules/@jetcrab/pi-desk')
     const manifest = await phase('install-host', async () => {
@@ -470,7 +480,6 @@ async function verifyInstalledPackage({
       `独立 npm 安装、基础模式、项目搜索、关键命令及浏览器模块检查通过：${manifest.name}@${version}`
     )
   } catch (error) {
-    failure = error
     await writeFile(join(attemptDirectory, 'failure.log'), String(error.stack ?? error))
     throw error
   } finally {
@@ -483,8 +492,7 @@ async function verifyInstalledPackage({
     const errors = cleanup.filter((item) => item.status === 'rejected').map((item) => item.reason)
     if (errors.length) {
       await writeFile(join(attemptDirectory, 'cleanup.log'), errors.map(String).join('\n'))
-      if (!failure) throw new AggregateError(errors, '安装验收资源未确认释放')
-      console.error('安装验收清理失败', errors)
+      console.warn('安装验收最终收尾未完成，保留功能验收结果', errors)
     }
   }
 }

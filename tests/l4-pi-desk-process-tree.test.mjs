@@ -295,6 +295,52 @@ test('Windows孤儿清理失败保留执行阶段、耗时及底层异常', asyn
   )
 })
 
+test('Linux进程组清理等待活动进程退出，僵尸不当作运行进程', async (t) => {
+  const source = await readFile(
+    new URL('../src/server/l4_foundation/process/l4-process-tree.js', import.meta.url),
+    'utf8'
+  )
+  for (const [label, states, rejects] of [
+    ['延迟退出', ['123 S', '123 Z', ''], false],
+    ['已经退出', ['123 Z'], false],
+    ['持续活动', ['123 S'], true]
+  ]) {
+    await t.test(label, async () => {
+      let clock = 0
+      let reads = 0
+      const signals = []
+      const runtime = { exports: {} }
+      const execute = () => {}
+      execute[promisify.custom] = async () => ({
+        stdout: states[Math.min(reads++, states.length - 1)]
+      })
+      runInNewContext(source, {
+        module: runtime,
+        Buffer,
+        process: { platform: 'linux', kill: (pid, signal) => signals.push([pid, signal]) },
+        require(name) {
+          if (name === 'node:child_process') return { execFile: execute }
+          if (name === 'node:perf_hooks') return { performance: { now: () => clock } }
+          if (name === 'node:timers/promises')
+            return {
+              setTimeout: async () => {
+                clock += 1000
+              }
+            }
+          return require(name)
+        }
+      })
+      const stopping = runtime.exports.terminateManagedTree({ pid: 123 })
+      if (rejects) await assert.rejects(stopping, /仍未退出.*123/)
+      else await stopping
+      assert.ok(signals.length > 0)
+      assert.ok(signals.every(([pid, signal]) => pid === -123 && signal === 'SIGKILL'))
+      if (label === '延迟退出') assert.ok(reads >= 2, '发出信号后仍活动就继续等待和终止')
+      assert.ok(clock <= 5000, '清理总等待有界')
+    })
+  }
+})
+
 test.after(async () => {
   for (const pid of spawnedChildren) {
     if (await processExists(pid)) {

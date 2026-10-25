@@ -61,9 +61,7 @@ export async function runL4PiPluginProbe(
     maxOutputBytes: L4_PI_PLUGIN_PROBE_MAX_OUTPUT_BYTES,
     timeoutMs: L4_PI_PLUGIN_PROBE_TIMEOUT_MS,
     signal,
-    timeoutError: () => new Error('插件预检超时'),
-    cleanupError: (output, error) =>
-      new Error(`${output}\n插件预检进程树清理失败`, { cause: error })
+    timeoutError: () => new Error('插件预检超时')
   })
   if (code !== 0) throw new Error(stderr.trim() || `插件预检进程退出码 ${code ?? 'null'}`)
   const marker = stdout.lastIndexOf(L4_PI_PLUGIN_PROBE_RESULT_PREFIX)

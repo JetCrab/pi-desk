@@ -113,7 +113,9 @@ async function main() {
     })
     console.log('官网静态产物已包含当前批次，归档完成。')
   } finally {
-    await rm(isolated, { recursive: true, force: true })
+    await rm(isolated, { recursive: true, force: true }).catch((error) => {
+      console.warn(`官网构建临时目录清理未完成：${isolated}；${error.message}`)
+    })
   }
 }
 

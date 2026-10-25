@@ -3,6 +3,7 @@
 // CLI、服务端与隔离探针共用的原生 Node 实现，不依赖 Next 的 react-server 导出条件。
 const { execFile } = require('node:child_process')
 const { performance } = require('node:perf_hooks')
+const { setTimeout: delay } = require('node:timers/promises')
 const { promisify } = require('node:util')
 const execFileAsync = promisify(execFile)
 
@@ -182,10 +183,28 @@ async function terminateManagedTree(child) {
   }
 
   // 托管服务与维护命令均以自己的进程组启动，不终止 CLI 所在进程组。
-  try {
-    process.kill(-child.pid, 'SIGKILL')
-  } catch (error) {
-    if (error.code !== 'ESRCH') throw error
+  const deadline = performance.now() + 5_000
+  while (true) {
+    try {
+      process.kill(-child.pid, 'SIGKILL')
+    } catch (error) {
+      if (error.code === 'ESRCH') return
+      throw error
+    }
+    const { stdout } = await execFileAsync('ps', ['-eo', 'pgid=,stat='], {
+      timeout: 1_000,
+      maxBuffer: 1024 * 1024
+    })
+    const running = stdout.split('\n').some((line) => {
+      const [group, state] = line.trim().split(/\s+/)
+      // 僵尸已停止执行并释放文件和端口，只等待父进程回收退出状态。
+      return Number(group) === child.pid && state && !state.startsWith('Z')
+    })
+    if (!running) return
+    if (performance.now() >= deadline) {
+      throw new Error(`进程组在终止后仍未退出：pgid=${child.pid}`)
+    }
+    await delay(50)
   }
 }
 

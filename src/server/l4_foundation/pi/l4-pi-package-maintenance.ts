@@ -81,12 +81,6 @@ export async function runL4PiPackageMaintenance(input: {
         'failed',
         '包维护超过120秒，已停止；结果未确认，请检查配置后手动处理',
         null
-      ),
-    cleanupError: (_output, error) =>
-      new L4PiPackageMaintenanceError(
-        'failed',
-        `维护进程树未确认释放：${error instanceof Error ? error.message : String(error)}`,
-        null
       )
   })
   if (code === 0) return

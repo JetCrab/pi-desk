@@ -136,6 +136,18 @@ jobs:
           path: ${{ env.NPM_ARTIFACT_DIR }}/command-smoke/*.tgz
           if-no-files-found: error
           retention-days: 7
+      - name: 筛选可恢复的已验证原始开发包
+        id: partial
+        if: failure() && github.ref == 'refs/heads/dev' && steps.artifacts.outputs.reusable != 'true'
+        run: node .github/scripts/release-npm.mjs preserve
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.partial.outputs.packages != '' && steps.partial.outputs.packages != '[]'
+        with:
+          name: npm-partial-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.NPM_ARTIFACT_DIR }}/verified/*.tgz
+          if-no-files-found: error
+          retention-days: 7
       - name: 保留 npm 构建失败现场
         uses: actions/upload-artifact@v4
         if: failure()
@@ -251,6 +263,16 @@ jobs:
           name: npm-packages-${{ github.run_id }}
           path: ${{ env.NPM_ARTIFACT_DIR }}
       - name: 发布同一批已验证制品
+        id: publication
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: node .github/scripts/release-npm.mjs publish
+      - name: 保存逐包发布结果
+        if: always() && steps.publication.outcome != '' && steps.publication.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-published-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.NPM_ARTIFACT_DIR }}/published.json
+          if-no-files-found: error
+          retention-days: 7

@@ -585,6 +585,8 @@ async function verifyBrowserAttempt({ root, baseUrl, entry, version, executable,
   } finally {
     clearTimeout(timer)
     client?.close()
-    await stopBrowserTree(browser, cdpPort)
+    await stopBrowserTree(browser, cdpPort).catch((error) => {
+      console.warn(`验收浏览器收尾未完成：pid=${browser.pid}，port=${cdpPort}；${error.message}`)
+    })
   }
 }

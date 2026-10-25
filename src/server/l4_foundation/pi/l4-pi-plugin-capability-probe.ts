@@ -138,9 +138,7 @@ export async function runL4PiPluginCapabilityProbe(
     env: { PI_DESK_PLUGIN_CAPABILITY_AGENT_DIR: agentDir, PI_DESK_PLUGIN_CAPABILITY_CWD: cwd },
     maxOutputBytes: L4_PI_PLUGIN_CAPABILITY_PROBE_MAX_OUTPUT_BYTES,
     timeoutMs: L4_PI_PLUGIN_CAPABILITY_PROBE_TIMEOUT_MS,
-    timeoutError: () => new Error('插件能力盘点超时'),
-    cleanupError: (output, error) =>
-      new Error(`${output}\n能力盘点进程树清理失败`, { cause: error })
+    timeoutError: () => new Error('插件能力盘点超时')
   })
   if (code !== 0) throw new Error(stderr.trim() || `插件能力盘点进程退出码 ${code ?? 'null'}`)
   const marker = stdout.lastIndexOf(L4_PI_PLUGIN_CAPABILITY_PROBE_RESULT_PREFIX)

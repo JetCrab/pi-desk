@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { appendFile, copyFile, mkdir } from 'node:fs/promises'
+import { appendFile, copyFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readVersions, validateVersions } from './commit-versions.mjs'
@@ -133,11 +133,21 @@ async function main() {
   if (process.argv[2] === 'complete') {
     const batch = await loadDevBatch(github, runId)
     const results = JSON.parse(process.env.RESULTS)
+    let published = []
+    if (process.env.NPM_PUBLISHED_FILE) {
+      try {
+        published = JSON.parse(await readFile(process.env.NPM_PUBLISHED_FILE, 'utf8'))
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error
+        console.info(`本批没有逐包发布结果：${process.env.NPM_PUBLISHED_FILE}`)
+      }
+    }
     if (batch && results.plan.result === 'success') {
       await completeDevBatch(
         github,
         batch,
-        Object.fromEntries(Object.entries(results).map(([name, task]) => [name, task.result]))
+        Object.fromEntries(Object.entries(results).map(([name, task]) => [name, task.result])),
+        published
       )
     }
     await appendFile(
