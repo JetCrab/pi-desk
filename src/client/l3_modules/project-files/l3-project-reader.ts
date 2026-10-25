@@ -5,6 +5,7 @@ import * as contract from '@common/l3_modules/project-files/l3-project-files-con
 import type {
   L4ProjectFileList,
   L4ProjectFileSearch,
+  L4ProjectSearchInput,
   L4ProjectFileContent,
   L4ProjectFileImagePreviewMode
 } from '@common/l4_foundation/file/l4-project-file-contract'
@@ -62,7 +63,7 @@ export async function requestL3Project<I, O>(
 
 export interface L3ProjectFileReader {
   list(path: string, signal?: AbortSignal): Promise<L4ProjectFileList>
-  search(query: string, signal?: AbortSignal): Promise<L4ProjectFileSearch>
+  search(input: L4ProjectSearchInput, signal?: AbortSignal): Promise<L4ProjectFileSearch>
   get(
     path: string,
     imagePreviewMode: L4ProjectFileImagePreviewMode,
@@ -89,8 +90,8 @@ export function createL3ProjectReader(
   return {
     list: (path, signal) =>
       requestL3Project(clientId, contract.L3ProjectFileList, { ...context, path }, signal),
-    search: (query, signal) =>
-      requestL3Project(clientId, contract.L3ProjectFileSearch, { ...context, query }, signal),
+    search: (input, signal) =>
+      requestL3Project(clientId, contract.L3ProjectFileSearch, { ...context, ...input }, signal),
     get: (path, imagePreviewMode, signal) =>
       requestL3Project(
         clientId,

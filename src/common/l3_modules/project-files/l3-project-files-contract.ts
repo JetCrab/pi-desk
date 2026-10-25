@@ -6,6 +6,7 @@ import {
   L4ProjectFileImagePreviewModeSchema,
   L4ProjectFileListSchema,
   L4ProjectFileSearchSchema,
+  L4ProjectSearchInputSchema,
   L4ProjectFileContentSchema
 } from '@common/l4_foundation/file/l4-project-file-contract'
 import {
@@ -67,9 +68,7 @@ export const L3ProjectFileList = {
 } as const
 export const L3ProjectFileSearch = {
   path: '/api/project-files/search',
-  request: L3ProjectReadContextSchema.extend({
-    query: z.string().trim().min(1).max(200)
-  }).strict(),
+  request: L3ProjectReadContextSchema.extend(L4ProjectSearchInputSchema.shape).strict(),
   response: L4ProjectFileSearchSchema
 } as const
 export const L3ProjectFileGet = {

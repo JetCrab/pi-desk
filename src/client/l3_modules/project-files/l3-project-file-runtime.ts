@@ -1,13 +1,18 @@
 import type {
   L4ProjectFileEntry,
   L4ProjectFileImageMimeType,
-  L4ProjectFileImagePreviewMode
+  L4ProjectFileImagePreviewMode,
+  L4ProjectFileSearch,
+  L4ProjectSearchInput
 } from '@common/l4_foundation/file/l4-project-file-contract'
 import type { L4GitHistoricalDiff } from '@common/l4_foundation/git/l4-git-history-contract'
 import { L3_PROJECT_FILES_LOCALE_MESSAGES } from '@common/l3_modules/project-files/l3-project-files-locale-messages'
 import { l4LocalizedErrorMessage } from '@client/l4_foundation/locale/l4-localized-error'
 import { createL4Base64ImageBlob } from '@client/l4_foundation/media/l4-base64-image'
-import type { L4CodePreviewState } from '@client/l4_foundation/ui/code/l4-code-preview'
+import type {
+  L4CodePreviewState,
+  L4CodeLineNavigation
+} from '@client/l4_foundation/ui/code/l4-code-preview'
 import type { L4CodeDiffState } from '@client/l4_foundation/ui/code/l4-code-diff'
 import { saveL4CodePreferences } from '@client/l4_foundation/ui/code/l4-code-preferences'
 import { L3ProjectRequestError, type L3ProjectFileReader } from './l3-project-reader'
@@ -47,12 +52,25 @@ export type L3FileDocument =
     }
   | { status: 'image'; mimeType: L4ProjectFileImageMimeType; size: number; objectUrl: string }
   | { status: 'error'; error: string }
-export interface L3FileSearch {
-  query: string
+export interface L3FileSearch extends L4ProjectSearchInput, L4ProjectFileSearch {
   status: 'idle' | 'loading' | 'ready' | 'error'
-  matches: string[]
-  truncated: boolean
   error: string | null
+}
+const DEFAULT_SEARCH_OPTIONS = {
+  scope: 'all',
+  caseSensitive: false,
+  wholeWord: false,
+  regex: false
+} as const
+function emptySearch(input: L4ProjectSearchInput): L3FileSearch {
+  return {
+    ...input,
+    status: input.query.trim() ? 'loading' : 'idle',
+    fileMatches: [],
+    contentMatches: [],
+    truncated: false,
+    error: null
+  }
 }
 interface DiffOptions {
   repositoryRoot: string
@@ -132,7 +150,7 @@ export class L3ProjectFileRuntime {
     directories: new Map(),
     expandedPaths: new Set(),
     treeScrollTop: 0,
-    search: { query: '', status: 'idle', matches: [], truncated: false, error: null },
+    search: emptySearch({ query: '', ...DEFAULT_SEARCH_OPTIONS }),
     searchOpen: false,
     documents: new Map(),
     activeDiff: null
@@ -150,6 +168,7 @@ export class L3ProjectFileRuntime {
   private readonly restoredFileViewModes = new Map<string, 'source' | 'preview'>()
   private readonly restoredPreviewScrollTops = new Map<string, number>()
   private searchRequest: AbortController | null = null
+  private navigation: L4CodeLineNavigation | null = null
   private diffRequest: AbortController | null = null
   private revision = 0
   private disposed = false
@@ -165,8 +184,23 @@ export class L3ProjectFileRuntime {
   }
   getRevision = (): number => this.revision
   setSearchOpen(open: boolean): void {
-    if (this.state.searchOpen === open) return
+    if (this.disposed || this.state.searchOpen === open) return
+    this.cancelSearch()
     this.state.searchOpen = open
+    this.state.search = emptySearch({
+      ...this.searchInput(),
+      scope: open ? 'all' : this.state.search.scope
+    })
+    this.publish()
+  }
+  get pendingNavigation(): L4CodeLineNavigation | null {
+    const path = this.state.activePath
+    return path && !this.documentRequests.has(path) ? this.navigation : null
+  }
+  consumeNavigation(target: L4CodeLineNavigation, exists: boolean): void {
+    if (this.navigation !== target) return
+    this.navigation = null
+    if (!exists) this.options.onNotice?.(projectText('searchLineUnavailable'))
     this.publish()
   }
   get canReveal(): boolean {
@@ -203,13 +237,7 @@ export class L3ProjectFileRuntime {
       input.activePath && input.tabs.includes(input.activePath) ? input.activePath : null
     this.state.expandedPaths = new Set(input.expandedPaths)
     this.state.treeScrollTop = input.treeScrollTop
-    this.state.search = {
-      query: input.searchQuery,
-      status: input.searchQuery ? 'loading' : 'idle',
-      matches: [],
-      truncated: false,
-      error: null
-    }
+    this.state.search = emptySearch({ query: input.searchQuery, ...DEFAULT_SEARCH_OPTIONS })
     for (const path of input.tabs) this.state.documents.set(path, { status: 'unloaded' })
     for (const path of input.expandedPaths) void this.ensureDirectory(path)
     if (input.activeDiff) {
@@ -320,18 +348,12 @@ export class L3ProjectFileRuntime {
     this.directoryRequests.clear()
     this.state.directories.clear()
     this.cancelSearch()
-    this.state.search = {
-      query: this.state.search.query,
-      status: this.state.search.query ? 'loading' : 'idle',
-      matches: [],
-      truncated: false,
-      error: null
-    }
+    this.state.search = emptySearch(this.searchInput())
     this.publish()
     void this.ensureRoot().then(() => {
       if (this.disposed) return
       for (const path of this.state.expandedPaths) void this.ensureDirectory(path)
-      if (this.state.search.query) {
+      if (this.state.searchOpen && this.state.search.query.trim()) {
         this.cancelSearch()
         this.state.search = { ...this.state.search, status: 'loading' }
         void this.search(this.state.search.query)
@@ -339,16 +361,30 @@ export class L3ProjectFileRuntime {
     })
   }
   setSearchQuery(query: string): void {
-    if (this.state.search.query === query) return
+    if (this.disposed || this.state.search.query === query) return
     this.cancelSearch()
-    this.state.search = {
-      query,
-      status: query.trim() ? 'loading' : 'idle',
-      matches: [],
-      truncated: false,
-      error: null
-    }
+    this.state.search = emptySearch({ ...this.searchInput(), query })
     this.publish()
+  }
+  setSearchOptions(options: Partial<Omit<L4ProjectSearchInput, 'query'>>): void {
+    if (this.disposed) return
+    const previous = this.searchInput()
+    const next = { ...previous, ...options }
+    if (
+      next.scope === previous.scope &&
+      next.caseSensitive === previous.caseSensitive &&
+      next.wholeWord === previous.wholeWord &&
+      next.regex === previous.regex
+    )
+      return
+    this.cancelSearch()
+    this.state.search = emptySearch(next)
+    this.publish()
+    if (this.state.searchOpen) void this.search(next.query)
+  }
+  private searchInput(): L4ProjectSearchInput {
+    const { query, scope, caseSensitive, wholeWord, regex } = this.state.search
+    return { query, scope, caseSensitive, wholeWord, regex }
   }
   async search(query: string): Promise<void> {
     if (
@@ -361,27 +397,22 @@ export class L3ProjectFileRuntime {
       return
     const request = new AbortController()
     this.searchRequest = request
-    this.state.search = { query, status: 'loading', matches: [], truncated: false, error: null }
+    const input = this.searchInput()
+    this.state.search = emptySearch(input)
     this.publish()
     try {
-      const result = await this.reader.search(query.trim(), request.signal)
+      const result = await this.reader.search(input, request.signal)
       if (this.searchRequest !== request) return
-      this.state.search = { query, status: 'ready', ...result, error: null }
+      this.state.search = { ...input, status: 'ready', ...result, error: null }
     } catch (cause) {
       if (this.searchRequest !== request) return
-      this.state.search = {
-        query,
-        status: 'error',
-        matches: [],
-        truncated: false,
-        error: message(cause)
-      }
+      this.state.search = { ...emptySearch(input), status: 'error', error: message(cause) }
     }
     if (this.searchRequest !== request) return
     this.searchRequest = null
     this.publish()
   }
-  openFile(input: string): void {
+  openFile(input: string, line?: number): void {
     if (this.disposed) return
     const normalized = normalizePath(this.cwd, input)
     const windows = /^[a-z]:[\\/]/i.test(this.cwd) || this.cwd.startsWith('\\\\')
@@ -399,8 +430,11 @@ export class L3ProjectFileRuntime {
     this.clearDiff()
     if (!this.state.documents.has(path)) this.state.documents.set(path, { status: 'unloaded' })
     this.state.activePath = path
+    this.navigation = line === undefined ? null : { line }
+    const document = this.state.documents.get(path)
+    if (line !== undefined && document?.status === 'text') document.viewMode = 'source'
+    void this.ensureDocument(path, line !== undefined)
     this.publish()
-    void this.ensureDocument(path)
   }
   closeTabs(target: string | null, scope: L3FileTabCloseScope): void {
     const state = this.state
@@ -439,6 +473,7 @@ export class L3ProjectFileRuntime {
     }
     state.tabs = state.tabs.filter((path) => !removed.has(path))
     if (state.activePath && removed.has(state.activePath)) {
+      this.navigation = null
       const activeIndex = tabs.indexOf(state.activePath)
       state.activePath =
         tabs.slice(activeIndex + 1).find((path) => path !== null && !removed.has(path)) ??
@@ -454,17 +489,23 @@ export class L3ProjectFileRuntime {
   }
   reloadFile(path: string): void {
     if (!this.state.tabs.includes(path)) return
+    if (this.state.activePath === path && this.navigation) {
+      // 面板显示时的自动重读与搜索定位共用刷新，不能清除待消费的目标行。
+      void this.ensureDocument(path, true)
+      return
+    }
     this.invalidateDocument(path)
     this.publish()
     void this.ensureDocument(path)
   }
-  async ensureDocument(path: string): Promise<void> {
-    if (this.disposed || !this.state.tabs.includes(path)) return
+  async ensureDocument(path: string, refresh = false): Promise<void> {
+    if (this.disposed || !this.state.tabs.includes(path) || this.documentRequests.has(path)) return
     const current = this.state.documents.get(path)
-    if (current && ['loading', 'text', 'image'].includes(current.status)) return
+    if (!refresh && current && ['loading', 'text', 'image'].includes(current.status)) return
     const request = new AbortController()
     this.documentRequests.set(path, request)
-    this.state.documents.set(path, { status: 'loading' })
+    // 搜索定位刷新正文时保留已挂载的代码视图，内容未变时不重建编辑器。
+    if (current?.status !== 'text') this.state.documents.set(path, { status: 'loading' })
     this.publish()
     try {
       const result = await this.reader.get(path, this.options.imagePreviewMode(), request.signal)
@@ -472,29 +513,47 @@ export class L3ProjectFileRuntime {
       this.documentRequests.delete(path)
       this.closeMissing.delete(path)
       this.restoredTabs.delete(path)
-      this.state.documents.set(
-        path,
-        result.kind === 'text'
-          ? {
-              status: 'text',
-              content: result.content,
-              size: result.size,
-              editorState: this.restoredEditorStates.get(path) ?? null,
-              viewMode:
-                this.restoredFileViewModes.get(path) ??
-                (getL3ProjectTextPreviewKind(path) === 'markdown' ||
-                (this.options.htmlPreview && getL3ProjectTextPreviewKind(path) === 'html')
-                  ? 'preview'
-                  : 'source'),
-              previewScrollTop: this.restoredPreviewScrollTops.get(path) ?? 0
-            }
-          : {
-              status: 'image',
-              mimeType: result.mimeType,
-              size: result.size,
-              objectUrl: URL.createObjectURL(createL4Base64ImageBlob(result))
-            }
-      )
+      const unchanged =
+        current?.status === 'text' &&
+        result.kind === 'text' &&
+        current.content === result.content &&
+        current.size === result.size
+      if (!unchanged)
+        this.state.documents.set(
+          path,
+          result.kind === 'text'
+            ? {
+                status: 'text',
+                content: result.content,
+                size: result.size,
+                editorState:
+                  current?.status === 'text'
+                    ? current.editorState
+                    : (this.restoredEditorStates.get(path) ?? null),
+                viewMode:
+                  this.state.activePath === path && this.navigation
+                    ? 'source'
+                    : current?.status === 'text'
+                      ? current.viewMode
+                      : (this.restoredFileViewModes.get(path) ??
+                        (getL3ProjectTextPreviewKind(path) === 'markdown' ||
+                        (this.options.htmlPreview && getL3ProjectTextPreviewKind(path) === 'html')
+                          ? 'preview'
+                          : 'source')),
+                previewScrollTop:
+                  current?.status === 'text'
+                    ? current.previewScrollTop
+                    : (this.restoredPreviewScrollTops.get(path) ?? 0)
+              }
+            : {
+                status: 'image',
+                mimeType: result.mimeType,
+                size: result.size,
+                objectUrl: URL.createObjectURL(createL4Base64ImageBlob(result))
+              }
+        )
+      if (this.state.activePath === path && result.kind !== 'text') this.navigation = null
+      this.releaseDocument(current)
     } catch (cause) {
       if (this.documentRequests.get(path) !== request) return
       this.documentRequests.delete(path)
@@ -516,6 +575,8 @@ export class L3ProjectFileRuntime {
         error: message(cause)
       })
       this.state.documents.set(path, { status: 'error', error: message(cause) })
+      this.releaseDocument(current)
+      if (this.state.activePath === path) this.navigation = null
     }
     this.publish()
   }
@@ -703,6 +764,7 @@ export class L3ProjectFileRuntime {
     this.publish()
   }
   private clearDiff(): void {
+    this.navigation = null
     this.diffRequest?.abort()
     this.diffRequest = null
     this.state.activeDiff = null
@@ -712,6 +774,7 @@ export class L3ProjectFileRuntime {
     this.searchRequest = null
   }
   private invalidateDocument(path: string): void {
+    if (this.state.activePath === path) this.navigation = null
     this.documentRequests.get(path)?.abort()
     this.documentRequests.delete(path)
     const document = this.state.documents.get(path)

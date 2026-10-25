@@ -33,7 +33,6 @@ export async function register(): Promise<void> {
   })
   const manage = getL2WorkSessionManage()
   initializeL2PluginManagement({
-    refreshPluginMessages: () => manage.refreshPluginMessages(),
     runPluginRestart: (operation) => manage.runPluginRestart(operation)
   })
   registerL1WebAuthRuntime(getL1WebAuthRuntime())
@@ -70,7 +69,6 @@ export async function register(): Promise<void> {
   setTimeout(() => {
     void pluginRuntime.initialize().then(
       () => {
-        manage.refreshPluginMessages()
         console.info('[Pi Desk][Instrumentation] 插件加载尝试完成，基础聊天不依赖插件就绪')
       },
       (error: unknown) => {

@@ -14,7 +14,7 @@ function createRuntime(diff: L3ProjectFileReader['diff']): L3ProjectFileRuntime 
         return { entries: [], truncated: false }
       },
       async search() {
-        return { matches: [], truncated: false }
+        return { fileMatches: [], contentMatches: [], truncated: false }
       },
       async get() {
         return { kind: 'text', content: 'cached', size: 6 }

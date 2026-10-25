@@ -25,7 +25,8 @@ function parseItems(value: unknown): DeliverableItem[] | null {
     const path = item.path.trim()
     const title = item.title.trim()
     if (!path || !title || title.length > 40) return null
-    items.push({ path, title })
+    if (item.kind !== undefined && item.kind !== 'file' && item.kind !== 'directory') return null
+    items.push({ path, title, ...(item.kind ? { kind: item.kind } : {}) })
   }
   return items
 }

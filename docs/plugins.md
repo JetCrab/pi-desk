@@ -211,7 +211,7 @@ export default {
 - 首屏和实时必需内容放 `summary`；大内容或用户展开后才用的数据放 `detail`。需要详情时，仅在消息已有 `entryId` 且 `fixed.hasDetail` 为真后调用 `target.message.loadDetail()`；异步结果须检查挂载的 `signal`，不能写回失效视图。
 - 视图从 `getSnapshot()` 读取完整当前状态，并通过 `subscribe()` 跟随更新；同 `viewKey` 的消息更新不重新挂载，Temporary 转 Durable 保持同一 Handle，`viewKey` 改变时会重挂。释放时解除订阅并清理自有资源。
 - Declaration 和 View 分别按 `priority` 选择，数值越大越优先；同最高优先级冲突会报错。声明、加载或展示失败不自动尝试低优先级实现；异步展示错误通过 `target.reportError(error)` 交给宿主处理。
-- 刷新后仍需展示的数据必须存在于最终 Pi Entry，仅通过 Tool `onUpdate()` 提供的数据不会自动持久化。更新插件时兼容已有消息结构，不靠自动重载旧会话解决兼容问题。
+- 刷新后仍需展示的数据必须存在于最终 Pi Entry，仅通过 Tool `onUpdate()` 提供的数据不会自动持久化。插件初始化、更新和热加载不自动重投影或重传旧聊天，新消息使用当前声明；Browser View 需兼容已有消息结构，不靠自动重载旧会话解决兼容问题。
 
 ## 任务
 

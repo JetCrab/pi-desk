@@ -52,7 +52,7 @@ const reader: L3ProjectFileReader = {
     return { entries: [], truncated: false }
   },
   async search() {
-    return { matches: [], truncated: false }
+    return { fileMatches: [], contentMatches: [], truncated: false }
   },
   async get(path) {
     return { kind: 'text', content: path, size: path.length }

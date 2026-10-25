@@ -140,6 +140,8 @@ interface L2WorkSessionSidebarProps {
   onTogglePin: (workId: string) => void
   onDelete: (workId: string) => void
   onRename: (workSession: L2WorkSessionListItem) => void
+  syncingWorkIds: readonly string[]
+  onReloadChat: (workSession: L2WorkSessionListItem) => void
   onArrangementChange: (arrangement: L2WorkSessionArrangement, movedWorkId: string) => void
 }
 
@@ -343,7 +345,9 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
   onSelect,
   onTogglePin,
   onDelete,
-  onRename
+  onRename,
+  syncing,
+  onReloadChat
 }: {
   workSession: L2WorkSessionListItem
   mobile: boolean
@@ -357,6 +361,8 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
   onTogglePin: (workId: string) => void
   onDelete: (workId: string) => void
   onRename: (workSession: L2WorkSessionListItem) => void
+  syncing: boolean
+  onReloadChat: (workSession: L2WorkSessionListItem) => void
 }): React.JSX.Element {
   const suppressTouchClick = useRef(false)
   const lastPointer = useRef('')
@@ -607,6 +613,14 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
           {t('renameSessionTitle')}
         </ContextMenuItem>
         <ContextMenuItem
+          data-testid={`work-session-reload-chat-${workSession.workId}`}
+          disabled={actionsDisabled || deleting || syncing}
+          onClick={() => onReloadChat(workSession)}
+        >
+          {syncing ? <LoaderCircleIcon className="animate-spin" /> : <RefreshCwIcon />}
+          {t('reloadChatData')}
+        </ContextMenuItem>
+        <ContextMenuItem
           data-testid={`work-session-copy-project-path-${workSession.workId}`}
           onClick={copyProjectPath}
         >
@@ -675,6 +689,8 @@ function L2WorkSessionSidebarComponent({
   onTogglePin,
   onDelete,
   onRename,
+  syncingWorkIds,
+  onReloadChat,
   onArrangementChange
 }: L2WorkSessionSidebarProps): React.JSX.Element {
   const { t } = useTranslation('workbench')
@@ -888,6 +904,8 @@ function L2WorkSessionSidebarComponent({
         onTogglePin={onTogglePin}
         onDelete={onDelete}
         onRename={onRename}
+        syncing={syncingWorkIds.includes(workSession.workId)}
+        onReloadChat={onReloadChat}
       />
     )
   })

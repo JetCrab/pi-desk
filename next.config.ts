@@ -42,6 +42,7 @@ const nextConfig: NextConfig = {
         ? 'temp/next-dev'
         : 'temp/build/pi-desk/release/.next',
   serverExternalPackages: [
+    '@vscode/ripgrep',
     '@earendil-works/pi-coding-agent',
     '@earendil-works/pi-agent-core',
     '@earendil-works/pi-ai',

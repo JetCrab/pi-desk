@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, openSync, writeSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { basename, join, resolve } from 'node:path'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
@@ -24,6 +26,7 @@ const phases = {
   'health-safe': ['基础模式启动', 2 * 60_000],
   'prepare-commands': ['准备命令夹具', 60_000],
   'health-normal': ['正常模式启动', 2 * 60_000],
+  'project-search': ['验证安装态项目搜索', 60_000],
   commands: ['验证安装态命令与浏览器模块', 5 * 60_000],
   cleanup: ['释放验收资源', 90_000]
 }
@@ -397,9 +400,74 @@ async function verifyInstalledPackage({
       runtime = start(false)
       await waitForHealth(runtime, version)
     })
+    await phase('project-search', async () => {
+      const installedRequire = createRequire(join(installed, 'package.json'))
+      const ripgrepModule = installedRequire.resolve('@vscode/ripgrep')
+      const { rgPath } = installedRequire('@vscode/ripgrep')
+      assert.equal(typeof rgPath, 'string', '安装后的 ripgrep 必须导出可执行路径')
+      const modulesRoot = await realpath(join(directory, 'node_modules'))
+      for (const path of [ripgrepModule, rgPath]) {
+        const location = relative(modulesRoot, await realpath(path))
+        assert.ok(
+          !isAbsolute(location) && location !== '..' && !location.startsWith(`..${sep}`),
+          `搜索依赖必须来自本次独立 npm 安装：${path}`
+        )
+      }
+      const project = join(attemptDirectory, 'project-search')
+      const query = 'installed-search-check'
+      const filename = `${query}.txt`
+      await mkdir(project)
+      const options = { cwd: project, timeout: 10_000, maxBuffer: 64 * 1024, windowsHide: true }
+      // 独立仓库使夹具不受外层验收目录的 Git 忽略规则影响。
+      await execute('git', ['init', '--quiet'], options)
+      await writeFile(join(project, filename), `header\n${query}\n`)
+      const { stdout: engineVersion } = await execute(rgPath, ['--version'], options)
+      assert.match(engineVersion, /^ripgrep \d+/)
+      const { stdout } = await execute(
+        rgPath,
+        [
+          '--no-config',
+          '--fixed-strings',
+          '--no-filename',
+          '--line-number',
+          '-e',
+          query,
+          '--',
+          filename
+        ],
+        options
+      )
+      assert.equal(stdout.trim(), `2:${query}`)
+      const response = await fetch(`http://127.0.0.1:${port}/api/project-files/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Pi-Desk-Client-Id': randomUUID() },
+        body: JSON.stringify({
+          cwd: project,
+          query,
+          scope: 'all',
+          caseSensitive: true,
+          wholeWord: false,
+          regex: false
+        }),
+        signal: AbortSignal.timeout(15_000),
+        redirect: 'error'
+      })
+      const body = await response.json()
+      assert.equal(response.status, 200, body.msg)
+      assert.equal(body.code, 0, body.msg)
+      const ranges = [{ start: 0, end: query.length }]
+      assert.deepEqual(body.data, {
+        fileMatches: [{ path: filename, ranges }],
+        contentMatches: [{ path: filename, line: 2, text: query, ranges }],
+        truncated: false
+      })
+      console.info(
+        `[smoke:project-search] ${engineVersion.trim().split('\n')[0]}，二进制及安装态 HTTP 搜索通过`
+      )
+    })
     await phase('commands', () => fixture.verify({ port, version }))
     console.info(
-      `独立 npm 安装、基础模式、关键命令及浏览器模块检查通过：${manifest.name}@${version}`
+      `独立 npm 安装、基础模式、项目搜索、关键命令及浏览器模块检查通过：${manifest.name}@${version}`
     )
   } catch (error) {
     failure = error

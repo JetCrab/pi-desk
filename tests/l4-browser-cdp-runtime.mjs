@@ -3,7 +3,7 @@ import { execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
 import { setTimeout as abortableDelay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import WebSocket from 'ws'
@@ -341,10 +341,11 @@ async function hasProcessForBrowserProfile(browserProcess) {
   )
   if (!userDataArgument) throw new Error('浏览器进程缺少隔离 user-data-dir 参数')
   const profilePath = userDataArgument.slice('--user-data-dir='.length).replaceAll("'", "''")
+  const executable = basename(browserProcess.spawnfile).replaceAll("'", "''")
   const command = [
     "$ProgressPreference = 'SilentlyContinue'",
     `$profile = '${profilePath}'`,
-    `$items = @(Get-CimInstance Win32_Process -Filter "Name = 'msedge.exe'" -ErrorAction Stop | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($profile) })`,
+    `$items = @(Get-CimInstance Win32_Process -Filter "Name = '${executable}'" -ErrorAction Stop | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($profile) })`,
     '$active = @($items | Where-Object { $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; $p -and -not $p.HasExited })',
     'if ($active.Count -gt 0) { exit 0 } else { exit 1 }'
   ].join('; ')

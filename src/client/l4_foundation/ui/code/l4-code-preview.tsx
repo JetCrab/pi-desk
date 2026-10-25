@@ -3,6 +3,7 @@
 import { LoaderCircleIcon } from 'lucide-react'
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useRef,
@@ -28,6 +29,10 @@ import markerStyles from './l4-code-line-markers.module.css'
 
 export type L4CodePreviewState = editor.ICodeEditorViewState
 
+export interface L4CodeLineNavigation {
+  readonly line: number
+}
+
 export interface L4CodePreviewHandle {
   openSearch: () => void
   gotoLine: () => void
@@ -48,6 +53,8 @@ interface L4CodePreviewProps {
   originalContent?: string
   onChanges?: (count: number | null) => void
   onOpenDiff?: (lineNumber: number) => void
+  navigation?: L4CodeLineNavigation | null
+  onNavigation?: (target: L4CodeLineNavigation, exists: boolean) => void
 }
 
 function L4CodePreviewComponent(
@@ -60,7 +67,9 @@ function L4CodePreviewComponent(
     onEscape,
     originalContent,
     onChanges,
-    onOpenDiff
+    onOpenDiff,
+    navigation,
+    onNavigation
   }: L4CodePreviewProps,
   ref: ForwardedRef<L4CodePreviewHandle>
 ): React.JSX.Element {
@@ -76,13 +85,29 @@ function L4CodePreviewComponent(
   const markersRef = useRef<L4CodeLineMarkers | null>(null)
   const changesRef = useRef(onChanges)
   const openDiffRef = useRef(onOpenDiff)
+  const navigationCompleteRef = useRef(onNavigation)
+  const navigationMarkersRef = useRef<editor.IEditorDecorationsCollection | null>(null)
+  const highlightedLineRef = useRef<number | null>(null)
+  const paintNavigation = useCallback((codeEditor: editor.IStandaloneCodeEditor): void => {
+    const line = highlightedLineRef.current
+    navigationMarkersRef.current?.clear()
+    if (line === null || line > (codeEditor.getModel()?.getLineCount() ?? 0)) return
+    navigationMarkersRef.current ??= codeEditor.createDecorationsCollection()
+    navigationMarkersRef.current.set([
+      {
+        range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
+        options: { isWholeLine: true, className: 'bg-accent' }
+      }
+    ])
+  }, [])
 
   useEffect(() => {
     savedStateRef.current = savedState
     escapeRef.current = onEscape
     changesRef.current = onChanges
     openDiffRef.current = onOpenDiff
-  }, [onChanges, onEscape, onOpenDiff, savedState])
+    navigationCompleteRef.current = onNavigation
+  }, [onChanges, onEscape, onOpenDiff, onNavigation, savedState])
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
 
   useEffect(() => {
@@ -200,6 +225,7 @@ function L4CodePreviewComponent(
         stopTypographyObserver = observeL4MonacoTypography((typography) =>
           codeEditor?.updateOptions(typography)
         )
+        paintNavigation(codeEditor)
         setLoadState('ready')
       })
       .catch((error: unknown) => {
@@ -222,15 +248,33 @@ function L4CodePreviewComponent(
         savedStateRef.current = codeEditor.saveViewState()
         onSaveStateRef.current(path, savedStateRef.current)
       }
+      navigationMarkersRef.current?.clear()
+      navigationMarkersRef.current = null
       editorRef.current = null
       codeEditor?.dispose()
       model?.dispose()
     }
-  }, [content, originalContent, path, projectFilesT, size, t])
+  }, [content, originalContent, paintNavigation, path, projectFilesT, size, t])
 
   useEffect(() => {
     editorRef.current?.updateOptions({ wordWrap: wrapLines ? 'on' : 'off' })
   }, [wrapLines])
+
+  useEffect(() => {
+    const codeEditor = editorRef.current
+    if (!navigation || loadState !== 'ready' || !codeEditor) return
+    const model = codeEditor.getModel()
+    const exists = Boolean(model && navigation.line >= 1 && navigation.line <= model.getLineCount())
+    highlightedLineRef.current = exists ? navigation.line : null
+    paintNavigation(codeEditor)
+    if (exists) {
+      codeEditor.setPosition({ lineNumber: navigation.line, column: 1 })
+      codeEditor.revealLineInCenter(navigation.line)
+      savedStateRef.current = codeEditor.saveViewState()
+      onSaveStateRef.current(path, savedStateRef.current)
+    }
+    navigationCompleteRef.current?.(navigation, exists)
+  }, [loadState, navigation, paintNavigation, path])
 
   return (
     <div

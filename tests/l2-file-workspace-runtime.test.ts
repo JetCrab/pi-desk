@@ -29,7 +29,7 @@ function fileBiz(overrides: Partial<L2WorkSessionFilesBiz> = {}): L2WorkSessionF
       return { entries: [], truncated: false }
     },
     async search() {
-      return { matches: [], truncated: false }
+      return { fileMatches: [], contentMatches: [], truncated: false }
     },
     async reveal() {
       return {}

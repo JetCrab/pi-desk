@@ -7,11 +7,18 @@ import {
   SESSION_PLUGIN_METHOD_EVENT,
   SESSION_PLUGIN_PUSH_EVENT,
   type SessionPluginMethodEvent,
-  type SessionPluginPushEvent
+  type SessionPluginPushEvent,
+  type PluginJsonObject
 } from '@jetcrab/pi-desk-sdk/session'
 import extension from '../src/index.js'
+import type { DeliverableItem } from '../src/contract.js'
+import {
+  parseDeliverableBatch,
+  publishDeliverablePush,
+  subscribeDeliverablePush
+} from '../src/browser-runtime.js'
 
-const root = resolve('temp', 'pi', 'deliverables-runtime-test', String(process.pid), 'agent')
+const root = resolve('temp/tests/deliverables', `runtime-${process.pid}`)
 
 type Handler = (event: unknown, context: ExtensionContext) => unknown
 
@@ -39,7 +46,7 @@ interface CapturedTool {
   ): Promise<{ details?: unknown }>
 }
 
-function entry(entryId: string, items: Array<{ path: string; title: string }>): SessionEntry {
+function entry(entryId: string, items: DeliverableItem[]): SessionEntry {
   return {
     type: 'message',
     id: entryId,
@@ -96,10 +103,10 @@ test('Tool 原子校验多个文件，历史恢复后按批次倒序分页并 Pu
   assert.ok(tool)
   assert.equal(
     tool.parameters.properties?.items?.items?.properties?.path?.description,
-    '已存在、可在 Pi Desk 中预览的完成文件路径；支持绝对路径或相对当前会话 cwd 的路径'
+    '已存在、可在 Pi Desk 中预览的完成文件或文件夹路径；支持绝对路径或相对当前会话 cwd 的路径'
   )
   assert.deepEqual(tool.promptGuidelines, [
-    'Use deliverable only for important completed results or acceptance evidence that can be previewed in Pi Desk, such as images, code files that are themselves a requested deliverable, and HTML. Do not register ordinary source edits, intermediate files, or files that cannot be previewed.'
+    'Use deliverable only for important completed results or acceptance evidence that can be previewed in Pi Desk, such as images, code files that are themselves a requested deliverable, HTML, and folders containing completed deliverables. Do not register ordinary source edits, intermediate files, or files that cannot be previewed.'
   ])
   const result = await tool.execute(
     'tool-1',
@@ -115,8 +122,8 @@ test('Tool 原子校验多个文件，历史恢复后按批次倒序分页并 Pu
   )
   assert.deepEqual(result.details, {
     items: [
-      { path: 'artifacts/desktop.png', title: '桌面端验收' },
-      { path: 'artifacts/mobile.png', title: '移动端验收' }
+      { path: 'artifacts/desktop.png', title: '桌面端验收', kind: 'file' },
+      { path: 'artifacts/mobile.png', title: '移动端验收', kind: 'file' }
     ]
   })
   await assert.rejects(
@@ -132,7 +139,7 @@ test('Tool 原子校验多个文件，历史恢复后按批次倒序分页并 Pu
       undefined,
       context(root, [])
     ),
-    /文件不存在/
+    /文件或文件夹不存在/
   )
 
   const first = entry('entry-1', [{ path: 'artifacts/desktop.png', title: '桌面端验收' }])
@@ -197,13 +204,14 @@ test('Tool 原子校验多个文件，历史恢复后按批次倒序分页并 Pu
   )
 })
 
-test('项目外绝对路径、父目录和目录链接登记为可恢复的绝对文件路径', async (contextTest) => {
+test('文件与目录支持项目外路径、当前目录和目录链接，类型随历史与Push保留', async (contextTest) => {
   const testRoot = resolve('temp/tests/deliverables', `external-paths-${process.pid}`)
   const cwd = join(testRoot, 'project')
   const external = join(testRoot, 'external')
   contextTest.after(() => rm(testRoot, { recursive: true, force: true }))
   await mkdir(cwd, { recursive: true })
   await mkdir(external, { recursive: true })
+  await mkdir(join(cwd, 'report.png'))
   await writeFile(join(external, 'result.html'), '<h1>完成</h1>')
   await symlink(external, join(cwd, 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
 
@@ -235,7 +243,7 @@ test('项目外绝对路径、父目录和目录链接登记为可恢复的绝�
       extensionContext
     )
   const storedPath = (await realpath(join(external, 'result.html'))).split(sep).join('/')
-  const items = [{ path: storedPath, title: '项目外交付' }]
+  const items: DeliverableItem[] = [{ path: storedPath, title: '项目外交付', kind: 'file' }]
   for (const path of [
     join(external, 'result.html'),
     '../external/result.html',
@@ -243,14 +251,48 @@ test('项目外绝对路径、父目录和目录链接登记为可恢复的绝�
   ]) {
     assert.deepEqual((await execute(path)).details, { items })
   }
-  await assert.rejects(execute(join(external, 'missing.html')), /文件不存在/)
-  await assert.rejects(execute(external), /不是文件/)
+  const directoryItems: DeliverableItem[] = [
+    {
+      path: (await realpath(external)).split(sep).join('/'),
+      title: '项目外交付',
+      kind: 'directory'
+    }
+  ]
+  for (const path of [external, '../external', 'linked']) {
+    assert.deepEqual((await execute(path)).details, { items: directoryItems })
+  }
+  for (const path of ['report.png', join(cwd, 'report.png')]) {
+    assert.deepEqual((await execute(path)).details, {
+      items: [{ path: 'report.png', title: '项目外交付', kind: 'directory' }]
+    })
+  }
+  assert.deepEqual((await execute('.')).details, {
+    items: [{ path: '.', title: '项目外交付', kind: 'directory' }]
+  })
+  await assert.rejects(execute(join(external, 'missing.html')), /文件或文件夹不存在/)
   await assert.rejects(execute('\0invalid'), /路径无效/)
+  await assert.rejects(
+    tool.execute(
+      'mixed-invalid',
+      {
+        items: [
+          { path: '.', title: '目录' },
+          { path: 'missing', title: '缺失路径' }
+        ]
+      },
+      new AbortController().signal,
+      undefined,
+      extensionContext
+    ),
+    /文件或文件夹不存在/
+  )
 
-  const branchContext = context(cwd, [
+  const branch = [
     entry('legacy', [{ path: 'old.png', title: '旧交付' }]),
-    entry('external', items)
-  ])
+    entry('external', items),
+    entry('directory', directoryItems)
+  ]
+  const branchContext = context(cwd, branch)
   await handlers.get('session_start')?.({}, branchContext)
   const registration = emitted
     .filter((item) => item.channel === SESSION_PLUGIN_METHOD_EVENT)
@@ -267,12 +309,70 @@ test('项目外绝对路径、父目录和目录链接登记为可恢复的绝�
     ),
     {
       deliveries: [
+        { entryId: 'directory', items: directoryItems },
         { entryId: 'external', items },
         { entryId: 'legacy', items: [{ path: 'old.png', title: '旧交付' }] }
       ],
       hasMore: false
     }
   )
+  branch.push(entry('new-directory', directoryItems))
+  await handlers.get('turn_end')?.({}, branchContext)
+  const push = emitted.filter((item) => item.channel === SESSION_PLUGIN_PUSH_EVENT).at(-1)
+    ?.payload as SessionPluginPushEvent
+  assert.deepEqual(push.data, { entryId: 'new-directory', items: directoryItems })
+  branch.splice(
+    0,
+    branch.length,
+    entry('root-directory', [{ path: '.', title: '当前项目', kind: 'directory' }])
+  )
+  await handlers.get('session_tree')?.({}, branchContext)
+  const restored = await registration.execute(
+    {},
+    {
+      source: { workId: 'work-1', sessionId: 'session-1', branchId: 'v1:other' },
+      extensionContext: branchContext
+    }
+  )
+  assert.deepEqual(restored.deliveries, [
+    {
+      entryId: 'root-directory',
+      items: [{ path: '.', title: '当前项目', kind: 'directory' }]
+    }
+  ])
+})
+
+test('浏览器列表与Push保留目录类型并兼容旧文件记录', () => {
+  const batch: PluginJsonObject = {
+    entryId: 'delivery-browser',
+    items: [
+      { path: 'legacy.png', title: '旧图片' },
+      { path: 'report.png', title: '交付文件夹', kind: 'directory' },
+      { path: 'report.html', title: '页面', kind: 'file' }
+    ]
+  }
+  assert.deepEqual(parseDeliverableBatch(batch), batch)
+  assert.equal(
+    parseDeliverableBatch({ ...batch, items: [{ path: '.', title: '错误类型', kind: 'unknown' }] }),
+    null
+  )
+  const source = { workId: 'work-1', sessionId: 'session-1', branchId: 'v1:main' }
+  const received: unknown[] = []
+  const unsubscribe = subscribeDeliverablePush((event) => received.push(event))
+  try {
+    assert.deepEqual(
+      publishDeliverablePush({
+        pluginName: 'deliverables',
+        target: { scope: 'session', source },
+        event: 'added',
+        data: batch
+      }),
+      batch
+    )
+    assert.deepEqual(received, [{ source, delivery: batch }])
+  } finally {
+    unsubscribe()
+  }
 })
 
 test('树导航切换交付物与清空旧批次，不重注册或推送 added，shutdown 仍清理', async () => {

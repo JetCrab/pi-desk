@@ -346,7 +346,7 @@ export class L2FileWorkspaceRuntime {
       cwd,
       {
         list: (path, signal) => this.biz.list({ ...context, path }, signal),
-        search: (query, signal) => this.biz.search({ ...context, query }, signal),
+        search: (input, signal) => this.biz.search({ ...context, ...input }, signal),
         get: (path, imagePreviewMode, signal) =>
           this.biz.get({ ...context, path, imagePreviewMode }, signal),
         diff: (repositoryRoot, path, signal) =>

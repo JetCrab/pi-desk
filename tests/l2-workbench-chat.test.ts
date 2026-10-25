@@ -263,6 +263,7 @@ class FakeRepository implements L2WorkbenchChatRepository {
 
 class FakeAppSocket implements L4AppSocketClient {
   readonly requests: Array<{ path: string; input: unknown }> = []
+  subscribeResponseBlock: Promise<void> | null = null
   presentationResponseBlock: Promise<void> | null = null
   failNextPresentation = false
   private readonly listeners = new Map<string, Set<(body: unknown) => void>>()
@@ -276,6 +277,11 @@ class FakeAppSocket implements L4AppSocketClient {
     input: TInput
   ): Promise<TOutput> {
     this.requests.push({ path: contract.path, input })
+    if (contract.path === L2ChatSocketContracts.subscribe.path) {
+      const block = this.subscribeResponseBlock
+      this.subscribeResponseBlock = null
+      if (block) return block.then(() => contract.outputSchema.parse({}))
+    }
     if (contract.path === L3PiNativeSocketContracts.commandsList.path) {
       return Promise.resolve(contract.outputSchema.parse({ commands: [] }))
     }
@@ -542,6 +548,140 @@ test('Workbench Chat Runtime 通过 chat/reload 合同重载当前 Source', asyn
     { path: 'chat/reload', input: { source } }
   ])
   runtime.dispose()
+})
+
+test('手动重拉仅替换目标Source，保留旧画面且后续重连恢复增量游标', async (context) => {
+  const socket = new FakeAppSocket()
+  const repository = new FakeRepository()
+  const itemA = workSession()
+  const itemB = { ...workSession(SESSION_B), workId: 'work-2' }
+  const sourceA = sourceFor(itemA)
+  const sourceB = sourceFor(itemB)
+  const runtime = createL2WorkbenchChatRuntime(
+    socket,
+    async () => {
+      throw new Error('unexpected detail request')
+    },
+    repository
+  )
+  context.after(() => runtime.dispose())
+  runtime.start((cause) => {
+    throw cause
+  })
+  runtime.ensureDisplayedWorkSessions([itemA, itemB])
+  await runtime.applyWorkSessionsList([itemA, itemB])
+  socket.emit(L2ChatSocketContracts.sourceEvent, fullSync(sourceA, [userMessage(0, 'A旧数据')]))
+  socket.emit(L2ChatSocketContracts.sourceEvent, fullSync(sourceB, [userMessage(0, 'B保留')]))
+  await waitUntil(
+    () =>
+      runtime.getSourceState(sourceA).syncStatus === 'ready' &&
+      runtime.getSourceState(sourceB).syncStatus === 'ready'
+  )
+  const stateB = runtime.getSourceState(sourceB)
+  const cacheB = repository.messagesBySource.get(key(sourceB))
+  await runtime.reloadMessages(sourceA)
+  assert.deepEqual(socket.requests.at(-1), {
+    path: 'chat/subscribe',
+    input: { subscriptions: [{ source: sourceA, cursor: null }] }
+  })
+  assert.equal(runtime.getSourceState(sourceA).syncStatus, 'syncing')
+  assert.equal(runtime.getSourceState(sourceA).messages[0]?.summary.text, 'A旧数据')
+  assert.equal(repository.messagesBySource.get(key(sourceA))?.[0]?.summary.text, 'A旧数据')
+  await assert.rejects(runtime.reloadMessages(sourceA), /同步/)
+  assert.equal(socket.requests.length, 2)
+  socket.emit(
+    L2ChatSocketContracts.sourceEvent,
+    fullSync(sourceA, [userMessage(0, 'A新数据'), assistantMessage(1, '新增')])
+  )
+  await waitUntil(() => runtime.getSourceState(sourceA).syncStatus === 'ready')
+  assert.equal(repository.messagesBySource.get(key(sourceA))?.[0]?.summary.text, 'A新数据')
+  assert.strictEqual(runtime.getSourceState(sourceB), stateB)
+  assert.strictEqual(repository.messagesBySource.get(key(sourceB)), cacheB)
+  runtime.disconnected()
+  await runtime.applyWorkSessionsList([itemA, itemB])
+  assert.deepEqual(socket.requests.at(-1), {
+    path: 'chat/subscribe',
+    input: {
+      subscriptions: [
+        { source: sourceA, cursor: { index: 1, entryId: 'entry-assistant-1' } },
+        { source: sourceB, cursor: { index: 0, entryId: 'entry-user-0' } }
+      ]
+    }
+  })
+})
+
+test('手动重拉失败保留缓存与期间实时消息，可再次重试', async (context) => {
+  const socket = new FakeAppSocket()
+  const repository = new FakeRepository()
+  const item = workSession()
+  const source = sourceFor(item)
+  const runtime = createL2WorkbenchChatRuntime(
+    socket,
+    async () => {
+      throw new Error('unexpected detail request')
+    },
+    repository
+  )
+  context.after(() => runtime.dispose())
+  runtime.start((cause) => {
+    throw cause
+  })
+  runtime.ensureDisplayedWorkSessions([item])
+  await runtime.applyWorkSessionsList([item])
+  socket.emit(L2ChatSocketContracts.sourceEvent, fullSync(source, [userMessage(0, '保留历史')]))
+  await waitUntil(() => runtime.getSourceState(source).syncStatus === 'ready')
+  let rejectRequest!: (error: Error) => void
+  socket.subscribeResponseBlock = new Promise<void>((_resolve, reject) => {
+    rejectRequest = reject
+  })
+  const reload = runtime.reloadMessages(source)
+  const rejected = assert.rejects(reload, /重拉失败/)
+  socket.emit(L2ChatSocketContracts.sourceEvent, {
+    source,
+    event: { type: 'message_start', snapshot: assistantTemporary('期间收到的新消息') }
+  })
+  await waitUntil(() => runtime.getSourceState(source).temporaryMessages.length === 1)
+  assert.equal(runtime.getSourceState(source).syncStatus, 'syncing')
+  rejectRequest(new Error('重拉失败'))
+  await rejected
+  assert.equal(runtime.getSourceState(source).syncStatus, 'ready')
+  assert.equal(runtime.getSourceState(source).messages[0]?.summary.text, '保留历史')
+  assert.equal(
+    runtime.getSourceState(source).temporaryMessages[0]?.summary.text,
+    '期间收到的新消息'
+  )
+  assert.equal(repository.messagesBySource.get(key(source))?.[0]?.summary.text, '保留历史')
+  await runtime.reloadMessages(source)
+  socket.emit(L2ChatSocketContracts.sourceEvent, fullSync(source, [userMessage(0, '恢复成功')]))
+  await waitUntil(() => runtime.getSourceState(source).syncStatus === 'ready')
+  assert.equal(runtime.getSourceState(source).messages[0]?.summary.text, '恢复成功')
+})
+
+test('未展示会话只在手动重拉时订阅，失效Source不能重拉', async (context) => {
+  const socket = new FakeAppSocket()
+  const repository = new FakeRepository()
+  const item = workSession()
+  const source = sourceFor(item)
+  const runtime = createL2WorkbenchChatRuntime(
+    socket,
+    async () => {
+      throw new Error('unexpected detail request')
+    },
+    repository
+  )
+  context.after(() => runtime.dispose())
+  runtime.start((cause) => {
+    throw cause
+  })
+  await runtime.applyWorkSessionsList([item])
+  assert.equal(socket.requests.length, 0)
+  await runtime.reloadMessages(source)
+  assert.equal(socket.requests.length, 1)
+  socket.emit(L2ChatSocketContracts.sourceEvent, fullSync(source, [userMessage(0, '主动获取')]))
+  await waitUntil(() => runtime.getSourceState(source).syncStatus === 'ready')
+  runtime.reconcileWorkSessions([workSession(SESSION_B)])
+  await assert.rejects(runtime.reloadMessages(source), /会话已变化/)
+  assert.equal(socket.requests.length, 1)
 })
 
 test('首次加载不提前展示 IndexedDB 缓存，full snapshot 后才进入 ready', async () => {
@@ -1319,6 +1459,7 @@ test('full基线期间隔离迟到Detail并串行应用后续增量后才ready',
 
   const lateDetail = runtime.loadMessageDetail(source, 0, 'entry-assistant-0')
   await waitUntil(() => detailCalls === 1)
+  await runtime.reloadMessages(source)
   let releaseSnapshot!: () => void
   repository.replaceBlock = new Promise<void>((resolve) => {
     releaseSnapshot = resolve

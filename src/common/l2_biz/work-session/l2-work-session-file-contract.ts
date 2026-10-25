@@ -10,6 +10,7 @@ import {
   L4ProjectFileEntrySchema,
   L4ProjectFileListSchema,
   L4ProjectFileSearchSchema,
+  L4ProjectSearchInputSchema,
   L4ProjectFileContentSchema,
   L4ProjectDirectoryPathSchema,
   L4ProjectFileImageMimeTypeSchema,
@@ -47,9 +48,9 @@ export const L2WorkSessionFileListRequestSchema = L2WorkSessionFileProjectRefSch
 
 export const L2WorkSessionFileListResponseSchema = L4ProjectFileListSchema
 
-export const L2WorkSessionFileSearchRequestSchema = L2WorkSessionFileProjectRefSchema.extend({
-  query: z.string().trim().min(1).max(200)
-}).strict()
+export const L2WorkSessionFileSearchRequestSchema = L2WorkSessionFileProjectRefSchema.extend(
+  L4ProjectSearchInputSchema.shape
+).strict()
 
 export const L2WorkSessionFileSearchResponseSchema = L4ProjectFileSearchSchema
 

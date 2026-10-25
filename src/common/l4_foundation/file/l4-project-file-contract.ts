@@ -3,6 +3,8 @@ import { z } from 'zod'
 export const L4_PROJECT_FILE_PATH_MAX_LENGTH = 4096
 export const L4_PROJECT_FILE_LIST_MAX_ENTRIES = 5000
 export const L4_PROJECT_FILE_SEARCH_MAX_RESULTS = 100
+export const L4_PROJECT_CONTENT_SEARCH_MAX_RESULTS = 200
+export const L4_PROJECT_SEARCH_TEXT_MAX_LENGTH = 1000
 export const L4_PROJECT_TEXT_FILE_MAX_BYTES = 5 * 1024 * 1024
 export const L4_PROJECT_CODE_PARSE_MAX_BYTES = 1024 * 1024
 export const L4_PROJECT_IMAGE_FILE_MAX_BYTES = 10 * 1024 * 1024
@@ -76,9 +78,53 @@ export const L4ProjectFileListSchema = z
   })
   .strict()
 
+export const L4ProjectSearchInputSchema = z
+  .object({
+    query: z
+      .string()
+      .min(1)
+      .max(200)
+      .refine(
+        (value) => value.trim().length > 0 && !/[\0\r\n]/.test(value),
+        '搜索词必须是非空单行文本'
+      ),
+    scope: z.enum(['all', 'files', 'content']).default('all'),
+    caseSensitive: z.boolean().default(false),
+    wholeWord: z.boolean().default(false),
+    regex: z.boolean().default(false)
+  })
+  .strict()
+
+export const L4ProjectSearchRangeSchema = z
+  .object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() })
+  .strict()
+  .refine((range) => range.start <= range.end, '搜索命中区间无效')
+
+export const L4ProjectFileMatchSchema = z
+  .object({ path: L4ProjectFilePathSchema, ranges: z.array(L4ProjectSearchRangeSchema) })
+  .strict()
+  .refine(
+    (match) => match.ranges.every((range) => range.end <= match.path.length),
+    '文件名命中区间越界'
+  )
+
+export const L4ProjectContentMatchSchema = z
+  .object({
+    path: L4ProjectFilePathSchema,
+    line: z.number().int().positive(),
+    text: z.string().max(L4_PROJECT_SEARCH_TEXT_MAX_LENGTH),
+    ranges: z.array(L4ProjectSearchRangeSchema)
+  })
+  .strict()
+  .refine(
+    (match) => match.ranges.every((range) => range.end <= match.text.length),
+    '正文命中区间越界'
+  )
+
 export const L4ProjectFileSearchSchema = z
   .object({
-    matches: z.array(L4ProjectFilePathSchema).max(L4_PROJECT_FILE_SEARCH_MAX_RESULTS),
+    fileMatches: z.array(L4ProjectFileMatchSchema).max(L4_PROJECT_FILE_SEARCH_MAX_RESULTS),
+    contentMatches: z.array(L4ProjectContentMatchSchema).max(L4_PROJECT_CONTENT_SEARCH_MAX_RESULTS),
     truncated: z.boolean()
   })
   .strict()
@@ -103,6 +149,10 @@ export const L4ProjectFileContentSchema = z.discriminatedUnion('kind', [
 
 export type L4ProjectFileEntry = z.infer<typeof L4ProjectFileEntrySchema>
 export type L4ProjectFileList = z.infer<typeof L4ProjectFileListSchema>
+export type L4ProjectSearchInput = z.infer<typeof L4ProjectSearchInputSchema>
+export type L4ProjectSearchRange = z.infer<typeof L4ProjectSearchRangeSchema>
+export type L4ProjectFileMatch = z.infer<typeof L4ProjectFileMatchSchema>
+export type L4ProjectContentMatch = z.infer<typeof L4ProjectContentMatchSchema>
 export type L4ProjectFileSearch = z.infer<typeof L4ProjectFileSearchSchema>
 export type L4ProjectFileContent = z.infer<typeof L4ProjectFileContentSchema>
 export type L4ProjectFileImagePreviewMode = z.infer<typeof L4ProjectFileImagePreviewModeSchema>

@@ -112,6 +112,7 @@ import {
 } from './l2-work-session-sidebar-order'
 import { useL2WorkbenchBranchPicker } from './hooks/l2-workbench-branch-picker'
 import { useL2WorkSessionRename } from './hooks/l2-work-session-rename'
+import { useL2WorkbenchChatReload } from './hooks/l2-workbench-chat-reload'
 import { L2WorkSessionRenameDialog } from './views/l2-work-session-rename-dialog'
 import { useL2WorkbenchPluginHealth } from './hooks/l2-workbench-plugin-health'
 import { useL2WorkbenchSessionHistory } from './hooks/l2-workbench-session-history'
@@ -370,6 +371,7 @@ export function L2Workbench({
       createL2WorkbenchChatRuntime(appSocket, (input) => workbenchBiz.getChatMessageDetail(input)),
     [appSocket, workbenchBiz]
   )
+  const chatReload = useL2WorkbenchChatReload(chatRuntime, workSessions)
   const chatInputRuntime = useMemo(
     () => createL2WorkbenchChatInputRuntime(workbenchBiz, chatRuntime),
     [chatRuntime, workbenchBiz]
@@ -1928,6 +1930,8 @@ export function L2Workbench({
       onTogglePin={togglePinnedWorkSession}
       onDelete={requestDeleteWorkSession}
       onRename={renameSession.show}
+      syncingWorkIds={chatReload.syncingWorkIds}
+      onReloadChat={chatReload.reload}
       onArrangementChange={requestArrangementUpdate}
     />
   )

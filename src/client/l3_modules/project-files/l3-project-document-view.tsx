@@ -418,6 +418,8 @@ export function L3ProjectDocumentView({
             }}
             onOpenDiff={openDiff}
             savedState={document.editorState}
+            navigation={runtime.pendingNavigation}
+            onNavigation={(target, exists) => runtime.consumeNavigation(target, exists)}
             onSaveState={(path, state) => runtime.saveEditorState(path, state)}
             onEscape={escape}
           />

@@ -7,6 +7,7 @@ import { createJiti } from 'jiti'
 import type { SessionManager } from '@earendil-works/pi-coding-agent'
 import type { PluginMessageDeclaration } from '@jetcrab/pi-desk-sdk/entry'
 import type { WorkSession } from '../src/server/l3_modules/work-session/l3-work-session'
+import type { L2ChatSessionSyncEvent } from '../src/common/l2_biz/chat/l2-chat-websocket-contract'
 import {
   L4PiPluginOwnerRuntime,
   type L4PiMessageDeclarationRegistration,
@@ -315,7 +316,7 @@ test('有效cursor只返回后缀且保留Canonical Detail，无效cursor回退�
 })
 
 test(
-  '迟到Node Message Declaration只重投影已接纳前缀并保留Temporary与Canonical Detail',
+  '迟到Node Message Declaration保留旧历史和有效游标，仅应用到后续消息',
   { timeout: 45_000 },
   async () => {
     const [chatRuntimeModule, { L4PiWorkSessionRuntime }] = await modulesPromise
@@ -372,7 +373,7 @@ test(
     plugin.declareMessage('history', {
       priority: 100,
       match(input) {
-        return input.stage === 'durable' && input.message.kind === 'assistant' && input.message.text.includes('history')
+        return input.message.kind === 'assistant' && input.message.text.includes('history')
       },
       project(input) {
         return {
@@ -457,47 +458,22 @@ test(
       assert.deepEqual(owner.readMessageDeclarations(), [])
       releasePackageProvider?.()
       await pluginInitialization
-      chatRuntime.refreshPluginMessages()
-
-      const refreshedEvent = sourceEvents.at(-1)
-      assert.equal(refreshedEvent?.type, 'source_event')
-      assert.equal((refreshedEvent?.event as { type: string }).type, 'session_sync')
-      const refreshed = refreshedEvent?.event as {
-        type: 'session_sync'
-        mode: 'full' | 'incremental'
-        messages: Array<{
-          location: { entryId: string }
-          fixed: { viewKey: string }
-          summary: { text?: string }
-        }>
-        temporaryMessages: Array<{ location: { tempId: string } }>
-      }
-      assert.equal(refreshed.mode, 'full')
-      assert.equal(refreshed.messages.length, 1)
-      assert.equal(refreshed.messages[0]?.location.entryId, historyEntryId)
-      assert.equal(refreshed.messages[0]?.fixed.viewKey, 'late-message-declaration/history')
-      assert.equal(refreshed.messages[0]?.summary.text, '重新投影：history canonical text')
-      assert.deepEqual(
-        refreshed.temporaryMessages.map((message) => message.location.tempId),
-        [temporaryId]
-      )
-      assert.equal(
-        sourceEvents.some(
-          (event) =>
-            (event.event as { type?: string; durable?: { entryId?: string } }).type ===
-              'message_commit' &&
-            (event.event as { durable?: { entryId?: string } }).durable?.entryId === futureEntryId
-        ),
-        false
-      )
-      assert.deepEqual(
-        chatRuntime.getMessageDetail({
-          sessionId: workSession.sessionId,
-          branchId: workSession.branchId,
+      assert.equal(owner.readMessageDeclarations().length, 1)
+      assert.deepEqual(sourceEvents, [])
+      const unchanged = chatRuntime.createSync(source, null).event
+      assert.deepEqual(unchanged.messages, initial.messages)
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const sync: L2ChatSessionSyncEvent = chatRuntime.createSync(source, {
+          index: 0,
           entryId: historyEntryId
-        }).detail,
-        { output: 'canonical history detail' }
-      )
+        }).event
+        assert.equal(sync.mode, 'incremental')
+        assert.deepEqual(sync.messages, [])
+        assert.deepEqual(
+          sync.temporaryMessages.map((message) => message.location.tempId),
+          [temporaryId]
+        )
+      }
 
       Reflect.apply(emitWorkerEvent, worker, [
         {
@@ -506,8 +482,7 @@ test(
           entryId: futureEntryId,
           timestampMs: Date.now() + 1,
           message: {
-            ...temporaryMessage,
-            text: 'history committed after plugin readiness',
+            ...temporaryAssistantMessage('history committed after plugin readiness', ''),
             status: 'completed'
           }
         }
@@ -519,6 +494,25 @@ test(
         [historyEntryId, futureEntryId]
       )
       assert.equal(afterCommit.temporaryMessages.length, 0)
+      assert.deepEqual(afterCommit.messages[0], initial.messages[0])
+      assert.equal(afterCommit.messages[1]?.fixed.viewKey, 'late-message-declaration/history')
+      assert.deepEqual(
+        chatRuntime.getMessageDetail({
+          sessionId: source.sessionId,
+          branchId: source.branchId,
+          entryId: futureEntryId
+        }).detail,
+        { output: 'canonical history detail' }
+      )
+      const incremental = chatRuntime.createSync(source, {
+        index: 0,
+        entryId: historyEntryId
+      }).event
+      assert.equal(incremental.mode, 'incremental')
+      assert.deepEqual(
+        incremental.messages.map((message) => message.location.entryId),
+        [futureEntryId]
+      )
     } finally {
       unsubscribe()
       releasePackageProvider?.()
@@ -816,7 +810,7 @@ test('基础展示切换保留Canonical内容并允许运行中双向重投影',
   }
 })
 
-test('重投影不提前导入Pi预写Entry且相同cursor仍收到Full Snapshot', async () => {
+test('主动重投影不提前导入Pi预写Entry且后续有效cursor继续增量同步', async () => {
   const entries = [assistantEntry('entry-accepted', '已接纳正文', '已接纳思考', 100)]
   const globalState = globalThis as Record<string, unknown>
   const runtimeKey = '__piDeskGlobalPluginRuntime'
@@ -849,11 +843,17 @@ test('重投影不提前导入Pi预写Entry且相同cursor仍收到Full Snapshot
       entryId: 'entry-accepted'
     }).event
     assert.equal(reconnect.type, 'session_sync')
-    assert.equal(reconnect.mode, 'full')
-    assert.deepEqual(
-      reconnect.messages.map((message) => message.location.entryId),
-      ['entry-accepted']
-    )
+    assert.equal(reconnect.mode, 'incremental')
+    assert.deepEqual(reconnect.messages, [])
+    const repeat = fixture.chatRuntime.createSync(fixture.source, {
+      index: 0,
+      entryId: 'entry-accepted'
+    }).event
+    assert.equal(repeat.mode, 'incremental')
+    assert.deepEqual(repeat.messages, [])
+    const refreshed = sourceEvents.at(-1)?.event as { mode?: string; messages?: unknown[] }
+    assert.equal(refreshed.mode, 'full')
+    assert.equal(refreshed.messages?.length, 1)
     assert.deepEqual(
       reconnect.temporaryMessages.map((message) => message.location.tempId),
       [tempId]
@@ -887,6 +887,91 @@ test('重投影不提前导入Pi预写Entry且相同cursor仍收到Full Snapshot
     await fixture?.dispose()
     if (previousRuntime === undefined) delete globalState[runtimeKey]
     else globalState[runtimeKey] = previousRuntime
+  }
+})
+
+test('自动降级只同步运行态，历史消息与有效游标保持不变', async (context) => {
+  const globalState = globalThis as Record<string, unknown>
+  const runtimeKey = '__piDeskGlobalPluginRuntime'
+  const previous = globalState[runtimeKey]
+  const declarations: L4PiMessageDeclarationRegistration[] = [
+    {
+      pluginName: 'fixture',
+      declarationName: 'assistant',
+      declaration: {
+        priority: 100,
+        match: ({ message }) => message.kind === 'assistant',
+        project: ({ defaultProjection }) => ({ ...defaultProjection, viewKey: 'fixture/assistant' })
+      }
+    }
+  ]
+  globalState[runtimeKey] = { readMessageDeclarations: () => declarations }
+  context.after(() => {
+    if (previous === undefined) delete globalState[runtimeKey]
+    else globalState[runtimeKey] = previous
+  })
+  for (const trigger of ['runtime_changed', 'prepareSource'] as const) {
+    await context.test(trigger, async () => {
+      let emit!: (event: PiChatWorkerEvent) => void
+      const fixture = await createFixture(
+        { send: async () => ({ tempId: 'unused' }), compact: async () => undefined },
+        (runtime) => {
+          emit = installChatSnapshot(runtime, () => [
+            {
+              ...assistantEntry('accepted', '已有历史', '', 100),
+              message: { ...temporaryAssistantMessage('已有历史', ''), status: 'completed' }
+            }
+          ])
+        }
+      )
+      const events: string[] = []
+      const unsubscribe = fixture.chatRuntime.subscribe((event) => {
+        if (event.type === 'source_event') events.push(event.event.type)
+      })
+      try {
+        const initial = fixture.chatRuntime.createSync(fixture.source, null).event
+        assert.equal(initial.messages[0]?.fixed.viewKey, 'fixture/assistant')
+        const runtime = {
+          ...initial.runtime,
+          extensionMode: 'basic' as const,
+          initializationError: '加载失败'
+        }
+        if (trigger === 'runtime_changed') {
+          emit({ type: 'runtime_changed', runtime })
+        } else {
+          Object.defineProperty(fixture.piRuntime, 'readChatRuntime', {
+            configurable: true,
+            value: async () => runtime
+          })
+          await fixture.chatRuntime.prepareSource(fixture.source)
+        }
+        assert.deepEqual(events, ['runtime_update'])
+        const sync = fixture.chatRuntime.createSync(fixture.source, {
+          index: 0,
+          entryId: 'accepted'
+        }).event
+        assert.equal(sync.mode, 'incremental')
+        assert.deepEqual(sync.messages, [])
+        assert.equal(sync.runtime.presentationMode, 'normal')
+        assert.deepEqual(
+          fixture.chatRuntime.createSync(fixture.source, null).event.messages,
+          initial.messages
+        )
+        emit({
+          type: 'message_start',
+          tempId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          message: temporaryAssistantMessage('后续基础消息', '')
+        })
+        const next = fixture.chatRuntime.createSync(fixture.source, {
+          index: 0,
+          entryId: 'accepted'
+        }).event
+        assert.equal(next.temporaryMessages[0]?.fixed.viewKey, 'pi-desk/assistant')
+      } finally {
+        unsubscribe()
+        await fixture.dispose()
+      }
+    })
   }
 })
 
