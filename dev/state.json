@@ -1,5 +1,5 @@
 {
-  "checks": "92ed37bfbad26761f4fe981aa242b3951c781fbd",
+  "checks": "e3e96b8f686e56d7f2fa825c5e543dcd9aa2af79",
   "units": {
     "windows": {
       "version": "1.1.15",
@@ -27,9 +27,9 @@
       "runId": "37920264833"
     },
     "pi-desk": {
-      "version": "1.1.18",
-      "source": "5501f41b8e3983eee04fa5b151b4acf6a25e6511",
-      "runId": "39949683688"
+      "version": "1.1.20",
+      "source": "e3e96b8f686e56d7f2fa825c5e543dcd9aa2af79",
+      "runId": "40179740840"
     },
     "pi-desk-bg-run": {
       "version": "1.1.7",
@@ -42,9 +42,9 @@
       "runId": "39949683688"
     },
     "pi-desk-deliverables": {
-      "version": "1.1.8",
-      "source": "5501f41b8e3983eee04fa5b151b4acf6a25e6511",
-      "runId": "39949683688"
+      "version": "1.1.9",
+      "source": "e3e96b8f686e56d7f2fa825c5e543dcd9aa2af79",
+      "runId": "40179740840"
     },
     "pi-desk-quota-viewer": {
       "version": "1.1.9",
