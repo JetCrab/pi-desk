@@ -1,0 +1,115 @@
+{
+  "tag": "v1.1.21",
+  "date": 1793037844206,
+  "source": {
+    "base": "d0ef0250a59d2a391c62b10507e8221eb871aee3",
+    "head": "9e32f6f32f10cd63071db2506dde693a7c440415"
+  },
+  "packages": [
+    {
+      "name": "@jetcrab/pi-desk-sdk",
+      "version": "1.1.8"
+    },
+    {
+      "name": "@jetcrab/pi-desk",
+      "version": "1.1.21"
+    },
+    {
+      "name": "@jetcrab/pi-desk-bg-run",
+      "version": "1.1.8"
+    },
+    {
+      "name": "@jetcrab/pi-desk-ctx",
+      "version": "1.1.9"
+    },
+    {
+      "name": "@jetcrab/pi-desk-deliverables",
+      "version": "1.1.10"
+    },
+    {
+      "name": "@jetcrab/pi-desk-quota-viewer",
+      "version": "1.1.10"
+    },
+    {
+      "name": "@jetcrab/pi-desk-remote-debug",
+      "version": "1.1.9"
+    },
+    {
+      "name": "@jetcrab/pi-desk-subagent",
+      "version": "1.1.9"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tibo-monitor",
+      "version": "1.1.9"
+    },
+    {
+      "name": "@jetcrab/pi-desk-todo",
+      "version": "1.0.1"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tool-reason",
+      "version": "1.1.1"
+    },
+    {
+      "name": "@jetcrab/pi-desk-usage",
+      "version": "1.1.10"
+    },
+    {
+      "name": "@jetcrab/pi-desk-workspace",
+      "version": "1.1.6"
+    }
+  ],
+  "clients": [
+    {
+      "platform": "windows",
+      "version": "1.1.16",
+      "file": "PiDesk-Windows-x86-Setup.exe",
+      "sha256": "e3e887bafbaacc4eb733050414efdd71a5168242eb86506e27a4c04d34958e13"
+    },
+    {
+      "platform": "macos",
+      "version": "1.1.16",
+      "file": "PiDesk-macOS-universal.dmg",
+      "sha256": "c0002f14d93ef3b94601072ddfee08c12327a1f42024b4fb62348e9a596cf3fe"
+    },
+    {
+      "platform": "linux",
+      "version": "1.1.16",
+      "file": "PiDesk-Linux-x86_64.AppImage",
+      "sha256": "716c1436dfa47b96d8831b3181f240fdc4ab77c4d586e776aacdf9af4e040b56"
+    },
+    {
+      "platform": "android",
+      "version": "1.1.0",
+      "file": "PiDesk-Android.apk",
+      "sha256": "298cb6eef6229dbe7d39666f3cc74104ef0f88177ce90bd3361e76aa5d199972"
+    }
+  ],
+  "changes": {
+    "breaking": [],
+    "features": [
+      "Open project previews in a separate browser page or desktop window to browse files, preview Markdown, and inspect Git history and changes, with project switching and return to the preview after sign-in.",
+      "Search project filenames, paths, and file contents with scope, case-sensitive, whole-word, and regular-expression options, highlighted matches, and navigation to matching lines.",
+      "Register folders as deliverables and open them in project preview; existing file deliverables remain compatible.",
+      "Add a Todo plugin that displays live task progress above the composer, including nested tasks, parallel work, and blocked states.",
+      "Reload a work session's chat data from its context menu without restarting the session."
+    ],
+    "added": [
+      "Support Devin quota queries through CPA, showing enabled accounts' daily and weekly remaining percentages, reset times, and plan names.",
+      "Support plugin widgets above and below the composer, responsive session-header actions and custom items, and SDK popovers."
+    ],
+    "changed": [
+      "Removing models now cleans up associated presets and offers confirmation before replacing or clearing affected project defaults, including when editing native configuration.",
+      "Improve Markdown presentation with task-status indicators and alert blocks, plus syntax highlighting for language-tagged code blocks in plugin Markdown.",
+      "Plugin changes no longer automatically re-render existing chat history."
+    ],
+    "fixed": [
+      "Improve chat scroll-position restoration and bottom-following when switching sessions or resizing the view.",
+      "Prevent long Markdown text from overflowing the chat view.",
+      "Automatically retry timed-out plugin loads once after the original setup and cleanup have finished.",
+      "Treat oversized streaming tool arguments as retryable failures without executing tools from the affected response, and wait for session cancellation to complete.",
+      "Wait for managed process groups to stop on Unix-like systems, and preserve more diagnostic details when Windows process cleanup fails."
+    ],
+    "removed": []
+  }
+}
