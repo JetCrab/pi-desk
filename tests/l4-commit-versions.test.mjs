@@ -10,7 +10,10 @@ import {
   chooseReleaseVersions
 } from '../.github/scripts/commit-versions.mjs'
 import { installGitHooks } from '../.github/scripts/install-git-hooks.mjs'
-import { prepareDevelopmentVersions } from '../.github/scripts/release-version-model.mjs'
+import {
+  prepareDevelopmentVersions,
+  productionContent
+} from '../.github/scripts/release-version-model.mjs'
 
 async function repository(t) {
   const parent = resolve('temp/tests/commit-versions/staged-release')
@@ -69,6 +72,28 @@ async function repository(t) {
       ).version
   }
 }
+
+test('Rust内嵌测试不影响版本，模块前后的生产代码仍参与比较', () => {
+  const file = 'apps/desktop/src-tauri/src/process.rs'
+  const source = `fn before() -> u8 { 1 }
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn checks_value() {
+        assert_eq!(1, 1);
+    }
+}
+fn after() -> u8 { 2 }
+`
+  const baseline = productionContent(file, source)
+  assert.equal(
+    productionContent(file, source.replace('assert_eq!(1, 1)', 'assert_eq!(2, 2)')),
+    baseline
+  )
+  for (const value of ['{ 1 }', '{ 2 }']) {
+    assert.notEqual(productionContent(file, source.replace(value, '{ 3 }')), baseline)
+  }
+})
 
 test('代码提交递增所属单元，失败后再次准备不重复递增', async (t) => {
   const repo = await repository(t)
