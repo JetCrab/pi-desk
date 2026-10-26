@@ -157,7 +157,8 @@ jobs:
           path: |
             temp/run/npm-release/
             temp/pi/npm-release/
-            temp/run/pidesk-session-reload/
+            temp/run/pidesk*/
+            !temp/run/pidesk*/**/node_modules/**
           if-no-files-found: ignore
           retention-days: 7
 

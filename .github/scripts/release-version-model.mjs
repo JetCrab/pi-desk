@@ -390,6 +390,9 @@ function lockVersion(text, name, version) {
 
 export function productionContent(file, text) {
   if (text === null) return null
+  // rustfmt 的顶层模块结束括号独占行首；模块后的生产代码仍参与比较。
+  if (file.endsWith('.rs'))
+    return text.replace(/^#\[cfg\(test\)\]\r?\nmod \w+ \{\r?\n[\s\S]*?^\}(?:\r?\n|$)/gm, '')
   if (file === 'package.json' || file.endsWith('/package.json'))
     return productionManifest(json(text, file))
   if (file.endsWith('/tauri.conf.json')) {

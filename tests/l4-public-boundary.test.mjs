@@ -13,6 +13,7 @@ const pluginNames = [
   'pi-desk-sdk',
   'pi-desk-subagent',
   'pi-desk-tibo-monitor',
+  'pi-desk-todo',
   'pi-desk-tool-reason',
   'pi-desk-usage',
   'pi-desk-workspace'

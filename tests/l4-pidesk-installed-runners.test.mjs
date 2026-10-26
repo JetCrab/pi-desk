@@ -71,22 +71,30 @@ test(
       const jiti = createJiti(import.meta.url, { tsconfigPaths: join(process.cwd(), 'tsconfig.json'),
         alias: { 'server-only': join(dirname(require.resolve('server-only')), 'empty.js') },
         nativeModules: ['@earendil-works/pi-coding-agent', '@earendil-works/pi-agent-core', '@earendil-works/pi-ai'] })
+      const started = Date.now()
+      const stage = label => console.log('[安装态辅助进程] ' + label + '，累计 ' + (Date.now() - started) + 'ms')
+      stage('加载维护模块')
       const { runL4PiPackageMaintenance: maintain } = await jiti.import('./src/server/l4_foundation/pi/l4-pi-package-maintenance.ts')
       const input = { agentDir: process.env.PI_CODING_AGENT_DIR, cwd: ${JSON.stringify(cwd)} }
       const source = ${JSON.stringify(plugin)}
+      stage('安装插件')
       await maintain({ ...input, maintenance: { action: 'install', source } })
       const settings = () => readFile(join(input.agentDir, 'settings.json'), 'utf8').then(JSON.parse)
       assert.ok((await settings()).packages.some(value => resolve(input.agentDir, value) === source))
+      stage('候选预检')
       const { runL4PiPluginProbe: probe } = await jiti.import('./src/server/l4_foundation/pi/l4-pi-plugin-probe.ts')
       const result = await probe(input.cwd, input.agentDir, true)
       assert.equal(result.loadError, null)
       assert.equal(result.packages[0].status, 'ready')
+      stage('能力查询')
       const { runL4PiPluginCapabilityProbe: capabilities } = await jiti.import('./src/server/l4_foundation/pi/l4-pi-plugin-capability-probe.ts')
       const detail = await capabilities(input.cwd, input.agentDir)
       assert.equal(detail.loadError, null)
       assert.deepEqual(detail.packages[0].tools.map(tool => tool.name), ['pidesk_runner_fixture'])
+      stage('移除插件')
       await maintain({ ...input, maintenance: { action: 'remove', source } })
       assert.deepEqual((await settings()).packages, [])
+      stage('验证完成')
       console.log('INSTALLED_RUNNERS_OK')
     `
       )
@@ -117,6 +125,7 @@ test(
           env: environment
         }
       )
+      console.info(result.stdout.trim())
       assert.match(result.stdout, /INSTALLED_RUNNERS_OK/)
       await writeFile(join(cwd, 'tsconfig.json'), '{}')
       const runner = join(host, 'src/server/l4_foundation/pi/l4-pi-package-maintenance-runner.mts')
@@ -147,10 +156,14 @@ test(
       )
       passed = true
     } catch (error) {
-      await writeFile(
-        join(root, 'failure.log'),
-        String(error.stack ?? error) + '\n' + (error.stdout ?? '') + '\n' + (error.stderr ?? '')
-      )
+      const detail = [
+        `code=${error.code ?? 'null'} signal=${error.signal ?? 'null'} killed=${error.killed ?? false}`,
+        String(error.stack ?? error),
+        error.stdout ?? '',
+        error.stderr ?? ''
+      ].join('\n')
+      console.error(detail)
+      await writeFile(join(root, 'failure.log'), detail)
       throw error
     } finally {
       if (passed) await rm(root, { recursive: true, force: true })
