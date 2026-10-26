@@ -91,21 +91,12 @@ async function spawnProcessTree(mode, root) {
   }
 }
 
-async function processExists(pid) {
+function processExists(pid) {
   try {
-    await execFileAsync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }`
-      ],
-      { windowsHide: true, timeout: 5_000 }
-    )
+    process.kill(pid, 0)
     return true
   } catch (error) {
-    if (error.code === 1) return false
+    if (error.code === 'ESRCH') return false
     throw error
   }
 }
