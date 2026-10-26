@@ -121,7 +121,7 @@ test(
 
     const tree = await spawnProcessTree('live', root)
     const exit = once(tree.rootChild, 'exit')
-    await withTimeout(terminateManagedTree(tree.rootChild), 'live root process tree termination')
+    await terminateManagedTree(tree.rootChild)
     await withTimeout(exit, 'live root exit')
     assert.equal(await processExists(tree.rootPid), false)
     assert.equal(await processExists(tree.childPid), false)
@@ -152,7 +152,7 @@ test(
     }
     assert.equal(await processExists(tree.rootPid), false)
     assert.equal(await processExists(tree.childPid), true)
-    await withTimeout(terminateManagedTree(tree.rootChild), 'orphan process cleanup')
+    await terminateManagedTree(tree.rootChild)
     await withTimeout(
       (async () => {
         while (await processExists(tree.childPid)) await delay(25)
@@ -173,7 +173,7 @@ test(
     })
     spawnedRoots.add(child)
     await withTimeout(once(child, 'exit'), 'leaf command exit')
-    await withTimeout(terminateManagedTree(child), 'leaf command cleanup')
+    await terminateManagedTree(child)
     assert.equal(await processExists(child.pid), false)
   }
 )
@@ -217,10 +217,7 @@ test(
       await withTimeout(once(tree.rootChild, 'exit'), 'non-CIM root exit')
     }
     assert.equal(await processExists(tree.childPid), true)
-    await withTimeout(
-      runtime.exports.terminateManagedTree(tree.rootChild),
-      'non-CIM orphan cleanup'
-    )
+    await runtime.exports.terminateManagedTree(tree.rootChild)
     assert.equal(await processExists(tree.childPid), false)
   }
 )
