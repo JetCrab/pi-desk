@@ -85,49 +85,37 @@ export interface L3ProjectReader extends L3ProjectFileReader {
 
 export function createL3ProjectReader(
   clientId: string,
-  context: contract.L3ProjectReadContext
+  context: contract.L3ProjectReadContext,
+  onUnauthorized?: () => void
 ): L3ProjectReader {
+  async function request<I, O>(
+    api: { path: string; request: z.ZodType<I>; response: z.ZodType<O> },
+    input: I,
+    signal?: AbortSignal
+  ): Promise<O> {
+    try {
+      return await requestL3Project(clientId, api, input, signal)
+    } catch (cause) {
+      if (!signal?.aborted && cause instanceof L3ProjectRequestError && cause.status === 401)
+        onUnauthorized?.()
+      throw cause
+    }
+  }
   return {
-    list: (path, signal) =>
-      requestL3Project(clientId, contract.L3ProjectFileList, { ...context, path }, signal),
+    list: (path, signal) => request(contract.L3ProjectFileList, { ...context, path }, signal),
     search: (input, signal) =>
-      requestL3Project(clientId, contract.L3ProjectFileSearch, { ...context, ...input }, signal),
+      request(contract.L3ProjectFileSearch, { ...context, ...input }, signal),
     get: (path, imagePreviewMode, signal) =>
-      requestL3Project(
-        clientId,
-        contract.L3ProjectFileGet,
-        { ...context, path, imagePreviewMode },
-        signal
-      ),
+      request(contract.L3ProjectFileGet, { ...context, path, imagePreviewMode }, signal),
     snapshot: (signal, refresh) =>
-      requestL3Project(clientId, contract.L3ProjectGitGet, { ...context, refresh }, signal),
+      request(contract.L3ProjectGitGet, { ...context, refresh }, signal),
     branches: (repositoryRoot, signal) =>
-      requestL3Project(
-        clientId,
-        contract.L3ProjectGitBranches,
-        { ...context, repositoryRoot },
-        signal
-      ),
+      request(contract.L3ProjectGitBranches, { ...context, repositoryRoot }, signal),
     log: (repositoryRoot, query, signal) =>
-      requestL3Project(
-        clientId,
-        contract.L3ProjectGitLog,
-        { ...context, repositoryRoot, ...query },
-        signal
-      ),
+      request(contract.L3ProjectGitLog, { ...context, repositoryRoot, ...query }, signal),
     changes: (repositoryRoot, query, signal) =>
-      requestL3Project(
-        clientId,
-        contract.L3ProjectGitChanges,
-        { ...context, repositoryRoot, ...query },
-        signal
-      ),
+      request(contract.L3ProjectGitChanges, { ...context, repositoryRoot, ...query }, signal),
     diff: (repositoryRoot, path, signal, comparison) =>
-      requestL3Project(
-        clientId,
-        contract.L3ProjectGitDiff,
-        { ...context, repositoryRoot, path, comparison },
-        signal
-      )
+      request(contract.L3ProjectGitDiff, { ...context, repositoryRoot, path, comparison }, signal)
   }
 }

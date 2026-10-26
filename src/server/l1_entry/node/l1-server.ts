@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { URL } from 'node:url'
+import { L2BuildLoginHref, L2ResolveAuthReturnTo } from '@common/l2_biz/auth/l2-auth-return-to'
 import {
   L4_APP_WEBSOCKET_ENDPOINT,
   L4_APP_WEBSOCKET_PROTOCOL,
@@ -97,15 +98,16 @@ function allowHttpRequest(
   response: ServerResponse,
   hostname: string
 ): boolean {
-  let pathname: string
+  let requestUrl: URL
   try {
-    pathname = new URL(request.url ?? '/', `http://${request.headers.host ?? hostname}`).pathname
+    requestUrl = new URL(request.url ?? '/', `http://${request.headers.host ?? hostname}`)
   } catch {
     response.statusCode = 400
     response.end('Bad Request')
     return false
   }
 
+  const pathname = requestUrl.pathname
   if (isPublicHttpPath(pathname) && pathname !== LOGIN_PAGE_PATH) return true
 
   const authRuntime = getL1WebAuthRuntimeBridge()
@@ -119,9 +121,11 @@ function allowHttpRequest(
   }
   if (pathname === LOGIN_PAGE_PATH) {
     if (!authenticated) return true
+    const returnTo = L2ResolveAuthReturnTo(requestUrl.searchParams.get('returnTo'))
     response.statusCode = 302
     response.setHeader('Cache-Control', 'no-store')
-    response.setHeader('Location', '/')
+    // 保留已校验的原路径，避免将 /.//host 规范化为协议相对 Location。
+    response.setHeader('Location', encodeURI(returnTo).replace(/%25/g, '%'))
     response.end()
     return false
   }
@@ -146,7 +150,7 @@ function allowHttpRequest(
 
   response.statusCode = 302
   response.setHeader('Cache-Control', 'no-store')
-  response.setHeader('Location', LOGIN_PAGE_PATH)
+  response.setHeader('Location', L2BuildLoginHref(`${requestUrl.pathname}${requestUrl.search}`))
   response.end()
   return false
 }

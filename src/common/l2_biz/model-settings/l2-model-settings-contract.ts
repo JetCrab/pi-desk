@@ -222,7 +222,11 @@ export const L2ModelSettingsPreviewResponseSchema = z
   .object({
     projectDefaults: z.array(
       z
-        .object({ cwd: L3PiCwdSchema, from: L2ModelSelectionSchema, to: L2ModelSelectionSchema })
+        .object({
+          cwd: L3PiCwdSchema,
+          from: L2ModelSelectionSchema,
+          to: L2ModelSelectionSchema.nullable()
+        })
         .strict()
     )
   })

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { promisify } from 'node:util'
 import { once } from 'node:events'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -9,12 +10,18 @@ import {
   assertPortReleased,
   isolatedPiEnvironment,
   prepareIsolatedPiDirectory,
+  spawnE2eServer,
   stopE2eServerTree
 } from '../../../tests/l4-e2e-server-runtime.mjs'
 
+import { screenshot } from '../../../tests/l4-browser-cdp-runtime.mjs'
+
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const executable = resolve(process.argv[2] ?? '')
-const identifier = 'com.jetcrab.desktop.external-links-test'
+const previewOnly = process.env.DESKTOP_EXTERNAL_LINKS_SCOPE === 'preview'
+const identifier = previewOnly
+  ? 'com.jetcrab.desktop.project-preview-check'
+  : 'com.jetcrab.desktop.external-links-test'
 const openTargetOnly = process.env.DESKTOP_EXTERNAL_LINKS_SCOPE === 'open-target'
 assert.equal(process.platform, 'win32', '外部浏览器验收仅支持 Windows')
 assert.ok(process.argv[2], '请传入隔离构建的桌面 exe')
@@ -46,6 +53,10 @@ function handle(request, response) {
     return
   }
   response.setHeader('Content-Type', 'text/html; charset=utf-8')
+  if (previewOnly && request.url.startsWith('/project-preview')) {
+    response.end('<!doctype html><html><title>项目预览窗口</title><h1>项目预览窗口</h1></html>')
+    return
+  }
   if (request.url.startsWith('/opened/')) {
     const name = request.url.slice('/opened/'.length)
     response.end(`<!doctype html><html><title>${task}</title><script>
@@ -74,6 +85,7 @@ await new Promise((done) => reservation.close(done))
 const targetUrl = `http://127.0.0.1:${fixturePort}/`
 const externalUrl = `http://127.0.0.1:${externalPort}/`
 pageHtml = `<!doctype html><html lang="zh-CN"><title>外链验收</title><h1>外链验收</h1>
+  <button id="open-preview" onclick="window.open('${targetUrl}project-preview?cwd=C%3A%2Fexample', '_blank', 'noopener,noreferrer')">独立预览</button>
   <button id="open-secure" onclick="window.open('${externalUrl}opened/open-secure', '_blank', 'noopener,noreferrer')">安全新窗口</button>
   <a id="anchor-secure" href="${externalUrl}opened/anchor-secure" target="_blank" rel="noopener noreferrer"><span>安全新窗口链接</span></a>
   <button id="open-plain" onclick="window.open('${externalUrl}opened/open-plain', '_blank')">普通新窗口</button>
@@ -87,12 +99,13 @@ const logPath = join(root, 'logs/desktop.log')
 const pages = []
 const servicePorts = []
 let child
+let sourceService
 let exit
 let output = ''
 let passed = false
 
-async function until(probe, description, observeProcess = true) {
-  const deadline = Date.now() + 15_000
+async function until(probe, description, observeProcess = true, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (observeProcess && child?.exitCode !== null && child?.exitCode !== undefined) {
       throw new Error(`桌面进程提前退出：${child.exitCode}`)
@@ -351,6 +364,272 @@ async function verifyControlOpening(control) {
   await assertPortReleased(managedPort)
 }
 
+async function verifyPreviewOpening(control) {
+  const invoke = (command, args = {}) =>
+    control.evaluate(
+      `window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(args)})`
+    )
+  const previewPages = async () =>
+    (await targets()).filter((item) => new URL(item.url).pathname === '/project-preview')
+  const nativeHandles = new Map()
+  const nativeWindow = async (handle = null) => {
+    const script = `Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public class PreviewWindowTest {
+  public delegate bool Callback(IntPtr h, IntPtr p);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(Callback c, IntPtr p);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  public static void Run(uint pid, long close) {
+    EnumWindows((h,p) => { uint owner; GetWindowThreadProcessId(h,out owner);
+      if(owner == pid) { if(close == 0) Console.WriteLine(h.ToInt64()); else if(h.ToInt64() == close && !PostMessage(h,0x10,IntPtr.Zero,IntPtr.Zero)) throw new Exception("关闭消息发送失败"); }
+      return true;
+    }, IntPtr.Zero);
+  }
+}
+'@
+[PreviewWindowTest]::Run(${child.pid}, ${handle ?? 0})`
+    const { stdout } = await promisify(execFile)(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-EncodedCommand',
+        Buffer.from(script, 'utf16le').toString('base64')
+      ],
+      { timeout: 15_000, windowsHide: true }
+    )
+    return stdout.trim().split(/\s+/).filter(Boolean)
+  }
+  let knownHandles = new Set(await nativeWindow())
+  const registerWindow = async (target) => {
+    const handles = await nativeWindow()
+    const added = handles.filter((handle) => !knownHandles.has(handle))
+    assert.equal(added.length, 1, '新WebView必须对应唯一原生窗口')
+    nativeHandles.set(target.id, added[0])
+    knownHandles = new Set(handles)
+  }
+  const closeWindow = async (target) => {
+    assert.ok(nativeHandles.has(target.id), '关闭前必须登记原生窗口')
+    await nativeWindow(nativeHandles.get(target.id))
+    await until(
+      async () => !(await targets()).some((item) => item.id === target.id),
+      '预览WebView销毁'
+    )
+  }
+  await until(
+    async () => (await invoke('get_control_state')).environment.status !== 'checking',
+    '环境检查结束'
+  )
+  await invoke('set_startup_preference_command', { hideOnStartup: false, hideOnOpen: false })
+  await until(
+    () =>
+      control.evaluate(
+        `[...document.querySelectorAll('button')].some(item=>item.textContent.trim()==='项目预览')`
+      ),
+    '控制中心预览入口'
+  )
+  await control.evaluate(
+    `[...document.querySelectorAll('button')].find(item=>item.textContent.trim()==='项目预览').click()`
+  )
+  const first = await until(async () => (await previewPages())[0], '直接预览窗口')
+  assert.equal(
+    (await targets()).some((item) => item.url === targetUrl),
+    false,
+    '预览不能先开工作台'
+  )
+  await registerWindow(first)
+  await invoke('open_target_command', { url: targetUrl, preview: true })
+  await until(async () => (await previewPages()).length === 2, '第二个独立预览窗口')
+  await registerWindow((await previewPages()).find((item) => item.id !== first.id))
+  await closeWindow(first)
+  assert.equal((await previewPages()).length, 1)
+  await invoke('open_target_command', { url: targetUrl, preview: false })
+  const workspaceTarget = await until(
+    async () => (await targets()).find((item) => item.url === targetUrl),
+    '原工作台'
+  )
+  await registerWindow(workspaceTarget)
+  const workspace = await connect(workspaceTarget)
+  await until(
+    () => workspace.evaluate(`Boolean(document.getElementById('open-preview'))`),
+    '工作台页面加载'
+  )
+  await workspace.click('open-preview')
+  const deep = await until(
+    async () => (await previewPages()).find((item) => item.url.includes('cwd=')),
+    '网页同源预览新窗口'
+  )
+  await registerWindow(deep)
+  assert.equal(new URL(deep.url).searchParams.get('cwd'), 'C:/example')
+  assert.equal(await workspace.evaluate('location.href'), targetUrl)
+  const deepPage = await connect(deep)
+  assert.equal(
+    await deepPage.evaluate(
+      `(async()=>{try{await window.__TAURI_INTERNALS__.invoke('get_control_state');return false}catch{return true}})()`
+    ),
+    true,
+    '预览不得获得控制权限'
+  )
+  const oldLabel = await workspace.evaluate(
+    'window.__TAURI_INTERNALS__.metadata.currentWindow.label'
+  )
+  await nativeWindow(nativeHandles.get(workspaceTarget.id))
+  await until(
+    async () => !(await invoke('plugin:window|is_visible', { label: oldLabel })),
+    '工作台仍关闭为隐藏'
+  )
+  assert.ok((await targets()).some((item) => item.id === workspaceTarget.id))
+  await invoke('open_target_command', { url: targetUrl })
+  assert.equal((await targets()).find((item) => item.url === targetUrl)?.id, workspaceTarget.id)
+  await workspace.click('anchor-same-origin')
+  await until(() => reports.get('anchor-same-origin'), '同源普通新窗口仍交系统浏览器')
+  assert.equal(reports.get('anchor-same-origin').native, false)
+
+  const reservation = createServer()
+  const managedPort = await listen(reservation)
+  await new Promise((done) => reservation.close(done))
+  servicePorts.push(managedPort)
+  const managedUrl = `http://127.0.0.1:${managedPort}/workspace`
+  const readyFile = join(root, 'preview-service-ready')
+  const probeFile = join(root, 'preview-service-probed')
+  const managedFile = join(root, 'preview-managed.cjs')
+  await writeFile(
+    managedFile,
+    `const fs=require('node:fs');require('node:http').createServer((req,res)=>{if(req.url==='/health'){fs.writeFileSync(${JSON.stringify(probeFile)},'1');res.writeHead(fs.existsSync(${JSON.stringify(readyFile)})?200:503).end()}else{res.setHeader('Content-Type','text/html');res.end('<h1>启动后独立预览</h1>')}}).listen(Number(process.argv[2]),'127.0.0.1')`
+  )
+  await invoke('apply_target_command', {
+    originalUrl: null,
+    value: {
+      url: managedUrl,
+      server: {
+        startCommand: `"${process.execPath}" "${managedFile}" {port}`,
+        readyPath: '/health',
+        package: null
+      },
+      tunnel: null
+    }
+  })
+  await invoke('open_target_command', { url: managedUrl, preview: true })
+  await until(
+    () =>
+      readFile(probeFile).then(
+        () => true,
+        () => false
+      ),
+    '预览等待服务就绪'
+  )
+  assert.equal(
+    (await targets()).some((item) => item.url.startsWith(`http://127.0.0.1:${managedPort}/`)),
+    false
+  )
+  await writeFile(readyFile, 'ready')
+  await until(
+    async () =>
+      (await targets()).some(
+        (item) => item.url === `http://127.0.0.1:${managedPort}/project-preview`
+      ),
+    '服务就绪直接进入预览'
+  )
+  assert.equal(
+    (await targets()).some((item) => item.url === managedUrl),
+    false
+  )
+  await invoke('delete_target_command', { url: managedUrl })
+  await until(
+    async () =>
+      !(await targets()).some((item) => item.url.startsWith(`http://127.0.0.1:${managedPort}/`)),
+    '删除服务清理预览窗口'
+  )
+  await assertPortReleased(managedPort)
+
+  const sourceReservation = createServer()
+  const sourcePort = await listen(sourceReservation)
+  await new Promise((done) => sourceReservation.close(done))
+  const sourceUrl = `http://127.0.0.1:${sourcePort}/`
+  const project = join(root, 'preview-project')
+  await mkdir(project)
+  await writeFile(join(project, 'README.md'), '# 独立项目预览\n\n桌面窗口中的真实文件内容。\n')
+  await writeFile(
+    join(agent, 'pi-desk-settings.json'),
+    JSON.stringify({ region: { locale: 'zh-CN', timeZone: 'UTC' } })
+  )
+  sourceService = spawnE2eServer({
+    projectRoot,
+    agentDir: agent,
+    port: sourcePort,
+    development: true,
+    nextDirectory: join(projectRoot, 'temp/build/desktop-preview', task, 'next'),
+    environment: { NODE_OPTIONS: '' },
+    onOutput: (chunk) => {
+      output += chunk
+    }
+  })
+  await until(
+    async () => {
+      try {
+        return (await fetch(`${sourceUrl}api/health`)).ok
+      } catch {
+        return false
+      }
+    },
+    '真实Pi Desk就绪',
+    true,
+    120_000
+  )
+  await invoke('apply_target_command', {
+    originalUrl: null,
+    value: { url: sourceUrl, server: null, tunnel: null }
+  })
+  await invoke('open_target_command', { url: sourceUrl, preview: true })
+  const liveTarget = await until(
+    async () => (await targets()).find((item) => item.url === `${sourceUrl}project-preview`),
+    '真实独立预览页'
+  )
+  await registerWindow(liveTarget)
+  const live = await connect(liveTarget)
+  await until(
+    () => live.evaluate(`Boolean(document.querySelector('[data-testid="project-picker"]'))`),
+    '真实目录选择页',
+    true,
+    120_000
+  )
+  await live.send('Page.navigate', {
+    url: `${sourceUrl}project-preview?cwd=${encodeURIComponent(project)}`
+  })
+  await until(
+    () =>
+      live.evaluate(`Boolean(document.querySelector('[data-testid="project-file-README.md"]'))`),
+    '真实文件树',
+    true,
+    60_000
+  )
+  await live.evaluate(`document.querySelector('[data-testid="project-file-README.md"]').click()`)
+  await until(
+    () =>
+      live.evaluate(
+        `document.querySelector('[data-testid="markdown-preview"]')?.textContent.includes('桌面窗口中的真实文件内容')`
+      ),
+    '真实Markdown展示',
+    true,
+    60_000
+  )
+  for (const theme of ['light', 'dark']) {
+    await live.evaluate(`document.documentElement.classList.toggle('dark',${theme === 'dark'})`)
+    await live.evaluate(
+      `document.querySelectorAll('nextjs-portal').forEach(element=>element.style.setProperty('display','none','important'))`
+    )
+    await writeFile(join(root, `project-preview-${theme}.png`), await screenshot(live))
+  }
+  await closeWindow(liveTarget)
+  assert.equal((await fetch(`${sourceUrl}api/health`)).ok, true, '关闭预览不停止共享服务')
+  for (const item of await previewPages()) await closeWindow(item)
+  assert.equal((await previewPages()).length, 0)
+  await invoke('delete_target_command', { url: sourceUrl })
+  console.info('原生预览入口、启动就绪、窗口销毁、权限与真实文件预览通过')
+}
+
 try {
   child = spawn(executable, [], {
     cwd: root,
@@ -360,7 +639,7 @@ try {
       PI_DESK_DESKTOP_DATA_DIR: root,
       WEBVIEW2_USER_DATA_FOLDER: join(root, 'webview'),
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${debugPort}`,
-      ...(openTargetOnly ? { PI_DESK_DESKTOP_DISCOVERY_PATH: '' } : {})
+      ...(openTargetOnly || previewOnly ? { PI_DESK_DESKTOP_DISCOVERY_PATH: '' } : {})
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true
@@ -378,7 +657,9 @@ try {
     () => control.evaluate(`typeof window.__TAURI_INTERNALS__?.invoke === 'function'`),
     '控制页 Tauri 桥就绪'
   )
-  if (openTargetOnly) {
+  if (previewOnly) {
+    await verifyPreviewOpening(control)
+  } else if (openTargetOnly) {
     await verifyControlOpening(control)
   } else {
     await until(
@@ -516,6 +797,7 @@ try {
     await new Promise((done) => server.close(done))
     await assertPortReleased(port)
   }
+  if (sourceService) await stopE2eServerTree(sourceService)
   for (const port of servicePorts) await assertPortReleased(port)
   if (passed) await rm(agentRoot, { recursive: true, force: true })
 }

@@ -72,7 +72,9 @@ const CONTRIBUTION_LABELS: Readonly<Record<L4PluginBrowserContributionDescriptor
     'composer-panel': 'contributionComposer',
     'settings-page': 'contributionSettings',
     'message-view': 'contributionMessage',
-    'session-sidebar-tab': 'contributionSidebar'
+    'session-sidebar-tab': 'contributionSidebar',
+    widget: 'contributionWidget',
+    'session-header-item': 'contributionSessionHeader'
   }
 
 export type L2PluginCapabilityTagTone = 'neutral' | 'prompt' | 'dynamic' | 'override'
@@ -567,6 +569,9 @@ function PromptResources({
 function contributionDescription(descriptor: L4PluginBrowserContributionDescriptor): string {
   if (descriptor.kind === 'message-view') return descriptor.viewKey
   if (descriptor.kind === 'application') return descriptor.title
+  if (descriptor.kind === 'widget' || descriptor.kind === 'session-header-item') {
+    return descriptor.contributionName
+  }
   return descriptor.label
 }
 

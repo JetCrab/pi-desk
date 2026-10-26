@@ -57,6 +57,15 @@ export function L2PluginManagementControls({
         >
           {t('retry')}
         </Button>
+      ) : plugin.status === 'failed' ? (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={disabled || pending}
+          onClick={() => onAction('reload')}
+        >
+          {t('reloadOne')}
+        </Button>
       ) : browserError && plugin.pluginName ? (
         <Button
           size="sm"

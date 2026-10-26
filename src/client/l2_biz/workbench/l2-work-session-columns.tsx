@@ -54,8 +54,10 @@ import { useL2WorkSessionColumnCapacity } from './hooks/l2-work-session-column-c
 import type { L2FileWorkspaceRuntime } from './file-workspace/l2-file-workspace-runtime'
 import { L2WorkSessionFileLayout } from './file-workspace/l2-work-session-file-layout'
 import { Button, buttonVariants } from '@client/l4_foundation/ui/shadcn/button'
+import type { L2WorkbenchPluginSessionSlots } from './l2-workbench-plugin-slots'
 
-interface L2WorkSessionColumnsProps extends L2WorkbenchComposerSlots {
+interface L2WorkSessionColumnsProps
+  extends L2WorkbenchComposerSlots, L2WorkbenchPluginSessionSlots {
   onOpenSettings?: (target?: 'model-presets') => void
   workSessions: readonly L2WorkSessionListItem[]
   primaryWorkId: string | null
@@ -126,7 +128,7 @@ function SidebarToggle({
   )
 }
 
-interface WorkSessionColumnProps extends L2WorkbenchComposerSlots {
+interface WorkSessionColumnProps extends L2WorkbenchComposerSlots, L2WorkbenchPluginSessionSlots {
   onOpenSettings?: (target?: 'model-presets') => void
   workSession: L2WorkSessionListItem
   fixed: boolean
@@ -181,6 +183,8 @@ const WorkSessionColumn = memo(function WorkSessionColumn({
   renderTaskSummary,
   renderTaskMenu,
   renderPluginComposerPanel,
+  renderPluginWidgets,
+  renderPluginSessionHeader,
   gitRuntime,
   invokePluginMethod,
   listPiCommands,
@@ -214,6 +218,34 @@ const WorkSessionColumn = memo(function WorkSessionColumn({
   useSyncExternalStore(fileRuntime.subscribe, fileRuntime.getRevision, fileRuntime.getRevision)
   const fileWorkspace = fileRuntime.getWorkspace(workSession.workId)
   const fileCount = (fileWorkspace?.tabs.length ?? 0) + (fileWorkspace?.activeDiff ? 1 : 0)
+  const source = useMemo<L2ChatSource>(
+    () => ({
+      workId: workSession.workId,
+      sessionId: workSession.sessionId,
+      branchId: workSession.branchId
+    }),
+    [workSession.workId, workSession.sessionId, workSession.branchId]
+  )
+  const title = (
+    <div className="min-w-0">
+      <p
+        className={cn(
+          'truncate text-sm transition-colors duration-150 motion-reduce:transition-none',
+          focused ? 'font-semibold text-foreground' : 'font-medium text-muted-foreground'
+        )}
+        title={workSession.projectName}
+      >
+        {workSession.projectName}
+      </p>
+      <p
+        className="truncate text-xs text-muted-foreground"
+        data-testid="session-header-title"
+        title={workSession.sessionTitle ?? t('newSession')}
+      >
+        {workSession.sessionTitle ?? t('newSession')}
+      </p>
+    </div>
+  )
 
   useEffect(() => {
     const column = columnRef.current
@@ -259,23 +291,18 @@ const WorkSessionColumn = memo(function WorkSessionColumn({
         onOpenSidebar={() => onOpenFileSidebar(workSession.workId)}
       >
         {(chatVisible) => (
-          <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-            <header className="flex min-h-14 items-center gap-3 px-3">
+          <div className={cn(styles.chatContainer, 'flex h-full min-h-0 min-w-0 flex-1 flex-col')}>
+            <header
+              className={cn(styles.sessionHeader, 'flex min-h-14 shrink-0 items-center gap-3 px-3')}
+              data-testid="session-header"
+            >
               {fixed && !mobile ? null : (
                 <SidebarToggle sidebarOpen={sidebarOpen} onToggle={onToggleSidebar} />
               )}
               <div className="min-w-0 flex-1">
-                <p
-                  className={cn(
-                    'truncate text-sm transition-colors duration-150 motion-reduce:transition-none',
-                    focused ? 'font-semibold text-foreground' : 'font-medium text-muted-foreground'
-                  )}
-                >
-                  {workSession.projectName}
-                </p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {workSession.sessionTitle ?? t('newSession')}
-                </p>
+                {chatVisible && contentActive
+                  ? renderPluginSessionHeader({ source, title })
+                  : title}
               </div>
               <div className="-mr-1 flex shrink-0 items-center">
                 {initializationIssue.error ? (
@@ -292,13 +319,17 @@ const WorkSessionColumn = memo(function WorkSessionColumn({
                 {fileCount > 0 ? (
                   <Button
                     variant="ghost"
+                    className={styles.headerAction}
                     data-testid="session-files-entry"
                     aria-label={t('openSessionFiles')}
+                    title={t('sessionFiles', { count: fileCount })}
                     aria-pressed={fileWorkspace?.windowOpen ?? false}
                     onClick={() => fileRuntime.showWindow(workSession.workId)}
                   >
                     <FilesIcon className="size-4" />
-                    {t('sessionFiles', { count: fileCount })}
+                    <span className={styles.headerActionLabel}>
+                      {t('sessionFiles', { count: fileCount })}
+                    </span>
                   </Button>
                 ) : null}
                 {onUnpinWorkSession ? (
@@ -338,6 +369,8 @@ const WorkSessionColumn = memo(function WorkSessionColumn({
                 renderTaskSummary={renderTaskSummary}
                 renderTaskMenu={renderTaskMenu}
                 renderPluginComposerPanel={renderPluginComposerPanel}
+                renderPluginWidgets={renderPluginWidgets}
+                widgetsVisible={chatVisible && contentActive}
                 gitRuntime={gitRuntime}
                 active={composerActive}
                 mobile={mobile}
@@ -473,6 +506,8 @@ export function L2WorkSessionColumns({
   renderTaskSummary,
   renderTaskMenu,
   renderPluginComposerPanel,
+  renderPluginWidgets,
+  renderPluginSessionHeader,
   gitRuntime,
   invokePluginMethod,
   listPiCommands,
@@ -660,6 +695,8 @@ export function L2WorkSessionColumns({
               renderTaskSummary={renderTaskSummary}
               renderTaskMenu={renderTaskMenu}
               renderPluginComposerPanel={renderPluginComposerPanel}
+              renderPluginWidgets={renderPluginWidgets}
+              renderPluginSessionHeader={renderPluginSessionHeader}
               gitRuntime={gitRuntime}
               invokePluginMethod={invokePluginMethod}
               listPiCommands={listPiCommands}
@@ -758,6 +795,8 @@ export function L2WorkSessionColumns({
                   renderTaskSummary={renderTaskSummary}
                   renderTaskMenu={renderTaskMenu}
                   renderPluginComposerPanel={renderPluginComposerPanel}
+                  renderPluginWidgets={renderPluginWidgets}
+                  renderPluginSessionHeader={renderPluginSessionHeader}
                   gitRuntime={gitRuntime}
                   invokePluginMethod={invokePluginMethod}
                   listPiCommands={listPiCommands}

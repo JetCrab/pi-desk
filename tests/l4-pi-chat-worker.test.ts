@@ -4,7 +4,8 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import type { AgentEvent } from '@earendil-works/pi-agent-core'
-import type { PromptOptions } from '@earendil-works/pi-coding-agent'
+import type { AgentSession, PromptOptions } from '@earendil-works/pi-coding-agent'
+import type { AssistantMessage, ToolCall } from '@earendil-works/pi-ai'
 import { createJiti } from 'jiti'
 
 const require = createRequire(import.meta.url)
@@ -16,6 +17,7 @@ const jiti = createJiti(import.meta.url, {
 })
 
 type PiModule = typeof import('@earendil-works/pi-coding-agent')
+type PiAiModule = typeof import('@earendil-works/pi-ai')
 type ChatWorkerModule = typeof import('../src/server/l4_foundation/pi/l4-pi-chat-worker')
 type AgentListener = (event: AgentEvent, signal: AbortSignal) => Promise<void> | void
 
@@ -1326,6 +1328,244 @@ test('超长流式工具参数每轮 Agent 只中止一次并跳过超长 messag
   } finally {
     unsubscribe()
     await worker.dispose()
+  }
+})
+
+test('工具参数超限复用真实 Pi 重试且服从用户停止', { timeout: 60_000 }, async (t) => {
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR
+  const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR
+  const runRoot = resolve('temp/pi/l4-pi-chat-worker', `oversized-tool-retry-${process.pid}`)
+  const scenarios = [
+    'recover',
+    'recover-basic',
+    'exhaust',
+    'retry-disabled',
+    'stop-before-final',
+    'stop-before-update',
+    'stop-backoff',
+    'stop-normal'
+  ] as const
+
+  try {
+    for (const scenario of scenarios) {
+      await t.test(scenario, async () => {
+        const root = join(runRoot, scenario)
+        const agentDir = join(root, 'agent', 'config')
+        const sessionDir = join(root, 'agent', 'sessions')
+        const cwd = join(root, 'project')
+        await mkdir(agentDir, { recursive: true })
+        await mkdir(sessionDir, { recursive: true })
+        await mkdir(cwd, { recursive: true })
+        await writeFile(
+          join(agentDir, 'settings.json'),
+          JSON.stringify({
+            defaultProvider: 'retry-fixture',
+            defaultModel: 'retry-model',
+            defaultThinkingLevel: 'off',
+            cacheWarming: 'off',
+            compaction: { enabled: false },
+            retry: {
+              enabled: scenario !== 'retry-disabled',
+              maxRetries: 2,
+              baseDelayMs: scenario === 'stop-backoff' ? 1000 : 1
+            }
+          })
+        )
+        await writeFile(
+          join(agentDir, 'models.json'),
+          JSON.stringify({
+            providers: {
+              'retry-fixture': {
+                baseUrl: 'http://127.0.0.1:9/v1',
+                apiKey: 'fixture-only',
+                api: 'openai-responses',
+                models: [
+                  {
+                    id: 'retry-model',
+                    reasoning: false,
+                    input: ['text'],
+                    contextWindow: 65536,
+                    maxTokens: 1024,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+                  }
+                ]
+              }
+            }
+          })
+        )
+        process.env.PI_CODING_AGENT_DIR = agentDir
+        process.env.PI_CODING_AGENT_SESSION_DIR = sessionDir
+        const [[{ SessionManager }, { L4PiChatWorker }], { createAssistantMessageEventStream }] =
+          await Promise.all([loadWorkerModules(), jiti.import<PiAiModule>('@earendil-works/pi-ai')])
+        const manager = SessionManager.create(cwd, sessionDir)
+        const worker = new L4PiChatWorker(cwd, manager)
+        let requests = 0
+        let retries = 0
+        let toolExecutions = 0
+        let interrupt: Promise<void> | undefined
+        let unsubscribeAgent: (() => void) | undefined
+        let unsubscribeSession: (() => void) | undefined
+
+        try {
+          if (scenario === 'recover-basic') await worker.reload('basic')
+          await worker.getRuntime()
+          const session = Reflect.get(worker, 'session') as AgentSession
+          const recover = scenario === 'recover' || scenario === 'recover-basic'
+          session.agent.streamFunction = (
+            _model,
+            _context,
+            options
+          ): ReturnType<PiAiModule['createAssistantMessageEventStream']> => {
+            requests += 1
+            const stream = createAssistantMessageEventStream()
+            const message: AssistantMessage = {
+              role: 'assistant',
+              content: [],
+              api: 'openai-responses',
+              provider: 'retry-fixture',
+              model: 'retry-model',
+              timestamp: Date.now(),
+              stopReason: 'pending',
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+              }
+            }
+            stream.push({ type: 'start', partial: message })
+            if (recover && requests > 1) {
+              const content: AssistantMessage['content'] =
+                requests === 2
+                  ? [
+                      {
+                        type: 'toolCall',
+                        id: 'successful-write',
+                        name: 'write',
+                        arguments: { path: 'successful.txt', content: '一次成功写入' }
+                      }
+                    ]
+                  : [{ type: 'text', text: '完成' }]
+              const stopReason = requests === 2 ? 'toolUse' : 'stop'
+              const completed: AssistantMessage = {
+                ...message,
+                content,
+                stopReason
+              }
+              stream.push({ type: 'done', reason: stopReason, message: completed })
+              stream.end()
+              return stream
+            }
+
+            const completeCall: ToolCall = {
+              type: 'toolCall',
+              id: `failed-batch-${requests}`,
+              name: 'write',
+              arguments: { path: 'must-not-execute.txt', content: '不能执行失败批次' }
+            }
+            const oversizedCall: ToolCall & { partialJson: string } = {
+              type: 'toolCall',
+              id: `oversized-${requests}`,
+              name: 'write',
+              arguments: { path: 'must-not-execute-either.txt', content: '不能执行截断参数' },
+              partialJson: ' '.repeat(256 * 1024 + 1)
+            }
+            const aborted: AssistantMessage = {
+              ...message,
+              content: scenario === 'stop-normal' ? [] : [completeCall, { ...oversizedCall }],
+              stopReason: 'aborted',
+              errorMessage: 'OpenAI Responses stream ended before a terminal response event'
+            }
+            for (const block of aborted.content) {
+              if ('partialJson' in block) delete block.partialJson
+            }
+            options?.signal?.addEventListener(
+              'abort',
+              () => {
+                stream.push({ type: 'error', reason: 'aborted', error: aborted })
+                stream.end()
+              },
+              { once: true }
+            )
+            if (scenario !== 'stop-normal') {
+              stream.push({
+                type: 'toolcall_delta',
+                contentIndex: 1,
+                delta: oversizedCall.partialJson,
+                partial: { ...message, content: [completeCall, oversizedCall] }
+              })
+            }
+            return stream
+          }
+          unsubscribeSession = session.subscribe((event) => {
+            if (event.type === 'auto_retry_start') {
+              retries += 1
+              if (scenario === 'stop-backoff') interrupt = worker.interrupt()
+            }
+          })
+          unsubscribeAgent = session.agent.subscribe((event) => {
+            if (event.type === 'tool_execution_start') toolExecutions += 1
+            if (
+              (scenario === 'stop-before-final' && event.type === 'message_update') ||
+              ((scenario === 'stop-normal' || scenario === 'stop-before-update') &&
+                event.type === 'message_start' &&
+                event.message.role === 'assistant')
+            ) {
+              interrupt ??= worker.interrupt()
+            }
+          })
+
+          await session.prompt('验证工具参数超限恢复')
+          await interrupt
+          const assistants = manager
+            .getBranch()
+            .flatMap((entry) =>
+              entry.type === 'message' && entry.message.role === 'assistant' ? [entry.message] : []
+            )
+          const expectedRequests = recover ? 3 : scenario === 'exhaust' ? 3 : 1
+          assert.equal(requests, expectedRequests)
+          assert.equal(
+            retries,
+            recover ? 1 : scenario === 'exhaust' ? 2 : scenario === 'stop-backoff' ? 1 : 0
+          )
+          assert.equal(toolExecutions, recover ? 1 : 0)
+          await assert.rejects(readFile(join(cwd, 'must-not-execute.txt')), { code: 'ENOENT' })
+          await assert.rejects(readFile(join(cwd, 'must-not-execute-either.txt')), {
+            code: 'ENOENT'
+          })
+          if (
+            scenario === 'stop-normal' ||
+            scenario === 'stop-before-final' ||
+            scenario === 'stop-before-update'
+          ) {
+            assert.equal(assistants.at(-1)?.stopReason, 'aborted')
+          } else {
+            assert.equal(assistants[0]?.stopReason, 'error')
+            assert.match(assistants[0]?.errorMessage ?? '', /工具参数流超过 262144 字符上限/)
+          }
+          if (recover) {
+            assert.equal(await readFile(join(cwd, 'successful.txt'), 'utf8'), '一次成功写入')
+            assert.equal(assistants.at(-1)?.stopReason, 'stop')
+            await session.prompt('恢复后的普通请求')
+            assert.equal(requests, 4)
+            assert.equal(toolExecutions, 1)
+          }
+          assert.equal(Reflect.get(worker, 'oversizedToolCallAbortRequested'), false)
+        } finally {
+          unsubscribeAgent?.()
+          unsubscribeSession?.()
+          await worker.dispose()
+        }
+      })
+    }
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir
+    if (originalSessionDir === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR
+    else process.env.PI_CODING_AGENT_SESSION_DIR = originalSessionDir
+    await rm(runRoot, { recursive: true, force: true })
   }
 })
 

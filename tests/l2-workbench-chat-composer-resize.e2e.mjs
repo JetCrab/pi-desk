@@ -284,7 +284,20 @@ async function main() {
       assert.equal(partial.before.viewport, partial.after.viewport, '图片栏仍存在时高度不应变化')
       await removeImage(client, `${viewport.width}：再删除剩余图片`, 1)
 
-      await evaluate(client, 'window.__chatScroll.scrollTop -= 250')
+      const readingPoint = await evaluate(
+        client,
+        `(() => {
+        const rect = window.__chatScroll.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      })()`
+      )
+      await client.send('Input.dispatchMouseEvent', {
+        type: 'mouseWheel',
+        ...readingPoint,
+        deltaX: 0,
+        deltaY: -250
+      })
+      await waitFor(client, 'window.__measureChat().gap > 100', '用户上翻进入历史阅读')
       await settle(client)
       await pasteImages(client, 1)
       const reading = await evaluate(client, 'window.__measureChat()')

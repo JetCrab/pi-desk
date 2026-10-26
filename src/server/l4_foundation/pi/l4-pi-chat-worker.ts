@@ -425,6 +425,24 @@ export class L4PiChatWorker {
       readCapabilities: this.capabilities.rules,
       onInput: (event) =>
         this.validateFinalInput(event.text, event.images, event.streamingBehavior),
+      onMessageEnd: ({ message }) => {
+        if (
+          this.disposed ||
+          !this.oversizedToolCallAbortRequested ||
+          message.role !== 'assistant' ||
+          (message.stopReason !== 'aborted' && message.stopReason !== 'error')
+        ) {
+          return
+        }
+        return {
+          message: {
+            ...message,
+            stopReason: 'error',
+            // Pi 按错误文本识别可重试失败，保留其已支持的重试提示。
+            errorMessage: `工具参数流超过 ${L4_PI_CHAT_MAX_STREAMING_TOOL_ARGUMENT_CHARS} 字符上限，本次响应中的工具均未执行。Please retry your request.`
+          }
+        }
+      },
       onTree: () => this.resetBranchRuntime(),
       onCommand: (args, toolCallId) => {
         const signal = this.commandLifetime.signal
@@ -862,9 +880,8 @@ export class L4PiChatWorker {
     this.nativeUi.cancelAll()
     this.discardAcceptedInputs()
     const session = await this.ensureSession()
-    session.abortRetry()
-    session.abortCompaction()
-    session.agent.abort()
+    this.oversizedToolCallAbortRequested = false
+    await session.abort()
   }
 
   async navigateTree(entryId: string): Promise<boolean> {
@@ -1604,9 +1621,9 @@ export class L4PiChatWorker {
     const oversized = findOversizedStreamingToolCall(message)
     if (!oversized) return false
 
-    if (!this.oversizedToolCallAbortRequested) {
+    if (!this.oversizedToolCallAbortRequested && !this.session?.agent.signal?.aborted) {
       this.oversizedToolCallAbortRequested = true
-      console.warn('[Pi Desk][PiChatWorker] 工具参数流过大，已中止当前 Agent', {
+      console.warn('[Pi Desk][PiChatWorker] 工具参数流过大，已中止当前运行，交由 Pi 重试策略处理', {
         sessionId: this.sessionManager.getSessionId(),
         toolCallId: oversized.toolCallId,
         toolName: oversized.toolName,

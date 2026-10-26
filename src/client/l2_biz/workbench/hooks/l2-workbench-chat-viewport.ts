@@ -7,7 +7,8 @@ import {
   clearL3ConversationTailSpacer,
   findL3ConversationMessage,
   logL3ConversationScroll,
-  positionL3ConversationMessage
+  positionL3ConversationMessage,
+  refreshL3ConversationTailSpacer
 } from '@client/l3_modules/conversation/l3-conversation-viewport'
 import type { L2WorkbenchChatViewportSnapshot } from '../l2-workbench-chat'
 
@@ -252,25 +253,18 @@ export function L2WorkbenchChatViewportManager({
       const enterRunningAtBottom =
         entryPosition?.follow ?? (initializing && running && snapshot === null)
       const entryTarget = target
-      const positionEntry = (): void => {
-        stopScroll()
-        if (entryTarget) {
-          positionL3ConversationMessage(scrollElement, entryTarget, targetOffset, containsTail)
-        } else {
-          clearL3ConversationTailSpacer(scrollElement)
-        }
-        if (enterRunningAtBottom || !entryTarget) {
-          // 首屏懒布局展开后也在绘制前置底，不交给后续缓动收敛。
-          scrollElement.scrollTop = Math.max(
-            0,
-            scrollElement.scrollHeight - scrollElement.clientHeight
-          )
-        }
-        markProgrammaticScroll(state, scrollElement)
-        // 同步确立跟随，立即切走也不能丢失这个状态。
-        if (followAfterPosition || !entryTarget) void scrollToBottom({ animation: 'instant' })
+      stopScroll()
+      if (entryTarget) {
+        positionL3ConversationMessage(scrollElement, entryTarget, targetOffset, containsTail)
+      } else {
+        clearL3ConversationTailSpacer(scrollElement)
       }
-      positionEntry()
+      if (enterRunningAtBottom || !entryTarget) {
+        scrollElement.scrollTop = Math.max(0, state.calculatedTargetScrollTop)
+      }
+      markProgrammaticScroll(state, scrollElement)
+      // 同步确立跟随，立即切走也不能丢失这个状态。
+      if (followAfterPosition || !entryTarget) void scrollToBottom({ animation: 'instant' })
 
       logL3ConversationScroll('viewport:initialize:positioned', scrollElement, {
         initializing,
@@ -288,7 +282,18 @@ export function L2WorkbenchChatViewportManager({
           anchor: anchor ? { messageId: anchor, offset: targetOffset } : null,
           follow: followAfterPosition || target === null
         }
-        const observer = new ResizeObserver(positionEntry)
+        const observer = new ResizeObserver(() => {
+          // 懒布局与拖宽只校正既定目标，不再重走提问定位、停止和启动跟随。
+          if (followAfterPosition || !entryTarget) {
+            refreshL3ConversationTailSpacer(scrollElement)
+            scrollElement.scrollTop = Math.max(0, state.calculatedTargetScrollTop)
+          } else {
+            // 内容收缩时库可能自动恢复跟随；首屏阅读锚点仍优先。
+            if (state.isAtBottom) stopScroll()
+            positionL3ConversationMessage(scrollElement, entryTarget, targetOffset, containsTail)
+          }
+          markProgrammaticScroll(state, scrollElement)
+        })
         observer.observe(scrollElement)
         if (scrollElement.firstElementChild) observer.observe(scrollElement.firstElementChild)
         const interactionElement = scrollElement.parentElement!
@@ -356,13 +361,15 @@ export function L2WorkbenchChatViewportManager({
           isAtBottom: state.isAtBottom,
           escapedFromLock: state.escapedFromLock
         })
+        // 新视图会在旧视图清理前读取快照，恢复跟随时就释放旧阅读位置。
+        onClearSnapshot()
         void scrollToBottom({ animation: 'instant' })
       }
     }
 
     scrollElement.addEventListener('scroll', resumeFollowAtBottom, { passive: true })
     return () => scrollElement.removeEventListener('scroll', resumeFollowAtBottom)
-  }, [latestUserAnchor, scrollRef, scrollToBottom, state, visible])
+  }, [latestUserAnchor, onClearSnapshot, scrollRef, scrollToBottom, state, visible])
 
   useLayoutEffect(() => {
     if (!running || !visible) return

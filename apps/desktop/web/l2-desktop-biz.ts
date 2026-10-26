@@ -12,6 +12,7 @@ import {
 export type DesktopAction =
   | 'open'
   | 'open-external'
+  | 'preview'
   | 'stop'
   | 'restart'
   | 'delete'
@@ -28,6 +29,7 @@ export type DesktopAction =
 const commands: Record<DesktopAction, string> = {
   open: 'open_target_command',
   'open-external': 'open_target_command',
+  preview: 'open_target_command',
   stop: 'stop_server_command',
   restart: 'restart_server_command',
   delete: 'delete_target_command',
@@ -45,7 +47,8 @@ const commands: Record<DesktopAction, string> = {
 export async function runDesktopAction(action: DesktopAction, url?: string): Promise<void> {
   await desktopCommand(commands[action], {
     ...(url ? { url } : {}),
-    ...(action === 'open-external' ? { external: true } : {})
+    ...(action === 'open-external' ? { external: true } : {}),
+    ...(action === 'preview' ? { preview: true } : {})
   })
 }
 

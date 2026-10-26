@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import fs from 'node:fs'
+import fs, { type PathLike } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
@@ -406,7 +406,7 @@ test('账号模型：参数覆盖稀疏写入，恢复默认及自定义配置�
   })
 })
 
-test('账号模型：移除保护常用组合和已知项目默认，失败不改文件', async () => {
+test('账号模型：移除时自动清理常用组合和已忽略项目默认', async () => {
   await withAccountFixture(async (store, path, agentDir, [first]) => {
     await store.replaceL4ModelSettings({
       accountModels: [{ provider: 'openai-codex', modelId: first, overrides: {} }]
@@ -420,50 +420,41 @@ test('账号模型：移除保护常用组合和已知项目默认，失败不�
       color: null
     }
     await store.replaceL4ModelSettings({ presets: [...settings.presets, preset] })
-    const before = await readFile(path, 'utf8')
-    await assert.rejects(store.replaceL4ModelSettings({ accountModels: [] }), /常用组合/)
-    assert.equal(await readFile(path, 'utf8'), before)
-    const cwd = join(agentDir, 'project')
-    await mkdir(cwd, { recursive: true })
-    const manager = SessionManager.create(cwd)
-    manager.appendMessage({ role: 'user', content: 'fixture', timestamp: Date.now() })
-    // Pi 在第一条 assistant 消息后落盘，项目列表以真实 JSONL 为来源。
-    manager.appendMessage({
-      role: 'assistant',
-      api: 'openai-completions',
-      provider: 'fixture',
-      model: 'test-model',
-      content: [{ type: 'text', text: 'fixture' }],
-      stopReason: 'stop',
-      timestamp: Date.now(),
-      usage: {
-        input: 1,
-        output: 1,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 2,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
-      }
+    const project = await createKnownProject(agentDir, 'project-ignored', {
+      defaultProvider: preset.provider,
+      defaultModel: preset.modelId,
+      defaultThinkingLevel: preset.thinkingLevel,
+      retained: true
     })
-    await store.replaceL4ProjectModelDefault(cwd, preset)
-    await assert.rejects(
-      store.replaceL4ModelSettings({ accountModels: [], presets: settings.presets }),
-      /项目.*默认/
-    )
-    assert.equal(await readFile(path, 'utf8'), before)
     const ignoreStore = await jiti.import<
       typeof import('../src/server/l4_foundation/pi/l4-pi-directory-ignore-store')
     >('../src/server/l4_foundation/pi/l4-pi-directory-ignore-store.ts')
-    ignoreStore.replaceL4PiDirectoryIgnore(cwd, true)
-    await assert.rejects(
-      store.replaceL4ModelSettings({ accountModels: [], presets: settings.presets }),
-      /项目.*默认/
+    ignoreStore.replaceL4PiDirectoryIgnore(project.cwd, true)
+    const before = await readFile(path, 'utf8')
+    const projectBefore = await readFile(project.path, 'utf8')
+    const preview = L2ModelSettingsPreviewResponseSchema.parse(
+      await store.previewL4ModelSettings({ accountModels: [] })
     )
-    assert.equal(await readFile(path, 'utf8'), before, '忽略项目的引用保护也不能改写配置')
-    await store.replaceL4ProjectModelDefault(cwd, null)
-    await store.replaceL4ModelSettings({ accountModels: [], presets: settings.presets })
+    assert.deepEqual(preview.projectDefaults, [
+      {
+        cwd: project.cwd,
+        from: {
+          provider: preset.provider,
+          modelId: preset.modelId,
+          thinkingLevel: preset.thinkingLevel
+        },
+        to: null
+      }
+    ])
+    assert.equal(await readFile(path, 'utf8'), before)
+    assert.equal(await readFile(project.path, 'utf8'), projectBefore)
+
+    await store.replaceL4ModelSettings({ accountModels: [] })
+    assert.deepEqual(await readConfig(project.path), { retained: true })
+    const saved = await store.readL4ModelSettings()
+    assert.deepEqual(saved.presets, settings.presets)
     assert.equal(
-      (await store.readL4ModelSettings()).models.some((item) => item.provider === 'openai-codex'),
+      saved.models.some((item) => item.provider === 'openai-codex'),
       false
     )
   })
@@ -513,6 +504,76 @@ async function createKnownProject(
     }
   })
   return { cwd, path }
+}
+
+for (const mode of ['form', 'native'] as const) {
+  test(`模型删除：${mode === 'form' ? '表单' : '原生配置'}保存清理引用，保留其他模型、项目和全局设置`, async () => {
+    const initial = fixtureConfig()
+    const stable = { ...modelOf(initial), id: 'keep-model' }
+    ;(providerOf(initial).models as unknown[]).push(stable)
+    await withFixture(initial, async (store, path, agentDir) => {
+      const globalPath = join(agentDir, 'settings.json')
+      await writeFile(
+        globalPath,
+        JSON.stringify({
+          defaultProvider: 'fixture',
+          defaultModel: 'test-model',
+          defaultThinkingLevel: 'high'
+        })
+      )
+      const first = await createKnownProject(agentDir, 'project-default', {
+        defaultProvider: 'fixture',
+        defaultModel: 'test-model',
+        defaultThinkingLevel: 'high',
+        retained: true
+      })
+      const partial = await createKnownProject(agentDir, 'project-partial', {
+        defaultThinkingLevel: 'max',
+        retained: true
+      })
+      const unrelated = await createKnownProject(agentDir, 'project-unrelated', {
+        defaultProvider: 'fixture',
+        defaultModel: 'keep-model'
+      })
+      const following = await createKnownProject(agentDir, 'project-following', { retained: true })
+      const settings = await store.readL4ModelSettings()
+      settings.providers[0].models.shift()
+      const candidate = structuredClone(initial)
+      providerOf(candidate).models = [stable]
+      const input =
+        mode === 'native'
+          ? L2ModelSettingsReplaceRequestSchema.parse({ nativeConfig: candidate })
+          : { providers: settings.providers }
+      const inputBefore = JSON.stringify(input)
+      const paths = [path, first.path, partial.path, unrelated.path, following.path, globalPath]
+      const before = await Promise.all(paths.map((item) => readFile(item, 'utf8')))
+      const preview = L2ModelSettingsPreviewResponseSchema.parse(
+        await store.previewL4ModelSettings(input)
+      )
+      assert.deepEqual(
+        new Set(preview.projectDefaults.map((item) => item.cwd)),
+        new Set([first.cwd, partial.cwd])
+      )
+      assert.ok(preview.projectDefaults.every((item) => item.to === null))
+      assert.deepEqual(await Promise.all(paths.map((item) => readFile(item, 'utf8'))), before)
+
+      await store.replaceL4ModelSettings(input)
+      for (const project of [first, partial]) {
+        assert.deepEqual(await readConfig(project.path), { retained: true })
+      }
+      const saved = await store.readL4ModelSettings()
+      assert.deepEqual(saved.presets, [])
+      assert.deepEqual(
+        saved.providers[0].models.map((item) => item.modelId),
+        ['keep-model']
+      )
+      assert.deepEqual((await readConfig(path)).customHostData, initial.customHostData)
+      for (const item of [unrelated.path, following.path, globalPath]) {
+        assert.equal(await readFile(item, 'utf8'), before[paths.indexOf(item)])
+      }
+      assert.equal(JSON.stringify(input), inputBefore, '预览与保存不修改调用方候选')
+    })
+  })
 }
 
 test('模型替换：预览只读，确认后同步已知项目并保留无关配置', async () => {
@@ -594,10 +655,6 @@ test('模型替换：预览只读，确认后同步已知项目并保留无关�
       '预览或取消不写配置'
     )
     await assert.rejects(
-      store.replaceL4ModelSettings({ ...input, modelReplacements: undefined }),
-      /项目.*默认/
-    )
-    await assert.rejects(
       store.replaceL4ModelSettings({
         ...input,
         modelReplacements: [
@@ -621,6 +678,7 @@ test('模型替换：预览只读，确认后同步已知项目并保留无关�
     await store.replaceL4ModelSettings(input)
     for (const project of [first, second]) {
       const next = preview.projectDefaults.find((item) => item.cwd === project.cwd)!.to
+      assert.ok(next)
       assert.deepEqual(await readConfig(project.path), {
         ...defaults,
         defaultProvider: next.provider,
@@ -635,52 +693,61 @@ test('模型替换：预览只读，确认后同步已知项目并保留无关�
   })
 })
 
-test('模型替换：最后一个文件写入失败会恢复已更新项目的原始文本', async (context) => {
-  await withFixture(fixtureConfig(), async (store, path, agentDir) => {
-    const first = await createKnownProject(agentDir, 'project-rollback', {
-      defaultProvider: 'fixture',
-      defaultModel: 'test-model',
-      defaultThinkingLevel: 'high',
-      retained: true
-    })
-    const before = await readFile(first.path, 'utf8')
-    const originalModels = await readFile(path, 'utf8')
-    const settings = await store.readL4ModelSettings()
-    settings.providers[0].models[0].modelId = 'new-model'
-    let projectWasChanged = false
-    const rename = fs.renameSync
-    const mocked = context.mock.method(fs, 'renameSync', (from, to): void => {
-      if (to === path) {
-        projectWasChanged =
-          JSON.parse(fs.readFileSync(first.path, 'utf8')).defaultModel === 'new-model'
-        throw new Error('fixture: model file write failed')
-      }
-      rename(from, to)
-    })
-    syncBuiltinESMExports()
-    try {
-      await assert.rejects(
-        store.replaceL4ModelSettings({
-          providers: settings.providers,
-          presets: [],
-          modelReplacements: [
-            {
-              from: { provider: 'fixture', modelId: 'test-model' },
-              to: { provider: 'fixture', modelId: 'new-model' }
-            }
-          ]
-        }),
-        /model file write failed/
-      )
-    } finally {
-      mocked.mock.restore()
+for (const operation of ['delete', 'replace'] as const) {
+  test(`模型${operation === 'delete' ? '删除' : '替换'}：最后一个文件写入失败会恢复项目原始文本`, async (context) => {
+    await withFixture(fixtureConfig(), async (store, path, agentDir) => {
+      const project = await createKnownProject(agentDir, 'project-rollback', {
+        defaultProvider: 'fixture',
+        defaultModel: 'test-model',
+        defaultThinkingLevel: 'high',
+        retained: true
+      })
+      const before = await readFile(project.path, 'utf8')
+      const originalModels = await readFile(path, 'utf8')
+      const settings = await store.readL4ModelSettings()
+      if (operation === 'delete') settings.providers[0].models = []
+      else settings.providers[0].models[0].modelId = 'new-model'
+      let projectWasChanged = false
+      const rename = fs.renameSync
+      const mocked = context.mock.method(fs, 'renameSync', (from: PathLike, to: PathLike): void => {
+        if (to === path) {
+          const updated = JSON.parse(fs.readFileSync(project.path, 'utf8')) as Config
+          projectWasChanged =
+            operation === 'delete'
+              ? !Object.hasOwn(updated, 'defaultModel')
+              : updated.defaultModel === 'new-model'
+          throw new Error('fixture: model file write failed')
+        }
+        rename(from, to)
+      })
       syncBuiltinESMExports()
-    }
-    assert.equal(projectWasChanged, true, '必须真实覆盖项目已写入后的失败')
-    assert.equal(await readFile(first.path, 'utf8'), before)
-    assert.equal(await readFile(path, 'utf8'), originalModels)
+      try {
+        await assert.rejects(
+          store.replaceL4ModelSettings({
+            providers: settings.providers,
+            ...(operation === 'replace'
+              ? {
+                  modelReplacements: [
+                    {
+                      from: { provider: 'fixture', modelId: 'test-model' },
+                      to: { provider: 'fixture', modelId: 'new-model' }
+                    }
+                  ]
+                }
+              : {})
+          }),
+          /model file write failed/
+        )
+      } finally {
+        mocked.mock.restore()
+        syncBuiltinESMExports()
+      }
+      assert.equal(projectWasChanged, true, '必须覆盖项目已写入后的失败')
+      assert.equal(await readFile(project.path, 'utf8'), before)
+      assert.equal(await readFile(path, 'utf8'), originalModels)
+    })
   })
-})
+}
 
 test('模型设置：原生编辑仍可修复无法解析的旧文件', async () => {
   await withFixture('{ broken', async (store, path) => {

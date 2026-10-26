@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type PropsWithChildren } from 'react'
 import { createL2PluginHostRuntime } from '@client/l2_biz/plugin-host/l2-plugin-host-runtime'
 import { L2ProjectPreviewDialog } from '@client/l2_biz/project-preview/l2-project-preview-dialog'
-import { createL4BrowserUuid } from '@client/l4_foundation/lib/l4-browser-uuid'
+import { useL4ClientId } from '@client/l4_foundation/lib/l4-client-id'
 import { L4PluginHostContext } from '@client/l4_foundation/plugin-host/l4-plugin-host-context'
 import type { L4PluginHostRuntime } from '@client/l4_foundation/plugin-host/l4-plugin-host-runtime'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
@@ -22,8 +22,8 @@ interface L1AppRuntimeOwner {
 
 export function L1AppRuntimeProvider({ children }: PropsWithChildren): React.JSX.Element {
   const toast = useL4AppToast()
+  const clientId = useL4ClientId()
   const [runtime] = useState<L1AppRuntimeOwner>(() => {
-    const clientId = createL4BrowserUuid()
     const owner = createL4AppSocketClient(clientId)
     return {
       clientId,

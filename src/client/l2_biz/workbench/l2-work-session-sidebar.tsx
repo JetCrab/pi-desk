@@ -21,6 +21,7 @@ import {
   EllipsisIcon,
   FolderTreeIcon,
   FolderSearchIcon,
+  ExternalLinkIcon,
   LoaderCircleIcon,
   MessageSquareTextIcon,
   PinIcon,
@@ -131,6 +132,7 @@ interface L2WorkSessionSidebarProps {
   onModeChange: (mode: L2WorkSessionSidebarMode) => void
   onRefreshFiles: () => void
   onPreviewProject: () => void
+  onPreviewProjectWindow: () => void
   onOpenTerminal: () => void
   onCreate: () => void
   onReplace: () => void
@@ -680,6 +682,7 @@ function L2WorkSessionSidebarComponent({
   onModeChange,
   onRefreshFiles,
   onPreviewProject,
+  onPreviewProjectWindow,
   onOpenTerminal,
   onCreate,
   onReplace,
@@ -770,20 +773,28 @@ function L2WorkSessionSidebarComponent({
       : mode === 'files'
         ? [
             {
-              key: 'new-terminal',
-              label: t('newTerminal'),
-              disabled,
-              icon: <TerminalIcon />,
-              testId: 'project-files-terminal-open',
-              onSelect: onOpenTerminal
-            },
-            {
               key: 'preview-project',
               label: t('projectPreview'),
               disabled: !canBrowseFiles,
               icon: <FolderSearchIcon />,
               testId: 'project-preview-open',
               onSelect: onPreviewProject
+            },
+            {
+              key: 'preview-project-window',
+              label: t('projectPreviewWindow'),
+              disabled: !canBrowseFiles,
+              icon: <ExternalLinkIcon />,
+              testId: 'project-preview-window-open',
+              onSelect: onPreviewProjectWindow
+            },
+            {
+              key: 'new-terminal',
+              label: t('newTerminal'),
+              disabled,
+              icon: <TerminalIcon />,
+              testId: 'project-files-terminal-open',
+              onSelect: onOpenTerminal
             },
             {
               key: 'refresh-files',

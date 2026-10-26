@@ -9,6 +9,7 @@ use url::Url;
 
 struct BrowserWindow {
     label: String,
+    target: String,
     invalid: Arc<AtomicBool>,
 }
 
@@ -75,18 +76,36 @@ fn show(window: &WebviewWindow) -> Result<(), String> {
 }
 
 pub fn open_browser(app: &AppHandle, value: &str) -> Result<(), String> {
+    let url = Url::parse(value).map_err(|_| "网页地址无效".to_string())?;
+    open_page(app, value, url, false)
+}
+
+pub fn open_preview(app: &AppHandle, target: &str, url: &Url) -> Result<(), String> {
+    open_page(app, target, url.clone(), true)
+}
+
+fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<(), String> {
     let state = app.state::<ShellState>();
     let registry = &state.windows;
-    let url = Url::parse(value).map_err(|_| "网页地址无效".to_string())?;
-    // 同一网址串行创建窗口；已有窗口只显示，不触发页面重载。
+    // 同一网址串行创建工作台；临时预览始终创建新窗口。
     let mut labels = registry
         .labels
         .lock()
         .map_err(|_| "窗口状态不可用".to_string())?;
-    if let Some((window, invalid)) = labels.get(value).and_then(|registered| {
-        app.get_webview_window(&registered.label)
-            .map(|window| (window, registered.invalid.load(Ordering::Acquire)))
-    }) {
+    if state.closing.load(Ordering::Acquire) {
+        return Err("桌面程序正在退出".into());
+    }
+    if preview && state.config()?.target(value).is_none() {
+        return Err("网址配置不存在".into());
+    }
+    if let Some((window, invalid)) = labels
+        .get(value)
+        .filter(|_| !preview)
+        .and_then(|registered| {
+            app.get_webview_window(&registered.label)
+                .map(|window| (window, registered.invalid.load(Ordering::Acquire)))
+        })
+    {
         if !invalid {
             return show(&window);
         }
@@ -103,16 +122,28 @@ pub fn open_browser(app: &AppHandle, value: &str) -> Result<(), String> {
         return open_browser(app, value);
     }
     let label = format!(
-        "browser-{}",
+        "browser-{}{}",
+        if preview { "preview-" } else { "" },
         registry.sequence.fetch_add(1, Ordering::Relaxed)
     );
+    let key = if preview {
+        label.clone()
+    } else {
+        value.to_string()
+    };
     let origin = url.origin();
+    let popup_origin = origin.clone();
     let navigate_app = app.clone();
     let popup_app = app.clone();
     let popup_label = label.clone();
+    let popup_target = value.to_string();
     let invalid = Arc::new(AtomicBool::new(false));
     let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()))
-        .title(format!("Pi Desk · {}", url.host_str().unwrap_or("网页")))
+        .title(format!(
+            "Pi Desk · {}{}",
+            if preview { "项目预览 · " } else { "" },
+            url.host_str().unwrap_or("网页")
+        ))
         .inner_size(1280.0, 820.0)
         .min_inner_size(720.0, 480.0)
         .on_navigation(move |next| {
@@ -120,6 +151,8 @@ pub fn open_browser(app: &AppHandle, value: &str) -> Result<(), String> {
                 return true;
             }
             if !matches!(next.scheme(), "http" | "https") {
+                let state = navigate_app.state::<ShellState>();
+                logging::write(&state.log_path, "browser-navigation-denied", next.as_str());
                 return false;
             }
             open_external(&navigate_app, next, "navigation").is_err()
@@ -133,6 +166,18 @@ pub fn open_browser(app: &AppHandle, value: &str) -> Result<(), String> {
                 &format!("label={popup_label} url={next} supported={supported}"),
             );
             if !supported {
+                return NewWindowResponse::Deny;
+            }
+            if next.origin() == popup_origin && next.path() == "/project-preview" {
+                let app = popup_app.clone();
+                let target = popup_target.clone();
+                // WebView 回调不阻塞等待另一个 WebView 在主线程创建。
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(error) = open_preview(&app, &target, &next) {
+                        let state = app.state::<ShellState>();
+                        logging::write(&state.log_path, "preview-open-failed", &error);
+                    }
+                });
                 return NewWindowResponse::Deny;
             }
             if open_external(&popup_app, &next, "new-window").is_ok() {
@@ -162,9 +207,10 @@ pub fn open_browser(app: &AppHandle, value: &str) -> Result<(), String> {
     #[cfg(windows)]
     watch_process(&window, invalid.clone())?;
     labels.insert(
-        value.to_string(),
+        key.clone(),
         BrowserWindow {
             label: label.clone(),
+            target: value.to_string(),
             invalid,
         },
     );
@@ -174,6 +220,9 @@ pub fn open_browser(app: &AppHandle, value: &str) -> Result<(), String> {
     let hidden = window.clone();
     window.on_window_event(move |event| {
         if let WindowEvent::CloseRequested { api, .. } = event {
+            if preview {
+                return;
+            }
             api.prevent_close();
             let _ = hidden.hide();
             if let Err(error) = crate::runtime::workspace_window_closed(&app_for_close) {
@@ -184,30 +233,62 @@ pub fn open_browser(app: &AppHandle, value: &str) -> Result<(), String> {
         if matches!(event, WindowEvent::Destroyed) {
             let state = app_for_close.state::<ShellState>();
             if let Ok(mut labels) = state.windows.labels.lock() {
-                if labels.get(&target).map(|registered| &registered.label) == Some(&label) {
-                    labels.remove(&target);
+                if labels.get(&key).map(|registered| &registered.label) == Some(&label) {
+                    labels.remove(&key);
                 }
             }
             logging::write(
                 &state.log_path,
                 "browser-destroyed",
-                &format!("label={label} url={target}"),
+                &format!("label={label} url={target} preview={preview}"),
             );
         }
     });
+    logging::write(
+        &state.log_path,
+        "browser-open",
+        &format!("label={} url={url} preview={preview}", window.label()),
+    );
     show(&window)
 }
 
 pub fn remove(app: &AppHandle, url: &str) {
+    remove_matching(app, |window| window.target == url);
+}
+
+pub fn remove_all(app: &AppHandle) {
+    remove_matching(app, |_| true);
+}
+
+fn remove_matching(app: &AppHandle, matches: impl Fn(&BrowserWindow) -> bool) {
     let state = app.state::<ShellState>();
-    let label = state
+    let labels = state
         .windows
         .labels
         .lock()
-        .ok()
-        .and_then(|mut labels| labels.remove(url));
-    if let Some(window) = label.and_then(|registered| app.get_webview_window(&registered.label)) {
-        let _ = window.destroy();
+        .map(|mut labels| {
+            let mut removed = Vec::new();
+            labels.retain(|_, window| {
+                if matches(window) {
+                    removed.push(window.label.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            removed
+        })
+        .unwrap_or_default();
+    for label in labels {
+        if let Some(window) = app.get_webview_window(&label) {
+            if let Err(error) = window.destroy() {
+                logging::write(
+                    &state.log_path,
+                    "browser-destroy-failed",
+                    &format!("label={label} error={error}"),
+                );
+            }
+        }
     }
 }
 

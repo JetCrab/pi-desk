@@ -45,6 +45,7 @@ import {
 const L4_PLUGIN_PUSH_MAX_JSON_BYTES = 64 * 1024
 const L4_PLUGIN_LIFECYCLE_TIMEOUT_MS = 1_500
 const L4_PLUGIN_LOAD_TIMEOUT_MS = 15_000
+const L4_PLUGIN_RECOVERY_DELAY_MS = 10_000
 const L4_PLUGIN_BROWSER_TOTAL_BYTES = 128 * 1024 * 1024
 const L4PiPluginPushDataSchema = z.record(z.string(), z.json())
 const L4PiSourceSchema = z
@@ -153,6 +154,22 @@ class L4PiPluginPhaseError extends Error {
   }
 }
 
+class L4PiPluginLoadTimeoutError extends L4PiPluginPhaseError {
+  constructor(
+    phase: L4PiPluginDiagnosticPhase,
+    readonly execution: Promise<void>
+  ) {
+    super(phase, new Error('插件加载超时，已停止本次加载'))
+    this.name = 'L4PiPluginLoadTimeoutError'
+  }
+}
+
+interface L4PiPluginRecovery {
+  installedPath: string
+  settled: Promise<void>
+  controller: AbortController
+}
+
 interface L4PiPluginOwner {
   source: string
   packageName: string | null
@@ -163,6 +180,7 @@ interface L4PiPluginOwner {
   pluginNames: Set<string>
   activeCalls: Set<AbortController>
   subscriptions: Set<PluginDisposer>
+  pendingCleanup: Set<Promise<void>>
   beforeReload: PiDeskPluginLifecycle['beforeReload'] | null
   disposer: PluginDisposer | null
 }
@@ -269,11 +287,15 @@ async function runLifecycleWithTimeout(input: {
 }): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | null = null
   const timeoutMs = L4_PLUGIN_LIFECYCLE_TIMEOUT_MS
+  const execution = Promise.resolve().then(input.execute)
+  input.owner.pendingCleanup.add(execution)
+  const release = (): void => {
+    input.owner.pendingCleanup.delete(execution)
+  }
+  void execution.then(release, release)
   try {
     const completed = await Promise.race([
-      Promise.resolve()
-        .then(input.execute)
-        .then(() => true),
+      execution.then(() => true),
       new Promise<false>((resolveTimeout) => {
         timer = setTimeout(() => resolveTimeout(false), timeoutMs)
       })
@@ -307,6 +329,7 @@ export class L4PiPluginOwnerRuntime {
   private readonly maintainingSources = new Set<string>()
   private readonly lifetime = new AbortController()
   private readonly packageDiagnostics = new Map<string, L4PiPluginPackageDiagnostic>()
+  private readonly recoveries = new Map<string, L4PiPluginRecovery>()
   private initializePromise: Promise<void> | null = null
   private initialized = false
   private disposed = false
@@ -386,6 +409,7 @@ export class L4PiPluginOwnerRuntime {
     ) {
       throw new L4PiPluginRuntimeBusyError()
     }
+    this.cancelRecovery(source)
     this.maintainingSources.add(source)
     try {
       while (this.owners.some((owner) => owner.source === source && owner.activeCalls.size > 0)) {
@@ -404,6 +428,7 @@ export class L4PiPluginOwnerRuntime {
     if (this.disposed || !this.acceptingCalls || this.changingSources.has(source)) {
       throw new L4PiPluginRuntimeBusyError()
     }
+    this.cancelRecovery(source)
     const owner = this.owners.find((item) => item.source === source)
 
     this.changingSources.add(source)
@@ -487,6 +512,7 @@ export class L4PiPluginOwnerRuntime {
     }
 
     this.acceptingCalls = false
+    for (const source of this.recoveries.keys()) this.cancelRecovery(source)
     for (const owner of this.owners) owner.draining = true
     await Promise.all(
       [...this.owners].reverse().map(async (owner) => {
@@ -648,6 +674,7 @@ export class L4PiPluginOwnerRuntime {
     if (this.disposed) return
     this.disposed = true
     this.lifetime.abort()
+    for (const source of this.recoveries.keys()) this.cancelRecovery(source)
     this.acceptingCalls = false
     this.changeListeners.clear()
     this.workSessionProvider = null
@@ -671,7 +698,56 @@ export class L4PiPluginOwnerRuntime {
     this.packageDiagnostics.clear()
     for (const item of await this.packageProvider()) {
       if (this.disposed) return
-      await this.loadPackage(item.source, item.installedPath)
+      const settled = await this.loadPackage(item.source, item.installedPath)
+      if (settled && !this.disposed) {
+        this.recoveries.set(item.source, {
+          installedPath: item.installedPath,
+          settled: settled.execution,
+          controller: new AbortController()
+        })
+      }
+    }
+    for (const [source, recovery] of this.recoveries) {
+      void this.recoverSource(source, recovery)
+    }
+  }
+
+  private cancelRecovery(source: string): void {
+    const recovery = this.recoveries.get(source)
+    this.recoveries.delete(source)
+    recovery?.controller.abort()
+  }
+
+  private async recoverSource(source: string, recovery: L4PiPluginRecovery): Promise<void> {
+    const signal = recovery.controller.signal
+    let onAbort!: () => void
+    const canceled = new Promise<never>((_, reject) => {
+      onAbort = (): void => reject(signal.reason)
+      signal.addEventListener('abort', onAbort, { once: true })
+    })
+    try {
+      // 超时只结束等待；旧 setup 和清理真正结束后才允许自动创建新实例。
+      await Promise.race([recovery.settled, canceled])
+      signal.throwIfAborted()
+      console.info('[Pi Desk][GlobalPluginRuntime] 插件加载超时，稍后自动重试一次', {
+        source,
+        delayMs: L4_PLUGIN_RECOVERY_DELAY_MS
+      })
+      await delay(L4_PLUGIN_RECOVERY_DELAY_MS, undefined, { signal })
+      signal.throwIfAborted()
+      this.recoveries.delete(source)
+      await this.replaceSource(source, recovery.installedPath)
+      console.info('[Pi Desk][GlobalPluginRuntime] 插件自动重试成功', { source })
+    } catch (error) {
+      if (!signal.aborted) {
+        console.warn('[Pi Desk][GlobalPluginRuntime] 插件自动重试失败，不再自动加载', {
+          source,
+          message: errorMessage(error)
+        })
+      }
+    } finally {
+      signal.removeEventListener('abort', onAbort)
+      if (this.recoveries.get(source) === recovery) this.recoveries.delete(source)
     }
   }
 
@@ -681,9 +757,28 @@ export class L4PiPluginOwnerRuntime {
     globalInput: unknown
   ): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined
+    let phase: L4PiPluginDiagnosticPhase = 'entry'
+    let phaseStartedAt = performance.now()
+    const logPhase = (): void => {
+      const durationMs = Math.round(performance.now() - phaseStartedAt)
+      if (durationMs < 1_000) return
+      console.info('[Pi Desk][GlobalPluginRuntime] 插件加载阶段耗时', {
+        source: owner.source,
+        packageName: owner.packageName,
+        phase,
+        durationMs
+      })
+    }
+    const enterPhase = (next: L4PiPluginDiagnosticPhase): void => {
+      logPhase()
+      phase = next
+      phaseStartedAt = performance.now()
+    }
     const execution = (async (): Promise<void> => {
-      if (entryInput !== undefined) await this.loadEntryOwner(owner, entryInput)
-      else await this.loadLegacyOwner(owner, globalInput)
+      const onSetup = (): void => enterPhase('setup')
+      if (entryInput !== undefined) await this.loadEntryOwner(owner, entryInput, onSetup)
+      else await this.loadLegacyOwner(owner, globalInput, onSetup)
+      enterPhase('resources')
       try {
         await this.validateOwnerResources(owner)
       } catch (error) {
@@ -696,16 +791,20 @@ export class L4PiPluginOwnerRuntime {
         execution,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            reject(new L4PiPluginPhaseError('setup', new Error('插件初始化超时，已放弃加载')))
+            reject(new L4PiPluginLoadTimeoutError(phase, execution))
           }, L4_PLUGIN_LOAD_TIMEOUT_MS)
         })
       ])
     } finally {
       if (timer) clearTimeout(timer)
+      logPhase()
     }
   }
 
-  private async loadPackage(source: string, installedPath: string): Promise<void> {
+  private async loadPackage(
+    source: string,
+    installedPath: string
+  ): Promise<{ execution: Promise<void> } | null> {
     const startedAt = performance.now()
     const packageRoot = resolve(installedPath)
     let manifest: L4PiDeskPackageManifest
@@ -721,13 +820,13 @@ export class L4PiPluginOwnerRuntime {
         status: 'failed',
         error: { phase: 'package', message: errorMessage(error) }
       })
-      return
+      return null
     }
 
     const entryInput = manifest.piDesk?.entry
     const globalInput = manifest.piDesk?.global
-    if (entryInput === undefined && globalInput === undefined) return
-    if (this.disposed) return
+    if (entryInput === undefined && globalInput === undefined) return null
+    if (this.disposed) return null
     const owner: L4PiPluginOwner = {
       source,
       packageName: typeof manifest.name === 'string' ? manifest.name : null,
@@ -738,6 +837,7 @@ export class L4PiPluginOwnerRuntime {
       pluginNames: new Set(),
       activeCalls: new Set(),
       subscriptions: new Set(),
+      pendingCleanup: new Set(),
       beforeReload: null,
       disposer: null
     }
@@ -783,12 +883,26 @@ export class L4PiPluginOwnerRuntime {
         message,
         durationMs: Math.round(performance.now() - startedAt)
       })
+      if (error instanceof L4PiPluginLoadTimeoutError) {
+        return {
+          execution: error.execution
+            .catch(() => {})
+            .then(async () => {
+              await Promise.allSettled([...owner.pendingCleanup])
+            })
+        }
+      }
     } finally {
       this.loadingOwners.delete(owner)
     }
+    return null
   }
 
-  private async loadEntryOwner(owner: L4PiPluginOwner, entryInput: unknown): Promise<void> {
+  private async loadEntryOwner(
+    owner: L4PiPluginOwner,
+    entryInput: unknown,
+    onSetup: () => void
+  ): Promise<void> {
     const entryPath = packageEntryPath(owner.packageRoot, entryInput, 'piDesk.entry')
     const entryStat = await stat(entryPath)
     if (!entryStat.isFile()) throw new Error('Pi Desk Plugin entry is not a file')
@@ -806,6 +920,7 @@ export class L4PiPluginOwnerRuntime {
 
     const pluginName = parseL4PiPluginName(definition.name)
     this.claimPluginName(owner, pluginName)
+    onSetup()
     try {
       const lifecycle = normalizeSetupResult(
         await definition.setup(this.createPiDeskFacade(owner, pluginName, owner.packageRoot))
@@ -821,7 +936,11 @@ export class L4PiPluginOwnerRuntime {
     }
   }
 
-  private async loadLegacyOwner(owner: L4PiPluginOwner, entryInput: unknown): Promise<void> {
+  private async loadLegacyOwner(
+    owner: L4PiPluginOwner,
+    entryInput: unknown,
+    onSetup: () => void
+  ): Promise<void> {
     const entryPath = packageEntryPath(owner.packageRoot, entryInput, 'piDesk.global')
     const entryStat = await stat(entryPath)
     if (!entryStat.isFile()) throw new Error('Global Plugin entry is not a file')
@@ -832,6 +951,7 @@ export class L4PiPluginOwnerRuntime {
     }
 
     const factory = loaded.default as GlobalPluginFactory
+    onSetup()
     try {
       const disposer = await factory(this.createLegacyApi(owner))
       if (disposer !== undefined && typeof disposer !== 'function') {

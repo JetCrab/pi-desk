@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, type ComponentProps } from 'react'
+import { buildL2ProjectPreviewHref } from '@common/l2_biz/project-preview/l2-project-preview-navigation'
 import { L2TerminalBiz } from '@client/l2_biz/terminal/l2-terminal-biz'
 import { L2TerminalWorkspace } from '@client/l2_biz/terminal/l2-terminal-workspace'
 import { useL4PluginHost } from '@client/l4_foundation/plugin-host/l4-plugin-host-context'
@@ -12,6 +13,8 @@ import { L2PluginManagement } from '@client/l2_biz/plugin-host/l2-plugin-managem
 import { createL2PluginManagementBiz } from '@client/l2_biz/plugin-host/l2-plugin-management-biz'
 import { L2PluginSessionSidebarTab } from '@client/l2_biz/plugin-host/l2-plugin-session-sidebar-tab'
 import { L2PluginSettingsPage } from '@client/l2_biz/plugin-host/l2-plugin-settings-page'
+import { L2PluginWidgets } from '@client/l2_biz/plugin-host/l2-plugin-widgets'
+import { L2PluginSessionHeader } from '@client/l2_biz/plugin-host/l2-plugin-session-header'
 import { L2Settings } from '@client/l2_biz/settings/l2-settings'
 import { L2PiSettings } from '@client/l2_biz/pi-settings/l2-pi-settings'
 import { createL2TaskCenterBiz } from '@client/l2_biz/task-center/l2-task-center-biz'
@@ -56,6 +59,28 @@ function renderPluginComposerPanel(
   return (
     <L2PluginComposerPanel
       key={`${input.pluginName}:${input.descriptor.contributionName}:${sourceKey}`}
+      {...input}
+    />
+  )
+}
+
+function renderPluginWidgets(
+  input: Parameters<WorkbenchProps['renderPluginWidgets']>[0]
+): React.JSX.Element {
+  return (
+    <L2PluginWidgets
+      key={`${input.source.workId}:${input.source.sessionId}:${input.source.branchId}:${input.placement}`}
+      {...input}
+    />
+  )
+}
+
+function renderPluginSessionHeader(
+  input: Parameters<WorkbenchProps['renderPluginSessionHeader']>[0]
+): React.JSX.Element {
+  return (
+    <L2PluginSessionHeader
+      key={`${input.source.workId}:${input.source.sessionId}:${input.source.branchId}`}
       {...input}
     />
   )
@@ -158,6 +183,9 @@ export function L1HomePage(): React.JSX.Element {
       onTerminalReady={terminalBiz.connected}
       onTerminalDisconnected={terminalBiz.disconnected}
       onOpenTerminal={terminalBiz.open}
+      onOpenProjectPreviewWindow={(cwd) => {
+        window.open(buildL2ProjectPreviewHref(cwd), '_blank', 'noopener,noreferrer')
+      }}
       renderTerminalWorkspace={renderTerminalWorkspace}
       listPluginManagement={pluginManagementBiz.list}
       subscribePluginManagementChanges={pluginManagementBiz.subscribeChanges}
@@ -169,6 +197,8 @@ export function L1HomePage(): React.JSX.Element {
       renderPluginApplication={renderPluginApplication}
       renderPluginSessionSidebarTab={renderPluginSessionSidebarTab}
       renderPluginComposerPanel={renderPluginComposerPanel}
+      renderPluginWidgets={renderPluginWidgets}
+      renderPluginSessionHeader={renderPluginSessionHeader}
       renderSettings={renderSettings}
       renderTaskSummary={renderTaskSummary}
       renderTaskMenu={renderTaskMenu}

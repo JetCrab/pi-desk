@@ -99,7 +99,7 @@ export class L2ProjectHistoryRuntime {
   getChangeRows(): readonly L3PathTreeRow[] {
     return this.changeRows
   }
-  restoreBrowsing(input: L2ProjectPreviewProject['history']): void {
+  restoreBrowsing(input: L2ProjectPreviewProject['history'], load = true): void {
     Object.assign(this.state, {
       repositoryRoot: input.repositoryRoot,
       mode: input.mode,
@@ -114,7 +114,7 @@ export class L2ProjectHistoryRuntime {
     this.restoredChangesScroll = input.changesScroll
     this.restoredCommit = input.selectedCommit
     this.restoredChangePath = input.selectedChangePath
-    if (input.repositoryRoot !== null) {
+    if (load && input.repositoryRoot !== null) {
       void this.loadBranches()
       void this.reload()
     }
@@ -138,7 +138,13 @@ export class L2ProjectHistoryRuntime {
   }
 
   setRepository(root: string): void {
-    if (root === this.state.repositoryRoot) return
+    if (root === this.state.repositoryRoot) {
+      if (this.state.branches.status === 'idle') {
+        void this.loadBranches()
+        void this.reload()
+      }
+      return
+    }
     this.cancel('branches')
     this.state.repositoryRoot = root
     this.state.tip = this.state.target = 'HEAD'

@@ -35,11 +35,12 @@ export function subscribeL2ProjectPreviewDirectories(
     )
     syncL2ProjectPreviewGitReferences(files, git, getSessions(), getFocusedWorkId())
   })
-  for (const session of getSessions()) {
-    const state = chat.getSourceState(session)
+  for (const { workId, sessionId, branchId } of getSessions()) {
+    const source = { workId, sessionId, branchId }
+    const state = chat.getSourceState(source)
     if (state.syncStatus === 'loading') continue
     files.applyPreviewDirectories(
-      session,
+      source,
       readL4ProjectPreviewState(state.runtime.plugins[L4_PROJECT_PREVIEW_PLUGIN_KEY])
     )
   }

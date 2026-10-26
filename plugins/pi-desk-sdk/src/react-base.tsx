@@ -34,6 +34,7 @@ export type {
 } from './browser.js'
 export * from './react-ui.tsx'
 export * from './react-log.tsx'
+export * from './react-popover.tsx'
 
 function useExternalSnapshot<T>(owner: {
   getSnapshot(): T

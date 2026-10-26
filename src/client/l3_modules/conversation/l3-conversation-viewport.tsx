@@ -157,9 +157,11 @@ export function positionL3ConversationMessage(
     offset,
     addTailSpace
   })
-  clearL3ConversationTailSpacer(scrollElement)
-
   const turn = addTailSpace ? logicalTailTurn(scrollElement) : null
+  // 同一轮的定位空间可直接重算，先清空会让浏览器截短 scrollTop。
+  if (!turn || activeTailTurn(scrollElement) !== turn) {
+    clearL3ConversationTailSpacer(scrollElement)
+  }
   if (!turn) {
     scrollElement.scrollTop = Math.max(
       0,
@@ -177,11 +179,15 @@ export function positionL3ConversationMessage(
   }
 
   const { targetScrollTop, minHeight } = measureTailPosition(scrollElement, target, turn, offset)
-  turn.style.minHeight = `${Math.ceil(minHeight)}px`
-  turn.dataset.chatTailSpace = ''
+  const nextMinHeight = `${Math.ceil(minHeight)}px`
+  if (turn.style.minHeight !== nextMinHeight) turn.style.minHeight = nextMinHeight
+  if (!turn.hasAttribute('data-chat-tail-space')) turn.dataset.chatTailSpace = ''
   const anchor = target.dataset.chatScrollAnchor
-  if (anchor) turn.dataset.chatTailAnchor = anchor
-  turn.dataset.chatTailOffset = String(offset)
+  if (turn.dataset.chatTailAnchor !== anchor) {
+    if (anchor) turn.dataset.chatTailAnchor = anchor
+    else delete turn.dataset.chatTailAnchor
+  }
+  if (turn.dataset.chatTailOffset !== String(offset)) turn.dataset.chatTailOffset = String(offset)
   scrollElement.scrollTop = targetScrollTop
   logL3ConversationScroll('position:end', scrollElement, {
     target: target.dataset.chatScrollAnchor ?? null,

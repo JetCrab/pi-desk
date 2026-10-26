@@ -196,6 +196,36 @@ export function useL2ModelSettings(
     }
   }
 
+  async function confirmModelChanges(
+    input: L2ModelSettingsReplaceRequest,
+    removedPresetCount = 0
+  ): Promise<boolean> {
+    const { projectDefaults } = await biz.previewSettings(input)
+    if (projectDefaults.length > 0) {
+      const description = [
+        t('replaceProjectDefaultsDescription'),
+        ...(removedPresetCount > 0
+          ? [t('removeInvalidPresets', { count: removedPresetCount })]
+          : [])
+      ].join(' ')
+      return confirm({
+        title: t('replaceProjectDefaultsTitle'),
+        description,
+        content: createElement(L2ModelReplacementPreview, { projectDefaults }),
+        confirmLabel: t('confirmAndSaveModels'),
+        confirmVariant: 'default'
+      })
+    }
+    return (
+      removedPresetCount === 0 ||
+      confirm({
+        title: t('removeInvalidPresetsTitle'),
+        description: t('removeInvalidPresets', { count: removedPresetCount }),
+        confirmLabel: t('removeAndSave')
+      })
+    )
+  }
+
   async function saveConfig(): Promise<void> {
     if (savingRef.current || inputState.invalid || serviceDirty || nativeOpen) return
     if (!settings || !formDirty) {
@@ -230,36 +260,7 @@ export function useL2ModelSettings(
           ? { modelReplacements: modelReplacements.current }
           : {})
       }
-      const { projectDefaults } = modelReplacements.current.length
-        ? await biz.previewSettings(input)
-        : { projectDefaults: [] }
-      if (projectDefaults.length > 0) {
-        const description = [
-          t('replaceProjectDefaultsDescription'),
-          ...(removedPresetCount > 0
-            ? [t('removeInvalidPresets', { count: removedPresetCount })]
-            : [])
-        ].join(' ')
-        if (
-          !(await confirm({
-            title: t('replaceProjectDefaultsTitle'),
-            description,
-            content: createElement(L2ModelReplacementPreview, { projectDefaults }),
-            confirmLabel: t('confirmAndSaveModels'),
-            confirmVariant: 'default'
-          }))
-        )
-          return
-      } else if (
-        removedPresetCount > 0 &&
-        !(await confirm({
-          title: t('removeInvalidPresetsTitle'),
-          description: t('removeInvalidPresets', { count: removedPresetCount }),
-          confirmLabel: t('removeAndSave')
-        }))
-      ) {
-        return
-      }
+      if (!(await confirmModelChanges(input, removedPresetCount))) return
 
       await biz.replaceSettings(input)
       applySettings(await biz.getSettings())
@@ -335,7 +336,9 @@ export function useL2ModelSettings(
     setNativeError(null)
     try {
       const nativeConfig = biz.parseNativeConfig(nativeText)
-      await biz.replaceSettings({ nativeConfig })
+      const input = { nativeConfig }
+      if (!(await confirmModelChanges(input))) return
+      await biz.replaceSettings(input)
       applySettings(await biz.getSettings())
       setNativeOpen(false)
       toast.success(t('modelSaved'))

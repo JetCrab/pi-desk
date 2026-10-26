@@ -234,6 +234,17 @@ export interface BrowserApplicationTarget {
   close(): void
 }
 
+export interface BrowserWidgetTarget {
+  kind: 'widget'
+  source: PluginSource
+}
+
+export interface BrowserSessionHeaderItemTarget {
+  kind: 'session-header-item'
+  source: PluginSource
+  presentation: 'inline' | 'overflow'
+}
+
 export interface BrowserComposerPanelTarget {
   kind: 'composer-panel'
   source: PluginSource
@@ -354,7 +365,17 @@ export interface BrowserSessionSidebarTabImplementation {
   mount: BrowserMount<BrowserSessionSidebarTabTarget>
 }
 
+export interface BrowserWidgetImplementation {
+  mount: BrowserMount<BrowserWidgetTarget>
+}
+
+export interface BrowserSessionHeaderItemImplementation {
+  mount: BrowserMount<BrowserSessionHeaderItemTarget>
+}
+
 export type BrowserContributionImplementation =
+  | BrowserWidgetImplementation
+  | BrowserSessionHeaderItemImplementation
   | BrowserApplicationImplementation
   | BrowserComposerPanelImplementation
   | BrowserSettingsPageImplementation
@@ -400,6 +421,39 @@ export interface BrowserSessionSidebarTabContributionDefinition {
   load(): Promise<BrowserSessionSidebarTabImplementation>
 }
 
+export interface BrowserWidgetDefinition {
+  placement?: 'aboveEditor' | 'belowEditor'
+  load(): Promise<BrowserWidgetImplementation>
+}
+
+export interface BrowserSessionHeaderActionContext {
+  source: PluginSource
+  host: BrowserPluginHost
+  signal: AbortSignal
+}
+
+export interface BrowserSessionHeaderAction {
+  type: 'action'
+  icon: import('./shared.js').BrowserContributionIcon
+  label: string
+  onSelect(context: BrowserSessionHeaderActionContext): void | Promise<void>
+  load?: never
+  minWidthRem?: never
+}
+
+export interface BrowserSessionHeaderCustom {
+  type: 'custom'
+  load(): Promise<BrowserSessionHeaderItemImplementation>
+  icon?: never
+  label?: never
+  onSelect?: never
+}
+
+export interface BrowserSessionHeaderItemDefinition {
+  inline: BrowserSessionHeaderAction | (BrowserSessionHeaderCustom & { minWidthRem: number })
+  overflow: BrowserSessionHeaderAction | (BrowserSessionHeaderCustom & { minWidthRem?: never })
+}
+
 export interface BrowserContributionDefinitionMap {
   application: BrowserApplicationContributionDefinition
   'composer-panel': BrowserComposerPanelContributionDefinition
@@ -417,6 +471,19 @@ export interface BrowserContributionImplementationMap {
 }
 
 export type BrowserContributionDescriptor =
+  | {
+      kind: 'widget'
+      contributionName: string
+      placement: 'aboveEditor' | 'belowEditor'
+    }
+  | {
+      kind: 'session-header-item'
+      contributionName: string
+      inline:
+        | Pick<BrowserSessionHeaderAction, 'type' | 'icon' | 'label'>
+        | { type: 'custom'; minWidthRem: number }
+      overflow: Pick<BrowserSessionHeaderAction, 'type' | 'icon' | 'label'> | { type: 'custom' }
+    }
   | {
       kind: 'application'
       contributionName: string
@@ -472,6 +539,11 @@ export interface BrowserPluginFacade {
     kind: K,
     contributionName: string,
     definition: BrowserContributionDefinitionMap[K]
+  ): void
+  registerWidget(contributionName: string, definition: BrowserWidgetDefinition): void
+  registerSessionHeaderItem(
+    contributionName: string,
+    definition: BrowserSessionHeaderItemDefinition
   ): void
   onPush(listener: (message: PluginPushMessage) => void): PluginDisposer
 }

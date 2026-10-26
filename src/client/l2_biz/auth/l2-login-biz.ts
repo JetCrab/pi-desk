@@ -1,4 +1,5 @@
 import type { L4ApiResponse } from '@common/l4_foundation/http/l4-api-response-contract'
+import { L2ResolveAuthReturnTo } from '@common/l2_biz/auth/l2-auth-return-to'
 import { l4LocalizedErrorMessage } from '@client/l4_foundation/locale/l4-localized-error'
 import {
   L2AuthLoginRequestSchema,
@@ -44,4 +45,6 @@ export async function loginL2Auth(clientId: string, input: L2AuthLoginRequest): 
     )
   }
   L2AuthLoginResponseSchema.parse(envelope.data)
+  const returnTo = new URLSearchParams(window.location.search).get('returnTo')
+  window.location.replace(L2ResolveAuthReturnTo(returnTo))
 }

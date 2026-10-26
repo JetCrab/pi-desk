@@ -24,7 +24,13 @@ export function L2ModelReplacementPreview({
             {from.provider}/{from.modelId} · {t(THINKING_LABELS[from.thinkingLevel])}
             <span className="mx-1.5">→</span>
             <span className="text-foreground">
-              {to.provider}/{to.modelId} · {t(THINKING_LABELS[to.thinkingLevel])}
+              {to ? (
+                <>
+                  {to.provider}/{to.modelId} · {t(THINKING_LABELS[to.thinkingLevel])}
+                </>
+              ) : (
+                t('clearProjectDefault')
+              )}
             </span>
           </p>
         </li>

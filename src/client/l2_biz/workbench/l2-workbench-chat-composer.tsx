@@ -89,6 +89,7 @@ import type { L3CapabilityModeNames } from '@common/l3_modules/capability-modes/
 import { L2WorkbenchCapabilityModePicker } from './l2-workbench-capability-mode-picker'
 import { useL2NativeUi } from './native-ui/l2-native-ui'
 import { L2NativeUiExtras, L2NativeUiQuestions } from './native-ui/l2-native-ui-view'
+import type { L2WorkbenchPluginWidgetSlots } from './l2-workbench-plugin-slots'
 
 interface L2WorkbenchTaskSlotInput {
   source: L2ChatSource
@@ -107,13 +108,15 @@ export interface L2WorkbenchComposerSlots {
   }) => ReactNode
 }
 
-interface L2WorkbenchChatComposerProps extends L2WorkbenchComposerSlots {
+interface L2WorkbenchChatComposerProps
+  extends L2WorkbenchComposerSlots, L2WorkbenchPluginWidgetSlots {
   onOpenSettings?: (target?: 'model-presets') => void
   workSession: L2WorkSessionListItem
   chatRuntime: L2WorkbenchChatRuntime
   inputRuntime: L2WorkbenchChatInputRuntime
   gitRuntime: L2GitWorkspaceRuntime
   active: boolean
+  widgetsVisible: boolean
   mobile: boolean
   invokePluginMethod: L2WorkbenchBiz['invokePluginMethod']
   listPiCommands: L2WorkbenchBiz['listPiCommands']
@@ -161,8 +164,10 @@ function L2WorkbenchChatComposerComponent({
   renderTaskSummary,
   renderTaskMenu,
   renderPluginComposerPanel,
+  renderPluginWidgets,
   gitRuntime,
   active,
+  widgetsVisible,
   mobile,
   invokePluginMethod,
   listPiCommands,
@@ -633,6 +638,9 @@ function L2WorkbenchChatComposerComponent({
         <p className="mb-1 px-1 text-xs text-muted-foreground">{t('nativeUiComposer')}</p>
       ) : null}
 
+      {widgetsVisible && !basicChat
+        ? renderPluginWidgets({ source, placement: 'aboveEditor' })
+        : null}
       <form
         aria-label={
           workSessionRunning
@@ -1021,6 +1029,9 @@ function L2WorkbenchChatComposerComponent({
           </PromptInputFooter>
         </InputGroup>
       </form>
+      {widgetsVisible && !basicChat
+        ? renderPluginWidgets({ source, placement: 'belowEditor' })
+        : null}
       <L2NativeUiExtras snapshot={nativeUi.state.snapshot} placement="belowEditor" />
 
       {activePluginPanel &&

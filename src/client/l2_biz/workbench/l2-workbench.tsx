@@ -66,6 +66,7 @@ import { L4_APP_VERSION } from '@client/l4_foundation/l4-app-info'
 import { L2WorkbenchSidebarLayout } from './l2-workbench-sidebar-layout'
 import type { L4PluginBrowserContributionDescriptor } from '@client/l4_foundation/plugin-host/l4-plugin-host-runtime'
 import type { L2WorkbenchComposerSlots } from './l2-workbench-chat-composer'
+import type { L2WorkbenchPluginSessionSlots } from './l2-workbench-plugin-slots'
 import { createL2WorkbenchBiz } from './l2-workbench-biz'
 import { createL2WorkbenchVersionRefresh } from './l2-workbench-version-refresh'
 import { L2FileWorkspaceRuntime } from './file-workspace/l2-file-workspace-runtime'
@@ -172,10 +173,11 @@ function WorkbenchDisplaySlot<Input>({
   return render(input)
 }
 
-interface L2WorkbenchProps extends L2WorkbenchComposerSlots {
+interface L2WorkbenchProps extends L2WorkbenchComposerSlots, L2WorkbenchPluginSessionSlots {
   onTerminalReady: () => Promise<void>
   onTerminalDisconnected: () => void
   onOpenTerminal: (cwd?: string) => Promise<void>
+  onOpenProjectPreviewWindow: (cwd: string) => void
   renderTerminalWorkspace: (input: { mobile: boolean; children: ReactNode }) => ReactNode
   listPluginManagement: () => Promise<L2PluginManagementSnapshot>
   subscribePluginManagementChanges: (listener: () => void) => () => void
@@ -221,6 +223,7 @@ export function L2Workbench({
   onTerminalReady,
   onTerminalDisconnected,
   onOpenTerminal,
+  onOpenProjectPreviewWindow,
   renderTerminalWorkspace,
   listPluginManagement,
   subscribePluginManagementChanges,
@@ -234,7 +237,9 @@ export function L2Workbench({
   renderSettings,
   renderTaskSummary,
   renderTaskMenu,
-  renderPluginComposerPanel
+  renderPluginComposerPanel,
+  renderPluginWidgets,
+  renderPluginSessionHeader
 }: L2WorkbenchProps): React.JSX.Element {
   const { t } = useTranslation('workbench')
   const { clientId, appSocket } = useL4AppSocket()
@@ -1917,6 +1922,12 @@ export function L2Workbench({
         fileRuntime.collapseExpandedWindow()
         pluginHost.previewProject(activeWorkId ? fileRuntime.getDirectory(activeWorkId) : activeCwd)
       }}
+      onPreviewProjectWindow={() => {
+        if (!activeCwd) return
+        onOpenProjectPreviewWindow(
+          activeWorkId ? fileRuntime.getDirectory(activeWorkId) : activeCwd
+        )
+      }}
       onOpenTerminal={() => {
         closeMobileDrawer()
         fileRuntime.collapseExpandedWindow()
@@ -1973,6 +1984,8 @@ export function L2Workbench({
           renderTaskSummary={renderTaskSummary}
           renderTaskMenu={renderTaskMenu}
           renderPluginComposerPanel={renderPluginComposerPanel}
+          renderPluginWidgets={renderPluginWidgets}
+          renderPluginSessionHeader={renderPluginSessionHeader}
           gitRuntime={gitRuntime}
           invokePluginMethod={workbenchBiz.invokePluginMethod}
           listPiCommands={workbenchBiz.listPiCommands}

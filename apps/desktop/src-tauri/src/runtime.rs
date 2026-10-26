@@ -125,9 +125,9 @@ struct ManagedChild {
 }
 
 #[derive(Clone, Copy)]
-enum OpenDestination {
-    Desktop,
-    External,
+struct OpenDestination {
+    external: bool,
+    preview: bool,
 }
 
 #[derive(Default)]
@@ -216,7 +216,7 @@ pub struct ShellState {
     target_runtimes: Mutex<HashMap<String, TargetRuntime>>,
     workers: Mutex<Vec<JoinHandle<()>>>,
     monitor: Mutex<Option<(mpsc::Sender<()>, JoinHandle<()>)>>,
-    closing: AtomicBool,
+    pub(crate) closing: AtomicBool,
 }
 
 impl ShellState {
@@ -664,7 +664,7 @@ pub fn activate_desktop(app: &AppHandle) -> Result<(), String> {
     let Some(url) = url else {
         return open_control_window(app);
     };
-    if let Err(error) = open_target(app, &url, false) {
+    if let Err(error) = open_target(app, &url, false, false) {
         write_shell_log(
             &state,
             "desktop-open-failed",
@@ -712,24 +712,31 @@ fn open_destination(
     url: &str,
     destination: OpenDestination,
 ) -> Result<(), String> {
-    match destination {
-        OpenDestination::Desktop => open_workspace_window(app, url),
-        OpenDestination::External => {
-            let url = url::Url::parse(url).map_err(|_| "网页地址无效".to_string())?;
-            windows::open_external(app, &url, "control")
-        }
+    let mut page = url::Url::parse(url).map_err(|_| "网页地址无效".to_string())?;
+    if destination.preview {
+        page.set_path("/project-preview");
+        page.set_query(None);
+        page.set_fragment(None);
+    }
+    if destination.external {
+        windows::open_external(app, &page, "control")
+    } else if destination.preview {
+        windows::open_preview(app, url, &page)
+    } else {
+        open_workspace_window(app, url)
     }
 }
 
-pub fn open_target(app: &AppHandle, url: &str, external: bool) -> Result<(), String> {
+pub fn open_target(
+    app: &AppHandle,
+    url: &str,
+    external: bool,
+    preview: bool,
+) -> Result<(), String> {
     let state = app.state::<ShellState>();
     let url = config::normalize_target_url(url)?;
     let target = configured_target(&state, &url)?;
-    let destination = if external {
-        OpenDestination::External
-    } else {
-        OpenDestination::Desktop
-    };
+    let destination = OpenDestination { external, preview };
     if target.server.is_some() && !has_child(&state, &url) {
         set_auto_start(&state, &url, true)?;
         begin_operation_with_open(app, &url, Operation::Start, Some(destination))
@@ -1521,7 +1528,7 @@ fn run_operation(
         if let Err(error) = open_destination(app, url, destination) {
             write_shell_log(&state, "browser-open-failed", &error);
             let _ = open_control_window(app);
-            if matches!(destination, OpenDestination::External) {
+            if destination.external {
                 rfd::MessageDialog::new()
                     .set_title("无法打开浏览器")
                     .set_description(&error)
@@ -2748,6 +2755,7 @@ pub fn shutdown(app: &AppHandle) {
             );
         }
     }
+    windows::remove_all(app);
     state.environment.cleanup_cache(&state.log_path);
     write_shell_log(&state, "desktop-exit", "桌面托管操作和服务进程已结束");
 }
