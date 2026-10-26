@@ -15,21 +15,23 @@ import { readNpmArchiveManifest, runAsync } from './release-npm.mjs'
 
 const registry = 'https://registry.npmjs.org'
 
-/** @returns {Promise<boolean>} */
-async function hasRunArtifact(github, runId, name) {
+/** @returns {Promise<Set<string>>} */
+async function runArtifacts(github, runId) {
+  const names = new Set()
   let pages = 1
   for (let page = 1; page <= pages; page += 1) {
     const result = await github.request(
       `/actions/runs/${runId}/artifacts?per_page=100&page=${page}`,
       { allow404: true }
     )
-    if (!result) return false
+    if (!result) break
     assert.ok(Number.isSafeInteger(result.total_count) && result.total_count >= 0, '制品数量无效')
     if (page === 1) pages = Math.ceil(result.total_count / 100)
-    if (result.artifacts.some((artifact) => artifact.name === name && !artifact.expired))
-      return true
+    for (const artifact of result.artifacts) {
+      if (!artifact.expired) names.add(artifact.name)
+    }
   }
-  return false
+  return names
 }
 
 /** @returns {Promise<Buffer|null>} */
@@ -89,85 +91,126 @@ async function restoreArchive(source, destination, id, version) {
 }
 
 /** @returns {Promise<string[]>} */
+async function restoreRunArtifacts(
+  root,
+  { github, batch, runId, ids, output, temporary, repository }
+) {
+  const available = await runArtifacts(github, runId)
+  const restored = []
+  for (const artifact of [`npm-packages-${runId}`, `npm-partial-${runId}`]) {
+    if (restored.length === ids.length) break
+    if (!available.has(artifact)) continue
+    const download = join(temporary, artifact)
+    await mkdir(download, { recursive: true })
+    await runAsync(
+      'gh',
+      ['run', 'download', runId, '--repo', repository, '-n', artifact, '--dir', download],
+      { cwd: root }
+    )
+    for (const id of ids.filter((name) => !restored.includes(name))) {
+      const version = batch.npmVersions[id]
+      const filename = `jetcrab-${id}-${version}.tgz`
+      if (await restoreArchive(join(download, filename), join(output, filename), id, version)) {
+        restored.push(id)
+        console.info(`复用原始制品：${id}@${version}，来源 ${artifact}`)
+      }
+    }
+  }
+  return restored
+}
+
+/** @returns {Promise<string[]>} */
 export async function restoreDevPackages(root, { github, batch, directory, repository }) {
   assert.match(repository, /^[\w.-]+\/[\w.-]+$/)
-  const sources = await loadDevArtifactSources(github)
-  const batches = new Map()
-  const checked = new Set()
-  const groups = new Map()
-  for (const id of batch.selected.filter((name) => name.startsWith('pi-desk'))) {
-    const runId = sources[id]
-    if (!runId) {
-      console.info(`重新构建：${id}，尚无原始制品来源`)
-      continue
-    }
-    if (!batches.has(runId)) batches.set(runId, await loadDevBatch(github, runId))
-    const old = batches.get(runId)
-    assert.ok(
-      old?.selected.includes(id) && old.npmVersions[id],
-      `原始制品来源批次无效：${id}/${runId}`
-    )
-    if (old.versions[id] !== batch.versions[id] || old.npmVersions[id] !== batch.npmVersions[id]) {
-      console.info(`重新构建：${id}，原始制品版本与当前批次不同`)
-      continue
-    }
-    const pair = `${old.source}:${batch.source}`
-    if (!checked.has(pair)) {
-      try {
-        await validateVersions(root, { base: old.source, head: batch.source })
-      } catch (error) {
-        throw new Error(`拒绝复用 ${id}（来源运行 ${runId}）：${error.message}`, { cause: error })
-      }
-      checked.add(pair)
-    }
-    if (!groups.has(runId)) groups.set(runId, [])
-    groups.get(runId).push(id)
-  }
-  if (!groups.size) return []
   const temporaryRoot = join(resolve(root), 'temp/package/npm-dev-reuse')
   await mkdir(temporaryRoot, { recursive: true })
   const temporary = await mkdtemp(join(temporaryRoot, `${batch.runId}-`))
   const output = resolve(directory)
-  const restored = []
   try {
     await mkdir(output, { recursive: true })
-    for (const [runId, ids] of groups) {
-      const download = join(temporary, runId)
-      const artifactName = `npm-packages-${runId}`
-      await mkdir(download)
-      const available = await hasRunArtifact(github, runId, artifactName)
-      if (available) {
-        await runAsync(
-          'gh',
-          ['run', 'download', runId, '--repo', repository, '-n', artifactName, '--dir', download],
-          { cwd: root }
-        )
+    const selected = batch.selected.filter((name) => name.startsWith('pi-desk'))
+    const restored = await restoreRunArtifacts(root, {
+      github,
+      batch,
+      runId: batch.runId,
+      ids: selected,
+      output,
+      temporary,
+      repository
+    })
+    if (restored.length === selected.length) return restored
+    const sources = await loadDevArtifactSources(github)
+    const batches = new Map()
+    const checked = new Set()
+    const groups = new Map()
+    for (const id of selected.filter((name) => !restored.includes(name))) {
+      const runId = sources[id]
+      if (!runId) {
+        console.info(`重新构建：${id}，尚无原始制品来源`)
+        continue
       }
-      for (const id of ids) {
-        const version = batch.npmVersions[id]
-        const filename = `jetcrab-${id}-${version}.tgz`
-        const destination = join(output, filename)
-        const source = join(download, filename)
-        if (available && (await restoreArchive(source, destination, id, version))) {
-          restored.push(id)
-          console.info(`复用原始制品：${id}@${version}，来源运行 ${runId}`)
-          continue
+      if (!batches.has(runId)) batches.set(runId, await loadDevBatch(github, runId))
+      const old = batches.get(runId)
+      assert.ok(
+        old?.selected.includes(id) && old.npmVersions[id],
+        `原始制品来源批次无效：${id}/${runId}`
+      )
+      if (
+        old.versions[id] !== batch.versions[id] ||
+        old.npmVersions[id] !== batch.npmVersions[id]
+      ) {
+        console.info(`重新构建：${id}，原始制品版本与当前批次不同`)
+        continue
+      }
+      const pair = `${old.source}:${batch.source}`
+      if (!checked.has(pair)) {
+        try {
+          await validateVersions(root, { base: old.source, head: batch.source })
+        } catch (error) {
+          throw new Error(`拒绝复用 ${id}（来源运行 ${runId}）：${error.message}`, { cause: error })
         }
+        checked.add(pair)
+      }
+      if (!groups.has(runId)) groups.set(runId, [])
+      groups.get(runId).push(id)
+    }
+    for (const [runId, ids] of groups) {
+      const fromRun =
+        runId === batch.runId
+          ? []
+          : await restoreRunArtifacts(root, {
+              github,
+              batch,
+              runId,
+              ids,
+              output,
+              temporary,
+              repository
+            })
+      restored.push(...fromRun)
+      for (const id of ids.filter((name) => !fromRun.includes(name))) {
+        const version = batch.npmVersions[id]
         console.info(`原始制品缺失或过期：${id}，查询 Registry 固定版本 ${version}`)
         const bytes = await registryArchive(id, version)
         if (!bytes) {
           console.info(`重新构建：${id}@${version}，Registry 固定版本不存在`)
           continue
         }
+        const filename = `jetcrab-${id}-${version}.tgz`
+        const source = join(temporary, filename)
         await writeFile(source, bytes)
-        await restoreArchive(source, destination, id, version)
+        await restoreArchive(source, join(output, filename), id, version)
         restored.push(id)
         console.info(`复用 Registry 原始包：${id}@${version}`)
       }
     }
     return restored
   } finally {
-    await rm(temporary, { recursive: true, force: true })
+    try {
+      await rm(temporary, { recursive: true, force: true })
+    } catch (error) {
+      console.warn(`原始制品临时目录清理失败：${temporary}；${error.message}`)
+    }
   }
 }
 
@@ -192,8 +235,26 @@ async function main() {
     })
     console.info(`已恢复原始 npm 制品：${restored.join('、') || '无'}`)
   } else {
-    await recordDevArtifactSources(github, batch)
-    console.info(`已记录上传的原始 npm 制品来源：运行 ${runId}`)
+    const temporary = await mkdtemp(join(process.env.RUNNER_TEMP, 'npm-artifact-sources-'))
+    try {
+      const ids = await restoreRunArtifacts(resolve(import.meta.dirname, '../..'), {
+        github,
+        batch,
+        runId,
+        ids: batch.selected.filter((name) => name.startsWith('pi-desk')),
+        output: temporary,
+        temporary,
+        repository
+      })
+      await recordDevArtifactSources(github, batch, ids)
+      console.info(`已记录上传的原始 npm 制品来源：运行 ${runId}，包=${ids.join('、') || '无'}`)
+    } finally {
+      try {
+        await rm(temporary, { recursive: true, force: true })
+      } catch (error) {
+        console.warn(`原始制品来源临时目录清理失败：${temporary}；${error.message}`)
+      }
+    }
   }
 }
 

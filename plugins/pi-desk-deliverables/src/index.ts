@@ -19,7 +19,7 @@ const deliverableItemSchema = Type.Object(
       minLength: 1,
       maxLength: 4096,
       description:
-        '已存在、可在 Pi Desk 中预览的完成文件路径；支持绝对路径或相对当前会话 cwd 的路径'
+        '已存在、可在 Pi Desk 中预览的完成文件或文件夹路径；支持绝对路径或相对当前会话 cwd 的路径'
     }),
     title: Type.String({
       minLength: 1,
@@ -35,7 +35,7 @@ const deliverableInputSchema = Type.Object(
     items: Type.Array(deliverableItemSchema, {
       minItems: 1,
       maxItems: 20,
-      description: '本次需要登记的交付物文件'
+      description: '本次需要登记的交付物文件或文件夹'
     })
   },
   { additionalProperties: false }
@@ -72,11 +72,15 @@ async function validateItems(cwd: string, input: DeliverableInput): Promise<Deli
       try {
         target = await realpath(resolve(root, path))
       } catch {
-        throw new Error(`交付物文件不存在：${path}`)
+        throw new Error(`交付物文件或文件夹不存在：${path}`)
       }
-      if (!(await stat(target)).isFile()) throw new Error(`交付物路径不是文件：${path}`)
-      const storedPath = isInsideRoot(root, target) ? relative(root, target) : target
-      return { path: storedPath.split(sep).join('/'), title }
+      const targetStat = await stat(target)
+      if (!targetStat.isFile() && !targetStat.isDirectory()) {
+        throw new Error(`交付物路径不是文件或文件夹：${path}`)
+      }
+      const kind = targetStat.isDirectory() ? 'directory' : 'file'
+      const storedPath = isInsideRoot(root, target) ? relative(root, target) || '.' : target
+      return { path: storedPath.split(sep).join('/'), title, kind }
     })
   )
 }
@@ -97,7 +101,8 @@ function parseItems(value: unknown): DeliverableItem[] | null {
       const path = filePath(item.path)
       const title = item.title.trim()
       if (!title || title.length > 40) return null
-      items.push({ path, title })
+      if (item.kind !== undefined && item.kind !== 'file' && item.kind !== 'directory') return null
+      items.push({ path, title, ...(item.kind ? { kind: item.kind } : {}) })
     } catch {
       return null
     }
@@ -206,10 +211,11 @@ export default function extension(pi: ExtensionAPI): void {
     name: TOOL_NAME,
     label: '交付物',
     description:
-      '登记需要用户明确查看或验收的已完成文件。仅用于重要最终结果或验收证据，支持一次登记多个文件。',
-    promptSnippet: 'Register completed files that the user should explicitly inspect or accept',
+      '登记需要用户明确查看或验收的已完成文件或文件夹。仅用于重要最终结果或验收证据，支持一次登记多个交付物；文件夹使用项目预览打开。',
+    promptSnippet:
+      'Register completed files or folders that the user should explicitly inspect or accept',
     promptGuidelines: [
-      'Use deliverable only for important completed results or acceptance evidence that can be previewed in Pi Desk, such as images, code files that are themselves a requested deliverable, and HTML. Do not register ordinary source edits, intermediate files, or files that cannot be previewed.'
+      'Use deliverable only for important completed results or acceptance evidence that can be previewed in Pi Desk, such as images, code files that are themselves a requested deliverable, HTML, and folders containing completed deliverables. Do not register ordinary source edits, intermediate files, or files that cannot be previewed.'
     ],
     parameters: deliverableInputSchema,
     async execute(_toolCallId, input, _signal, _onUpdate, context) {

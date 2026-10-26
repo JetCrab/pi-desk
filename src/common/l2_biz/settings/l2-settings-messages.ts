@@ -110,7 +110,8 @@ export const L2_SETTINGS_MESSAGES = {
     removeAndSave: 'Remove and save',
     replaceProjectDefaultsTitle: 'Update project default models',
     replaceProjectDefaultsDescription:
-      'The following projects will use the new model settings. Confirm to save all changes together.',
+      'The following project defaults will be updated or cleared. Confirm to save all changes together.',
+    clearProjectDefault: 'Clear project default',
     confirmAndSaveModels: 'Confirm and save',
     modelSaved: 'Model configuration saved.',
     modelSaveFailed: 'Could not save the model configuration',
@@ -405,8 +406,8 @@ export const L2_SETTINGS_MESSAGES = {
       '有 {{count}} 个常用组合引用了已删除模型，保存配置将同时删除这些组合。',
     removeAndSave: '删除并保存',
     replaceProjectDefaultsTitle: '同步项目默认模型',
-    replaceProjectDefaultsDescription:
-      '以下项目的默认模型将替换为本次设置的新模型，确认后一起保存。',
+    replaceProjectDefaultsDescription: '以下项目默认将更新或清除，确认后一起保存。',
+    clearProjectDefault: '清除项目默认',
     confirmAndSaveModels: '确认并保存',
     modelSaved: '模型配置已保存。',
     modelSaveFailed: '模型配置保存失败',

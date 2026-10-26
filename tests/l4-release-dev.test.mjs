@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { parse } from 'yaml'
 import { lockDependencyContent } from '../.github/scripts/release-dependencies.mjs'
+import { evaluateWorkflowCondition, readWorkflow } from './fixtures/l4-workflow-test-runtime.mjs'
 
 const lock = `lockfileVersion: '9.0'
 importers:
@@ -39,6 +40,70 @@ test('锁文件变化仅影响实际使用该依赖的包并包含传递依赖',
     lockDependencyContent(changed, 'plugins/pi-desk-usage')
   )
   assert.equal(lockDependencyContent(lock, 'plugins/missing'), null)
+})
+
+test('部分原包及发布结果跨失败保留，但不替代完整构建与安装验收', async () => {
+  const npm = await readWorkflow('release-npm')
+  const dev = await readWorkflow('release-dev')
+  const preserve = npm.jobs.build.steps.find((step) =>
+    /release-npm\.mjs preserve/.test(step.run ?? '')
+  )
+  const partial = npm.jobs.build.steps.find(
+    (step) => step.with?.name === 'npm-partial-${{ github.run_id }}'
+  )
+  assert.ok(preserve)
+  assert.equal(partial.with.path, '${{ env.NPM_ARTIFACT_DIR }}/verified/*.tgz')
+  assert.equal(
+    evaluateWorkflowCondition(preserve.if, {
+      failure: () => true,
+      github: { ref: 'refs/heads/dev' },
+      steps: { artifacts: { outputs: { reusable: 'false' } } }
+    }),
+    true
+  )
+  assert.equal(
+    evaluateWorkflowCondition(preserve.if, {
+      failure: () => true,
+      github: { ref: 'refs/heads/main' },
+      steps: { artifacts: { outputs: { reusable: 'false' } } }
+    }),
+    false
+  )
+  const published = npm.jobs.publish.steps.find(
+    (step) => step.with?.name === 'npm-published-${{ github.run_id }}'
+  )
+  assert.ok(published)
+  assert.equal(
+    evaluateWorkflowCondition(published.if, { steps: { publication: { outcome: 'failure' } } }),
+    true
+  )
+  assert.equal(published.with.path, '${{ env.NPM_ARTIFACT_DIR }}/published.json')
+  const download = dev.jobs.result.steps.find(
+    (step) => step.with?.pattern === 'npm-published-${{ github.run_id }}'
+  )
+  assert.ok(download)
+  assert.equal(dev.jobs.result.permissions.actions, 'read')
+  const complete = dev.jobs.result.steps.find((step) =>
+    /release-dev\.mjs complete/.test(step.run ?? '')
+  )
+  assert.ok(complete.env.NPM_PUBLISHED_FILE.endsWith('/published.json'))
+  const needs = {
+    plan: { result: 'success', outputs: { packages: '["pi-desk"]' } },
+    checks: { result: 'success' },
+    'npm-build': { result: 'success' },
+    'npm-artifacts': { result: 'success' }
+  }
+  const context = { needs, github: { event_name: 'push' }, inputs: { publish: false } }
+  assert.equal(evaluateWorkflowCondition(dev.jobs['npm-publish'].if, context), true)
+  for (const id of ['checks', 'npm-build', 'npm-artifacts']) {
+    assert.equal(
+      evaluateWorkflowCondition(dev.jobs['npm-publish'].if, {
+        ...context,
+        needs: { ...needs, [id]: { result: 'failure' } }
+      }),
+      false
+    )
+  }
 })
 
 test('dev只保留统一入口，内部复用不取消连续批次', async () => {

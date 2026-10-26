@@ -97,7 +97,7 @@ export interface L4ModelReplacement {
 }
 
 export interface L4ModelSettingsPreview {
-  projectDefaults: Array<{ cwd: string; from: L4ModelSelection; to: L4ModelSelection }>
+  projectDefaults: Array<{ cwd: string; from: L4ModelSelection; to: L4ModelSelection | null }>
 }
 
 export type L4ModelSettingsReplaceInput =

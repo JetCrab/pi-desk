@@ -165,7 +165,7 @@ function TargetRow({
             )}
           </div>
           {!server && (
-            <>
+            <div className="actions">
               <button
                 className="quiet forward"
                 type="button"
@@ -178,6 +178,15 @@ function TargetRow({
               <button
                 className="quiet"
                 type="button"
+                disabled={locked}
+                onClick={() => run('preview')}
+              >
+                <DesktopIcon name="folder" />
+                项目预览
+              </button>
+              <button
+                className="quiet"
+                type="button"
                 title="使用系统默认浏览器打开"
                 disabled={locked}
                 onClick={() => run('open-external')}
@@ -185,7 +194,7 @@ function TargetRow({
                 <DesktopIcon name="globe" />
                 浏览器打开
               </button>
-            </>
+            </div>
           )}
           <div className="target-row-actions">
             <button
@@ -223,6 +232,15 @@ function TargetRow({
           >
             <DesktopIcon name={working ? 'loader' : 'arrow'} spinning={working} />
             打开 Pi Desk
+          </button>
+          <button
+            type="button"
+            title={server.needsSetup ? '请先准备本机组件' : '在独立窗口中预览项目'}
+            disabled={launchLocked || preparing || server.needsSetup}
+            onClick={() => run('preview')}
+          >
+            <DesktopIcon name="folder" />
+            项目预览
           </button>
           <button
             type="button"

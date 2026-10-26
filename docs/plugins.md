@@ -50,6 +50,8 @@ Node Entry 默认导出普通 `PiDeskPluginDefinition` 对象即可，`definePiD
 
 `registerBrowserEntry()` 最多一次，路径位于包内，文件名为 `entry.js`。无需自有资源时 `setup()` 不必返回清理；创建 Timer、Watcher、连接或子进程时返回 disposer，释放旧实例资源。Host 自动撤销注册；旧异步清理不得写入新实例。
 
+宿主启动时，单个 Node 插件的入口导入、`setup()` 和 Browser 资源检查共用 15 秒上限。超时不代表插件代码已经停止；宿主撤销旧实例，等首轮插件加载、旧加载及其清理结束后，延迟 10 秒自动重试一次。明确加载错误和再次超时不自动重试；手动重载、禁用、卸载或宿主关闭会取消待执行的恢复。加载失败可在插件管理行点击“重新加载”，只重载本机代码。
+
 会话能力在真实原生扩展中绑定，不用 Node Global 冒充 Session：
 
 ```ts
@@ -81,7 +83,7 @@ plugin.addPreviewDirectory(directory, { default: true })
 
 ## Browser Entry 与懒界面
 
-Entry 默认导出普通同步函数即可；在函数返回前完成全部 `registerContribution(kind, name, definition)`。kind 支持 `application`、`composer-panel`、`settings-page`、`session-sidebar-tab`、`message-view`。Entry 只放元数据、loader、轻量页面状态和事件订阅；返回 disposer 清理自有订阅与资源。
+Entry 默认导出普通同步函数即可；在函数返回前完成全部注册。`registerContribution(kind, name, definition)` 支持 `application`、`composer-panel`、`settings-page`、`session-sidebar-tab`、`message-view`；输入区挂件与会话标题项分别使用 `registerWidget()`、`registerSessionHeaderItem()`，不能通过 `registerContribution` 注册。Entry 只放元数据、loader、轻量页面状态和事件订阅；返回 disposer 清理自有订阅与资源。
 
 Entry 不静态引入 React、ReactDOM、UI、CSS 或大型实现，也不等网络或动态 import 后再注册。UI 放在 `load()` 的动态模块，导出 `{ mount({ container, target, host, signal }) }`；Lazy Module 顶层不启动副作用。
 
@@ -99,11 +101,91 @@ react-dom/client
 @jetcrab/pi-desk-sdk/react/markdown
 ```
 
+`PluginMarkdown` 会高亮带语言标记的代码块（例如 `sql`），语言和主题资源按需加载；插件不需要另装高亮库。它只负责展示，不格式化代码；SQL 等业务格式化依赖由对应插件维护。
+
 复用宿主 React 与 UI，不复制或打包第二套公共运行时。`/browser` 不在白名单中：普通函数无需包装；`copyBrowserText` 等 SDK Browser 运行函数需要构建时打入插件模块，不能原样留下裸 import。其他业务依赖也需构建为相对模块。无构建示例用 JS `createElement`；TSX、TypeScript 浏览器文件需要先编译为 JS。
 
 Application 使用 `chrome: 'host'` 让宿主负责 Dialog、标题、关闭、焦点、Escape、Loading/Error 和视口约束；内容自然决定尺寸，不替换工作台。React mount 使用 `createRoot`、`PluginHostProvider`、`PluginErrorBoundary` 和公共控件；disposer 调用 `root.unmount()`，释放自建 Listener、Timer、Observer、Object URL。宿主先 abort `signal`，迟到结果必须忽略。
 
 界面继承宿主明暗主题与字号，布局使用 `rem`、合理内边距和自身滚动；窄屏与触控可用，不以裁切或只靠 hover 隐藏必要操作。按钮、表单、加载/错误/重试优先复用 `/react/base`；需要 Markdown 时才加载 `/react/markdown`。
+
+### 输入框上下方挂件
+
+在 Browser Entry 注册，不调用原生 `ctx.ui.setWidget()`：
+
+```js
+plugin.registerWidget('session-info', {
+  placement: 'aboveEditor',
+  load: () => import('./session-info.js').then((module) => module.default)
+})
+```
+
+同目录 `session-info.js` 是最小 Lazy View：
+
+```js
+export default {
+  mount({ container, target }) {
+    const element = document.createElement('p')
+    element.textContent = `当前会话：${target.source.sessionId}`
+    element.style.cssText = 'margin:0;overflow-wrap:anywhere'
+    container.append(element)
+    return () => element.remove()
+  }
+}
+```
+
+`placement` 只允许 `aboveEditor / belowEditor`，省略时是上方。Target 为 `{ kind: 'widget', source }`。挂件在对应聊天区可见时挂载，自然高度；没有内容时不预留空白。多个挂件按插件名和注册名稳定排列，不进入标题栏更多浮层。关闭或隐藏聊天区、Source 变化和插件重载会 Abort/dispose；重新挂载时按现有 Method/Push 建立数据基线。
+
+### 锚定浮层
+
+Lazy View 可从 `@jetcrab/pi-desk-sdk/react/base` 使用受控 `PluginPopover`。`trigger` 接收 React Element，其他内容作为 children；宿主组件负责 Portal、锚定、视口约束和焦点，打开不会抢走输入焦点。悬停、短暂提示和业务状态由插件控制，不自行定位到宿主 DOM。
+
+```tsx
+const [open, setOpen] = useState(false)
+
+<PluginPopover
+  open={open}
+  onOpenChange={setOpen}
+  side="top"
+  trigger={<PluginButton>查看详情</PluginButton>}
+>
+  <div style={{ padding: '0.75rem' }}>当前内容</div>
+</PluginPopover>
+```
+
+`side` 默认 `bottom`，`align` 默认 `start`，`className` 用于自身浮层的布局。浮层维持指定方向并限制可用高度；长内容自行使用 `PluginScroll`。调用方关闭或卸载时清理自己的计时器、Observer 和订阅。此组件需要支持该导出的宿主 Host Runtime，不能只更新插件依赖后向旧宿主请求。
+
+### 会话标题右侧条目
+
+`inline` 和 `overflow` 必须分别声明，可以独立选择普通按钮或自定义视图：
+
+```js
+const showSession = {
+  type: 'action',
+  icon: { type: 'builtin', name: 'file' },
+  label: '会话信息',
+  onSelect({ source, host }) {
+    host.notify({ level: 'info', title: '当前会话', description: source.sessionId })
+  }
+}
+
+plugin.registerSessionHeaderItem('session-info', {
+  inline: {
+    type: 'custom',
+    minWidthRem: 6,
+    load: () => import('./session-info.js').then((module) => module.default)
+  },
+  overflow: showSession
+})
+```
+
+- `action` 只接受固定 `icon`、`label`、`onSelect({ source, host, signal })`，不提供动态图标、文字或状态订阅。宿主显示图标加文字，异步操作期间防止重复点击；失败记录局部错误，失效后的回调不得继续使用旧 Host。信号属于该展示生命周期，不会回滚服务端已经产生的副作用。
+- `custom` 只提供 `load()`，宿主不包装点击回调。inline custom 必须额外声明正数 `minWidthRem`，单位为 `rem`；宿主按此预留可用宽度，不通过重复挂载业务视图测量。自定义内容应适应获得的容器，不能靠超宽 DOM 挤占标题。overflow custom 不声明宽度。
+- 自定义 Target 为 `{ kind: 'session-header-item', source, presentation: 'inline' | 'overflow' }`。两种表现可以使用不同模块，也可以复用同一个 `{ mount }`；loader 分别按表现缓存和重试。可复用上面的 `session-info.js`，或使用公共 React/UI 构建交互视图。
+- 标题项按插件名和注册名稳定排列；宽度不足时从末尾收进更多，宿主保留标题及必要操作。普通按钮选择后关闭更多；自定义区域内点击不会被转发，也不会自动关闭更多。Escape 或外部点击关闭浮层，键盘与触控均可操作。
+- 收纳会卸载 inline 自定义视图；只有更多打开时才挂载 overflow 自定义视图，关闭后释放。动态状态与运行/停止等复杂交互由自定义视图自行实现；业务状态归插件运行态，不归 mount，也不能只存于会被卸载的组件局部状态。卸载只清理视图资源，不停止项目进程。
+
+两种注册均限定 Browser Entry 同步阶段，名称规则与其他贡献相同。它们需要支持对应方法的宿主和 SDK；旧宿主缺少能力时禁用这项入口，不使用 `registerContribution` 别名或访问宿主 DOM 代替。现有 `composer-panel` 仍是人工打开的会话弹窗，不是上下方挂件。
 
 ### 侧栏顶部操作
 
@@ -209,7 +291,7 @@ export default {
 - 首屏和实时必需内容放 `summary`；大内容或用户展开后才用的数据放 `detail`。需要详情时，仅在消息已有 `entryId` 且 `fixed.hasDetail` 为真后调用 `target.message.loadDetail()`；异步结果须检查挂载的 `signal`，不能写回失效视图。
 - 视图从 `getSnapshot()` 读取完整当前状态，并通过 `subscribe()` 跟随更新；同 `viewKey` 的消息更新不重新挂载，Temporary 转 Durable 保持同一 Handle，`viewKey` 改变时会重挂。释放时解除订阅并清理自有资源。
 - Declaration 和 View 分别按 `priority` 选择，数值越大越优先；同最高优先级冲突会报错。声明、加载或展示失败不自动尝试低优先级实现；异步展示错误通过 `target.reportError(error)` 交给宿主处理。
-- 刷新后仍需展示的数据必须存在于最终 Pi Entry，仅通过 Tool `onUpdate()` 提供的数据不会自动持久化。更新插件时兼容已有消息结构，不靠自动重载旧会话解决兼容问题。
+- 刷新后仍需展示的数据必须存在于最终 Pi Entry，仅通过 Tool `onUpdate()` 提供的数据不会自动持久化。插件初始化、更新和热加载不自动重投影或重传旧聊天，新消息使用当前声明；Browser View 需兼容已有消息结构，不靠自动重载旧会话解决兼容问题。
 
 ## 任务
 

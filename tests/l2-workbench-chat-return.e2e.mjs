@@ -28,11 +28,21 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const scenario = process.argv[2] ?? 'all'
 const desktop = process.argv.includes('--desktop')
 assert.ok(
-  ['all', 'reading', 'follow-retained', 'follow-remount', 'send-switch', 'switch-ended'].includes(
-    scenario
-  )
+  [
+    'all',
+    'reading',
+    'follow-retained',
+    'follow-remount',
+    'send-switch',
+    'switch-ended',
+    'resize-entry'
+  ].includes(scenario)
 )
-assert.ok(!desktop || scenario === 'switch-ended', '桌面参数仅用于已结束会话切换回归')
+assert.ok(
+  !desktop || ['switch-ended', 'resize-entry'].includes(scenario),
+  '桌面参数仅用于切换与拖宽回归'
+)
+assert.ok(scenario !== 'resize-entry' || desktop, '拖宽回归需要 --desktop')
 const taskId = `follow-return-${scenario}-${process.pid}`
 const runRoot = join(projectRoot, 'temp/run/chat-return', taskId)
 const agentRoot = join(projectRoot, 'temp/pi/chat-return-e2e', taskId)
@@ -95,7 +105,15 @@ async function fixture(modelPort) {
       })
       session.appendMessage({
         role: 'assistant',
-        content: [{ type: 'text', text: answer }],
+        content: [
+          {
+            type: 'text',
+            text:
+              scenario === 'resize-entry' && id === workId && index === 4
+                ? '这是一段随列宽重新换行的短回复。'.repeat(8)
+                : answer
+          }
+        ],
         api: 'openai-completions',
         provider,
         model,
@@ -453,6 +471,150 @@ async function checkFollowReturn(client, mode) {
   await finishReply(client)
 }
 
+async function checkEntryResize(client, following = false) {
+  const waitForDevelopmentIdle = () =>
+    waitFor(
+      client,
+      `(() => {
+    const badge = document.querySelector('nextjs-portal')?.shadowRoot?.querySelector('[data-next-badge]');
+    return !badge || (badge.getAttribute('data-status') === 'none' && badge.getAttribute('data-animate') === 'false'
+      && !badge.getAnimations({ subtree: true }).some(animation => animation.playState === 'running'));
+  })()`,
+      '开发指示器动画结束'
+    )
+  await settle(client)
+  await waitForDevelopmentIdle()
+  await client.send('Performance.enable')
+  const before = await client.send('Performance.getMetrics')
+  const point = await evaluate(
+    client,
+    `(() => {
+    const handle = document.querySelector('[role="separator"][aria-label="调整第 1 列与第 2 列宽度"]');
+    const rect = handle.getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  })()`
+  )
+  const samples = []
+  let outputCount = 0
+  let x = point.x
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    ...point,
+    button: 'left',
+    clickCount: 1
+  })
+  try {
+    for (const target of [point.x + 130, point.x - 100, point.x]) {
+      const from = x
+      for (let step = 1; step <= 16; step++) {
+        x = from + ((target - from) * step) / 16
+        await client.send('Input.dispatchMouseEvent', {
+          type: 'mouseMoved',
+          x,
+          y: point.y,
+          button: 'left',
+          buttons: 1
+        })
+        // 读取绘制后的状态，不能只检查松开鼠标后是否收敛。
+        samples.push(
+          await evaluate(
+            client,
+            `new Promise((resolve, reject) => {
+          const logs = [${JSON.stringify(workId)}, ${JSON.stringify(otherWorkId)}].map(id => document.querySelector('[data-work-id="' + id + '"] [role="log"]'));
+          const deadline = performance.now() + 1000;
+          const sample = () => requestAnimationFrame(() => {
+            const frameTexts = logs.map(log => log.textContent);
+            setTimeout(() => {
+              // 消息可能在绘制后、采样前提交；先等该版本绘制，不把未布局的 DOM 当作可见跳动。
+              if (logs.some((log, index) => log.textContent !== frameTexts[index])) {
+                if (performance.now() >= deadline) reject(new Error('消息版本未能完成绘制'));
+                else sample();
+                return;
+              }
+              resolve(logs.map(log => {
+                const scroll = [...log.querySelectorAll('div')].find(element => ['auto', 'scroll'].includes(getComputedStyle(element).overflowY));
+                const user = [...log.querySelectorAll('[data-chat-user-message]')].at(-1);
+                return { width: scroll.clientWidth, offset: user.getBoundingClientRect().top - scroll.getBoundingClientRect().top,
+                  gap: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight };
+              }));
+            }, 0);
+          });
+          sample();
+        })`
+          )
+        )
+        if (following && step % 4 === 0)
+          send(`\n\n拖宽增量 ${++outputCount}。\n\n继续输出，保持底部。`)
+      }
+    }
+  } finally {
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x,
+      y: point.y,
+      button: 'left',
+      clickCount: 1
+    })
+  }
+  const after = await client.send('Performance.getMetrics')
+  const layoutCount = (response) =>
+    response.metrics.find((metric) => metric.name === 'LayoutCount').value
+  const result = { following, samples, layouts: layoutCount(after) - layoutCount(before) }
+  await writeFile(
+    join(runRoot, `resize-${following ? 'follow' : 'anchor'}.json`),
+    JSON.stringify(result, null, 2)
+  )
+  console.log('首次进入直接拖宽', {
+    following,
+    frames: samples.length,
+    layouts: result.layouts,
+    maxPrimaryError: Math.max(
+      ...samples.map(([primary]) => (following ? primary.gap : Math.abs(primary.offset - 12)))
+    ),
+    maxPinnedError: Math.max(...samples.map(([, pinned]) => Math.abs(pinned.offset - 12)))
+  })
+  const widths = samples.map(([primary]) => primary.width)
+  assert.ok(Math.max(...widths) - Math.min(...widths) >= 100, '列宽必须实际变化')
+  for (const [primary, pinned] of samples) {
+    assert.ok(
+      Math.abs(pinned.offset - 12) <= 2 && pinned.gap > 100,
+      `长回复的提问锚点跳动：${JSON.stringify(pinned)}`
+    )
+    assert.ok(
+      following ? primary.gap <= 3 : Math.abs(primary.offset - 12) <= 2,
+      `拖动中${following ? '脱离底部' : '提问锚点跳动'}：${JSON.stringify(primary)}`
+    )
+  }
+  // 两列的无增量拖动最多保留每步一次布局和两次位置校正，防止留白拆装再次放大成本。
+  if (!following)
+    assert.ok(result.layouts <= samples.length * 3, `拖宽布局次数过多：${result.layouts}`)
+  if (following) {
+    await waitFor(
+      client,
+      `document.querySelector('${column} [role="log"]').textContent.includes('拖宽增量 ${outputCount}。')`,
+      '最后一条拖宽增量已显示'
+    )
+  }
+  await settle(client)
+  await waitForDevelopmentIdle()
+  const idleBefore = await client.send('Performance.getMetrics')
+  await evaluate(
+    client,
+    `(async () => {
+    const start = performance.now();
+    do { await new Promise(requestAnimationFrame); } while (performance.now() - start < 1000);
+  })()`
+  )
+  const idleAfter = await client.send('Performance.getMetrics')
+  const idleLayouts = layoutCount(idleAfter) - layoutCount(idleBefore)
+  console.log('拖宽后空闲布局', { following, idleLayouts })
+  assert.ok(idleLayouts <= 1, `停止拖动后仍持续布局：${idleLayouts}`)
+  await writeFile(
+    join(runRoot, `resize-${following ? 'follow' : 'anchor'}.png`),
+    await screenshot(client)
+  )
+}
+
 async function main() {
   let server
   let browser
@@ -532,7 +694,23 @@ async function main() {
       client,
       `localStorage.setItem('pi-super:workbench-layout', JSON.stringify({ primaryWorkId: '${workId}' }))`
     )
-    await navigate(client, `http://127.0.0.1:${appPort}/?chatScrollDebug=1`)
+    const chatUrl = `http://127.0.0.1:${appPort}/${scenario === 'resize-entry' ? '' : '?chatScrollDebug=1'}`
+    await navigate(client, chatUrl)
+    if (scenario === 'resize-entry') {
+      await waitFor(client, `Math.abs((${metrics})?.offset - 12) <= 2`, '短回复定位到最后提问')
+      await settle(client)
+      assert.ok((await evaluate(client, metrics)).tailSpace > 100, '短回复必须存在尾部留白')
+      await checkEntryResize(client)
+      await startReply(client, '验证拖宽时持续跟随')
+      // 重建视图，保留首屏校正尚未被聊天区交互解除的状态。
+      await navigate(client, chatUrl)
+      await waitFor(client, `(${metrics})?.gap <= 2`, '运行中重新进入直接跟随底部')
+      await checkEntryResize(client, true)
+      await finishReply(client)
+      success = true
+      console.log('首屏锚点、短回复留白和运行中拖宽逐帧回归通过')
+      return
+    }
     await checkLatest(client, '已结束会话首次进入定位末条提问')
     if (scenario === 'all' || scenario === 'switch-ended') {
       await checkEndedSwitch(client, workId, replacementWorkId)
@@ -645,7 +823,10 @@ async function main() {
     if (success) {
       await rm(agentRoot, { recursive: true, force: true })
       await rm(buildRoot, { recursive: true, force: true })
-      await rm(runRoot, { recursive: true, force: true })
+      await rm(scenario === 'resize-entry' ? join(runRoot, 'browser') : runRoot, {
+        recursive: true,
+        force: true
+      })
     }
   }
 }

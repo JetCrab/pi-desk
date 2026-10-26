@@ -1,6 +1,7 @@
 import { cjk } from '@streamdown/cjk'
+import { code } from '@streamdown/code'
 import { Streamdown } from 'streamdown'
-const PLUGIN_MARKDOWN_PLUGINS = { cjk }
+const PLUGIN_MARKDOWN_PLUGINS = { cjk, code }
 const COMPACT_CODE_CONTROLS = {
   code: {
     copy: true,

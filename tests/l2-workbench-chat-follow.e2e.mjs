@@ -212,7 +212,7 @@ async function checkWidthSettled(client, label, baseline = null) {
   return { elapsed, delta }
 }
 
-async function dragSidebar(client) {
+async function dragSidebar(client, following = false) {
   const point = await evaluate(
     client,
     `(() => {
@@ -242,8 +242,12 @@ async function dragSidebar(client) {
           button: 'left',
           buttons: 1
         })
-        await evaluate(client, 'new Promise(requestAnimationFrame)')
-        widths.push((await evaluate(client, metrics)).rect.width)
+        const frame = await evaluate(
+          client,
+          `new Promise(resolve => requestAnimationFrame(() => setTimeout(() => resolve(${metrics}), 0)))`
+        )
+        widths.push(frame.rect.width)
+        if (following) assert.ok(frame.gap <= 3, `拖宽过程中脱离底部：${JSON.stringify(frame)}`)
       }
     }
   } finally {
@@ -617,7 +621,7 @@ async function main() {
       const dragBaseline = await checkWidthSettled(client, '分隔条拖动前基线')
       const dragStart = await renderingMetrics(client)
       const beforeDrag = await evaluate(client, metrics)
-      const dragWidths = await dragSidebar(client)
+      const dragWidths = await dragSidebar(client, true)
       await checkBottom(client, '连续拖动聊天宽度后')
       const dragEnd = await renderingMetrics(client)
       widthPerformance.push({

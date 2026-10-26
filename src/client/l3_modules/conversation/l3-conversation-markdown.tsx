@@ -10,6 +10,12 @@ import { MessageResponse } from '@client/l4_foundation/ui/ai-elements/message'
 import { copyL4BrowserText } from '@client/l4_foundation/lib/l4-browser-clipboard'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import { L4ImageViewer } from '@client/l4_foundation/ui/l4-image-viewer'
+import {
+  L4_MARKDOWN_ALLOWED_TAGS,
+  L4_MARKDOWN_CLASS_NAME,
+  L4_MARKDOWN_COMPONENTS,
+  L4_MARKDOWN_REMARK_PLUGINS
+} from '@client/l4_foundation/ui/markdown/l4-markdown'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
 import styles from './l3-conversation-markdown.module.css'
 
@@ -140,11 +146,14 @@ export function L3ConversationMarkdown({
   return (
     <div className="contents" onClickCapture={handleCodeCopyFallback}>
       <MessageResponse
-        className={cn('space-y-0', styles.markdown, className)}
+        className={cn('space-y-0', styles.markdown, L4_MARKDOWN_CLASS_NAME, className)}
         controls={COMPACT_CODE_CONTROLS}
         isAnimating={isAnimating}
         lineNumbers={false}
+        allowedTags={L4_MARKDOWN_ALLOWED_TAGS}
+        remarkPlugins={L4_MARKDOWN_REMARK_PLUGINS}
         components={{
+          ...L4_MARKDOWN_COMPONENTS,
           ...components,
           a: L3ConversationMarkdownLink,
           img: L3ConversationMarkdownImage

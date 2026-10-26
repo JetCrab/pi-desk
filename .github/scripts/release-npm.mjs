@@ -84,7 +84,7 @@ export function run(tool, args, { cwd = projectRoot, capture = false, env = proc
 export function runAsync(
   tool,
   args,
-  { cwd = projectRoot, capture = false, env = process.env } = {}
+  { cwd = projectRoot, capture = false, env = process.env, timeout = 0 } = {}
 ) {
   const windows = process.platform === 'win32' && ['npm', 'pnpm'].includes(tool)
   return new Promise((resolveCommand, rejectCommand) => {
@@ -96,9 +96,21 @@ export function runAsync(
         env,
         windowsHide: true,
         windowsVerbatimArguments: windows,
-        stdio: capture ? ['ignore', 'pipe', 'inherit'] : 'inherit'
+        stdio: [capture ? 'ignore' : 'inherit', capture ? 'pipe' : 'inherit', 'pipe']
       }
     )
+    let stderr = Buffer.alloc(0)
+    child.stderr.on('data', (chunk) => {
+      process.stderr.write(chunk)
+      stderr = Buffer.concat([stderr, chunk]).subarray(-16 * 1024)
+    })
+    let timedOut = false
+    const timer = timeout
+      ? setTimeout(() => {
+          timedOut = true
+          child.kill('SIGKILL')
+        }, timeout)
+      : undefined
     const chunks = []
     let size = 0
     let overflow
@@ -112,11 +124,19 @@ export function runAsync(
         chunks.push(chunk)
       }
     })
-    child.once('error', rejectCommand)
+    child.once('error', (error) => {
+      clearTimeout(timer)
+      rejectCommand(error)
+    })
     child.once('close', (code, signal) => {
+      clearTimeout(timer)
       if (overflow) rejectCommand(overflow)
-      else if (code !== 0)
-        rejectCommand(new Error(`命令执行失败：${tool}，退出码=${code}，信号=${signal ?? '无'}`))
+      else if (timedOut || code !== 0)
+        rejectCommand(
+          new Error(
+            `命令执行失败：${tool}，退出码=${code}，信号=${signal ?? '无'}${timedOut ? `，ETIMEDOUT（${timeout / 1000} 秒）` : ''}\n${stderr.toString('utf8').trim()}`
+          )
+        )
       else resolveCommand(capture ? Buffer.concat(chunks).toString('utf8') : '')
     })
   })
@@ -271,6 +291,27 @@ async function pack(entry, output) {
   })
 }
 
+export async function preserveArchives(entries, output) {
+  const verified = join(output, 'verified')
+  await rm(verified, { recursive: true, force: true })
+  await mkdir(verified, { recursive: true })
+  const saved = []
+  for (const entry of entries) {
+    const archive = archivePath(entry, output)
+    if (!existsSync(archive)) continue
+    try {
+      await verifyArchive(entry, output)
+      const destination = join(verified, basename(archive))
+      await cp(archive, `${destination}.copy`)
+      await rename(`${destination}.copy`, destination)
+      saved.push(entry.manifest.name.slice('@jetcrab/'.length))
+    } catch (error) {
+      console.warn(`原始制品未保存：${archive}；${error.message}`)
+    }
+  }
+  return saved
+}
+
 async function prepare(entries, output) {
   const mode = npmValidationMode(process.env.GITHUB_REF)
   const full = mode === 'full'
@@ -300,6 +341,7 @@ async function prepare(entries, output) {
         runAsync(process.execPath, ['--test', ...tests], { cwd: sdk.directory, env })
       )
     }
+    if (entries.some(({ manifest }) => manifest.name === sdkName)) await pack(sdk, output)
   }
   if (full) {
     await stage('test npm 发布回归', () =>
@@ -348,16 +390,24 @@ async function prepare(entries, output) {
         const nextCache = join(projectRoot, 'temp/build/pi-desk/release/.next/cache')
         const savedCache = join(projectRoot, 'temp/cache/next/npm-dev')
         if (!full && existsSync(savedCache)) {
-          await cp(savedCache, nextCache, { recursive: true })
+          try {
+            await cp(savedCache, nextCache, { recursive: true })
+          } catch (error) {
+            console.warn(`Next 缓存复制失败：${savedCache} -> ${nextCache}；${error.message}`)
+          }
         }
         // 主包 build 的前半段只重复 SDK build；这里执行同一 Next 构建入口。
         await stage(`build ${entry.manifest.name}`, () =>
           runAsync('pnpm', ['exec', 'next', 'build', '--webpack'])
         )
         if (!full && existsSync(nextCache)) {
-          await mkdir(join(projectRoot, 'temp/cache/next'), { recursive: true })
-          await rm(savedCache, { recursive: true, force: true })
-          await rename(nextCache, savedCache)
+          try {
+            await mkdir(join(projectRoot, 'temp/cache/next'), { recursive: true })
+            await rm(savedCache, { recursive: true, force: true })
+            await rename(nextCache, savedCache)
+          } catch (error) {
+            console.warn(`Next 缓存保存失败：${nextCache} -> ${savedCache}；${error.message}`)
+          }
         }
         await pruneHostBuild(join(projectRoot, 'temp/build/pi-desk/release/.next'))
       } else {
@@ -373,7 +423,6 @@ async function prepare(entries, output) {
       await pack(entry, output)
     }
   )
-  if (entries.some(({ manifest }) => manifest.name === sdkName)) await pack(sdk, output)
   const host = entries.find((entry) => entry.directory === projectRoot)
   if (host) {
     const sdkSelected = entries.some((entry) => entry.manifest.name === sdkName)
@@ -388,7 +437,13 @@ async function prepare(entries, output) {
         cp(archivePath(host, output), join(smokeArtifacts, 'host.tgz'))
       ])
     } finally {
-      if (!sdkSelected) await rm(verificationOutput, { recursive: true, force: true })
+      if (!sdkSelected) {
+        try {
+          await rm(verificationOutput, { recursive: true, force: true })
+        } catch (error) {
+          console.warn(`临时 smoke 目录清理失败：${verificationOutput}；${error.message}`)
+        }
+      }
     }
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
@@ -407,68 +462,130 @@ export function assertDevelopmentTags(tags, name, version) {
   if (version) assert.equal(tags.dev, version, `${name} 的 dev 标签未指向本次版本`)
 }
 
-async function readTags(name) {
-  const response = await fetch(
-    `${registry}/-/package/${encodeURIComponent(name)}/dist-tags?validation=${Date.now()}`,
-    {
-      headers: { 'cache-control': 'no-cache' },
-      signal: AbortSignal.timeout(30_000)
+async function readRegistry(url, { method = 'GET', deadline = Date.now() + 96_000 } = {}) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const remaining = deadline - Date.now()
+    assert.ok(remaining > 0, `Registry 读取已超出总时限：${method} ${url}`)
+    let retryable = false
+    let retryAfterMs = 0
+    try {
+      const response = await fetch(url, {
+        method,
+        headers: { accept: 'application/json', 'cache-control': 'no-cache' },
+        signal: AbortSignal.timeout(Math.min(30_000, remaining))
+      })
+      retryable = [408, 429].includes(response.status) || response.status >= 500
+      if (retryable) {
+        const retryAfter = response.headers.get('retry-after')
+        if (retryAfter) {
+          const seconds = Number(retryAfter)
+          const delay = Number.isFinite(seconds)
+            ? seconds * 1000
+            : Date.parse(retryAfter) - Date.now()
+          if (Number.isFinite(delay)) retryAfterMs = Math.max(0, delay)
+        }
+        await response.body?.cancel()
+        throw new Error(`HTTP ${response.status}`)
+      }
+      if (method === 'HEAD' || !response.ok || response.status === 202) {
+        await response.body?.cancel()
+        return { status: response.status, data: null }
+      }
+      return { status: response.status, data: await response.json() }
+    } catch (error) {
+      const code = error.cause?.code ?? error.code
+      retryable ||=
+        ['TimeoutError', 'AbortError'].includes(error.name) ||
+        [
+          'ECONNRESET',
+          'ECONNREFUSED',
+          'ETIMEDOUT',
+          'EAI_AGAIN',
+          'ENOTFOUND',
+          'ENETUNREACH',
+          'UND_ERR_CONNECT_TIMEOUT',
+          'UND_ERR_HEADERS_TIMEOUT',
+          'UND_ERR_BODY_TIMEOUT',
+          'UND_ERR_SOCKET'
+        ].includes(code) ||
+        (error instanceof TypeError && ['fetch failed', 'terminated'].includes(error.message))
+      const detail = [error.message, error.cause?.message, code].filter(Boolean).join('；')
+      const delayMs = Math.max(2_000 * 2 ** (attempt - 1), retryAfterMs)
+      if (!retryable || attempt === 3 || Date.now() + delayMs >= deadline) {
+        const limit = retryable && attempt < 3 ? '，重试将超出总时限' : ''
+        throw new Error(`Registry ${method} ${url} 失败（${attempt}/3${limit}）：${detail}`, {
+          cause: error
+        })
+      }
+      console.warn(
+        `Registry ${method} ${url} 第 ${attempt}/3 次失败：${detail}；${delayMs / 1000} 秒后重试`
+      )
+      await new Promise((done) => setTimeout(done, delayMs))
     }
+  }
+}
+
+async function readPackageMetadata(name, deadline) {
+  const result = await readRegistry(
+    `${registry}/${encodeURIComponent(name)}?validation=${Date.now()}`,
+    { deadline }
   )
-  if (response.status === 404) return {}
-  assert.ok(response.ok, `无法核对 ${name} 标签：HTTP ${response.status}`)
-  return response.json()
+  assert.ok(
+    [200, 202, 404].includes(result.status),
+    `无法核对 ${name} 元数据：HTTP ${result.status}`
+  )
+  if (result.status === 200) {
+    assert.equal(result.data?.name, name, `Registry 包元数据身份不符：${name}`)
+    for (const field of ['dist-tags', 'versions']) {
+      assert.ok(
+        result.data[field] &&
+          typeof result.data[field] === 'object' &&
+          !Array.isArray(result.data[field]),
+        `Registry 包元数据缺少 ${field}：${name}`
+      )
+    }
+  }
+  return result
 }
 
 export async function waitForNpmTags(name, version, tag) {
   const deadline = Date.now() + 10 * 60_000
   let nextLogAt = 0
-  while (true) {
-    const tags = await readTags(name)
-    if (tag === 'dev') assertDevelopmentTags(tags, name)
+  while (Date.now() < deadline) {
+    const { status, data } = await readPackageMetadata(name, deadline)
+    const tags = data?.['dist-tags'] ?? {}
+    if (tag === 'dev' && status !== 202) assertDevelopmentTags(tags, name)
     if (tags[tag] === version) {
       console.info(`${tag} 标签校验通过：${name}@${version}`)
       return
     }
     const now = Date.now()
-    if (now >= deadline) {
-      assert.equal(tags[tag], version, `等待 ${tag} 标签同步超时（10 分钟）：${name}@${version}`)
-    }
+    if (now >= deadline) break
     if (now >= nextLogAt) {
       console.info(
         `等待 ${tag} 标签同步：${name}@${version}，当前值=${tags[tag] ?? '未设置'}；每 5 秒检查，最多等待 10 分钟`
       )
       nextLogAt = now + 60_000
     }
-    await new Promise((resolve) => setTimeout(resolve, 5_000))
+    await new Promise((done) => setTimeout(done, Math.min(5_000, deadline - now)))
   }
+  throw new Error(`等待 ${tag} 标签同步超时（10 分钟）：${name}@${version}`)
 }
 
 export async function waitForRegistryPackage(name, version) {
   const deadline = Date.now() + 10 * 60_000
-  while (true) {
-    const response = await fetch(
-      `${registry}/${encodeURIComponent(name)}/${version}?validation=${Date.now()}`,
-      { headers: { 'cache-control': 'no-cache' }, signal: AbortSignal.timeout(30_000) }
-    )
-    if (response.status === 404 || response.status === 202) {
-      await response.body?.cancel()
-    } else {
-      assert.ok(response.ok, `无法核对 ${name}@${version}：HTTP ${response.status}`)
-      const metadata = await response.json()
+  while (Date.now() < deadline) {
+    const { data } = await readPackageMetadata(name, deadline)
+    const metadata = data?.versions?.[version]
+    if (metadata) {
       assert.equal(metadata.version, version, 'Registry 版本与本批不一致')
       assert.ok(
         typeof metadata.dist?.tarball === 'string' &&
           metadata.dist.tarball.startsWith(`${registry}/`),
         'Registry 未提供有效 tarball'
       )
-      const archive = await fetch(metadata.dist.tarball, {
-        method: 'HEAD',
-        headers: { 'cache-control': 'no-cache' },
-        signal: AbortSignal.timeout(30_000)
-      })
-      await archive.body?.cancel()
-      if (archive.ok && archive.status !== 202) {
+      const archive = await readRegistry(metadata.dist.tarball, { method: 'HEAD', deadline })
+      if (archive.status >= 200 && archive.status < 300 && archive.status !== 202) {
         console.info(`Registry 版本和安装包已就绪：${name}@${version}`)
         return
       }
@@ -477,9 +594,68 @@ export async function waitForRegistryPackage(name, version) {
         `无法核对 ${name} tarball：HTTP ${archive.status}`
       )
     }
-    assert.ok(Date.now() < deadline, `等待 Registry 可安装状态超时：${name}@${version}`)
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) break
     console.info(`等待 Registry 可安装状态：${name}@${version}`)
-    await new Promise((done) => setTimeout(done, 5_000))
+    await new Promise((done) => setTimeout(done, Math.min(5_000, remaining)))
+  }
+  throw new Error(`等待 Registry 可安装状态超时（10 分钟）：${name}@${version}`)
+}
+
+async function assertPublishedArchive(entry, output, metadata) {
+  assert.equal(metadata.version, entry.manifest.version, 'Registry 版本与本批不一致')
+  const integrity = `sha512-${createHash('sha512')
+    .update(await readFile(archivePath(entry, output)))
+    .digest('base64')}`
+  assert.equal(
+    metadata.dist?.integrity,
+    integrity,
+    `${entry.manifest.name}@${entry.manifest.version} 已存在不同内容，拒绝覆盖`
+  )
+}
+
+async function upload(entry, output, env) {
+  const { name, version } = entry.manifest
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await runAsync(
+        'npm',
+        [
+          'publish',
+          archivePath(entry, output),
+          '--ignore-scripts',
+          '--access=public',
+          `--tag=${npmTagFor(process.env.GITHUB_REF, version)}`,
+          `--registry=${registry}`,
+          '--fetch-retries=0',
+          '--fetch-timeout=90000'
+        ],
+        { env, timeout: 120_000 }
+      )
+      return
+    } catch (error) {
+      if (
+        !/\b(?:E(?:408|429|5\d\d)|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ESOCKETTIMEDOUT|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EPIPE)\b/.test(
+          error.message
+        ) ||
+        /\b(?:E401|E403|ENEEDAUTH|EJSONPARSE|EINVALIDPACKAGENAME)\b/.test(error.message)
+      ) {
+        throw error
+      }
+      console.warn(`npm 上传临时失败（${attempt}/3）：${name}@${version}；${error.message}`)
+      const { status, data } = await readPackageMetadata(name)
+      assert.notEqual(status, 202, `Registry 包元数据尚未就绪，停止重传：${name}@${version}`)
+      const metadata = data?.versions?.[version]
+      if (metadata) {
+        await assertPublishedArchive(entry, output, metadata)
+        console.info(`Registry 已接受相同制品，继续发布检查：${name}@${version}`)
+        return
+      }
+      if (attempt === 3) throw error
+      const delay = 2_000 * attempt
+      console.warn(`Registry 当前无本版本，${delay / 1000} 秒后重传：${name}@${version}`)
+      await new Promise((done) => setTimeout(done, delay))
+    }
   }
 }
 
@@ -494,40 +670,25 @@ export async function publish(entries, output) {
     env.NODE_AUTH_TOKEN = process.env.NPM_TOKEN
     npmrc += '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n'
   }
-  await writeFile(config, npmrc, { mode: 0o600 })
+  const published = []
   try {
+    await writeFile(config, npmrc, { mode: 0o600 })
     const selected = new Set(entries.map((entry) => entry.manifest.name))
     const existing = new Set()
     await runPackageTasks(entries, async (entry) => {
       const packed = await verifyArchive(entry, output)
+      const { status, data } = await readPackageMetadata(packed.name)
+      assert.notEqual(status, 202, `Registry 包元数据尚未就绪：${packed.name}`)
       if (npmTagFor(process.env.GITHUB_REF, packed.version) === 'dev') {
         // npm 首次发布可能补充 latest；发布授权不一定允许随后删除标签。
-        assertDevelopmentTags(await readTags(packed.name), packed.name)
+        assertDevelopmentTags(data?.['dist-tags'] ?? {}, packed.name)
       }
-      const response = await fetch(
-        `${registry}/${encodeURIComponent(packed.name)}/${packed.version}`,
-        { signal: AbortSignal.timeout(30_000) }
-      )
-      if (response.ok) {
-        const metadata = await response.json()
-        const integrity = `sha512-${createHash('sha512')
-          .update(await readFile(archivePath(entry, output)))
-          .digest('base64')}`
-        assert.equal(
-          metadata.dist?.integrity,
-          integrity,
-          `${packed.name}@${packed.version} 已存在不同内容，拒绝覆盖`
-        )
+      const metadata = data?.versions?.[packed.version]
+      if (metadata) {
+        await assertPublishedArchive(entry, output, metadata)
         existing.add(packed.name)
         return
       }
-      assert.equal(
-        response.status,
-        404,
-        response.ok
-          ? `${packed.name}@${packed.version} 已发布，不覆盖；请选择尚未发布的包`
-          : `Registry 查询失败：HTTP ${response.status}`
-      )
       for (const [name, version] of Object.entries(packed.dependencies ?? {})) {
         if (name.startsWith('@jetcrab/') && !selected.has(name)) {
           await runAsync(
@@ -543,18 +704,7 @@ export async function publish(entries, output) {
         console.info(`复用已验证发布：${entry.manifest.name}@${entry.manifest.version}`)
       } else {
         console.info(`发布：${entry.manifest.name}@${entry.manifest.version}`)
-        await runAsync(
-          'npm',
-          [
-            'publish',
-            archivePath(entry, output),
-            '--ignore-scripts',
-            '--access=public',
-            `--tag=${npmTagFor(process.env.GITHUB_REF, entry.manifest.version)}`,
-            `--registry=${registry}`
-          ],
-          { env }
-        )
+        await upload(entry, output, env)
       }
       const checks = await Promise.allSettled([
         waitForNpmTags(
@@ -566,9 +716,18 @@ export async function publish(entries, output) {
       ])
       const failure = checks.find((check) => check.status === 'rejected')
       if (failure) throw failure.reason
+      published.push(entry.manifest.name.slice('@jetcrab/'.length))
     })
   } finally {
-    await rm(config, { force: true })
+    try {
+      await writeFile(join(output, 'published.json'), JSON.stringify(published) + '\n')
+    } finally {
+      try {
+        await rm(config, { force: true })
+      } catch (error) {
+        console.warn(`发布临时配置清理失败：${config}；${error.message}`)
+      }
+    }
   }
 }
 
@@ -576,7 +735,10 @@ async function main() {
   assert.equal(process.env.GITHUB_ACTIONS, 'true', '正式构建与发布仅在 GitHub Actions 中执行')
   npmValidationMode(process.env.GITHUB_REF)
   const [command] = process.argv.slice(2)
-  assert.ok(command === 'prepare' || command === 'publish', '请指定 prepare 或 publish')
+  assert.ok(
+    ['prepare', 'publish', 'preserve'].includes(command),
+    '请指定 prepare、publish 或 preserve'
+  )
   const output = resolve(process.env.NPM_ARTIFACT_DIR)
   const targets = process.env.RELEASE_PACKAGES_JSON
     ? JSON.parse(process.env.RELEASE_PACKAGES_JSON)
@@ -584,7 +746,11 @@ async function main() {
   const entries = await selectPackages(projectRoot, targets)
   for (const entry of entries) npmTagFor(process.env.GITHUB_REF, entry.manifest.version)
   if (command === 'prepare') await prepare(entries, output)
-  else await publish(entries, output)
+  else if (command === 'publish') await publish(entries, output)
+  else {
+    const saved = await preserveArchives(entries, output)
+    await appendFile(process.env.GITHUB_OUTPUT, `packages=${JSON.stringify(saved)}\n`)
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

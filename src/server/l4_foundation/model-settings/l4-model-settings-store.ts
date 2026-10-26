@@ -624,7 +624,7 @@ async function assertConnectionCredentials(
 }
 
 async function prepareProjectDefaultChanges(
-  current: JsonRecord,
+  removed: Set<string>,
   candidate: JsonRecord,
   input: L4ModelSettingsReplaceInput,
   runtime: ModelRuntime,
@@ -633,16 +633,14 @@ async function prepareProjectDefaultChanges(
   projectDefaults: L4ModelSettingsPreview['projectDefaults']
   files: Array<{ path: string; value: JsonRecord }>
 }> {
-  const previousKeys = collectedModelKeys(current)
   const nextKeys = collectedModelKeys(candidate)
-  const removed = new Set([...previousKeys].filter((key) => !nextKeys.has(key)))
   const replacements = new Map<string, L4ModelOption>()
   for (const { from, to } of input.modelReplacements ?? []) {
     const fromKey = collectedModelKey(from.provider, from.modelId)
     const toKey = collectedModelKey(to.provider, to.modelId)
     if (fromKey === toKey) throw new Error('模型替换来源和目标不能相同')
     if (replacements.has(fromKey)) throw new Error('模型替换来源不能重复')
-    if (!previousKeys.has(fromKey) || !removed.has(fromKey)) {
+    if (!removed.has(fromKey)) {
       throw new Error(`替换来源 ${from.provider}/${from.modelId} 必须是本次移除的已收录模型`)
     }
     const target = models.find(
@@ -658,13 +656,6 @@ async function prepareProjectDefaultChanges(
     files: Array<{ path: string; value: JsonRecord }>
   } = { projectDefaults: [], files: [] }
   if (!removed.size) return result
-  for (const preset of normalizePresets(candidate)) {
-    if (removed.has(collectedModelKey(preset.provider, preset.modelId))) {
-      throw new Error(
-        `模型 ${preset.provider}/${preset.modelId} 仍被常用组合引用，请先移除对应组合`
-      )
-    }
-  }
   // 仅在移除模型时检查已知项目，不扫描文件系统寻找任意项目配置。
   const projects = await listL4PiDirectorySummaries(true)
   for (const { cwd } of projects) {
@@ -681,11 +672,20 @@ async function prepareProjectDefaultChanges(
     const provider = merged.getDefaultProvider()
     const modelId = merged.getDefaultModel()
     if (!provider || !modelId || !removed.has(collectedModelKey(provider, modelId))) continue
+    const from: L4ModelSelection = {
+      provider,
+      modelId,
+      thinkingLevel: merged.getDefaultThinkingLevel() ?? 'off'
+    }
     const target = replacements.get(collectedModelKey(provider, modelId))
     if (!target) {
-      throw new Error(
-        `项目“${cwd}”仍将 ${provider}/${modelId} 设为默认模型，请先在“项目默认”中调整`
-      )
+      const value = { ...settings }
+      delete value.defaultProvider
+      delete value.defaultModel
+      delete value.defaultThinkingLevel
+      result.projectDefaults.push({ cwd, from, to: null })
+      result.files.push({ path, value })
+      continue
     }
     const projectModels = await availableModelOptions(runtime, cwd, candidate)
     if (
@@ -694,11 +694,6 @@ async function prepareProjectDefaultChanges(
       )
     ) {
       throw new Error(`替换目标 ${target.provider}/${target.modelId} 在项目“${cwd}”中不可用`)
-    }
-    const from: L4ModelSelection = {
-      provider,
-      modelId,
-      thinkingLevel: merged.getDefaultThinkingLevel() ?? 'off'
     }
     const thinkingLevel = target.thinkingLevels.includes(from.thinkingLevel)
       ? from.thinkingLevel
@@ -785,11 +780,25 @@ async function prepareModelSettings(input: L4ModelSettingsReplaceInput): Promise
         : await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
     candidate = mergeModelsRoot(current, input, currentRuntime, defaults)
   }
+  const nextKeys = collectedModelKeys(candidate)
+  const removed = new Set([...collectedModelKeys(current)].filter((key) => !nextKeys.has(key)))
+  if (removed.size && Array.isArray(candidate.modelPresets)) {
+    candidate = {
+      ...candidate,
+      modelPresets: candidate.modelPresets.filter(
+        (preset) =>
+          !isRecord(preset) ||
+          typeof preset.provider !== 'string' ||
+          typeof preset.modelId !== 'string' ||
+          !removed.has(collectedModelKey(preset.provider, preset.modelId))
+      )
+    }
+  }
   const runtime = await validateModelsRoot(candidate)
   const models = await availableModelOptions(runtime, undefined, candidate)
   await assertConnectionCredentials(current, candidate, runtime)
   assertPresetsValid(normalizePresets(candidate), models, normalizePresets(current))
-  const result = await prepareProjectDefaultChanges(current, candidate, input, runtime, models)
+  const result = await prepareProjectDefaultChanges(removed, candidate, input, runtime, models)
   result.files.push({ path, value: candidate })
   return result
 }

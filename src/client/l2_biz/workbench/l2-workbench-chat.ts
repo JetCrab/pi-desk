@@ -73,6 +73,7 @@ export interface L2WorkbenchChatRuntime {
   ) => Promise<L2ChatMessageDetail>
   compact: (source: L2ChatSource) => Promise<void>
   reload: (source: L2ChatSource, mode?: L2ChatMode) => Promise<void>
+  reloadMessages: (source: L2ChatSource) => Promise<void>
   setPresentation: (source: L2ChatSource, mode: L2ChatMode) => Promise<void>
   disconnected: () => void
   dispose: () => void
@@ -609,6 +610,50 @@ export function createL2WorkbenchChatRuntime(
         L2ChatSocketContracts.reload,
         mode === undefined ? { source } : { source, mode }
       )
+    },
+
+    async reloadMessages(sourceInput): Promise<void> {
+      const source = L2ChatSourceSchema.parse(sourceInput)
+      const key = sourceKey(source)
+      const workSession = currentWorkSessions.get(source.workId)
+      if (!workSession || !sameSource(sourceFor(workSession), source)) {
+        throw new Error(l2WorkbenchText('reloadChatSourceChanged'))
+      }
+      const previous = statesBySource.get(key)
+      if (
+        !workSessionsReady ||
+        disposed ||
+        pendingSyncs.has(key) ||
+        previous?.syncStatus === 'syncing'
+      ) {
+        throw new Error(l2WorkbenchText('sourceSyncing'))
+      }
+      const epoch = connectionEpoch
+      const queue = eventQueues.get(key)
+      const previousSyncEpoch = queue?.syncEpoch ?? null
+      if (queue) queue.syncEpoch = null
+      subscriptionPool.set(source.workId, source)
+      setSourceState(source, { ...(previous ?? EMPTY_CHAT_SOURCE_STATE), syncStatus: 'syncing' })
+      try {
+        // 重拉期间继续接收旧基线上的实时消息，失败时无需丢弃缓存或补偿重放。
+        await appSocket.request(L2ChatSocketContracts.subscribe, {
+          subscriptions: [{ source, cursor: null }]
+        })
+      } catch (error) {
+        if (!disposed && epoch === connectionEpoch && isCurrentAndSubscribed(source)) {
+          if (queue && eventQueues.get(key) === queue) queue.syncEpoch = previousSyncEpoch
+          const current = statesBySource.get(key)
+          if (current)
+            setSourceState(source, { ...current, syncStatus: previous?.syncStatus ?? 'loading' })
+        }
+        console.error('[Pi Desk][WorkbenchChat] 重新加载聊天数据失败，保留已有缓存', {
+          workId: source.workId,
+          sessionId: source.sessionId,
+          branchId: source.branchId,
+          message: error instanceof Error ? error.message : String(error)
+        })
+        throw error
+      }
     },
 
     async setPresentation(sourceInput, mode): Promise<void> {

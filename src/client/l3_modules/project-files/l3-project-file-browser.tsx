@@ -12,10 +12,9 @@ import {
   ImageIcon,
   ListFilterIcon,
   LoaderCircleIcon,
-  SearchIcon,
-  XIcon
+  SearchIcon
 } from 'lucide-react'
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { L4GitRepository } from '@common/l4_foundation/git/l4-git-contract'
 import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
@@ -30,12 +29,8 @@ import {
 } from '@client/l4_foundation/ui/ai-elements/file-tree'
 import { L4ScrollArea } from '@client/l4_foundation/ui/l4-scroll-area'
 import { buttonVariants } from '@client/l4_foundation/ui/shadcn/button'
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput
-} from '@client/l4_foundation/ui/shadcn/input-group'
+import { L3ProjectSearchControls } from './views/l3-project-search-controls'
+import { L3ProjectSearchResults } from './views/l3-project-search-results'
 import type { L3ProjectGitBrowser } from './l3-project-git-runtime'
 import {
   getL3GitChangeBadge,
@@ -69,6 +64,7 @@ interface L3ProjectFileBrowserProps {
 }
 
 const EMPTY_GIT_REPOSITORIES: readonly L4GitRepository[] = []
+const composingSearches = new WeakMap<L3ProjectFileRuntime, object>()
 
 function compactPath(path: string): string {
   const parts = path.replaceAll('\\', '/').split('/').filter(Boolean)
@@ -169,8 +165,26 @@ export function L3ProjectFileBrowser({
   const gitWorkspace = gitRuntime.getWorkspace(cwd)
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const searchResultsRef = useRef<HTMLDivElement>(null)
+  const searchButtonRef = useRef<HTMLButtonElement>(null)
+  const [composing, setComposing] = useState(false)
+  const compositionOwner = useRef<object>({})
+  const onComposingChange = useCallback(
+    (active: boolean): void => {
+      if (active) composingSearches.set(runtime, compositionOwner.current)
+      else if (composingSearches.get(runtime) === compositionOwner.current)
+        composingSearches.delete(runtime)
+      setComposing(active)
+    },
+    [runtime]
+  )
   const searchOpen = workspace.searchOpen
   const setSearchOpen = (open: boolean): void => runtime.setSearchOpen(open)
+  const closeSearch = (): void => {
+    setComposing(false)
+    setSearchOpen(false)
+    requestAnimationFrame(() => searchButtonRef.current?.focus())
+  }
   const [visibleEntries, setVisibleEntries] = useState<Record<string, number>>({})
   const moreEntries = (key: string, total: number): React.ReactNode => {
     const count = visibleEntries[key] ?? 300
@@ -200,15 +214,17 @@ export function L3ProjectFileBrowser({
 
   useEffect(() => {
     const scrollElement = scrollRef.current
-    if (!scrollElement || !workspace) return
+    if (!scrollElement || searchOpen) return
     scrollElement.scrollTop = workspace.treeScrollTop
-  }, [workspace])
+  }, [searchOpen, workspace])
 
   useEffect(() => {
-    if (!searchQuery.trim() || gitWorkspace?.changesOnly) return
-    const timer = window.setTimeout(() => void runtime.search(searchQuery), 220)
+    if (!searchOpen || !searchQuery.trim() || composing) return
+    const timer = window.setTimeout(() => {
+      if (!composingSearches.has(runtime)) void runtime.search(searchQuery)
+    }, 220)
     return () => window.clearTimeout(timer)
-  }, [gitWorkspace?.changesOnly, runtime, searchQuery])
+  }, [composing, runtime, searchOpen, searchQuery])
 
   const expandedRepositoryRootsKey = [...(gitWorkspace?.expandedRepositories ?? [])].join('\u0000')
   useEffect(() => {
@@ -242,9 +258,18 @@ export function L3ProjectFileBrowser({
       toggleDirectory(directory, keys.has(keyL3ProjectTree('directory', path)))
   }
 
-  const openPreview = (path: string): void => {
-    runtime.openFile(path)
+  const openPreview = (path: string, line?: number): void => {
+    runtime.openFile(path, line)
     onFileOpened?.()
+  }
+
+  const openFirstSearchResult = (): void => {
+    const search = runtime.state.search
+    if (search.status !== 'ready') return
+    const firstFile = search.fileMatches[0]
+    const firstLine = search.contentMatches[0]
+    if (firstFile) openPreview(firstFile.path)
+    else if (firstLine) openPreview(firstLine.path, firstLine.line)
   }
 
   const openDiff = (change: L3GitProjectChange): void => {
@@ -271,16 +296,17 @@ export function L3ProjectFileBrowser({
     path: string,
     trigger: React.ReactElement,
     change: L3GitProjectChange | null = null,
-    diffOnSelect = false
+    diffOnSelect = false,
+    line?: number
   ): React.JSX.Element => (
     <L3ProjectPathMenu
-      key={keyL3ProjectTree('file', path)}
+      key={line === undefined ? keyL3ProjectTree('file', path) : `${path}:${line}`}
       cwd={cwd}
       path={path}
       type="file"
       trigger={trigger}
       openLabel={t(diffOnSelect ? 'viewDiff' : 'openPreview')}
-      onOpen={() => (diffOnSelect && change ? openDiff(change) : openPreview(path))}
+      onOpen={() => (diffOnSelect && change ? openDiff(change) : openPreview(path, line))}
       oldPath={
         change?.change.oldPath ? joinPath(change.repositoryRoot, change.change.oldPath) : undefined
       }
@@ -648,10 +674,6 @@ export function L3ProjectFileBrowser({
     )
   }
 
-  const changeSearchResults = projectChanges.filter((change) =>
-    change.projectPath.toLocaleLowerCase().includes(searchQuery.trim().toLocaleLowerCase())
-  )
-  const searching = searchOpen && Boolean(searchQuery.trim())
   const singleProjectRootRepository =
     repositories.length === 1 && repositories[0]?.root === '' ? repositories[0] : null
   const showLayoutToggle = repositories.length > 0 && !singleProjectRootRepository
@@ -661,92 +683,82 @@ export function L3ProjectFileBrowser({
     <section
       className="flex h-full min-h-0 flex-col bg-sidebar"
       aria-label={t('projectFiles', { name: projectName })}
+      onKeyDown={(event) => {
+        if (!searchOpen || event.key !== 'Escape') return
+        event.stopPropagation()
+        if (event.nativeEvent.isComposing || composing) return
+        event.preventDefault()
+        closeSearch()
+      }}
     >
-      <div className="space-y-1.5 border-b px-2.5 py-2">
-        <div className="flex min-h-7 min-w-0 items-center gap-2">
-          <L3ProjectPathMenu
-            cwd={cwd}
-            path=""
-            type="directory"
-            onReveal={
-              runtime.canReveal ? (path, type) => runtime.revealFile(path, type) : undefined
-            }
-            trigger={
-              rootTitle ? (
-                <div className="flex min-w-0 flex-1">{rootTitle}</div>
-              ) : (
-                <div tabIndex={0} className="flex min-w-0 flex-1 items-baseline gap-1">
-                  <p className="shrink-0 truncate text-xs font-semibold" title={projectName}>
-                    {projectName}
-                  </p>
-                  <span className="text-xs text-muted-foreground">·</span>
-                  <p
-                    className="min-w-0 truncate font-mono text-xs text-muted-foreground"
-                    title={cwd}
-                  >
-                    {compactPath(cwd)}
-                  </p>
-                </div>
-              )
-            }
-          />
-          {singleProjectRootRepository ? (
-            <button
-              type="button"
-              disabled={gitReadOnly || singleProjectRootRepository.state !== 'ready'}
-              className={cn(
-                buttonVariants({ variant: 'outline', size: 'sm' }),
-                'max-w-32 shrink gap-1 font-mono text-xs text-muted-foreground'
-              )}
-              title={
-                singleProjectRootRepository.state === 'ready'
-                  ? t(gitReadOnly ? 'gitBranchReadOnly' : 'gitBranches')
-                  : selectL4LocalizedText(singleProjectRootRepository.message, locale)
+      {searchOpen ? (
+        <L3ProjectSearchControls
+          input={workspace.search}
+          inputRef={searchInputRef}
+          invalid={workspace.search.status === 'error'}
+          onQueryChange={(query) => runtime.setSearchQuery(query)}
+          onOptionsChange={(options) => runtime.setSearchOptions(options)}
+          onComposingChange={onComposingChange}
+          onClose={closeSearch}
+          onOpenFirst={openFirstSearchResult}
+          onFocusResults={() =>
+            searchResultsRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+          }
+        />
+      ) : (
+        <div className="space-y-1.5 border-b px-2.5 py-2">
+          <div className="flex min-h-7 min-w-0 items-center gap-2">
+            <L3ProjectPathMenu
+              cwd={cwd}
+              path=""
+              type="directory"
+              onReveal={
+                runtime.canReveal ? (path, type) => runtime.revealFile(path, type) : undefined
               }
-              onClick={() => onOpenGitBranches('')}
-            >
-              <GitBranchIcon className="size-3 shrink-0" />
-              <span className="truncate">
-                {singleProjectRootRepository.state === 'ready'
-                  ? getL3GitHeadLabel(singleProjectRootRepository.head)
-                  : t('unavailable')}
-              </span>
-            </button>
-          ) : null}
-        </div>
-
-        {searchOpen ? (
-          <InputGroup>
-            <InputGroupAddon>
-              <SearchIcon className="size-3.5" />
-            </InputGroupAddon>
-            <InputGroupInput
-              ref={searchInputRef}
-              data-testid="project-file-search"
-              value={searchQuery}
-              onChange={(event) => runtime.setSearchQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== 'Escape') return
-                runtime.setSearchQuery('')
-                setSearchOpen(false)
-              }}
-              placeholder={t('searchFiles')}
-              aria-label={t('searchFiles')}
+              trigger={
+                rootTitle ? (
+                  <div className="flex min-w-0 flex-1">{rootTitle}</div>
+                ) : (
+                  <div tabIndex={0} className="flex min-w-0 flex-1 items-baseline gap-1">
+                    <p className="shrink-0 truncate text-xs font-semibold" title={projectName}>
+                      {projectName}
+                    </p>
+                    <span className="text-xs text-muted-foreground">·</span>
+                    <p
+                      className="min-w-0 truncate font-mono text-xs text-muted-foreground"
+                      title={cwd}
+                    >
+                      {compactPath(cwd)}
+                    </p>
+                  </div>
+                )
+              }
             />
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton
-                size="icon-xs"
-                onClick={() => {
-                  runtime.setSearchQuery('')
-                  setSearchOpen(false)
-                }}
-                aria-label={t('closeSearch')}
+            {singleProjectRootRepository ? (
+              <button
+                type="button"
+                disabled={gitReadOnly || singleProjectRootRepository.state !== 'ready'}
+                className={cn(
+                  buttonVariants({ variant: 'outline', size: 'sm' }),
+                  'max-w-32 shrink gap-1 font-mono text-xs text-muted-foreground'
+                )}
+                title={
+                  singleProjectRootRepository.state === 'ready'
+                    ? t(gitReadOnly ? 'gitBranchReadOnly' : 'gitBranches')
+                    : selectL4LocalizedText(singleProjectRootRepository.message, locale)
+                }
+                onClick={() => onOpenGitBranches('')}
               >
-                <XIcon />
-              </InputGroupButton>
-            </InputGroupAddon>
-          </InputGroup>
-        ) : (
+                <GitBranchIcon className="size-3 shrink-0" />
+                <span className="truncate">
+                  {singleProjectRootRepository.state === 'ready'
+                    ? getL3GitHeadLabel(singleProjectRootRepository.head)
+                    : t('unavailable')}
+                </span>
+              </button>
+            ) : null}
+          </div>
+
           <div className="flex min-h-8 min-w-0 items-center gap-1.5">
             {showLayoutToggle ? (
               <div
@@ -797,6 +809,7 @@ export function L3ProjectFileBrowser({
               </button>
             ) : null}
             <button
+              ref={searchButtonRef}
               type="button"
               className={cn(buttonVariants({ variant: 'outline', size: 'icon-sm' }), 'ml-auto')}
               aria-label={t('searchProject')}
@@ -809,133 +822,62 @@ export function L3ProjectFileBrowser({
               <SearchIcon className="size-3.5" />
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      <L4ScrollArea
-        className="min-h-0 flex-1"
-        viewportClassName="py-1.5"
-        viewportRef={scrollRef}
-        onViewportScroll={(event) => runtime.setTreeScrollTop(event.currentTarget.scrollTop)}
-      >
-        {repositories
-          .filter((item) => item.state === 'unavailable')
-          .map((item) =>
-            item.state === 'unavailable' ? (
-              <p
-                key={item.root}
-                role="alert"
-                className="mx-2 mb-1 break-words rounded-md bg-muted px-2 py-2 text-sm text-destructive"
-              >
-                {item.root || projectName}：{selectL4LocalizedText(item.message, locale)}
-              </p>
-            ) : null
-          )}
-        {gitWorkspace?.snapshot.status === 'error' ? (
-          <p className="mx-2 mb-1 rounded-md bg-muted px-2 py-2 text-sm text-destructive">
-            {gitWorkspace.snapshot.error}
-          </p>
-        ) : null}
-        {searching ? (
-          <div className="space-y-0.5 px-1">
-            {gitWorkspace?.changesOnly ? (
-              changeSearchResults.length > 0 ? (
-                changeSearchResults.map((change) => {
-                  return fileContextMenu(
-                    change.projectPath,
-                    <button
-                      type="button"
-                      className="flex min-h-10 w-full items-center gap-2 rounded-lg px-2 text-left hover:bg-muted/70"
-                      onClick={() => {
-                        openDiff(change)
-                      }}
-                      title={change.projectPath}
-                    >
-                      {fileIcon(change.projectPath)}
-                      <span className="min-w-0 flex-1">
-                        <span
-                          className={cn(
-                            'block truncate text-xs font-medium',
-                            changedFileNameClass(change)
-                          )}
-                        >
-                          {change.projectPath.split('/').at(-1)}
-                        </span>
-                        <span className="mt-0.5 block truncate font-mono text-xs text-muted-foreground">
-                          {change.projectPath}
-                        </span>
-                      </span>
-                    </button>,
-                    change,
-                    true
-                  )
-                })
-              ) : (
-                <p className="px-2 py-5 text-center text-xs text-muted-foreground">
-                  {t('noMatches')}
+      {searchOpen ? (
+        <L3ProjectSearchResults
+          key={JSON.stringify([
+            workspace.search.query,
+            workspace.search.scope,
+            workspace.search.caseSensitive,
+            workspace.search.wholeWord,
+            workspace.search.regex
+          ])}
+          search={workspace.search}
+          resultsRef={searchResultsRef}
+          activePath={workspace.activeDiff ? null : workspace.activePath}
+          onOpen={openPreview}
+          wrapFile={(path, line, trigger) =>
+            fileContextMenu(path, trigger, changeByProjectPath.get(path) ?? null, false, line)
+          }
+          renderFileIcon={fileIcon}
+          fileDecoration={(path) => {
+            const change = changeByProjectPath.get(path) ?? null
+            return {
+              className: changedFileNameClass(change),
+              badge: change ? getL3GitChangeBadge(change.change) : undefined
+            }
+          }}
+        />
+      ) : (
+        <L4ScrollArea
+          className="min-h-0 flex-1"
+          viewportClassName="py-1.5"
+          viewportRef={scrollRef}
+          onViewportScroll={(event) => runtime.setTreeScrollTop(event.currentTarget.scrollTop)}
+        >
+          {repositories
+            .filter((item) => item.state === 'unavailable')
+            .map((item) =>
+              item.state === 'unavailable' ? (
+                <p
+                  key={item.root}
+                  role="alert"
+                  className="mx-2 mb-1 break-words rounded-md bg-muted px-2 py-2 text-sm text-destructive"
+                >
+                  {item.root || projectName}：{selectL4LocalizedText(item.message, locale)}
                 </p>
-              )
-            ) : (
-              <>
-                {workspace?.search.status === 'loading' ? (
-                  <div className="flex min-h-10 items-center gap-2 px-2 text-xs text-muted-foreground">
-                    <LoaderCircleIcon className="size-3.5 animate-spin" /> {t('searching')}
-                  </div>
-                ) : null}
-                {workspace?.search.status === 'error' ? (
-                  <p className="px-2 py-2 text-xs text-destructive">{workspace.search.error}</p>
-                ) : null}
-                {workspace?.search.status === 'ready'
-                  ? workspace.search.matches.map((path) => {
-                      const change = changeByProjectPath.get(path) ?? null
-                      return fileContextMenu(
-                        path,
-                        <button
-                          data-testid={`project-search-result-${path}`}
-                          type="button"
-                          onClick={() => {
-                            openPreview(path)
-                          }}
-                          className="flex min-h-10 w-full items-center gap-2 rounded-lg px-2 text-left hover:bg-muted/70"
-                          title={path}
-                        >
-                          <span className="shrink-0">{fileIcon(path)}</span>
-                          <span className="min-w-0 flex-1">
-                            <span
-                              className={cn(
-                                'block truncate text-xs font-medium',
-                                changedFileNameClass(change)
-                              )}
-                            >
-                              {path.split('/').at(-1)}
-                            </span>
-                            <span className="mt-0.5 block truncate font-mono text-xs text-muted-foreground">
-                              {path}
-                            </span>
-                          </span>
-                        </button>
-                      )
-                    })
-                  : null}
-                {workspace?.search.status === 'ready' && workspace.search.matches.length === 0 ? (
-                  <p className="px-2 py-5 text-center text-xs text-muted-foreground">
-                    {t('noMatches')}
-                  </p>
-                ) : null}
-                {workspace?.search.status === 'ready' && workspace.search.truncated ? (
-                  <p className="px-2 py-2 text-xs text-amber-600 dark:text-amber-400">
-                    {t('resultLimit')}
-                  </p>
-                ) : null}
-              </>
+              ) : null
             )}
-          </div>
-        ) : effectiveLayout === 'repository' ? (
-          renderRepositoryView()
-        ) : (
-          renderDirectoryView()
-        )}
-      </L4ScrollArea>
+          {gitWorkspace?.snapshot.status === 'error' ? (
+            <p className="mx-2 mb-1 rounded-md bg-muted px-2 py-2 text-sm text-destructive">
+              {gitWorkspace.snapshot.error}
+            </p>
+          ) : null}
+          {effectiveLayout === 'repository' ? renderRepositoryView() : renderDirectoryView()}
+        </L4ScrollArea>
+      )}
     </section>
   )
 }

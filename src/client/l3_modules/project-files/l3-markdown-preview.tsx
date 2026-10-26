@@ -4,6 +4,12 @@ import { cjk } from '@streamdown/cjk'
 import { code } from '@streamdown/code'
 import { memo, useLayoutEffect, useRef } from 'react'
 import { Streamdown } from 'streamdown'
+import {
+  L4_MARKDOWN_ALLOWED_TAGS,
+  L4_MARKDOWN_CLASS_NAME,
+  L4_MARKDOWN_COMPONENTS,
+  L4_MARKDOWN_REMARK_PLUGINS
+} from '@client/l4_foundation/ui/markdown/l4-markdown'
 import styles from './l3-markdown-preview.module.css'
 
 const plugins = { cjk, code }
@@ -37,7 +43,10 @@ export const L3MarkdownPreview = memo(function L3MarkdownPreview({
       onScroll={(event) => onScroll(event.currentTarget.scrollTop)}
     >
       <Streamdown
-        className={styles.document}
+        className={`${styles.document} ${L4_MARKDOWN_CLASS_NAME}`}
+        allowedTags={L4_MARKDOWN_ALLOWED_TAGS}
+        components={L4_MARKDOWN_COMPONENTS}
+        remarkPlugins={L4_MARKDOWN_REMARK_PLUGINS}
         mode="static"
         parseIncompleteMarkdown={false}
         isAnimating={false}

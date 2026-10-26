@@ -59,6 +59,17 @@ test('构建成功后记录原制品来源，未完成发布也能按组件恢�
   )
 })
 
+test('部分原包上传只记录实际保存的单元，空列表不制造来源', async () => {
+  const github = fixture()
+  const batch = plan('123', '1.2.3')
+  await saveDevBatch(github, batch)
+  await recordDevArtifactSources(github, batch, [])
+  assert.deepEqual(await loadDevArtifactSources(github), {})
+  await recordDevArtifactSources(github, batch, ['pi-desk-sdk'])
+  assert.deepEqual(await loadDevArtifactSources(github), { 'pi-desk-sdk': '123' })
+  await assert.rejects(recordDevArtifactSources(github, batch, ['pi-desk-usage']), /当前批次/)
+})
+
 test('同版本新运行仅更新原制品副本的来源，不制造新版本', async () => {
   const github = fixture()
   for (const runId of ['123', '124']) {

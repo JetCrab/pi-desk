@@ -1,7 +1,9 @@
 'use client'
 
-import { CheckIcon, CopyIcon, LoaderCircleIcon, RefreshCwIcon } from 'lucide-react'
+import { CheckIcon, CircleAlertIcon, CopyIcon, LoaderCircleIcon, RefreshCwIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@client/l4_foundation/lib/l4-utils'
+import styles from './l2-work-session-columns.module.css'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import {
   Popover,
@@ -36,11 +38,14 @@ export function L2WorkbenchInitializationNotice({
           <Button
             variant="ghost"
             size="sm"
-            className="text-xs text-destructive hover:text-destructive"
+            aria-label={t('initializationDegraded')}
+            title={t('initializationDegraded')}
+            className={cn(styles.headerAction, 'text-xs text-destructive hover:text-destructive')}
           />
         }
       >
-        {t('initializationDegraded')}
+        <CircleAlertIcon className={cn(styles.headerActionIcon, 'size-4')} aria-hidden="true" />
+        <span className={styles.headerActionLabel}>{t('initializationDegraded')}</span>
       </PopoverTrigger>
       <PopoverContent
         align="end"

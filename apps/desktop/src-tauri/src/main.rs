@@ -363,9 +363,15 @@ async fn open_target_command(
     window: Window,
     url: String,
     external: Option<bool>,
+    preview: Option<bool>,
 ) -> Result<(), String> {
     run_command(app, window, "open-target", move |app| {
-        runtime::open_target(app, &url, external.unwrap_or(false))
+        runtime::open_target(
+            app,
+            &url,
+            external.unwrap_or(false),
+            preview.unwrap_or(false),
+        )
     })
     .await
 }

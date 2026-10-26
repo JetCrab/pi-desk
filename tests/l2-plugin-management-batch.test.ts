@@ -63,7 +63,7 @@ async function fixture(
       typeof import('../src/server/l2_biz/plugin-management/l2-plugin-management')
     >('../src/server/l2_biz/plugin-management/l2-plugin-management.ts')
     management = new L2PluginManagement(
-      { refreshPluginMessages: () => undefined, runPluginRestart: (operation) => operation() },
+      { runPluginRestart: (operation) => operation() },
       root,
       agentDir
     )

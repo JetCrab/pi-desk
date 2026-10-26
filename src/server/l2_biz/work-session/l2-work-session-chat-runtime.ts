@@ -108,7 +108,6 @@ interface L2WorkSessionChatRecord {
   source: L2ChatSource
   state: L2ChatSourceState
   sourceEventVersion: number
-  forceFullSync: boolean
   rawTemporaryMessages: Map<string, L4PiChatMessage>
   metadata: L2WorkSessionChatMetadata
   mainRunning: boolean
@@ -302,20 +301,6 @@ export class L2WorkSessionChatRuntime {
     return isCurrent() ? { cwd, isCurrent } : null
   }
 
-  refreshPluginMessages(): void {
-    for (const record of this.recordsByWorkId.values()) {
-      if (record.state.runtime.presentationMode === 'basic') continue
-      try {
-        this.reprojectRecord(record, record.state.runtime.presentationMode)
-      } catch (error) {
-        console.error('[Pi Desk][WorkSessionChatRuntime] 插件消息刷新失败，保留已有聊天', {
-          workId: record.source.workId,
-          message: error instanceof Error ? error.message : String(error)
-        })
-      }
-    }
-  }
-
   setPresentation(source: L2ChatSource, mode: L2ChatMode): Promise<void> {
     const record = this.currentRecord(source)
     return this.enqueueCommand(record, async () => {
@@ -363,7 +348,6 @@ export class L2WorkSessionChatRuntime {
       temporaryMessages,
       runtime: { ...record.state.runtime, presentationMode: mode }
     }
-    record.forceFullSync = true
     record.sourceEventVersion += 1
     this.publish({
       type: 'source_event',
@@ -380,16 +364,14 @@ export class L2WorkSessionChatRuntime {
 
   private async syncRecordRuntime(record: L2WorkSessionChatRecord): Promise<void> {
     const source = record.source
-    const runtime = L2ChatRuntimeSchema.parse({
-      ...(await getL4PiWorkSessionRuntime(source.sessionId).readChatRuntime()),
+    const runtime = await getL4PiWorkSessionRuntime(source.sessionId).readChatRuntime()
+    const nextRuntime = L2ChatRuntimeSchema.parse({
+      ...runtime,
       presentationMode: record.state.runtime.presentationMode
     })
     if (!this.isCurrentSource(source)) return
-    if (!sameRuntime(record.state.runtime, runtime))
-      this.applySourceEvent(source, { type: 'runtime_update', runtime })
-    if (runtime.extensionMode === 'basic' && record.state.runtime.presentationMode !== 'basic') {
-      this.reprojectRecord(record, 'basic')
-    }
+    if (!sameRuntime(record.state.runtime, nextRuntime))
+      this.applySourceEvent(source, { type: 'runtime_update', runtime: nextRuntime })
   }
 
   createSync(sourceInput: L2ChatSource, cursor: L2ChatCursor): L2PreparedChatSourceSync {
@@ -413,24 +395,23 @@ export class L2WorkSessionChatRuntime {
       })
     }
 
-    const event: L2ChatSessionSyncEvent =
-      cursor !== null && cursorMatches && !record.forceFullSync
-        ? {
-            type: 'session_sync',
-            mode: 'incremental',
-            baseCursor: cursor,
-            messages: messages.slice(cursor.index + 1).map(withoutL3ConversationMessageDetail),
-            temporaryMessages,
-            runtime
-          }
-        : {
-            type: 'session_sync',
-            mode: 'full',
-            baseCursor: null,
-            messages: messages.map(withoutL3ConversationMessageDetail),
-            temporaryMessages,
-            runtime
-          }
+    const event: L2ChatSessionSyncEvent = cursorMatches
+      ? {
+          type: 'session_sync',
+          mode: 'incremental',
+          baseCursor: cursor,
+          messages: messages.slice(cursor.index + 1).map(withoutL3ConversationMessageDetail),
+          temporaryMessages,
+          runtime
+        }
+      : {
+          type: 'session_sync',
+          mode: 'full',
+          baseCursor: null,
+          messages: messages.map(withoutL3ConversationMessageDetail),
+          temporaryMessages,
+          runtime
+        }
 
     return { event, watermark: record.sourceEventVersion }
   }
@@ -548,12 +529,6 @@ export class L2WorkSessionChatRuntime {
       } finally {
         if (this.recordsByWorkId.get(source.workId) === record) {
           await this.syncRecordRuntime(record)
-          if (
-            record.state.runtime.extensionMode === 'basic' &&
-            record.state.runtime.presentationMode !== 'basic'
-          ) {
-            this.reprojectRecord(record, 'basic')
-          }
         }
       }
     })
@@ -685,7 +660,6 @@ export class L2WorkSessionChatRuntime {
       source,
       state,
       sourceEventVersion: 0,
-      forceFullSync: isL4PiDeskSafeMode(),
       rawTemporaryMessages: new Map(),
       metadata: {
         sessionTitle: snapshot.sessionName ?? firstUserTitle,
@@ -714,6 +688,9 @@ export class L2WorkSessionChatRuntime {
     if (this.recordsByWorkId.get(record.source.workId) !== record) return
     const previousMetadata = record.metadata
     const previousStatus = this.statusForRecord(record)
+    const basic =
+      record.state.runtime.extensionMode === 'basic' ||
+      record.state.runtime.presentationMode === 'basic'
 
     switch (event.type) {
       case 'message_start':
@@ -726,7 +703,7 @@ export class L2WorkSessionChatRuntime {
             record.source,
             false,
             'temporary',
-            record.state.runtime.presentationMode === 'basic'
+            basic
           )
         })
         return
@@ -744,7 +721,7 @@ export class L2WorkSessionChatRuntime {
             record.source,
             false,
             'update',
-            record.state.runtime.presentationMode === 'basic'
+            basic
           )
         )
         if (update) this.applySourceEvent(record.source, update)
@@ -761,7 +738,7 @@ export class L2WorkSessionChatRuntime {
           record.source,
           false,
           'final',
-          record.state.runtime.presentationMode === 'basic'
+          basic
         )
         const update = buildL3ConversationMessageUpdate(current, publicFinal)
         if (update) this.applySourceEvent(record.source, update)
@@ -800,12 +777,6 @@ export class L2WorkSessionChatRuntime {
         })
         if (!sameRuntime(record.state.runtime, runtime)) {
           this.applySourceEvent(record.source, { type: 'runtime_update', runtime })
-        }
-        if (
-          runtime.extensionMode === 'basic' &&
-          record.state.runtime.presentationMode !== 'basic'
-        ) {
-          this.reprojectRecord(record, 'basic')
         }
         return
       }
@@ -861,7 +832,8 @@ export class L2WorkSessionChatRuntime {
       record.source,
       true,
       'final',
-      record.state.runtime.presentationMode === 'basic'
+      record.state.runtime.extensionMode === 'basic' ||
+        record.state.runtime.presentationMode === 'basic'
     )
     record.state = { ...record.state, temporaryMessages }
   }

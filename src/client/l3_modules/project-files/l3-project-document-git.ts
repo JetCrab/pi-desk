@@ -10,7 +10,8 @@ export function useL3ProjectDocumentGit(
   git: L3ProjectGitBrowser,
   host: RefObject<HTMLDivElement | null>,
   savePosition: () => void,
-  active: boolean
+  active: boolean,
+  refreshOnFocus = true
 ): { refresh: () => void; unavailable: boolean } {
   useSyncExternalStore(git.subscribe, git.getRevision, git.getRevision)
   const snapshot = git.getWorkspace(runtime.cwd)?.snapshot
@@ -29,7 +30,7 @@ export function useL3ProjectDocumentGit(
   }, [diffActive, git, path, runtime])
 
   useEffect(() => {
-    if (!active || !path || diffActive) return
+    if (!refreshOnFocus || !active || !path || diffActive) return
     const visible = (): boolean =>
       window.document.visibilityState === 'visible' &&
       Boolean(host.current?.getClientRects().length) &&
@@ -54,7 +55,7 @@ export function useL3ProjectDocumentGit(
       window.removeEventListener('focus', onFocus)
       window.document.removeEventListener('visibilitychange', onFocus)
     }
-  }, [active, diffActive, git, host, path, refresh, runtime])
+  }, [active, diffActive, git, host, path, refresh, refreshOnFocus, runtime])
 
   useEffect(() => {
     if (!active || !path || diffActive || document?.status !== 'text') return

@@ -56,7 +56,7 @@ test('作者筛选携带组合查询、分页并只用已加载提交生成建�
   const requests: Array<{ root: string; query: Parameters<L3ProjectReader['log']>[1] }> = []
   const reader: L3ProjectReader = {
     list: async () => ({ entries: [], truncated: false }),
-    search: async () => ({ matches: [], truncated: false }),
+    search: async () => ({ fileMatches: [], contentMatches: [], truncated: false }),
     get: async () => ({ kind: 'text', path: 'x', content: '', size: 0 }),
     diff: async () => ({
       kind: 'text',
@@ -115,7 +115,7 @@ test('快速切仓库时迟到成功与错误均不能污染当前历史', async
   }> = []
   const reader: L3ProjectReader = {
     list: async () => ({ entries: [], truncated: false }),
-    search: async () => ({ matches: [], truncated: false }),
+    search: async () => ({ fileMatches: [], contentMatches: [], truncated: false }),
     get: async () => ({ kind: 'text', path: 'src/app.ts', content: '', size: 0 }),
     diff: async () => ({
       kind: 'text',
@@ -155,7 +155,7 @@ test('累计比较、提交单次比较、返回累计保持固定范围并可�
   const selected = commit('c'.repeat(40), '单次提交')
   const reader: L3ProjectReader = {
     list: async () => ({ entries: [], truncated: false }),
-    search: async () => ({ matches: [], truncated: false }),
+    search: async () => ({ fileMatches: [], contentMatches: [], truncated: false }),
     get: async () => ({ kind: 'text', path: 'src/app.ts', content: '', size: 0 }),
     diff: async () => ({
       kind: 'text',
@@ -202,7 +202,7 @@ test('恢复已选提交时保留先恢复的历史 Diff', async () => {
   const selected = commit('c'.repeat(40))
   const reader: L3ProjectReader = {
     list: async () => ({ entries: [], truncated: false }),
-    search: async () => ({ matches: [], truncated: false }),
+    search: async () => ({ fileMatches: [], contentMatches: [], truncated: false }),
     get: async () => ({ kind: 'text', path: 'src/app.ts', content: '', size: 0 }),
     diff: async () => ({
       kind: 'text',
@@ -245,7 +245,7 @@ test('搜索与分页触发独立请求，dispose后迟到结果不再发布', a
   let aborted = false
   const reader: L3ProjectReader = {
     list: async () => ({ entries: [], truncated: false }),
-    search: async () => ({ matches: [], truncated: false }),
+    search: async () => ({ fileMatches: [], contentMatches: [], truncated: false }),
     get: async () => ({ kind: 'text', path: 'x', content: '', size: 0 }),
     diff: async () => ({
       kind: 'text',

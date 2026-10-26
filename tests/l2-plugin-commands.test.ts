@@ -64,7 +64,6 @@ test(
     try {
       management = new Management(
         {
-          refreshPluginMessages: () => undefined,
           runPluginRestart: (operation) => operation()
         },
         root,

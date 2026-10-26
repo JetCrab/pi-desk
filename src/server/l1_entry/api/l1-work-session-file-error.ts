@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { getL4WorkSessionProjectFileErrorKind } from '@server/l4_foundation/file/l4-work-session-project-file'
+import { L4ProjectSearchError } from '@server/l4_foundation/file/l4-project-search'
 import { createL4ApiErrorResponse } from '@server/l4_foundation/http/l4-api-response'
 
 export function createL1WorkSessionFileErrorResponse(error: unknown): Response | null {
@@ -9,6 +10,28 @@ export function createL1WorkSessionFileErrorResponse(error: unknown): Response |
   }
   if (error instanceof Error && error.name === 'WorkSessionProjectChangedError') {
     return createL4ApiErrorResponse(409, '工作会话项目已变化', { key: 'errors:projectChanged' })
+  }
+
+  if (error instanceof Error && error.name === 'AbortError') {
+    return createL4ApiErrorResponse(499, '项目搜索已取消', { key: 'errors:projectSearchCancelled' })
+  }
+  if (error instanceof L4ProjectSearchError) {
+    switch (error.kind) {
+      case 'invalid-pattern':
+        return createL4ApiErrorResponse(400, error.message, {
+          key: 'errors:projectSearchPatternInvalid'
+        })
+      case 'unavailable':
+        return createL4ApiErrorResponse(503, error.message, {
+          key: 'errors:projectSearchUnavailable'
+        })
+      case 'timeout':
+        return createL4ApiErrorResponse(504, error.message, { key: 'errors:projectSearchTimeout' })
+      case 'read-failed':
+        return createL4ApiErrorResponse(500, error.message, {
+          key: 'errors:projectSearchReadFailed'
+        })
+    }
   }
 
   switch (getL4WorkSessionProjectFileErrorKind(error)) {

@@ -184,22 +184,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.2
-      - name: 确认本批原始制品已完整上传
+      - name: 检查本批完整原始制品与验收附件
         id: artifacts
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_PACKAGES_JSON: ${{ needs.plan.outputs.packages }}
         run: node .github/scripts/reuse-npm-artifacts.mjs
+      - name: 保存已上传包的原始制品来源
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-dev-reuse.mjs record
       - name: 阻止原始制品缺失的发布
         if: needs.npm-build.result == 'success' && steps.artifacts.outputs.reusable != 'true'
         run: |
           echo '构建成功但缺少完整原始制品，停止发布以免无法续跑。' >&2
           exit 1
-      - name: 保存可续跑的原始制品来源
-        if: steps.artifacts.outputs.reusable == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node .github/scripts/release-dev-reuse.mjs record
 
   npm-publish:
     needs: [plan, checks, npm-build, npm-artifacts]
@@ -238,6 +237,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -246,8 +246,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.2
+      - name: 读取本批逐包发布结果
+        if: needs.npm-publish.result != 'skipped'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: npm-published-${{ github.run_id }}
+          path: temp/package/npm-published/${{ github.run_id }}-${{ github.run_attempt }}
+          merge-multiple: true
       - name: 保存实际成功单元，失败范围留待后续批次
         env:
           GH_TOKEN: ${{ github.token }}
           RESULTS: ${{ toJSON(needs) }}
+          NPM_PUBLISHED_FILE: temp/package/npm-published/${{ github.run_id }}-${{ github.run_attempt }}/published.json
         run: node .github/scripts/release-dev.mjs complete

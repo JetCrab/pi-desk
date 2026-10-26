@@ -250,10 +250,6 @@ export class WorkSessionManage {
     })
   }
 
-  refreshPluginMessages(): void {
-    this.chat.refreshPluginMessages()
-  }
-
   runPluginRestart<T>(operation: () => Promise<T>): Promise<T> {
     return this.runExclusive(async () => {
       await this.ensureHydrated()

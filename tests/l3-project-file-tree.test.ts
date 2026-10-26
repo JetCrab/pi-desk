@@ -29,7 +29,7 @@ function readerForRuntime(
 ): L3ProjectReader {
   return {
     list,
-    search: async () => ({ matches: [], truncated: false }),
+    search: async () => ({ fileMatches: [], contentMatches: [], truncated: false }),
     get: async (path) => ({ kind: 'text', path, content: path, size: path.length }),
     diff: async (_root, path) => ({
       kind: 'text',

@@ -222,7 +222,7 @@ async function login(client) {
   assert.equal(result.ok, true, result.body?.msg)
   await evaluate(
     client,
-    `localStorage.setItem('pi-desk:workbench-layout', JSON.stringify({ primaryWorkId: ${JSON.stringify(shortWorkId)} }))`
+    `localStorage.setItem('pi-super:workbench-layout', JSON.stringify({ primaryWorkId: ${JSON.stringify(shortWorkId)} }))`
   )
 }
 

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import childProcess, { execFileSync } from 'node:child_process'
+import { EventEmitter } from 'node:events'
+import { syncBuiltinESMExports } from 'node:module'
+import { PassThrough } from 'node:stream'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import test, { beforeEach } from 'node:test'
 import { format } from 'node:util'
@@ -10,7 +13,9 @@ import {
   assertPackedManifest,
   assertDevelopmentTags,
   waitForNpmTags,
+  waitForRegistryPackage,
   pruneHostBuild,
+  preserveArchives,
   publish,
   run
 } from '../.github/scripts/release-npm.mjs'
@@ -18,7 +23,12 @@ import {
 // Node 22 的测试 stdout 帧解析存在缺陷，诊断通道保留中文日志而不与报告混流。
 beforeEach((context) => {
   context.mock.method(console, 'info', (...args) => context.diagnostic(format(...args)))
+  context.mock.method(console, 'warn', (...args) => context.diagnostic(format(...args)))
 })
+
+function packageResponse(name, tags, versions = {}) {
+  return Response.json({ name, 'dist-tags': tags, versions })
+}
 
 const publishConfig = { registry: 'https://registry.npmjs.org', access: 'public' }
 async function fixture(context) {
@@ -115,17 +125,23 @@ test('部分发布后新运行只接纳完全相同的原包，不覆盖已有�
   pack()
   const bytes = await readFile(archive)
   const integrity = 'sha512-' + createHash('sha512').update(bytes).digest('base64')
-  t.mock.method(globalThis, 'fetch', async (url) =>
-    String(url).includes('dist-tags')
-      ? Response.json({ latest: '1.2.2', dev: manifest.version })
-      : String(url).endsWith('.tgz')
-        ? new Response(null, { status: 200 })
-        : Response.json({
-            name: manifest.name,
-            version: manifest.version,
-            dist: { integrity, tarball: 'https://registry.npmjs.org/fixture.tgz' }
-          })
-  )
+  let metadataReads = 0
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (options.method === 'HEAD') return new Response(null, { status: 200 })
+    const target = new URL(url)
+    assert.equal(target.pathname, `/${encodeURIComponent(manifest.name)}`)
+    metadataReads += 1
+    return packageResponse(
+      manifest.name,
+      { latest: '1.2.2', dev: manifest.version },
+      {
+        [manifest.version]: {
+          version: manifest.version,
+          dist: { integrity, tarball: 'https://registry.npmjs.org/fixture.tgz' }
+        }
+      }
+    )
+  })
   const environment = {
     GITHUB_REF: 'refs/heads/dev',
     GITHUB_REPOSITORY: 'JetCrab/pi-desk',
@@ -137,6 +153,7 @@ test('部分发布后新运行只接纳完全相同的原包，不覆盖已有�
   try {
     Object.assign(process.env, environment)
     await publish([{ directory: source, manifest }], output)
+    assert.equal(metadataReads, 3, '发布前的标签、版本与摘要共用一次元数据查询')
     await writeFile(join(source, 'package/dist/index.js'), 'export default { changed: true }')
     pack()
     await assert.rejects(publish([{ directory: source, manifest }], output), /已存在不同内容/)
@@ -148,12 +165,257 @@ test('部分发布后新运行只接纳完全相同的原包，不覆盖已有�
   }
 })
 
+for (const scenario of ['accepted', 'retry', 'conflict', 'permission', 'unavailable']) {
+  test(`npm上传恢复：${scenario}`, { timeout: 30_000 }, async (t) => {
+    const root = await fixture(t)
+    const source = join(root, 'upload/package')
+    const output = join(root, 'archives')
+    await mkdir(source, { recursive: true })
+    await mkdir(output)
+    const manifest = { name: '@jetcrab/pi-desk-usage', version: '1.2.3-dev', publishConfig }
+    await writeFile(join(source, 'package.json'), JSON.stringify(manifest))
+    await writeFile(join(source, 'LICENSE'), 'fixture')
+    const archive = join(output, 'jetcrab-pi-desk-usage-1.2.3-dev.tgz')
+    execFileSync(
+      process.platform === 'win32' ? 'tar.exe' : 'tar',
+      ['-czf', relative(join(root, 'upload'), archive).replaceAll('\\', '/'), 'package'],
+      { cwd: join(root, 'upload'), stdio: 'pipe' }
+    )
+    const integrity = `sha512-${createHash('sha512')
+      .update(await readFile(archive))
+      .digest('base64')}`
+    let uploads = 0
+    let accepted = false
+    let readsAfterFailure = 0
+    const spawn = childProcess.spawn
+    const replacement = t.mock.method(childProcess, 'spawn', (command, args, options) => {
+      if (!(command === 'npm' || (command === 'cmd.exe' && args.at(-1).startsWith('npm ')))) {
+        return spawn(command, args, options)
+      }
+      const child = new EventEmitter()
+      child.stdout = new PassThrough()
+      child.stderr = new PassThrough()
+      queueMicrotask(() => {
+        uploads += 1
+        if (scenario === 'retry' && uploads === 2) {
+          assert.ok(readsAfterFailure > 0, '重传前必须先核对远端是否已接受')
+          accepted = true
+          child.emit('close', 0, null)
+          return
+        }
+        accepted = scenario === 'accepted' || scenario === 'conflict'
+        child.stderr.write(`npm error code ${scenario === 'permission' ? 'E403' : 'E503'}\n`)
+        child.emit('close', 1, null)
+      })
+      return child
+    })
+    syncBuiltinESMExports()
+    t.after(() => {
+      replacement.mock.restore()
+      syncBuiltinESMExports()
+    })
+    t.mock.method(globalThis, 'fetch', async (_url, options) => {
+      if (options.method === 'HEAD') return new Response(null, { status: 200 })
+      if (uploads) readsAfterFailure += 1
+      return packageResponse(
+        manifest.name,
+        { latest: '1.2.2', ...(accepted ? { dev: manifest.version } : {}) },
+        accepted
+          ? {
+              [manifest.version]: {
+                version: manifest.version,
+                dist: {
+                  integrity: scenario === 'conflict' ? 'sha512-different' : integrity,
+                  tarball: 'https://registry.npmjs.org/fixture.tgz'
+                }
+              }
+            }
+          : {}
+      )
+    })
+    const environment = {
+      GITHUB_REF: 'refs/heads/dev',
+      GITHUB_REPOSITORY: 'JetCrab/pi-desk',
+      RUNNER_TEMP: root
+    }
+    const previous = Object.fromEntries(
+      Object.keys(environment).map((key) => [key, process.env[key]])
+    )
+    Object.assign(process.env, environment)
+    t.after(() => {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    })
+    const publishing = publish([{ directory: source, manifest }], output)
+    if (scenario === 'conflict') {
+      await assert.rejects(publishing, /不同内容|摘要|完整性/)
+      assert.equal(uploads, 1)
+    } else if (scenario === 'permission') {
+      await assert.rejects(publishing, /E403|退出码=1/)
+      assert.equal(uploads, 1)
+    } else if (scenario === 'unavailable') {
+      await assert.rejects(publishing, /E503|退出码=1/)
+      assert.equal(uploads, 3, '持续临时故障最多上传三次')
+    } else {
+      await publishing
+      assert.equal(uploads, scenario === 'accepted' ? 1 : 2)
+    }
+    assert.deepEqual(
+      JSON.parse(await readFile(join(output, 'published.json'), 'utf8')),
+      scenario === 'accepted' || scenario === 'retry' ? ['pi-desk-usage'] : []
+    )
+  })
+}
+
+test('失败构建仅保存通过完整制品检查的原包，不保存缺失入口或尚未打包的单元', async (t) => {
+  const root = await fixture(t)
+  const output = join(root, 'archives')
+  await mkdir(join(output, 'verified'), { recursive: true })
+  await writeFile(join(output, 'verified/stale.tgz'), 'stale')
+  const entries = []
+  for (const id of ['pi-desk-usage', 'pi-desk-sdk', 'pi-desk-ctx']) {
+    const directory = join(root, id)
+    const manifest = {
+      name: `@jetcrab/${id}`,
+      version: '1.2.3-dev',
+      publishConfig,
+      piDesk: { entry: './dist/index.js' }
+    }
+    entries.push({ directory, manifest })
+    if (id === 'pi-desk-ctx') continue
+    await mkdir(join(directory, 'package/dist'), { recursive: true })
+    await writeFile(join(directory, 'package/package.json'), JSON.stringify(manifest))
+    await writeFile(join(directory, 'package/LICENSE'), 'fixture')
+    if (id === 'pi-desk-usage') await writeFile(join(directory, 'package/dist/index.js'), 'fixture')
+    execFileSync(
+      process.platform === 'win32' ? 'tar.exe' : 'tar',
+      [
+        '-czf',
+        relative(directory, join(output, `jetcrab-${id}-1.2.3-dev.tgz`)).replaceAll('\\', '/'),
+        'package'
+      ],
+      { cwd: directory, stdio: 'pipe' }
+    )
+  }
+  assert.deepEqual(await preserveArchives(entries, output), ['pi-desk-usage'])
+  const filename = 'jetcrab-pi-desk-usage-1.2.3-dev.tgz'
+  assert.deepEqual(await readdir(join(output, 'verified')), [filename])
+  assert.deepEqual(
+    await readFile(join(output, 'verified', filename)),
+    await readFile(join(output, filename))
+  )
+})
+
+test('独立包发布成功保留结果，失败包及其消费者不进入成功列表', async (t) => {
+  const root = await fixture(t)
+  const output = join(root, 'archives')
+  await mkdir(output)
+  const ids = ['pi-desk-tool-reason', 'pi-desk-usage', 'pi-desk-ctx']
+  const entries = []
+  const integrities = new Map()
+  for (const id of ids) {
+    const directory = join(root, id)
+    const manifest = {
+      name: `@jetcrab/${id}`,
+      version: '1.2.3-dev',
+      publishConfig,
+      ...(id === 'pi-desk-ctx' ? { dependencies: { '@jetcrab/pi-desk-usage': '1.2.3-dev' } } : {})
+    }
+    entries.push({ directory, manifest })
+    await mkdir(join(directory, 'package'), { recursive: true })
+    await writeFile(join(directory, 'package/package.json'), JSON.stringify(manifest))
+    await writeFile(join(directory, 'package/LICENSE'), 'fixture')
+    const archive = join(output, `jetcrab-${id}-1.2.3-dev.tgz`)
+    execFileSync(
+      process.platform === 'win32' ? 'tar.exe' : 'tar',
+      ['-czf', relative(directory, archive).replaceAll('\\', '/'), 'package'],
+      { cwd: directory, stdio: 'pipe' }
+    )
+    integrities.set(
+      manifest.name,
+      `sha512-${createHash('sha512')
+        .update(await readFile(archive))
+        .digest('base64')}`
+    )
+  }
+  const uploaded = []
+  const accepted = new Set()
+  const spawn = childProcess.spawn
+  const replacement = t.mock.method(childProcess, 'spawn', (command, args, options) => {
+    if (!(command === 'npm' || (command === 'cmd.exe' && args.at(-1).startsWith('npm '))))
+      return spawn(command, args, options)
+    const text = args.join(' ')
+    const id = ids.find((name) => text.includes(`jetcrab-${name}-`))
+    assert.ok(id, '只允许模拟本测试的 npm publish')
+    uploaded.push(id)
+    const child = new EventEmitter()
+    child.stdout = null
+    child.stderr = new PassThrough()
+    queueMicrotask(() => {
+      if (id === 'pi-desk-usage') {
+        child.stderr.write('npm error code E403\n')
+        child.emit('close', 1, null)
+      } else {
+        accepted.add(`@jetcrab/${id}`)
+        child.emit('close', 0, null)
+      }
+    })
+    return child
+  })
+  syncBuiltinESMExports()
+  t.after(() => {
+    replacement.mock.restore()
+    syncBuiltinESMExports()
+  })
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (options.method === 'HEAD') return new Response(null, { status: 200 })
+    const name = decodeURIComponent(new URL(url).pathname.slice(1))
+    return packageResponse(
+      name,
+      { latest: '1.2.2', ...(accepted.has(name) ? { dev: '1.2.3-dev' } : {}) },
+      accepted.has(name)
+        ? {
+            '1.2.3-dev': {
+              version: '1.2.3-dev',
+              dist: {
+                integrity: integrities.get(name),
+                tarball: 'https://registry.npmjs.org/fixture.tgz'
+              }
+            }
+          }
+        : {}
+    )
+  })
+  const environment = {
+    GITHUB_REF: 'refs/heads/dev',
+    GITHUB_REPOSITORY: 'JetCrab/pi-desk',
+    RUNNER_TEMP: root
+  }
+  const previous = Object.fromEntries(
+    Object.keys(environment).map((key) => [key, process.env[key]])
+  )
+  Object.assign(process.env, environment)
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  })
+  await assert.rejects(publish(entries, output), /E403/)
+  assert.deepEqual(uploaded.sort(), ['pi-desk-tool-reason', 'pi-desk-usage'])
+  assert.deepEqual(JSON.parse(await readFile(join(output, 'published.json'), 'utf8')), [
+    'pi-desk-tool-reason'
+  ])
+})
+
 test('npm开发标签延迟同步时等待同一已上传版本而不是重复发布', async (context) => {
   context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
   let reads = 0
   context.mock.method(globalThis, 'fetch', async () => {
     reads += 1
-    return Response.json({
+    return packageResponse('@jetcrab/pi-desk', {
       latest: '1.0.0',
       dev: reads === 1 ? '1.0.1-dev.9001' : '1.0.1-dev.9002'
     })
@@ -170,7 +432,7 @@ test('正式版本必须等待 latest 实际指向新版本，不能仅凭上传
   context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
   let reads = 0
   context.mock.method(globalThis, 'fetch', async () =>
-    Response.json({ latest: ++reads === 1 ? '1.0.0' : '1.1.0' })
+    packageResponse('@jetcrab/pi-desk', { latest: ++reads === 1 ? '1.0.0' : '1.1.0' })
   )
   let completed = false
   const waiting = waitForNpmTags('@jetcrab/pi-desk', '1.1.0', 'latest').then(() => {
@@ -187,7 +449,7 @@ test('npm开发标签已同步时立即通过校验', async (context) => {
   let reads = 0
   context.mock.method(globalThis, 'fetch', async () => {
     reads += 1
-    return Response.json({ latest: '1.0.0', dev: '1.0.1-dev.9002' })
+    return packageResponse('@jetcrab/pi-desk', { latest: '1.0.0', dev: '1.0.1-dev.9002' })
   })
   await waitForNpmTags('@jetcrab/pi-desk', '1.0.1-dev.9002', 'dev')
   assert.equal(reads, 1)
@@ -196,7 +458,7 @@ test('npm开发标签已同步时立即通过校验', async (context) => {
 test('npm开发标签长期不一致时有界失败而不是放宽版本校验', async (context) => {
   context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
   context.mock.method(globalThis, 'fetch', async () =>
-    Response.json({ latest: '1.0.0', dev: '1.0.1-dev.9001' })
+    packageResponse('@jetcrab/pi-desk', { latest: '1.0.0', dev: '1.0.1-dev.9001' })
   )
   const rejected = assert.rejects(
     waitForNpmTags('@jetcrab/pi-desk', '1.0.1-dev.9002', 'dev'),
@@ -209,7 +471,7 @@ test('npm开发标签长期不一致时有界失败而不是放宽版本校验',
 
 test('npm稳定标签异常不能当作开发标签同步延迟', async (context) => {
   context.mock.method(globalThis, 'fetch', async () =>
-    Response.json({ latest: '1.0.1-dev.9002', dev: '1.0.1-dev.9001' })
+    packageResponse('@jetcrab/pi-desk', { latest: '1.0.1-dev.9002', dev: '1.0.1-dev.9001' })
   )
   await assert.rejects(
     waitForNpmTags('@jetcrab/pi-desk', '1.0.1-dev.9002', 'dev'),
@@ -220,6 +482,200 @@ test('npm稳定标签异常不能当作开发标签同步延迟', async (context
 test('npm标签查询错误不被当作正常的同步延迟', async (context) => {
   context.mock.method(globalThis, 'fetch', async () => new Response('', { status: 401 }))
   await assert.rejects(waitForNpmTags('@jetcrab/pi-desk', '1.0.1-dev.9002', 'dev'), /HTTP 401/)
+})
+
+test('Registry读取超时与服务端故障退避后继续验证同一版本', async (context) => {
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
+  const attempts = []
+  context.mock.method(globalThis, 'fetch', async (url) => {
+    assert.equal(new URL(url).pathname, '/%40jetcrab%2Fpi-desk')
+    attempts.push(Date.now())
+    if (attempts.length === 1) throw new DOMException('受控请求超时', 'TimeoutError')
+    if (attempts.length === 2) return new Response('', { status: 503 })
+    return packageResponse('@jetcrab/pi-desk', { latest: '1.0.0', dev: '1.0.1-dev' })
+  })
+  const waiting = waitForNpmTags('@jetcrab/pi-desk', '1.0.1-dev', 'dev')
+  await new Promise(setImmediate)
+  context.mock.timers.tick(2_000)
+  await new Promise(setImmediate)
+  context.mock.timers.tick(4_000)
+  await waiting
+  assert.deepEqual(attempts, [0, 2_000, 6_000])
+})
+
+test('Registry只对临时HTTP错误重试，认证与格式错误立即失败', async (context) => {
+  for (const [status, retryAfter, delayMs] of [
+    [408, null, 2_000],
+    [429, '3', 3_000],
+    [429, new Date(3_000).toUTCString(), 3_000],
+    [500, null, 2_000]
+  ]) {
+    await context.test(`HTTP ${status} ${retryAfter ?? ''}`, async (t) => {
+      t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
+      let attempts = 0
+      const transient = new Response('', {
+        status,
+        headers: retryAfter ? { 'retry-after': retryAfter } : {}
+      })
+      const cancel = t.mock.method(transient.body, 'cancel')
+      t.mock.method(globalThis, 'fetch', async () => {
+        if (++attempts === 1) return transient
+        return packageResponse('@jetcrab/pi-desk', { latest: '1.0.0' })
+      })
+      const waiting = waitForNpmTags('@jetcrab/pi-desk', '1.0.0', 'latest')
+      await new Promise(setImmediate)
+      t.mock.timers.tick(2_000)
+      if (delayMs > 2_000) {
+        assert.equal(attempts, 1, '遵循 Registry 的 Retry-After')
+        t.mock.timers.tick(delayMs - 2_000)
+      }
+      await waiting
+      assert.equal(attempts, 2)
+      assert.equal(cancel.mock.calls.length, 1)
+    })
+  }
+  for (const [label, response, pattern] of [
+    ['401', new Response('', { status: 401 }), /HTTP 401/],
+    ['403', new Response('', { status: 403 }), /HTTP 403/],
+    ['格式错误', new Response('{invalid'), /JSON|Unexpected|property/],
+    ['元数据缺失', Response.json({ name: '@jetcrab/pi-desk' }), /元数据/]
+  ]) {
+    await context.test(label, async (t) => {
+      const fetch = t.mock.method(globalThis, 'fetch', async () => response)
+      await assert.rejects(waitForNpmTags('@jetcrab/pi-desk', '1.0.0', 'latest'), pattern)
+      assert.equal(fetch.mock.calls.length, 1)
+    })
+  }
+})
+
+test('Registry连接持续中断只尝试三次并保留地址和底层原因', async (context) => {
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
+  const failure = new TypeError('fetch failed', {
+    cause: Object.assign(new Error('连接重置'), { code: 'ECONNRESET' })
+  })
+  const fetch = context.mock.method(globalThis, 'fetch', async () => {
+    throw failure
+  })
+  const rejected = assert.rejects(
+    waitForNpmTags('@jetcrab/pi-desk', '1.0.0', 'latest'),
+    (error) => {
+      assert.equal(error.cause, failure)
+      assert.match(error.message, /registry\.npmjs\.org/)
+      assert.match(error.message, /3\/3/)
+      assert.match(error.message, /ECONNRESET|连接重置/)
+      return true
+    }
+  )
+  await new Promise(setImmediate)
+  context.mock.timers.tick(2_000)
+  await new Promise(setImmediate)
+  context.mock.timers.tick(4_000)
+  await rejected
+  assert.equal(fetch.mock.calls.length, 3)
+})
+
+test('Registry元数据响应体中断与tarball HEAD也可有限重试', async (context) => {
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
+  let metadataReads = 0
+  let archiveReads = 0
+  context.mock.method(globalThis, 'fetch', async (_url, options) => {
+    if (options.method === 'HEAD') {
+      if (++archiveReads === 1) return new Response('', { status: 502 })
+      return new Response(null, { status: 200 })
+    }
+    if (++metadataReads === 1) {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(
+              new TypeError('terminated', {
+                cause: Object.assign(new Error('响应体中断'), { code: 'ECONNRESET' })
+              })
+            )
+          }
+        })
+      )
+    }
+    return packageResponse(
+      '@jetcrab/pi-desk-sdk',
+      { latest: '1.0.0' },
+      {
+        '1.0.1-dev': {
+          version: '1.0.1-dev',
+          dist: { tarball: 'https://registry.npmjs.org/fixture.tgz' }
+        }
+      }
+    )
+  })
+  const waiting = waitForRegistryPackage('@jetcrab/pi-desk-sdk', '1.0.1-dev')
+  await new Promise(setImmediate)
+  context.mock.timers.tick(2_000)
+  await new Promise(setImmediate)
+  context.mock.timers.tick(2_000)
+  await waiting
+  assert.equal(metadataReads, 2)
+  assert.equal(archiveReads, 2)
+})
+
+test('Registry重试与轮询共用十分钟预算且缩短最后请求超时', async (context) => {
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
+  const timeouts = []
+  context.mock.method(AbortSignal, 'timeout', (milliseconds) => {
+    timeouts.push(milliseconds)
+    return new AbortController().signal
+  })
+  let reads = 0
+  context.mock.method(globalThis, 'fetch', async () => {
+    if (++reads === 2) throw new DOMException('受控请求超时', 'TimeoutError')
+    return packageResponse('@jetcrab/pi-desk', { latest: '1.0.0' })
+  })
+  const rejected = assert.rejects(
+    waitForNpmTags('@jetcrab/pi-desk', '1.0.1', 'latest'),
+    /时限|超时/
+  )
+  await new Promise(setImmediate)
+  context.mock.timers.tick(599_000)
+  await rejected
+  assert.deepEqual(timeouts, [30_000, 1_000])
+  assert.equal(reads, 2)
+  assert.ok(Date.now() <= 600_000)
+})
+
+test('Registry版本轮询和tarball检查共用剩余预算', async (context) => {
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
+  const timeouts = []
+  context.mock.method(AbortSignal, 'timeout', (milliseconds) => {
+    timeouts.push(milliseconds)
+    return new AbortController().signal
+  })
+  let reads = 0
+  let archiveReads = 0
+  context.mock.method(globalThis, 'fetch', async (_url, options) => {
+    if (options.method === 'HEAD') {
+      archiveReads += 1
+      throw new DOMException('受控 tarball 超时', 'TimeoutError')
+    }
+    const versions =
+      ++reads === 1
+        ? {}
+        : {
+            '1.0.1-dev': {
+              version: '1.0.1-dev',
+              dist: { tarball: 'https://registry.npmjs.org/fixture.tgz' }
+            }
+          }
+    return packageResponse('@jetcrab/pi-desk-sdk', { latest: '1.0.0' }, versions)
+  })
+  const rejected = assert.rejects(
+    waitForRegistryPackage('@jetcrab/pi-desk-sdk', '1.0.1-dev'),
+    /时限|超时/
+  )
+  await new Promise(setImmediate)
+  context.mock.timers.tick(599_000)
+  await rejected
+  assert.deepEqual(timeouts, [30_000, 1_000, 1_000])
+  assert.equal(archiveReads, 1)
+  assert.ok(Date.now() <= 600_000)
 })
 
 test('包管理命令保留参数与带空格路径而不被Shell二次转义', async (context) => {

@@ -1,6 +1,6 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { HostSettingsSnapshot } from '@jetcrab/pi-desk-sdk/settings'
 import { L2_AUTH_MESSAGES } from '@common/l2_biz/auth/l2-auth-messages'
 import { L2_CAPABILITY_MODE_MESSAGES } from '@common/l2_biz/capability-modes/l2-capability-mode-messages'
@@ -22,7 +22,8 @@ import { L4RegionProvider } from '@client/l4_foundation/locale/l4-region-provide
 import { L4RegionNotice } from '@client/l4_foundation/locale/l4-region-notice'
 import { L4AppToastProvider } from '@client/l4_foundation/ui/l4-app-toast'
 import { TooltipProvider } from '@client/l4_foundation/ui/shadcn/tooltip'
-import { L1AppRuntimeProvider } from './l1-app-runtime-provider'
+import { createL4BrowserUuid } from '@client/l4_foundation/lib/l4-browser-uuid'
+import { L4ClientIdContext } from '@client/l4_foundation/lib/l4-client-id'
 
 const resources = {
   en: {
@@ -66,20 +67,22 @@ export function L1AppProviders({
   children,
   initialSettings
 }: L1AppProvidersProps): React.JSX.Element {
+  const [clientId] = useState(createL4BrowserUuid)
+
   return (
-    <L4ThemeProvider>
-      <L4DisplaySizeProvider>
-        <L4CodePreferencesProvider>
-          <L4RegionProvider resources={resources} initialSettings={initialSettings}>
-            <L4AppToastProvider>
-              <L4RegionNotice />
-              <L1AppRuntimeProvider>
+    <L4ClientIdContext.Provider value={clientId}>
+      <L4ThemeProvider>
+        <L4DisplaySizeProvider>
+          <L4CodePreferencesProvider>
+            <L4RegionProvider resources={resources} initialSettings={initialSettings}>
+              <L4AppToastProvider>
+                <L4RegionNotice />
                 <TooltipProvider>{children}</TooltipProvider>
-              </L1AppRuntimeProvider>
-            </L4AppToastProvider>
-          </L4RegionProvider>
-        </L4CodePreferencesProvider>
-      </L4DisplaySizeProvider>
-    </L4ThemeProvider>
+              </L4AppToastProvider>
+            </L4RegionProvider>
+          </L4CodePreferencesProvider>
+        </L4DisplaySizeProvider>
+      </L4ThemeProvider>
+    </L4ClientIdContext.Provider>
   )
 }

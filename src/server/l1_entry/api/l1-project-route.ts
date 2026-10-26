@@ -13,7 +13,7 @@ import { createL1WorkSessionGitErrorResponse } from './l1-work-session-git-error
 
 export function createL1ProjectRoute<I extends contracts.L3ProjectReadContext, O>(
   contract: { path: string; request: z.ZodType<I>; response: z.ZodType<O> },
-  execute: (input: I) => Promise<O>
+  execute: (input: I, signal: AbortSignal) => Promise<O>
 ): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     let payload: unknown
@@ -49,19 +49,20 @@ export function createL1ProjectRoute<I extends contracts.L3ProjectReadContext, O
         input.cwd = context.cwd
         isCurrent = context.isCurrent
       }
-      const result = await execute(input)
+      const result = await execute(input, request.signal)
       if (isCurrent && !isCurrent())
         return createL4ApiErrorResponse(409, '工作会话项目已变化', {
           key: 'errors:projectChanged'
         })
       return createL4ApiSuccessResponse(contract.response.parse(result))
     } catch (error) {
-      console.warn('[Pi Desk][Project] 项目请求失败', {
-        path: contract.path,
-        cwd: input.cwd,
-        workId: input.workId,
-        error: error instanceof Error ? error.message : String(error)
-      })
+      if (!request.signal.aborted)
+        console.warn('[Pi Desk][Project] 项目请求失败', {
+          path: contract.path,
+          cwd: input.cwd,
+          workId: input.workId,
+          error: error instanceof Error ? error.message : String(error)
+        })
       if (getL4WorkSessionGitErrorKind(error) === 'read-failed') {
         return createL4ApiErrorResponse(
           500,

@@ -16,9 +16,22 @@ import {
   L4WorkSessionProjectFileError,
   getL4WorkSessionProjectFile,
   listL4WorkSessionProjectFiles,
-  revealL4WorkSessionProjectFile,
-  searchL4WorkSessionProjectFiles
+  revealL4WorkSessionProjectFile
 } from '../src/server/l4_foundation/file/l4-work-session-project-file'
+
+import { searchL4ProjectFiles } from '../src/server/l4_foundation/file/l4-project-search'
+
+async function searchFiles(cwd: string, query: string): Promise<string[]> {
+  const result = await searchL4ProjectFiles(cwd, {
+    query,
+    scope: 'files',
+    caseSensitive: false,
+    wholeWord: false,
+    regex: false
+  })
+  assert.deepEqual(result.contentMatches, [])
+  return result.fileMatches.map((match) => match.path)
+}
 
 async function fixture(context: test.TestContext): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'pi-desk-project-files-'))
@@ -91,15 +104,13 @@ test('目录浏览仍拒绝越界，会话文件预览和定位允许绝对路�
 
 test('同一root复用搜索索引，显式目录刷新后重新读取文件', async (context) => {
   const root = await fixture(context)
-  assert.deepEqual((await searchL4WorkSessionProjectFiles(root, 'added-later')).matches, [])
+  assert.deepEqual(await searchFiles(root, 'added-later'), [])
 
   await writeFile(join(root, 'added-later.txt'), 'new file\n')
-  assert.deepEqual((await searchL4WorkSessionProjectFiles(root, 'added-later')).matches, [])
+  assert.deepEqual(await searchFiles(root, 'added-later'), [])
 
   await listL4WorkSessionProjectFiles(root, '')
-  assert.deepEqual((await searchL4WorkSessionProjectFiles(root, 'added-later')).matches, [
-    'added-later.txt'
-  ])
+  assert.deepEqual(await searchFiles(root, 'added-later'), ['added-later.txt'])
 })
 
 test('搜索目录缓存超过20个cwd后淘汰最早索引', async (context) => {
@@ -117,15 +128,11 @@ test('搜索目录缓存超过20个cwd后淘汰最早索引', async (context) =>
     roots.push(root)
     execFileSync('git', ['init', '--quiet', root], { windowsHide: true })
     await writeFile(join(root, 'indexed.marker'), 'indexed\n')
-    assert.deepEqual((await searchL4WorkSessionProjectFiles(root, 'indexed.marker')).matches, [
-      'indexed.marker'
-    ])
+    assert.deepEqual(await searchFiles(root, 'indexed.marker'), ['indexed.marker'])
   }
 
   await writeFile(join(roots[0]!, 'after-eviction.marker'), 'fresh\n')
-  assert.deepEqual((await searchL4WorkSessionProjectFiles(roots[0]!, 'after-eviction')).matches, [
-    'after-eviction.marker'
-  ])
+  assert.deepEqual(await searchFiles(roots[0]!, 'after-eviction'), ['after-eviction.marker'])
 })
 
 test('目录列表过滤重型目录但保留 temp', async (context) => {
@@ -141,9 +148,18 @@ test('目录列表过滤重型目录但保留 temp', async (context) => {
 
 test('搜索文件名和相对路径且跳过重型目录', async (context) => {
   const root = await fixture(context)
-  const result = await searchL4WorkSessionProjectFiles(root, 'workbench')
+  const result = await searchL4ProjectFiles(root, {
+    query: 'workbench',
+    scope: 'files',
+    caseSensitive: false,
+    wholeWord: false,
+    regex: false
+  })
 
-  assert.deepEqual(result.matches, ['src/workbench.ts'])
+  assert.deepEqual(
+    result.fileMatches.map((match) => match.path),
+    ['src/workbench.ts']
+  )
   assert.equal(result.truncated, false)
 })
 

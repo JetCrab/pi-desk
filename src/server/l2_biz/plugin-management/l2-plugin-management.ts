@@ -112,7 +112,6 @@ interface L2PluginPreparedMutation {
 }
 
 export interface L2PluginManagementWorkSessions {
-  refreshPluginMessages: () => void
   runPluginRestart: <T>(operation: () => Promise<T>) => Promise<T>
 }
 
@@ -621,7 +620,6 @@ export class L2PluginManagement {
         if (change.current?.path) clearL4PiPluginNativeDiagnostics(change.current.path)
         if (change.previous?.path) clearL4PiPluginNativeDiagnostics(change.previous.path)
         this.capabilityCache = null
-        this.workSessions.refreshPluginMessages()
         this.operations.delete(change.source)
       } catch (error) {
         this.setOperation(change.source, 'failed', errorMessage(error))
@@ -981,7 +979,6 @@ export class L2PluginManagement {
         this.updates.clear(operationSource)
         this.updates.clear(source)
         this.capabilityCache = null
-        this.workSessions.refreshPluginMessages()
       },
       this.lifetime.signal,
       waiting

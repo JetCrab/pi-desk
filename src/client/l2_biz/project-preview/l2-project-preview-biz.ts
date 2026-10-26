@@ -1,10 +1,54 @@
 import { revealL3ProjectPath } from '@client/l3_modules/project-files/l3-project-file-actions'
-import { createL3ProjectReader } from '@client/l3_modules/project-files/l3-project-reader'
+import {
+  createL3ProjectReader,
+  requestL3Project
+} from '@client/l3_modules/project-files/l3-project-reader'
+import {
+  L2PiDirectoryListRequestSchema,
+  L2PiDirectoryListResponseSchema,
+  L2PiDirectoryEntryListRequestSchema,
+  L2PiDirectoryEntryListResponseSchema,
+  type L2PiDirectoryListResponse,
+  type L2PiDirectoryEntryListResponse
+} from '@common/l2_biz/pi-session/l2-pi-session-contract'
 import { L3ProjectFileRuntime } from '@client/l3_modules/project-files/l3-project-file-runtime'
 import { L3ProjectGitRuntime } from '@client/l3_modules/project-files/l3-project-git-runtime'
 import { readL3ImagePreviewMode } from '@client/l3_modules/preferences/l3-work-session-file-preferences'
 import { L2ProjectHistoryRuntime } from './runtime/l2-project-history-runtime'
 import type { L2ProjectPreviewGlobal, L2ProjectPreviewProject } from './l2-project-preview-storage'
+
+export function listL2PreviewProjects(
+  clientId: string,
+  signal: AbortSignal
+): Promise<L2PiDirectoryListResponse> {
+  return requestL3Project(
+    clientId,
+    {
+      path: '/api/pi/directories/list',
+      request: L2PiDirectoryListRequestSchema,
+      response: L2PiDirectoryListResponseSchema
+    },
+    { forceRefresh: false },
+    signal
+  )
+}
+
+export function browseL2PreviewDirectory(
+  clientId: string,
+  cwd: string | null,
+  signal: AbortSignal
+): Promise<L2PiDirectoryEntryListResponse> {
+  return requestL3Project(
+    clientId,
+    {
+      path: '/api/pi/directory-entries/list',
+      request: L2PiDirectoryEntryListRequestSchema,
+      response: L2PiDirectoryEntryListResponseSchema
+    },
+    { cwd },
+    signal
+  )
+}
 
 export interface L2ProjectPreviewOwner {
   files: L3ProjectFileRuntime
@@ -18,9 +62,10 @@ export function createL2ProjectPreviewOwner(
   cwd: string,
   onNotice: (message: string) => void,
   initial: L2ProjectPreviewProject | null,
-  global: L2ProjectPreviewGlobal
+  global: L2ProjectPreviewGlobal,
+  options: { lazyHistory?: boolean; onUnauthorized?: () => void } = {}
 ): L2ProjectPreviewOwner {
-  const reader = createL3ProjectReader(clientId, { cwd })
+  const reader = createL3ProjectReader(clientId, { cwd }, options.onUnauthorized)
   const files = new L3ProjectFileRuntime(cwd, reader, {
     imagePreviewMode: readL3ImagePreviewMode,
     onNotice,
@@ -42,7 +87,7 @@ export function createL2ProjectPreviewOwner(
       git.setChangesOnly(cwd, initial.changesOnly)
       for (const root of initial.expandedRepositories) git.toggleRepository(cwd, root)
       files.restoreBrowsing(initial)
-      history.restoreBrowsing(initial.history)
+      history.restoreBrowsing(initial.history, !options.lazyHistory)
     },
     dispose(): void {
       history.dispose()

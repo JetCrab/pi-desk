@@ -1,0 +1,58 @@
+.markdown :global(.task-list-item) {
+  list-style: none;
+}
+
+.status {
+  display: inline-flex;
+  position: relative;
+  width: 1rem;
+  height: 1rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--muted-foreground);
+  border-radius: 0.25rem;
+  vertical-align: -0.125rem;
+  color: var(--foreground);
+}
+
+.status[data-state='completed'] {
+  border-color: var(--foreground);
+  background: var(--foreground);
+  color: var(--background);
+}
+
+.status svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  stroke-width: 2;
+}
+
+.alert {
+  margin-block: 0.75rem;
+  border-left: 3px solid var(--muted-foreground);
+  padding: 0.5rem 0.875rem;
+  color: var(--foreground);
+  font-style: normal;
+}
+
+.alertTitle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.375rem;
+  font-weight: 600;
+}
+
+.alertTitle svg {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+}
+
+.alertBody > * {
+  margin-block: 0;
+}
+
+.alertBody > * + * {
+  margin-block-start: 0.5rem;
+}

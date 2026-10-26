@@ -8,7 +8,9 @@ import type {
   BrowserComposerPanelTarget,
   BrowserMessageViewTarget,
   BrowserSessionSidebarTabTarget,
+  BrowserSessionHeaderItemTarget,
   BrowserSettingsPageTarget,
+  BrowserWidgetTarget,
   PluginDisposer
 } from '@jetcrab/pi-desk-sdk/browser'
 import {
@@ -16,11 +18,17 @@ import {
   useL4PluginRegistry
 } from '@client/l4_foundation/plugin-host/l4-plugin-host-context'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTitle,
+  PopoverTrigger
+} from '@client/l4_foundation/ui/shadcn/popover'
 import { L4ErrorDetails } from '@client/l4_foundation/ui/l4-error-details'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import type { L4PluginContributionKind } from '@client/l4_foundation/plugin-host/l4-plugin-host-runtime'
 
-type L2PluginContributionLayout = 'fill' | 'intrinsic'
+type L2PluginContributionLayout = 'fill' | 'intrinsic' | 'inline'
 
 interface L2PluginContributionHostProps {
   pluginName: string
@@ -32,6 +40,8 @@ interface L2PluginContributionHostProps {
     | BrowserSettingsPageTarget
     | BrowserMessageViewTarget
     | BrowserSessionSidebarTabTarget
+    | BrowserWidgetTarget
+    | BrowserSessionHeaderItemTarget
   targetKey?: string
   className?: string
   layout?: L2PluginContributionLayout
@@ -57,6 +67,7 @@ export function L2PluginContributionHost({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const targetRef = useRef(target)
   const mountIdentity = targetKey ?? target
+  const presentation = target.kind === 'session-header-item' ? target.presentation : undefined
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<MountState>({ status: 'loading' })
 
@@ -86,7 +97,9 @@ export function L2PluginContributionHost({
       mountContainer.className =
         layout === 'intrinsic'
           ? 'inline-block min-h-0 min-w-0 align-top'
-          : 'h-full min-h-0 w-full min-w-0'
+          : layout === 'inline'
+            ? 'min-w-0 w-full'
+            : 'h-full min-h-0 w-full min-w-0'
       hostContainer.append(mountContainer)
       return runtime.mountContribution({
         pluginName,
@@ -163,13 +176,18 @@ export function L2PluginContributionHost({
       })
       return
     }
-    const loadState = runtime.getContributionLoadState(pluginName, kind, contributionName)
+    const loadState = runtime.getContributionLoadState(
+      pluginName,
+      kind,
+      contributionName,
+      presentation
+    )
     if (loadState.status !== 'failed') {
       setAttempt((current) => current + 1)
       return
     }
     setState({ status: 'loading' })
-    void runtime.retryContribution(pluginName, kind, contributionName).then(
+    void runtime.retryContribution(pluginName, kind, contributionName, presentation).then(
       () => {
         if (runtime.getEntryState(pluginName) === entryState) setAttempt((current) => current + 1)
       },
@@ -199,7 +217,9 @@ export function L2PluginContributionHost({
               'max-h-[calc(100dvh-7rem)] max-w-[calc(100dvw-3rem)] overflow-auto max-sm:max-h-[calc(100dvh-5rem)] max-sm:max-w-[calc(100dvw-2rem)]',
               intrinsicFallbackClass
             )
-          : 'h-full w-full',
+          : layout === 'inline'
+            ? 'w-full'
+            : 'h-full w-full',
         className
       )}
     >
@@ -211,17 +231,58 @@ export function L2PluginContributionHost({
         className={cn(
           layout === 'intrinsic'
             ? 'inline-block min-h-0 min-w-0 align-top'
-            : 'h-full min-h-0 w-full min-w-0',
+            : layout === 'inline'
+              ? 'w-full min-w-0'
+              : 'h-full min-h-0 w-full min-w-0',
           state.status === 'error' && 'hidden'
         )}
       />
       {state.status === 'loading' ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-popover p-6 text-sm text-muted-foreground">
-          <LoaderCircleIcon className="mr-2 size-4 animate-spin" />
-          {t('viewLoading')}
+        <div
+          role="status"
+          className={cn(
+            'flex items-center text-sm text-muted-foreground',
+            layout === 'inline'
+              ? 'min-h-7 gap-1 py-1'
+              : 'absolute inset-0 justify-center bg-popover p-6'
+          )}
+        >
+          <LoaderCircleIcon className="mr-2 size-4 shrink-0 animate-spin" />
+          <span className="min-w-0 truncate">{t('viewLoading')}</span>
         </div>
       ) : null}
-      {state.status === 'error' ? (
+      {state.status === 'error' && layout === 'inline' ? (
+        <div role="alert" className="min-w-0">
+          <Popover>
+            <PopoverTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={t('viewFailed')}
+                  title={t('viewFailed')}
+                  className="text-destructive"
+                />
+              }
+            >
+              <AlertTriangleIcon className="size-4" />
+            </PopoverTrigger>
+            <PopoverContent align="start" finalFocus>
+              <PopoverTitle>{t('viewFailed')}</PopoverTitle>
+              <L4ErrorDetails error={state.error}>
+                <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                  {pluginName} · {kind} · {contributionName}
+                </p>
+              </L4ErrorDetails>
+              <Button type="button" variant="outline" size="sm" onClick={retry}>
+                <RefreshCwIcon />
+                {t('retry')}
+              </Button>
+            </PopoverContent>
+          </Popover>
+        </div>
+      ) : state.status === 'error' ? (
         <div
           role="alert"
           className={cn(

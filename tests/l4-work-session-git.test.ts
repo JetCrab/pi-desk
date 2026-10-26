@@ -10,7 +10,7 @@ import {
   L2WorkSessionGitGetRequestSchema
 } from '../src/common/l2_biz/work-session/l2-work-session-git-contract'
 import { selectL4LocalizedText } from '../src/common/l4_foundation/locale/l4-localized-text'
-import { searchL4WorkSessionProjectFiles } from '../src/server/l4_foundation/file/l4-work-session-project-file'
+import { searchL4ProjectFiles } from '../src/server/l4_foundation/file/l4-project-search'
 import {
   addL4WorkSessionGitBranch,
   getL4WorkSessionGitDiff,
@@ -154,8 +154,18 @@ test('发现被父仓库忽略的嵌套仓库并隔离各自变更', async (cont
   ])
   assert.equal(readyRepository(snapshot, 'C').changes.length, 0)
 
-  const search = await searchL4WorkSessionProjectFiles(root, 'renamed')
-  assert.deepEqual(search.matches, ['B/src/renamed.ts'])
+  const search = await searchL4ProjectFiles(root, {
+    query: 'renamed',
+    scope: 'files',
+    caseSensitive: false,
+    wholeWord: false,
+    regex: false
+  })
+  assert.deepEqual(
+    search.fileMatches.map((match) => match.path),
+    ['B/src/renamed.ts']
+  )
+  assert.deepEqual(search.contentMatches, [])
 })
 
 test('发现 `.git` 文件形式的嵌套 worktree', async (context) => {

@@ -2,9 +2,9 @@ import 'server-only'
 import * as contracts from '@common/l3_modules/project-files/l3-project-files-contract'
 import {
   getL4WorkSessionProjectFile,
-  listL4WorkSessionProjectFiles,
-  searchL4WorkSessionProjectFiles
+  listL4WorkSessionProjectFiles
 } from '@server/l4_foundation/file/l4-work-session-project-file'
+import { searchL4ProjectFiles } from '@server/l4_foundation/file/l4-project-search'
 import {
   getL4WorkSessionGitHeads,
   getL4WorkSessionGitSnapshot
@@ -20,8 +20,10 @@ import { createL1ProjectRoute } from './l1-project-route'
 export const projectFileList = createL1ProjectRoute(contracts.L3ProjectFileList, (input) =>
   listL4WorkSessionProjectFiles(input.cwd, input.path)
 )
-export const projectFileSearch = createL1ProjectRoute(contracts.L3ProjectFileSearch, (input) =>
-  searchL4WorkSessionProjectFiles(input.cwd, input.query)
+export const projectFileSearch = createL1ProjectRoute(
+  contracts.L3ProjectFileSearch,
+  ({ cwd, query, scope, caseSensitive, wholeWord, regex }, signal) =>
+    searchL4ProjectFiles(cwd, { query, scope, caseSensitive, wholeWord, regex }, signal)
 )
 export const projectFileGet = createL1ProjectRoute(contracts.L3ProjectFileGet, (input) =>
   getL4WorkSessionProjectFile(input.cwd, input.path, input.imagePreviewMode)

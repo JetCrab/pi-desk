@@ -8,6 +8,7 @@
 | `pi-desk-bg-run`       | 后台命令、日志与任务中心                  |
 | `pi-desk-subagent`     | 子代理执行与任务中心                      |
 | `pi-desk-deliverables` | 交付物预览                                |
+| `pi-desk-todo`         | 会话内存中的实际进度与输入框上方摘要      |
 | `pi-desk-usage`        | 模型用量与费用分析                        |
 | `pi-desk-ctx`          | 上下文管理与历史回查                      |
 | `pi-desk-quota-viewer` | 模型服务额度查看                          |

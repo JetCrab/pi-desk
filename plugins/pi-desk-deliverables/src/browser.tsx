@@ -22,7 +22,7 @@ import {
   PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
 import { parseDeliverableBatch, subscribeDeliverablePush } from './browser-runtime.js'
-import type { DeliverableBatch, DeliverableListResult } from './contract.js'
+import type { DeliverableBatch, DeliverableItem, DeliverableListResult } from './contract.js'
 
 const STYLES = `
 .deliverables{display:flex;height:100%;min-height:0;flex-direction:column;background:var(--pi-desk-plugin-background,var(--background))}
@@ -35,7 +35,7 @@ const STYLES = `
 
 `
 
-type DeliverableFileKind = 'image' | 'html' | 'text'
+type DeliverableFileKind = 'directory' | 'image' | 'html' | 'text'
 
 function absoluteFileAddress(cwd: string, path: string): string {
   if (/^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('\\\\') || path.startsWith('//')) {
@@ -45,6 +45,7 @@ function absoluteFileAddress(cwd: string, path: string): string {
   const windowsPath = /^[a-zA-Z]:[\\/]/.test(cwd) || cwd.startsWith('\\\\')
   const separator = windowsPath ? '\\' : '/'
   const normalizedCwd = windowsPath ? cwd.replaceAll('/', '\\') : cwd
+  if (path === '.') return normalizedCwd
   const root = normalizedCwd.replace(/[\\/]+$/, '')
   return `${root}${separator}${path.replaceAll('/', separator)}`
 }
@@ -58,8 +59,9 @@ function isTouchMenuEvent(event: Event): boolean {
   )
 }
 
-function deliverableFileKind(path: string): DeliverableFileKind {
-  const extension = path.split('/').at(-1)?.split('.').at(-1)?.toLowerCase()
+function deliverableFileKind(item: DeliverableItem): DeliverableFileKind {
+  if (item.kind === 'directory') return 'directory'
+  const extension = item.path.split('/').at(-1)?.split('.').at(-1)?.toLowerCase()
   if (
     extension === 'png' ||
     extension === 'jpg' ||
@@ -73,12 +75,28 @@ function deliverableFileKind(path: string): DeliverableFileKind {
 }
 
 function deliverableFileLabel(kind: DeliverableFileKind): string {
+  if (kind === 'directory') return '文件夹'
   if (kind === 'image') return '图片'
   if (kind === 'html') return 'HTML'
   return '文本'
 }
 
 function DeliverableFileIcon({ kind }: { kind: DeliverableFileKind }): React.JSX.Element {
+  if (kind === 'directory') {
+    return (
+      <svg
+        aria-hidden="true"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+        viewBox="0 0 24 24"
+      >
+        <path d="M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2Z" />
+      </svg>
+    )
+  }
   if (kind === 'image') {
     return (
       <svg
@@ -258,10 +276,23 @@ function DeliverablesView({
     void copyBrowserText(address).then((copied) => {
       host.notify(
         copied
-          ? { level: 'success', title: '已复制文件地址', description: address }
-          : { level: 'error', title: '复制文件地址失败' }
+          ? { level: 'success', title: '已复制地址', description: address }
+          : { level: 'error', title: '复制地址失败' }
       )
     })
+  }
+
+  const previewDirectory = (path: string): void => {
+    try {
+      host.projects.preview(absoluteFileAddress(target.cwd, path))
+    } catch (cause) {
+      console.error('[交付物] 打开文件夹预览失败', { path, cause })
+      host.notify({
+        level: 'error',
+        title: '打开文件夹预览失败',
+        description: cause instanceof Error ? cause.message : String(cause)
+      })
+    }
   }
 
   const revealFile = (path: string): void => {
@@ -347,7 +378,7 @@ function DeliverablesView({
           deliveries.map((delivery) => (
             <div className="deliverables-batch" key={delivery.entryId}>
               {delivery.items.map((item, index) => {
-                const kind = deliverableFileKind(item.path)
+                const kind = deliverableFileKind(item)
                 const label = deliverableFileLabel(kind)
                 return (
                   <PluginContextMenu
@@ -367,15 +398,17 @@ function DeliverablesView({
                           title={`${item.title} · ${item.path}`}
                           onClick={() => {
                             if (consumeSuppressedTouchClick()) return
+                            if (kind === 'directory') {
+                              previewDirectory(item.path)
+                              return
+                            }
                             target.files.preview(item.path, {
                               mode: 'standalone',
                               ...(kind === 'image'
                                 ? {
                                     imagePaths: deliveries.flatMap((batch) =>
                                       batch.items
-                                        .filter(
-                                          (file) => deliverableFileKind(file.path) === 'image'
-                                        )
+                                        .filter((file) => deliverableFileKind(file) === 'image')
                                         .map((file) => file.path)
                                     )
                                   }
@@ -400,12 +433,14 @@ function DeliverablesView({
                       >
                         复制地址
                       </PluginContextMenuItem>
-                      <PluginContextMenuItem
-                        data-testid={`deliverable-reveal-${delivery.entryId}-${index}`}
-                        onClick={() => revealFile(item.path)}
-                      >
-                        打开所在文件夹
-                      </PluginContextMenuItem>
+                      {kind !== 'directory' ? (
+                        <PluginContextMenuItem
+                          data-testid={`deliverable-reveal-${delivery.entryId}-${index}`}
+                          onClick={() => revealFile(item.path)}
+                        >
+                          打开所在文件夹
+                        </PluginContextMenuItem>
+                      ) : null}
                     </PluginContextMenuContent>
                   </PluginContextMenu>
                 )

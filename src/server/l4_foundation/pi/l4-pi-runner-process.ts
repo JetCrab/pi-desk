@@ -19,7 +19,6 @@ export function runL4PiRunnerProcess(input: {
   timeoutMs: number
   signal?: AbortSignal
   timeoutError: () => Error
-  cleanupError: (stderr: string, error: unknown) => Error
 }): Promise<L4PiRunnerProcessResult> {
   return new Promise<L4PiRunnerProcessResult>((resolveRun, rejectRun) => {
     if (input.signal?.aborted) {
@@ -54,24 +53,13 @@ export function runL4PiRunnerProcess(input: {
       input.signal?.removeEventListener('abort', onAbort)
       void terminateL4PiProcessTree(child).then(callback, (error: unknown) => {
         const failure = error instanceof Error ? error : new Error(String(error))
-        const code = 'code' in failure ? String(failure.code) : failure.name
-        const killed = 'killed' in failure && failure.killed === true
-        const detail =
-          'stderr' in failure && typeof failure.stderr === 'string'
-            ? failure.stderr.trim().slice(-2000)
-            : ''
         console.error('[Pi Desk][Runner] 子进程清理未完成', {
           pid: child.pid,
           exitCode: child.exitCode,
-          code,
-          killed,
-          detail
+          reason: failure.message
         })
-        const reason = new Error(
-          `子进程 ${child.pid} 清理${killed ? '超时' : '失败'}（${code}）${detail ? `：${detail}` : ''}`,
-          { cause: failure }
-        )
-        rejectRun(input.cleanupError(stderr.trim(), reason))
+        // 命令的退出、超时或取消结果已确定；清理诊断不能覆盖业务结果。
+        callback()
       })
     }
     const onAbort = (): void => finish(() => rejectRun(new Error('操作已取消')))

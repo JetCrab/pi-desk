@@ -3,7 +3,7 @@
 import { ArrowRightIcon, LanguagesIcon, LoaderCircleIcon } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useL4AppSocket } from '@client/l4_foundation/realtime/app-socket/l4-app-socket'
+import { useL4ClientId } from '@client/l4_foundation/lib/l4-client-id'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import { setL4RegionDisplayLocale } from '@client/l4_foundation/locale/l4-region-store'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
@@ -23,7 +23,7 @@ import styles from './l2-login.module.css'
 export function L2Login(): React.JSX.Element {
   const { t } = useTranslation('auth')
   const region = useL4Region()
-  const { clientId } = useL4AppSocket()
+  const clientId = useL4ClientId()
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -43,7 +43,6 @@ export function L2Login(): React.JSX.Element {
     setSubmitting(true)
     try {
       await loginL2Auth(clientId, { password })
-      window.location.replace('/')
     } catch (cause) {
       submittingRef.current = false
       setError(cause instanceof Error ? cause.message : t('loginFailed'))

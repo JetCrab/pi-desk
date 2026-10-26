@@ -27,6 +27,13 @@ import {
   type BrowserPluginGlobalStateHost,
   type BrowserPluginHost,
   type BrowserPluginNotificationEventListener,
+  type BrowserSessionHeaderAction,
+  type BrowserSessionHeaderActionContext,
+  type BrowserSessionHeaderCustom,
+  type BrowserSessionHeaderItemDefinition,
+  type BrowserSessionHeaderItemTarget,
+  type BrowserWidgetDefinition,
+  type BrowserWidgetTarget,
   type BrowserSessionSidebarHeaderAction,
   type BrowserSessionSidebarTabContributionDefinition,
   type BrowserSessionSidebarTabTarget,
@@ -83,7 +90,7 @@ const BUILTIN_ICON_NAMES = new Set([
   'database',
   'globe'
 ])
-const CONTRIBUTION_KINDS = new Set<L4PluginContributionKind>([
+const CONTRIBUTION_KINDS = new Set<BrowserContributionKind>([
   'application',
   'composer-panel',
   'settings-page',
@@ -141,7 +148,7 @@ export interface L4PluginHostTransport {
 }
 
 export type L4PluginNotificationSink = (pluginName: string, input: BrowserNotificationInput) => void
-export type L4PluginContributionKind = BrowserContributionKind
+export type L4PluginContributionKind = BrowserContributionDescriptor['kind']
 
 export interface L4PluginHostWorkSessionInput {
   workId: string
@@ -198,7 +205,9 @@ interface L4PluginContributionRegistration {
   kind: L4PluginContributionKind
   contributionName: string
   descriptor: L4PluginBrowserContributionDescriptor
-  load: () => Promise<BrowserContributionImplementation>
+  load?: () => Promise<BrowserContributionImplementation>
+  header?: BrowserSessionHeaderItemDefinition
+  headerActionScopes?: WeakMap<AbortSignal, BrowserSessionHeaderActionContext>
   resolve?: BrowserApplicationContributionDefinition['resolve']
   owner: L4PluginEntryOwner
 }
@@ -233,6 +242,8 @@ export type L4PluginContributionTarget =
   | BrowserSettingsPageTarget
   | BrowserMessageViewTarget
   | BrowserSessionSidebarTabTarget
+  | BrowserWidgetTarget
+  | BrowserSessionHeaderItemTarget
 
 export interface L4PluginContributionMountInput {
   pluginName: string
@@ -253,6 +264,20 @@ function pluginContributionKey(
   contributionName: string
 ): string {
   return `${pluginName}\u0000${contributionKey(kind, contributionName)}`
+}
+
+function contributionLoadKey(
+  pluginName: string,
+  kind: L4PluginContributionKind,
+  contributionName: string,
+  presentation?: BrowserSessionHeaderItemTarget['presentation']
+): string {
+  const key = pluginContributionKey(pluginName, kind, contributionName)
+  if (kind !== 'session-header-item') return key
+  if (presentation !== 'inline' && presentation !== 'overflow') {
+    throw new Error('会话标题视图必须指定 inline 或 overflow')
+  }
+  return `${key}\u0000${presentation}`
 }
 
 function defaultEntryImporter(url: string): Promise<L4PluginEntryNamespace> {
@@ -367,6 +392,54 @@ function cloneIcon(value: unknown): BrowserContributionIcon | undefined {
     return { type: 'svg', content }
   }
   throw new Error('Contribution icon type 无效')
+}
+
+function parseHeaderPresentation(
+  value: unknown,
+  presentation: BrowserSessionHeaderItemTarget['presentation']
+): BrowserSessionHeaderAction | BrowserSessionHeaderCustom {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`会话标题 ${presentation} 必须提供 action 或 custom 定义`)
+  }
+  const input = value as Record<string, unknown>
+  const allowed =
+    input.type === 'action'
+      ? ['type', 'icon', 'label', 'onSelect']
+      : presentation === 'inline'
+        ? ['type', 'load', 'minWidthRem']
+        : ['type', 'load']
+  for (const key of Object.keys(input)) {
+    if (!allowed.includes(key)) {
+      throw new Error(`会话标题 ${presentation} ${String(input.type)} 不支持字段 ${key}`)
+    }
+  }
+  if (input.type === 'action') {
+    if (typeof input.label !== 'string') throw new Error('会话标题 action label 必须是字符串')
+    const icon = cloneIcon(input.icon)
+    if (!icon) throw new Error('会话标题 action 必须提供 icon')
+    if (typeof input.onSelect !== 'function') throw new Error('会话标题 action 必须提供 onSelect()')
+    return {
+      type: 'action',
+      label: parseLabel(input.label, 'Session Header action label'),
+      icon,
+      onSelect: input.onSelect as BrowserSessionHeaderAction['onSelect']
+    }
+  }
+  if (input.type !== 'custom') throw new Error('会话标题表现 type 必须是 action 或 custom')
+  if (typeof input.load !== 'function') throw new Error('会话标题 custom 必须提供 load()')
+  if (
+    presentation === 'inline' &&
+    (typeof input.minWidthRem !== 'number' ||
+      !Number.isFinite(input.minWidthRem) ||
+      input.minWidthRem <= 0)
+  ) {
+    throw new Error('会话标题 inline custom minWidthRem 必须是正数')
+  }
+  return {
+    type: 'custom',
+    load: input.load as BrowserSessionHeaderCustom['load'],
+    ...(presentation === 'inline' ? { minWidthRem: input.minWidthRem } : {})
+  }
 }
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
@@ -509,11 +582,12 @@ export class L4PluginHostRuntime {
   getContributionLoadState(
     pluginName: string,
     kind: L4PluginContributionKind,
-    contributionName: string
+    contributionName: string,
+    presentation?: BrowserSessionHeaderItemTarget['presentation']
   ): BrowserContributionLoadState {
     return (
       this.contributionLoadStates.get(
-        pluginContributionKey(pluginName, kind, contributionName)
+        contributionLoadKey(pluginName, kind, contributionName, presentation)
       ) ?? { status: 'unloaded' }
     )
   }
@@ -724,11 +798,13 @@ export class L4PluginHostRuntime {
   retryContribution(
     pluginName: string,
     kind: L4PluginContributionKind,
-    contributionName: string
+    contributionName: string,
+    presentation?: BrowserSessionHeaderItemTarget['presentation']
   ): Promise<BrowserContributionImplementation> {
     const key = pluginContributionKey(pluginName, kind, contributionName)
-    if (this.contributionLoadStates.get(key)?.status === 'failed') {
-      this.contributionLoadStates.delete(key)
+    const loadKey = contributionLoadKey(pluginName, kind, contributionName, presentation)
+    if (this.contributionLoadStates.get(loadKey)?.status === 'failed') {
+      this.contributionLoadStates.delete(loadKey)
       this.publishRegistryChange()
     }
     const registration = this.registrations.get(key)
@@ -742,7 +818,100 @@ export class L4PluginHostRuntime {
         })
       )
     }
-    return this.loadContribution(registration)
+    return this.loadContribution(registration, presentation)
+  }
+
+  async invokeSessionHeaderAction(input: {
+    pluginName: string
+    contributionName: string
+    presentation: BrowserSessionHeaderItemTarget['presentation']
+    source: PluginSource
+    signal: AbortSignal
+  }): Promise<void> {
+    const key = pluginContributionKey(
+      input.pluginName,
+      'session-header-item',
+      input.contributionName
+    )
+    const registration = this.registrations.get(key)
+    const action = registration?.header?.[input.presentation]
+    if (!registration || action?.type !== 'action') {
+      throw new Error('会话标题 action 不存在')
+    }
+    input.signal.throwIfAborted()
+    if (!registration.owner.active) throw new Error('Browser Entry 已失效')
+    if (!this.workSessions.some((item) => sameSource(item.source, input.source))) {
+      throw new Error('工作会话来源已变化')
+    }
+    const scope = this.getHeaderActionScope(registration, input.source, input.signal)
+    try {
+      await action.onSelect({ ...scope })
+      scope.signal.throwIfAborted()
+      if (!registration.owner.active || this.registrations.get(key) !== registration) {
+        throw new Error('Browser Entry 已失效')
+      }
+    } catch (cause) {
+      const error = new BrowserPluginError({
+        pluginName: input.pluginName,
+        contributionName: input.contributionName,
+        phase: 'session-header-action',
+        message: cause instanceof Error ? cause.message : String(cause),
+        cause
+      })
+      if (!scope.signal.aborted) {
+        runPluginCallback(
+          () => {
+            throw error
+          },
+          `header-action:${input.contributionName}:${input.presentation}`,
+          input.pluginName
+        )
+      }
+      throw error
+    }
+  }
+
+  private getHeaderActionScope(
+    registration: L4PluginContributionRegistration,
+    sourceInput: PluginSource,
+    signal: AbortSignal
+  ): BrowserSessionHeaderActionContext {
+    const scopes = (registration.headerActionScopes ??= new WeakMap())
+    const cached = scopes.get(signal)
+    if (cached) {
+      if (!sameSource(cached.source, sourceInput)) throw new Error('会话标题展示来源不一致')
+      return cached
+    }
+    const owner = registration.owner
+    const source = freezeSnapshot(structuredClone(sourceInput))
+    const controller = new AbortController()
+    const actionOwner = {
+      ...owner,
+      subscriptionDisposers: new Set<() => void>(),
+      get active(): boolean {
+        return owner.active && !controller.signal.aborted
+      }
+    }
+    const dispose = (): void => {
+      controller.abort()
+      scopes.delete(signal)
+      this.workSessionListeners.delete(checkSource)
+      owner.subscriptionDisposers.delete(dispose)
+      signal.removeEventListener('abort', dispose)
+      for (const unsubscribe of actionOwner.subscriptionDisposers) {
+        runPluginCallback(unsubscribe, 'header-action-dispose', registration.pluginName)
+      }
+      actionOwner.subscriptionDisposers.clear()
+    }
+    const checkSource = (): void => {
+      if (!this.workSessions.some((item) => sameSource(item.source, source))) dispose()
+    }
+    const scope = { source, host: this.createBrowserHost(actionOwner), signal: controller.signal }
+    scopes.set(signal, scope)
+    this.workSessionListeners.add(checkSource)
+    owner.subscriptionDisposers.add(dispose)
+    signal.addEventListener('abort', dispose, { once: true })
+    return scope
   }
 
   async mountContribution(input: L4PluginContributionMountInput): Promise<PluginDisposer> {
@@ -756,11 +925,23 @@ export class L4PluginHostRuntime {
         message: '插件 Contribution 不存在'
       })
     }
+    if (registration.kind !== input.target.kind) {
+      throw new Error('Contribution kind 与 mount target 不一致')
+    }
     const controller = new AbortController()
     const cancelled = new Promise<void>((resolve) => {
       controller.signal.addEventListener('abort', () => resolve(), { once: true })
     })
     let target = input.target
+    if (target.kind === 'widget' || target.kind === 'session-header-item') {
+      target = { ...target, source: freezeSnapshot(structuredClone(target.source)) }
+    }
+    const source =
+      target.kind === 'widget' || target.kind === 'session-header-item' ? target.source : null
+    const presentation = target.kind === 'session-header-item' ? target.presentation : undefined
+    const checkSource = (): void => {
+      if (source && !this.workSessions.some((item) => sameSource(item.source, source))) cancel()
+    }
     if (target.kind === 'session-sidebar-tab' && target.setHeaderActions) {
       const publishActions = target.setHeaderActions
       let currentActions: readonly BrowserSessionSidebarHeaderAction[] = []
@@ -831,7 +1012,7 @@ export class L4PluginHostRuntime {
     }
     const mounting = Promise.resolve().then(async () => {
       if (controller.signal.aborted) throw new Error('插件视图已关闭')
-      const implementation = await this.loadContribution(registration)
+      const implementation = await this.loadContribution(registration, presentation)
       if (controller.signal.aborted || !registration.owner.active) {
         throw new Error('插件视图已失效')
       }
@@ -853,6 +1034,7 @@ export class L4PluginHostRuntime {
       if (disposal) return disposal
       registration.owner.mounts.delete(dispose)
       input.signal?.removeEventListener('abort', cancel)
+      this.workSessionListeners.delete(checkSource)
       controller.abort()
       // 先取消，再有界等待；迟到的 mount 仍由同一次清理释放。
       disposal = disposePluginResource(
@@ -869,8 +1051,10 @@ export class L4PluginHostRuntime {
       void dispose()
     }
     registration.owner.mounts.add(dispose)
+    if (source) this.workSessionListeners.add(checkSource)
     input.signal?.addEventListener('abort', cancel, { once: true })
     if (input.signal?.aborted) cancel()
+    checkSource()
     try {
       await Promise.race([mounting, cancelled])
       if (controller.signal.aborted || !registration.owner.active) {
@@ -1096,6 +1280,19 @@ export class L4PluginHostRuntime {
   }
 
   private createBrowserFacade(pluginName: string, owner: L4PluginEntryOwner): BrowserPluginFacade {
+    const register = (create: () => L4PluginContributionRegistration): void => {
+      if (!owner.active || !owner.registrationOpen) {
+        throw new Error('Browser Entry registration phase has ended')
+      }
+      const registration = create()
+      const key = contributionKey(registration.kind, registration.contributionName)
+      if (owner.registrations.has(key)) {
+        throw new Error(
+          `Browser Contribution 重复：${pluginName}/${registration.kind}/${registration.contributionName}`
+        )
+      }
+      owner.registrations.set(key, registration)
+    }
     return {
       name: pluginName,
       host: owner.host,
@@ -1119,26 +1316,22 @@ export class L4PluginHostRuntime {
         this.notifyPlugin(pluginName, structuredClone(input))
       },
       registerContribution: (kind, contributionName, definition) => {
-        if (!owner.active || !owner.registrationOpen) {
-          throw new Error('Browser Entry registration phase has ended')
-        }
-        if (!CONTRIBUTION_KINDS.has(kind)) {
-          throw new Error(`Browser Contribution kind 无效：${String(kind)}`)
-        }
-        const registration = this.createRegistration(
-          pluginName,
-          kind,
-          contributionName,
-          definition,
-          owner
+        register(() => {
+          if (!CONTRIBUTION_KINDS.has(kind)) {
+            throw new Error(`Browser Contribution kind 无效：${String(kind)}`)
+          }
+          return this.createRegistration(pluginName, kind, contributionName, definition, owner)
+        })
+      },
+      registerWidget: (contributionName, definition) => {
+        register(() =>
+          this.createWidgetRegistration(pluginName, contributionName, definition, owner)
         )
-        const key = contributionKey(kind, registration.contributionName)
-        if (owner.registrations.has(key)) {
-          throw new Error(
-            `Browser Contribution 重复：${pluginName}/${kind}/${registration.contributionName}`
-          )
-        }
-        owner.registrations.set(key, registration)
+      },
+      registerSessionHeaderItem: (contributionName, definition) => {
+        register(() =>
+          this.createHeaderRegistration(pluginName, contributionName, definition, owner)
+        )
       },
       onPush: (listener) => {
         if (!owner.active) throw new Error('Browser Entry owner is no longer active')
@@ -1150,7 +1343,7 @@ export class L4PluginHostRuntime {
     }
   }
 
-  private createRegistration<K extends L4PluginContributionKind>(
+  private createRegistration<K extends BrowserContributionKind>(
     pluginName: string,
     kind: K,
     contributionNameInput: string,
@@ -1258,6 +1451,74 @@ export class L4PluginHostRuntime {
     }
   }
 
+  private createWidgetRegistration(
+    pluginName: string,
+    contributionNameInput: string,
+    definition: BrowserWidgetDefinition,
+    owner: L4PluginEntryOwner
+  ): L4PluginContributionRegistration {
+    const contributionName = parseContributionName(contributionNameInput)
+    if (!definition || typeof definition !== 'object' || typeof definition.load !== 'function') {
+      throw new Error('Browser Widget 必须提供 load()')
+    }
+    const placement = definition.placement ?? 'aboveEditor'
+    if (placement !== 'aboveEditor' && placement !== 'belowEditor') {
+      throw new Error('Browser Widget placement 必须是 aboveEditor 或 belowEditor')
+    }
+    return {
+      pluginName,
+      kind: 'widget',
+      contributionName,
+      descriptor: { kind: 'widget', contributionName, placement },
+      load: definition.load,
+      owner
+    }
+  }
+
+  private createHeaderRegistration(
+    pluginName: string,
+    contributionNameInput: string,
+    definition: BrowserSessionHeaderItemDefinition,
+    owner: L4PluginEntryOwner
+  ): L4PluginContributionRegistration {
+    const contributionName = parseContributionName(contributionNameInput)
+    if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
+      throw new Error('会话标题条目必须提供 inline 和 overflow')
+    }
+    for (const key of Object.keys(definition)) {
+      if (key !== 'inline' && key !== 'overflow') {
+        throw new Error(`会话标题条目不支持顶层字段 ${key}`)
+      }
+    }
+    const inline = parseHeaderPresentation(
+      definition.inline,
+      'inline'
+    ) as BrowserSessionHeaderItemDefinition['inline']
+    const overflow = parseHeaderPresentation(
+      definition.overflow,
+      'overflow'
+    ) as BrowserSessionHeaderItemDefinition['overflow']
+    return {
+      pluginName,
+      kind: 'session-header-item',
+      contributionName,
+      descriptor: {
+        kind: 'session-header-item',
+        contributionName,
+        inline:
+          inline.type === 'action'
+            ? { type: 'action', icon: inline.icon, label: inline.label }
+            : { type: 'custom', minWidthRem: inline.minWidthRem },
+        overflow:
+          overflow.type === 'action'
+            ? { type: 'action', icon: overflow.icon, label: overflow.label }
+            : { type: 'custom' }
+      },
+      header: { inline, overflow },
+      owner
+    }
+  }
+
   private commitRegistrations(owner: L4PluginEntryOwner): void {
     for (const registration of owner.registrations.values()) {
       const key = pluginContributionKey(
@@ -1273,26 +1534,42 @@ export class L4PluginHostRuntime {
   }
 
   private loadContribution(
-    registration: L4PluginContributionRegistration
+    registration: L4PluginContributionRegistration,
+    presentation?: BrowserSessionHeaderItemTarget['presentation']
   ): Promise<BrowserContributionImplementation> {
-    const key = pluginContributionKey(
+    const registrationKey = pluginContributionKey(
       registration.pluginName,
       registration.kind,
       registration.contributionName
     )
+    const key = contributionLoadKey(
+      registration.pluginName,
+      registration.kind,
+      registration.contributionName,
+      presentation
+    )
+    const header = presentation ? registration.header?.[presentation] : undefined
+    const load = header?.type === 'custom' ? header.load : registration.load
+    if (!load) return Promise.reject(new Error('会话标题 action 不支持加载视图'))
+    if (!registration.owner.active || this.registrations.get(registrationKey) !== registration) {
+      return Promise.reject(new Error('Browser Contribution 已失效'))
+    }
     const state = this.contributionLoadStates.get(key)
     if (state?.status === 'ready') return Promise.resolve(state.implementation)
     if (state?.status === 'loading') return state.promise
     if (state?.status === 'failed') return Promise.reject(state.error)
 
     const promise = Promise.resolve()
-      .then(registration.load)
+      .then(load)
       .then(
         (implementation) => {
           if (!implementation || typeof implementation.mount !== 'function') {
             throw new Error('Lazy Contribution Module 必须导出 mount()')
           }
-          if (!registration.owner.active || this.registrations.get(key) !== registration) {
+          if (
+            !registration.owner.active ||
+            this.registrations.get(registrationKey) !== registration
+          ) {
             throw new Error('Browser Contribution 已失效')
           }
           this.contributionLoadStates.set(key, { status: 'ready', implementation })
@@ -1313,7 +1590,7 @@ export class L4PluginHostRuntime {
                 phase: 'contribution-load',
                 message: String(cause)
               })
-        if (registration.owner.active && this.registrations.get(key) === registration) {
+        if (registration.owner.active && this.registrations.get(registrationKey) === registration) {
           this.contributionLoadStates.set(key, { status: 'failed', error })
           this.publishRegistryChange()
         }
@@ -1490,6 +1767,10 @@ export class L4PluginHostRuntime {
       if (this.registrations.get(key) !== registration) continue
       this.registrations.delete(key)
       this.contributionLoadStates.delete(key)
+      if (registration.kind === 'session-header-item') {
+        this.contributionLoadStates.delete(`${key}\u0000inline`)
+        this.contributionLoadStates.delete(`${key}\u0000overflow`)
+      }
       this.applicationVisibility.delete(key)
     }
 

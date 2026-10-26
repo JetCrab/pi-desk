@@ -19,7 +19,7 @@ export function DeliverablesEffect(): ReactElement {
         <div>
           <ListChecks size={22} aria-hidden="true" />
           <strong>助手明确登记</strong>
-          <span>标题 + 项目相对路径</span>
+          <span>标题 + 文件或文件夹路径</span>
         </div>
         <ArrowRight className={base.flowArrow} size={18} aria-hidden="true" />
         <div>
@@ -41,7 +41,7 @@ export function DeliverablesPrinciple(): ReactElement {
       <FileText size={18} aria-hidden="true" />
       <div>
         <strong>登记的是引用，不是副本</strong>
-        <span>会话保留登记记录，预览仍依赖项目里的文件。</span>
+        <span>会话保留登记记录，预览仍依赖原路径的内容。</span>
       </div>
     </figure>
   )
@@ -60,11 +60,11 @@ export function DeliverablesConfig(): ReactElement {
       <dl className={base.parameters}>
         <div>
           <dt>
-            项目相对路径 <code>path</code>
+            文件或文件夹路径 <code>path</code>
           </dt>
           <dd>
             <code>deliverables/overview.html</code>
-            <span>当前项目中已存在的完成文件</span>
+            <span>支持相对路径或服务端绝对路径</span>
           </dd>
         </div>
         <div>

@@ -9,6 +9,8 @@ import {
   type ExtensionHandler,
   type InputEvent,
   type InputEventResult,
+  type MessageEndEvent,
+  type MessageEndEventResult,
   type SessionManager,
   type SessionBeforeTreeEvent
 } from '@earendil-works/pi-coding-agent'
@@ -40,6 +42,7 @@ interface InitializationOptions {
   resources: L4PiSessionResources
   readCapabilities: () => CapabilityMode | undefined
   onInput: ExtensionHandler<InputEvent, InputEventResult>
+  onMessageEnd: (event: MessageEndEvent) => MessageEndEventResult | undefined
   onTree?: () => void
   onCommand?: (args: string[], toolCallId: string) => Promise<L4PiDeskCommandResult>
   pluginEvents: ConstructorParameters<typeof L4PiSessionPluginRuntime>[0]
@@ -296,6 +299,12 @@ export class L4PiSessionInitialization {
           this.plugins.reset()
         }
       )
+      extension.handlers.set('message_end', [
+        async (event) => {
+          this.assertActive()
+          return this.options.onMessageEnd(event as MessageEndEvent)
+        }
+      ])
       extension.handlers.set('session_tree', [async () => this.options.onTree?.()])
       extension.handlers.set('session_before_tree', [
         async (event) => {
