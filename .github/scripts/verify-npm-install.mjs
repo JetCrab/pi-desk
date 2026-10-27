@@ -62,6 +62,9 @@ async function phase(name, action) {
 
 async function stopVerificationTree(child) {
   if (!child.pid) return
+  console.info(
+    `[smoke:cleanup] 终止验收进程树：ownerPid=${process.pid}，rootPid=${child.pid}，exitCode=${child.exitCode}，signal=${child.signalCode}`
+  )
   try {
     if (process.platform !== 'win32' && child.exitCode === null && child.signalCode === null) {
       // 服务和浏览器各自创建进程组，必须在父进程退出、后代被重新托管前取得所属关系。
@@ -249,6 +252,9 @@ async function verifyAttempt({
 
 export async function verifyNpmInstall({ root, sdkArchive, hostArchive, version }) {
   const directory = join(root, 'temp/run/npm-release', `installed-${randomUUID()}`)
+  console.info(
+    `[smoke:supervisor] pid=${process.pid}，parentPid=${process.ppid}，目录=${directory}`
+  )
   const agentRoot = join(root, 'temp/pi/npm-release', basename(directory))
   let log
   let pendingOutput = ''

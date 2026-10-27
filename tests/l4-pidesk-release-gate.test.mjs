@@ -62,6 +62,73 @@ test('纯插件批次可跳过宿主检查，正式构建与已验证制品复�
   assert.ok(verification.run.includes('command-smoke/host.tgz'))
 })
 
+test('Windows安装态使用原生启动，双平台各自只验收一次同批原包', () => {
+  const steps = workflow.jobs['installed-commands'].steps.filter((step) =>
+    step.run?.includes('verify-npm-install.mjs')
+  )
+  for (const os of ['Windows', 'Linux']) {
+    const selected = steps.filter((step) => evaluateWorkflowCondition(step.if, { runner: { os } }))
+    assert.equal(selected.length, 1)
+    assert.equal(selected[0].shell, os === 'Windows' ? 'pwsh' : 'bash')
+    assert.ok(selected[0].run.includes('command-smoke/sdk.tgz'))
+    assert.ok(selected[0].run.includes('command-smoke/host.tgz'))
+  }
+  const windows = steps.find((step) => step.shell === 'pwsh')
+  assert.match(windows.run, /exit \$child\.ExitCode/)
+  assert.match(windows.run, /RedirectStandardOutput.*RedirectStandardError/)
+})
+
+test(
+  'Windows原生启动保留真实失败退出码和两路输出',
+  {
+    skip: process.platform !== 'win32',
+    timeout: 30_000
+  },
+  async (t) => {
+    const parent = resolve('temp/run/npm-release/native-launcher')
+    await mkdir(parent, { recursive: true })
+    const root = await mkdtemp(join(parent, 'fixture-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    await mkdir(join(root, '.github/scripts'), { recursive: true })
+    await writeFile(
+      join(root, '.github/scripts/verify-npm-install.mjs'),
+      "console.log('fixture stdout'); console.error('fixture stderr'); process.exitCode = 7\n"
+    )
+    const step = workflow.jobs['installed-commands'].steps.find((step) => step.shell === 'pwsh')
+    await writeFile(join(root, 'launcher.ps1'), '\uFEFF' + step.run)
+    await assert.rejects(
+      execute(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          join(root, 'launcher.ps1')
+        ],
+        {
+          cwd: root,
+          timeout: 20_000,
+          env: {
+            ...process.env,
+            GITHUB_WORKSPACE: root,
+            GITHUB_RUN_ID: 'fixture',
+            GITHUB_RUN_ATTEMPT: '1',
+            NPM_ARTIFACT_DIR: join(root, 'packages')
+          }
+        }
+      ),
+      (error) => {
+        assert.equal(error.code, 7)
+        assert.match(error.stdout, /fixture stdout/)
+        assert.match(error.stdout, /fixture stderr/)
+        return true
+      }
+    )
+  }
+)
+
 test('安装态验收在 Job 超时前结束并为失败和取消保留现场', () => {
   const job = workflow.jobs['installed-commands']
   const verification = job.steps.find((step) => step.run?.includes('verify-npm-install.mjs'))
