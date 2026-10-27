@@ -132,6 +132,7 @@ jobs:
           tests/l4-restore-release-artifacts.test.mjs
           tests/l4-release-website.test.mjs
           tests/l4-release-npm.test.mjs
+          tests/l4-release-github.test.mjs
           tests/l4-release-speed.test.mjs
           tests/l4-release-dev.test.mjs
           tests/l4-release-parallel.test.mjs

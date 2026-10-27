@@ -3,7 +3,9 @@
 !prune-image.mjs
 !host/
 !host/package.json
+!host/package-lock.json
 !host/host.tgz
 !host/sdk.tgz
 !pi/
 !pi/package.json
+!pi/package-lock.json

@@ -1,17 +1,24 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { once } from 'node:events'
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:net'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   dockerAssets,
   dockerInstallManifests,
+  prepareDockerContext,
+  restoreDockerArtifacts,
   restoreDockerImage,
+  runDockerInputCommand,
   stageDockerImage,
   publishDockerImage
 } from '../.github/scripts/release-docker.mjs'
 import { sha256 } from '../.github/scripts/release-github.mjs'
 import { selectCiChecks } from '../.github/scripts/select-ci-checks.mjs'
 import { evaluateWorkflowCondition, readWorkflow } from './fixtures/l4-workflow-test-runtime.mjs'
+import { dockerInstallFixture } from './fixtures/l4-docker-install-fixture.mjs'
 
 const source = 'a'.repeat(40)
 const version = '1.2.3'
@@ -56,6 +63,317 @@ test('镜像使用同批主包和SDK，Pi单独安装并拒绝开发版本', () 
   assert.deepEqual(manifests.pi.dependencies, { '@earendil-works/pi-coding-agent': '1.0.1' })
   assert.throws(() => dockerInstallManifests({ ...host, version: '1.2.3-dev.1' }, sdk))
   assert.throws(() => dockerInstallManifests(host, { ...sdk, version: '1.1.0-dev.1' }))
+})
+
+test('两套安装锁在构建前固定，同run下载原输入后不重解析，npm ci不跟随范围更新', async (t) => {
+  const { directory } = await fixture(t)
+  const f = await dockerInstallFixture(t, directory)
+  await prepareDockerContext(f.root, f.archives, f.context, version, { source, lock: f.lock })
+  const locks = await Promise.all(
+    ['host', 'pi'].map((name) => readFile(join(f.context, name, 'package-lock.json')))
+  )
+  for (const bytes of locks) {
+    assert.equal(JSON.parse(bytes).packages['node_modules/docker-fixture-leaf'].version, '1.0.0')
+  }
+  f.advanceRegistry()
+  const retry = join(directory, 'retry')
+  const downloads = []
+  const result = await restoreDockerArtifacts({
+    directory: retry,
+    source,
+    version,
+    runId: '123',
+    github: {
+      request: async (path) => {
+        assert.equal(path, '/actions/runs/123/artifacts?per_page=100&page=1')
+        return { artifacts: [{ name: 'docker-inputs-123', expired: false }] }
+      }
+    },
+    download: async (name, target) => {
+      downloads.push(name)
+      await cp(f.context, target, { recursive: true })
+    }
+  })
+  assert.deepEqual(result, { reused: false, inputsReused: true })
+  assert.deepEqual(downloads, ['docker-inputs-123'])
+  const context = join(retry, 'context')
+  const before = f.requests.length
+  await prepareDockerContext(f.root, f.archives, context, version, {
+    source,
+    lock: () => assert.fail('恢复本批输入不能重新解析依赖')
+  })
+  assert.equal(f.requests.length, before)
+  for (const [index, name] of ['host', 'pi'].entries()) {
+    const install = join(context, name)
+    await f.npm(install, ['ci', '--omit=dev', ...(name === 'pi' ? ['--ignore-scripts'] : [])])
+    assert.deepEqual(await readFile(join(install, 'package-lock.json')), locks[index])
+    const leaf = JSON.parse(
+      await readFile(join(install, 'node_modules/docker-fixture-leaf/package.json'))
+    )
+    assert.equal(leaf.version, '1.0.0')
+  }
+})
+
+test('固定旧配方不支持锁时准备阶段阻断，不修改原配方且成功镜像仍直接复用', async (t) => {
+  const { directory } = await fixture(t)
+  const f = await dockerInstallFixture(t, directory)
+  const recipe = join(f.root, 'apps/docker/Dockerfile')
+  const ignore = join(f.root, 'apps/docker/.dockerignore')
+  const originalRecipe = await readFile(recipe, 'utf8')
+  const originalIgnore = await readFile(ignore, 'utf8')
+  for (const [path, original, unsupported] of [
+    [
+      recipe,
+      originalRecipe,
+      originalRecipe.replaceAll('npm ci --omit=dev', 'npm install --omit=dev')
+    ],
+    [recipe, originalRecipe, originalRecipe.replace('pi/package-lock.json ', '')],
+    [ignore, originalIgnore, originalIgnore.replace('!host/package-lock.json', '')],
+    [ignore, originalIgnore, originalIgnore.replace('!pi/package-lock.json', '')]
+  ]) {
+    await writeFile(path, unsupported)
+    await assert.rejects(
+      prepareDockerContext(f.root, f.archives, f.context, version, {
+        source,
+        lock: () => assert.fail('旧配方不能开始解析安装锁')
+      }),
+      /固定源码.*不支持.*请发布.*新版本/
+    )
+    assert.equal(await readFile(path, 'utf8'), unsupported)
+    await assert.rejects(readFile(join(f.context, dockerAssets.inputs)), /ENOENT/)
+    await writeFile(path, original)
+  }
+  await writeFile(recipe, originalRecipe.replaceAll('npm ci --omit=dev', 'npm install --omit=dev'))
+  await writeFile(join(directory, dockerAssets.archive), 'original verified image')
+  await stageDockerImage({ directory, source, version, imageId })
+  const result = await restoreDockerArtifacts({
+    directory,
+    source,
+    version,
+    runId: '123',
+    github: {
+      request: async () => ({ artifacts: [{ name: 'docker-image-123', expired: false }] })
+    },
+    download: async (name) => assert.equal(name, 'docker-image-123')
+  })
+  assert.deepEqual(result, { reused: true, inputsReused: false })
+})
+
+test(
+  '安装锁和归档下载命令超时保留阶段与stderr，释放父子进程及端口',
+  { timeout: 60000 },
+  async (t) => {
+    const { directory } = await fixture(t)
+    for (const phase of ['lock-host', 'download-docker-inputs']) {
+      const stateFile = join(directory, `${phase}.json`)
+      const descendant = `
+      const server = require('node:net').createServer()
+      server.listen(0, '127.0.0.1', () => {
+        require('node:fs').writeFileSync(process.argv[1], JSON.stringify({
+          rootPid: Number(process.argv[2]), pid: process.pid, port: server.address().port
+        }))
+      })
+    `
+      const root = `
+      require('node:fs').writeFileSync(${JSON.stringify(stateFile)}, JSON.stringify({ rootPid: process.pid }))
+      require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}, ${JSON.stringify(stateFile)}, String(process.pid)], {
+        stdio: 'ignore', windowsHide: true
+      })
+      process.stderr.write('fixture registry stalled\\n')
+      setInterval(() => {}, 1000)
+    `
+      let state
+      t.after(async () => {
+        if (!state) return
+        const running = [state.rootPid, state.pid].filter(Boolean).some((pid) => {
+          try {
+            process.kill(pid, 0)
+            return true
+          } catch (error) {
+            if (error.code !== 'ESRCH') throw error
+            return false
+          }
+        })
+        if (running) {
+          const { terminateManagedTree } =
+            await import('../src/server/l4_foundation/process/l4-process-tree.js')
+          await terminateManagedTree({ pid: state.rootPid, exitCode: null, signalCode: null })
+        }
+      })
+      const started = performance.now()
+      try {
+        await assert.rejects(
+          runDockerInputCommand(process.execPath, ['-e', root], {
+            cwd: directory,
+            phase,
+            timeout: 2000
+          }),
+          (error) => {
+            assert.equal(error.code, 'ETIMEDOUT')
+            assert.ok(error.message.includes(`[docker:${phase}]`))
+            assert.match(error.message, /fixture registry stalled/)
+            return true
+          }
+        )
+      } finally {
+        state = JSON.parse(await readFile(stateFile))
+      }
+      assert.ok(performance.now() - started < 40000, '命令与进程释放均须有限截止')
+      assert.ok(state.pid && state.port, '超时前必须实际启动后代与监听端口')
+      for (const pid of [state.rootPid, state.pid]) {
+        try {
+          process.kill(pid, 0)
+          assert.notEqual(process.platform, 'win32', `Windows 进程 ${pid} 未释放`)
+          const status = execFileSync('ps', ['-p', String(pid), '-o', 'stat='], {
+            encoding: 'utf8',
+            timeout: 1000
+          })
+          assert.match(status.trim(), /^Z/, `Linux 进程 ${pid} 必须已停止执行`)
+        } catch (error) {
+          if (error.code !== 'ESRCH' && error.status !== 1) throw error
+        }
+      }
+      const probe = createServer()
+      probe.listen(state.port, '127.0.0.1')
+      await once(probe, 'listening')
+      await new Promise((resolveClose, reject) =>
+        probe.close((error) => (error ? reject(error) : resolveClose()))
+      )
+    }
+  }
+)
+
+test('命令非零退出保留阶段、退出码与stderr', async (t) => {
+  const { directory } = await fixture(t)
+  await assert.rejects(
+    runDockerInputCommand(
+      process.execPath,
+      ['-e', "process.stderr.write('registry unavailable');process.exit(9)"],
+      {
+        cwd: directory,
+        phase: 'lock-pi',
+        timeout: 2000
+      }
+    ),
+    /docker:lock-pi.*退出码=9[\s\S]*registry unavailable/
+  )
+})
+
+test('安装输入拒绝错源码、版本、原包摘要、锁与构建文件，不覆盖归档', async (t) => {
+  const { directory } = await fixture(t)
+  const f = await dockerInstallFixture(t, directory)
+  await prepareDockerContext(f.root, f.archives, f.context, version, { source, lock: f.lock })
+  const record = await readFile(join(f.context, dockerAssets.inputs))
+  const prepare = (sha = source, v = version) =>
+    prepareDockerContext(f.root, f.archives, f.context, v, {
+      source: sha,
+      lock: () => assert.fail('错误输入不能重新解析依赖')
+    })
+  await assert.rejects(prepare('d'.repeat(40)), /源码批次/)
+  await assert.rejects(prepare(source, '1.2.4'))
+  for (const file of [
+    join(f.archives, 'jetcrab-pi-desk-1.2.3.tgz'),
+    join(f.archives, 'jetcrab-pi-desk-sdk-1.1.0.tgz'),
+    join(f.context, 'host/package-lock.json'),
+    join(f.context, 'pi/package-lock.json'),
+    join(f.context, 'Dockerfile')
+  ]) {
+    const original = await readFile(file)
+    await writeFile(file, 'changed')
+    await assert.rejects(prepare(), /不同|摘要/)
+    await writeFile(file, original)
+  }
+  const sourcePath = join(f.root, 'package.json')
+  const sourceHost = JSON.parse(await readFile(sourcePath))
+  sourceHost.devDependencies['@earendil-works/pi-coding-agent'] = '1.0.2'
+  await writeFile(sourcePath, JSON.stringify(sourceHost))
+  await assert.rejects(prepare(), /Pi 版本与源码不同/)
+  assert.deepEqual(await readFile(join(f.context, dockerAssets.inputs)), record)
+})
+
+test('同run恢复优先使用已验证镜像，旧批次无锁不触发安装输入下载', async (t) => {
+  const f = await fixture(t)
+  await writeFile(join(f.directory, dockerAssets.archive), 'verified original image')
+  await stageDockerImage({ ...f, source, version, imageId })
+  const downloads = []
+  const result = await restoreDockerArtifacts({
+    ...f,
+    source,
+    version,
+    runId: '123',
+    github: {
+      request: async () => ({
+        artifacts: [
+          { name: 'docker-inputs-123', expired: true },
+          { name: 'docker-image-123', expired: false }
+        ]
+      })
+    },
+    download: async (name) => {
+      downloads.push(name)
+    }
+  })
+  assert.deepEqual(result, { reused: true, inputsReused: false })
+  assert.deepEqual(downloads, ['docker-image-123'])
+})
+
+test('没有历史镜像和锁才允许首次解析；锁归档过期或不完整时停止', async (t) => {
+  const f = await fixture(t)
+  const options = {
+    ...f,
+    source,
+    version,
+    runId: '123',
+    github: { request: async () => ({ artifacts: [] }) },
+    download: async () => assert.fail('没有归档时不能下载')
+  }
+  assert.deepEqual(await restoreDockerArtifacts(options), { reused: false, inputsReused: false })
+  await assert.rejects(
+    restoreDockerArtifacts({
+      ...options,
+      github: {
+        request: async () => ({ artifacts: [{ name: 'docker-inputs-123', expired: true }] })
+      }
+    }),
+    /已过期/
+  )
+  await assert.rejects(
+    restoreDockerArtifacts({
+      ...options,
+      github: {
+        request: async () => ({ artifacts: [{ name: 'docker-inputs-123', expired: false }] })
+      },
+      download: async () => {}
+    }),
+    /归档不完整/
+  )
+})
+
+test('镜像构建前归档有限保留的原输入，Docker上下文带入两套npm ci锁', async () => {
+  const workflow = await readWorkflow('release-docker')
+  const steps = workflow.jobs.build.steps
+  const uploadIndex = steps.findIndex(
+    (step) => step.with?.name === 'docker-inputs-${{ github.run_id }}'
+  )
+  const buildIndex = steps.findIndex((step) => step.uses === 'docker/build-push-action@v6')
+  assert.ok(uploadIndex > 0 && uploadIndex < buildIndex)
+  const checkout = steps.find((step) => step.uses === 'actions/checkout@v4')
+  assert.equal(checkout.with.ref, '${{ inputs.source_sha }}')
+  const currentScripts = steps.filter((step) => step.run?.includes('git show'))
+  assert.equal(currentScripts.length, 1)
+  assert.match(currentScripts[0].run, /release-docker\.mjs/)
+  assert.doesNotMatch(currentScripts[0].run, /apps\/docker/)
+  const upload = steps[uploadIndex]
+  assert.equal(upload.with['retention-days'], 7)
+  assert.equal(upload.with['include-hidden-files'], true)
+  assert.ok(upload.if.includes("steps.image.outputs.inputs_reused != 'true'"))
+  assert.ok(upload.if.includes("steps.image.outputs.reused != 'true'"))
+  const dockerfile = await readFile('apps/docker/Dockerfile', 'utf8')
+  assert.equal((dockerfile.match(/RUN npm ci --omit=dev/g) ?? []).length, 2)
+  assert.match(dockerfile, /COPY pi\/package.json pi\/package-lock.json/)
+  assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/)
+  const ignore = await readFile('apps/docker/.dockerignore', 'utf8')
+  for (const name of ['host', 'pi']) assert.ok(ignore.includes(`!${name}/package-lock.json`))
 })
 
 test('工作流制品中的已验证镜像按原摘要复用，损坏或错批次禁止复用', async (t) => {

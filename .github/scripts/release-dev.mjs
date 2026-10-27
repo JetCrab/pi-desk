@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { readVersions, validateVersions } from './commit-versions.mjs'
 import { prepareDevelopmentVersions } from './release-version-model.mjs'
 import { readPublishedVersions } from './prepare-dev-release.mjs'
+import { versionParts } from './npm-channel.mjs'
 import { createGitHubClient } from './release-github.mjs'
 import { git, latestSuccessfulRelease } from './release-plan.mjs'
 import { loadReleaseRecord } from './release-metadata.mjs'
@@ -39,7 +40,7 @@ export async function prepareDevBatch(
     runId,
     target = 'all',
     rebuildOnly = false,
-    readPublished = readPublishedVersions
+    readPublished = (name) => readPublishedVersions(name, fetch, { requireStableLatest: true })
   }
 ) {
   assert.match(source, /^[a-f0-9]{40}$/)
@@ -63,6 +64,19 @@ export async function prepareDevBatch(
         tunnel: (await readVersions(root, stable.source.head)).tunnel
       }
     : {}
+  if (batch && !rebuildOnly) {
+    for (const id of batch.selected.filter((name) => name.startsWith('pi-desk'))) {
+      const published = stableVersions[id]
+      if (!published) continue
+      const next = versionParts(batch.versions[id]).slice(0, 3)
+      const previous = versionParts(published).slice(0, 3)
+      const changed = next.findIndex((value, index) => value !== previous[index])
+      assert.ok(
+        changed !== -1 && next[changed] > previous[changed],
+        `开发批次 ${runId} 的 ${id}@${batch.npmVersions[id]} 已被正式版 ${published} 取代；停止旧批次发布，不回退 dev 标签。请在新开发版本继续，或使用 publish=false 仅验证构建。`
+      )
+    }
+  }
   if (state.checks === null && stable)
     await validateVersions(root, { base: stable.source.head, head: source })
   const candidates = rebuildOnly ? Object.keys(versions) : selectDevUnits(versions, state)
@@ -95,13 +109,21 @@ export async function prepareDevBatch(
       fixedVersions[name] = previous.npmVersions[name]
     }
   }
+  const publishedVersions = new Map(
+    await Promise.all(
+      (rebuildOnly ? [] : selected.filter((name) => name.startsWith('pi-desk'))).map(async (id) => {
+        const name = `@jetcrab/${id}`
+        return [name, await readPublished(name)]
+      })
+    )
+  )
   const prepared = await prepareDevelopmentVersions(root, {
     before: state.checks ?? '0'.repeat(40),
     // 手动仅构建不会发布，允许验证当前稳定基础号；发布仍保留原版本门禁。
     stableBase: rebuildOnly ? null : (stable?.source.head ?? null),
     selected: selected.filter((name) => name.startsWith('pi-desk')),
     versions: fixedVersions,
-    readVersions: readPublished
+    readVersions: async (name) => publishedVersions.get(name)
   })
   if (!batch) {
     batch = {

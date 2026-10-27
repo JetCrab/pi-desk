@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, openSync, writeSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -28,7 +28,8 @@ const phases = {
   'health-normal': ['正常模式启动', 2 * 60_000],
   'project-search': ['验证安装态项目搜索', 60_000],
   commands: ['验证安装态命令与浏览器模块', 5 * 60_000],
-  cleanup: ['释放验收资源', 90_000]
+  cleanup: ['释放验收资源', 90_000],
+  remove: ['删除验收临时目录', 10_000]
 }
 
 async function phase(name, action) {
@@ -43,9 +44,13 @@ async function phase(name, action) {
     )
     return result
   } catch (error) {
+    console.error(
+      `[smoke:${name}] 失败，耗时 ${((performance.now() - started) / 1000).toFixed(1)} 秒：${error.stack ?? error}`
+    )
     process.send?.({
       phase: name,
       status: 'failed',
+      error: error.stack ?? String(error),
       recoverable:
         error.code === 'ETIMEDOUT' ||
         error.name === 'TimeoutError' ||
@@ -71,10 +76,11 @@ async function stopVerificationTree(child) {
         previousSize = descendants.size
         for (const [pid, ppid] of processes) if (descendants.has(ppid)) descendants.add(pid)
       } while (descendants.size !== previousSize)
-      for (const [pid, , group] of processes) {
-        if (pid !== child.pid && pid === group && descendants.has(pid))
-          await terminateManagedTree({ pid })
-      }
+      await Promise.all(
+        processes
+          .filter(([pid, , group]) => pid !== child.pid && pid === group && descendants.has(pid))
+          .map(([pid]) => terminateManagedTree({ pid }))
+      )
     }
   } finally {
     await terminateManagedTree(child)
@@ -91,7 +97,9 @@ async function verifyAttempt({
   version,
   completed,
   signal,
-  output
+  output,
+  mode = '--worker',
+  piVersion
 }) {
   let tail = ''
   const publish = (chunk, stream) => {
@@ -103,13 +111,14 @@ async function verifyAttempt({
     process.execPath,
     [
       import.meta.filename,
-      '--worker',
+      mode,
       directory,
-      sdkArchive,
-      hostArchive,
-      version,
+      sdkArchive ?? '',
+      hostArchive ?? '',
+      version ?? '',
       attemptDirectory,
-      JSON.stringify([...completed])
+      JSON.stringify([...completed]),
+      piVersion ?? ''
     ],
     {
       cwd: root,
@@ -130,7 +139,8 @@ async function verifyAttempt({
     child.once('error', rejectClose)
     child.once('close', (code, signal) => resolveClose({ code, signal }))
   })
-  let current = 'prepare'
+  let current = mode === '--remove' ? 'remove' : 'prepare'
+  let prepared
   let verified = false
   let failure
   let phaseTimer
@@ -152,9 +162,11 @@ async function verifyAttempt({
       phases[name][1]
     )
   }
-  arm('prepare')
+  arm(current)
   child.on('message', (message) => {
-    if (message.status === 'complete') {
+    if (message.prepared) {
+      prepared = message.prepared
+    } else if (message.status === 'complete') {
       if (message.phase === 'commands') verified = true
       if (['install-host', 'install-pi'].includes(message.phase)) completed.add(message.phase)
     } else if (message.status === 'failed') {
@@ -173,7 +185,9 @@ async function verifyAttempt({
       0,
       `验收子进程失败：退出码=${result.code}，信号=${result.signal ?? '无'}`
     )
-  } catch (error) {
+    return prepared
+  } catch (caught) {
+    const error = failure?.error ? new Error(failure.error, { cause: caught }) : caught
     const failedPhase = failure?.phase ?? current
     const networkFailure =
       ['install-host', 'install-pi'].includes(failedPhase) &&
@@ -181,10 +195,22 @@ async function verifyAttempt({
         tail
       )
     error.recoverable =
+      mode === '--worker' &&
       !signal.aborted &&
       (failure ? failure.recoverable || networkFailure : error.code === 'ETIMEDOUT')
     output(`${error.stack ?? error}\n`, process.stderr)
-    appendFileSync(join(attemptDirectory, 'failure.log'), `\n${error.stack ?? error}\n`)
+    const record = (name, error) => {
+      try {
+        appendFileSync(join(attemptDirectory, name), `\n${error.stack ?? error}\n`)
+      } catch (logError) {
+        output(`无法保存 ${name}：${logError.message}\n`, process.stderr)
+      }
+    }
+    record('failure.log', error)
+    if (error !== caught) {
+      output(`[smoke:${current}] 终止原因：${caught.stack ?? caught}\n`, process.stderr)
+      record('failure.log', caught)
+    }
     let cleanupTimer
     let cleaned = false
     try {
@@ -202,15 +228,13 @@ async function verifyAttempt({
       output('[smoke:cleanup] 本次验收进程树已终止\n')
     } catch (cleanupError) {
       error.recoverable = false
-      appendFileSync(
-        join(attemptDirectory, 'cleanup.log'),
-        `${cleanupError.stack ?? cleanupError}\n`
-      )
+      error.cleanupError = cleanupError
+      record('cleanup.log', cleanupError)
       output(`验收进程树清理失败：${cleanupError.stack ?? cleanupError}\n`, process.stderr)
     } finally {
       clearTimeout(cleanupTimer)
     }
-    if (verified && current === 'cleanup' && cleaned && !signal.aborted) {
+    if (verified && !failure && current === 'cleanup' && cleaned && !signal.aborted) {
       output('[smoke:cleanup] 功能验收已通过，收尾异常经强制清理恢复\n')
       return
     }
@@ -224,27 +248,31 @@ async function verifyAttempt({
 }
 
 export async function verifyNpmInstall({ root, sdkArchive, hostArchive, version }) {
-  const parent = join(root, 'temp/run/npm-release')
-  await mkdir(parent, { recursive: true })
-  const directory = await mkdtemp(join(parent, 'installed-'))
+  const directory = join(root, 'temp/run/npm-release', `installed-${randomUUID()}`)
   const agentRoot = join(root, 'temp/pi/npm-release', basename(directory))
-  const log = openSync(join(directory, 'smoke.log'), 'w')
+  let log
+  let pendingOutput = ''
   let logBytes = 0
   let truncated = false
   const output = (chunk, stream = process.stdout) => {
     const bytes = Buffer.from(chunk)
+    if (log === undefined) pendingOutput = `${pendingOutput}${chunk}`.slice(-64 * 1024)
     const available = Math.max(0, 8 * 1024 * 1024 - logBytes)
-    if (available) logBytes += writeSync(log, bytes.subarray(0, available))
-    if (bytes.length > available && !truncated) {
+    if (log !== undefined && available) logBytes += writeSync(log, bytes.subarray(0, available))
+    if (log !== undefined && bytes.length > available && !truncated) {
       writeSync(log, '\n日志已达到 8 MiB 上限；最终错误另存于各次尝试的 failure.log。\n')
       truncated = true
     }
     stream.write(chunk)
   }
   const controller = new AbortController()
+  // 18 分钟包含最终释放：保留 1 分钟供原生终止（最多 30 秒）、通道关闭及目录删除。
   const overallTimer = setTimeout(
-    () => controller.abort(new Error('安装态验收及自动恢复超过总时限 18 分钟')),
-    18 * 60_000
+    () =>
+      controller.abort(
+        new Error('安装态验收工作预算耗尽（完整生命周期上限 18 分钟，预留 1 分钟收尾）')
+      ),
+    17 * 60_000
   )
   const interrupt = () => controller.abort(new Error('安装态验收被中断'))
   process.once('SIGTERM', interrupt)
@@ -252,11 +280,26 @@ export async function verifyNpmInstall({ root, sdkArchive, hostArchive, version 
   const completed = new Set()
   let success = false
   try {
+    const prepared = await verifyAttempt({
+      root,
+      directory,
+      attemptDirectory: join(directory, 'prepare'),
+      agentDir: join(agentRoot, 'prepare', 'agent'),
+      sdkArchive,
+      hostArchive,
+      version,
+      completed,
+      signal: controller.signal,
+      output,
+      mode: '--prepare'
+    })
+    log = openSync(join(directory, 'smoke.log'), 'a')
+    logBytes += writeSync(log, pendingOutput)
+    pendingOutput = ''
     for (let attempt = 1; attempt <= 2; attempt++) {
       controller.signal.throwIfAborted()
       const name = `attempt-${attempt}`
       const attemptDirectory = join(directory, name)
-      await mkdir(attemptDirectory)
       output(`[smoke:attempt] 开始第 ${attempt} 次验收\n`)
       try {
         await verifyAttempt({
@@ -266,7 +309,8 @@ export async function verifyNpmInstall({ root, sdkArchive, hostArchive, version 
           agentDir: join(agentRoot, name, 'agent'),
           sdkArchive,
           hostArchive,
-          version,
+          version: prepared.version,
+          piVersion: prepared.piVersion,
           completed,
           signal: controller.signal,
           output
@@ -280,18 +324,40 @@ export async function verifyNpmInstall({ root, sdkArchive, hostArchive, version 
       }
     }
   } finally {
-    clearTimeout(overallTimer)
-    process.off('SIGTERM', interrupt)
-    process.off('SIGINT', interrupt)
-    closeSync(log)
-    if (success) {
-      for (const path of [directory, agentRoot]) {
-        await rm(path, { recursive: true, force: true }).catch((error) => {
-          console.warn(`验收已通过，临时目录清理未完成：${path}；${error.message}`)
-        })
+    if (!success && log === undefined && pendingOutput) {
+      try {
+        log = openSync(join(directory, 'smoke.log'), 'a')
+        writeSync(log, pendingOutput)
+      } catch (error) {
+        console.error(`无法保存准备阶段日志：${error.message}`)
       }
-    } else {
-      console.error(`安装态命令验收失败现场：${directory}`)
+    }
+    if (log !== undefined) closeSync(log)
+    log = undefined
+    try {
+      if (success) {
+        await verifyAttempt({
+          root,
+          directory,
+          attemptDirectory: directory,
+          agentDir: agentRoot,
+          completed,
+          signal: controller.signal,
+          output,
+          mode: '--remove'
+        }).catch((error) => {
+          if (error.cleanupError) throw error
+          console.warn(
+            `验收已通过，临时目录清理未完成：${directory}、${agentRoot}；${error.message}`
+          )
+        })
+      } else {
+        console.error(`安装态命令验收失败现场：${directory}`)
+      }
+    } finally {
+      clearTimeout(overallTimer)
+      process.off('SIGTERM', interrupt)
+      process.off('SIGINT', interrupt)
     }
   }
 }
@@ -324,13 +390,16 @@ async function verifyInstalledPackage({
   hostArchive,
   version,
   attemptDirectory,
-  reused
+  reused,
+  piVersion
 }) {
   const agentDir = process.env.PI_CODING_AGENT_DIR
   const piRoot = join(directory, 'pi-runtime')
   let runtime
   let fixture
+  let failure
   try {
+    await phase('prepare', () => mkdir(attemptDirectory, { recursive: true }))
     const installed = join(directory, 'node_modules/@jetcrab/pi-desk')
     const manifest = await phase('install-host', async () => {
       if (reused.includes('install-host')) {
@@ -375,9 +444,16 @@ async function verifyInstalledPackage({
           '--no-audit',
           '--no-fund',
           '--registry=https://registry.npmjs.org',
-          '@earendil-works/pi-coding-agent@latest'
+          `@earendil-works/pi-coding-agent@${piVersion}`
         ])
       }
+      const installedPi = JSON.parse(
+        await readFile(
+          join(piRoot, 'node_modules/@earendil-works/pi-coding-agent/package.json'),
+          'utf8'
+        )
+      )
+      assert.equal(installedPi.version, piVersion, '安装的 Pi 版本必须与源码 devDependency 一致')
     })
     await prepareIsolatedPiDirectory(agentDir)
     const port = await reservePort()
@@ -480,51 +556,87 @@ async function verifyInstalledPackage({
       `独立 npm 安装、基础模式、项目搜索、关键命令及浏览器模块检查通过：${manifest.name}@${version}`
     )
   } catch (error) {
-    await writeFile(join(attemptDirectory, 'failure.log'), String(error.stack ?? error))
+    failure = error
+    process.send?.({ status: 'failed', recoverable: false, error: error.stack ?? String(error) })
+    await writeFile(join(attemptDirectory, 'failure.log'), String(error.stack ?? error)).catch(
+      (logError) => console.error('无法保存验收原始错误', logError)
+    )
     throw error
   } finally {
-    const cleanup = await phase('cleanup', () =>
-      Promise.allSettled([
-        runtime ? stopE2eServerTree(runtime) : Promise.resolve(),
-        fixture ? fixture.close() : Promise.resolve()
-      ])
-    )
-    const errors = cleanup.filter((item) => item.status === 'rejected').map((item) => item.reason)
-    if (errors.length) {
-      await writeFile(join(attemptDirectory, 'cleanup.log'), errors.map(String).join('\n'))
-      console.warn('安装验收最终收尾未完成，保留功能验收结果', errors)
+    try {
+      await phase('cleanup', async () => {
+        const cleanup = await Promise.allSettled([
+          runtime ? stopE2eServerTree(runtime) : Promise.resolve(),
+          fixture ? fixture.close() : Promise.resolve()
+        ])
+        const errors = cleanup
+          .filter((item) => item.status === 'rejected')
+          .map((item) => item.reason)
+        if (errors.length) {
+          await writeFile(
+            join(attemptDirectory, 'cleanup.log'),
+            errors.map((error) => error.stack ?? String(error)).join('\n')
+          ).catch((logError) => console.error('无法保存收尾错误', logError))
+          throw new AggregateError(errors, '安装验收最终收尾未完成')
+        }
+      })
+    } catch (cleanupError) {
+      if (!failure) throw cleanupError
+      console.error('安装验收收尾失败，保留原始错误', cleanupError)
     }
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const worker = process.argv[2] === '--worker'
-  const [directory, sdk, host, version, attemptDirectory, reused] = process.argv.slice(3)
-  const action = worker
-    ? verifyInstalledPackage({
-        directory,
-        sdkArchive: sdk,
-        hostArchive: host,
-        version,
-        attemptDirectory,
-        reused: JSON.parse(reused)
-      })
-    : (async () => {
-        const [sdkArchive, hostArchive] = process.argv.slice(2)
-        assert.ok(
-          sdkArchive && hostArchive && process.argv.length === 4,
-          '用法：verify-npm-install.mjs <sdk.tgz> <host.tgz>'
-        )
-        const manifest = readNpmArchiveManifest(hostArchive)
-        assert.equal(manifest.name, '@jetcrab/pi-desk')
-        await verifyNpmInstall({
-          root: resolve(import.meta.dirname, '../..'),
-          sdkArchive: resolve(sdkArchive),
-          hostArchive: resolve(hostArchive),
-          version: manifest.version
+  const mode = process.argv[2]
+  const [directory, sdk, host, version, attemptDirectory, reused, piVersion] = process.argv.slice(3)
+  const action =
+    mode === '--prepare'
+      ? phase('prepare', async () => {
+          await mkdir(attemptDirectory, { recursive: true })
+          // 归档和源码输入只在受监督的子进程读取，tar 同步阻塞不影响父进程截止。
+          const manifest = readNpmArchiveManifest(host)
+          assert.equal(manifest.name, '@jetcrab/pi-desk')
+          if (version) assert.equal(manifest.version, version)
+          const source = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8'))
+          const piVersion = source.devDependencies?.['@earendil-works/pi-coding-agent']
+          assert.match(
+            piVersion ?? '',
+            /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/,
+            'Pi devDependency 必须为精确版本'
+          )
+          process.send({ prepared: { version: manifest.version, piVersion } })
         })
-      })()
+      : mode === '--remove'
+        ? phase('remove', async () => {
+            for (const path of [directory, process.env.PI_CODING_AGENT_DIR]) {
+              await rm(path, { recursive: true, force: true })
+            }
+          })
+        : mode === '--worker'
+          ? verifyInstalledPackage({
+              directory,
+              sdkArchive: sdk,
+              hostArchive: host,
+              version,
+              attemptDirectory,
+              reused: JSON.parse(reused),
+              piVersion
+            })
+          : (async () => {
+              const [sdkArchive, hostArchive] = process.argv.slice(2)
+              assert.ok(
+                sdkArchive && hostArchive && process.argv.length === 4,
+                '用法：verify-npm-install.mjs <sdk.tgz> <host.tgz>'
+              )
+              await verifyNpmInstall({
+                root: resolve(import.meta.dirname, '../..'),
+                sdkArchive: resolve(sdkArchive),
+                hostArchive: resolve(hostArchive)
+              })
+            })()
   action.catch((error) => {
+    process.send?.({ status: 'failed', recoverable: false, error: error.stack ?? String(error) })
     console.error(error)
     process.exitCode = 1
   })

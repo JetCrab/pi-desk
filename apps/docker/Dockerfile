@@ -4,12 +4,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/pi-desk
 COPY host/ ./
-RUN npm install --omit=dev --no-audit --no-fund --loglevel=info \
+RUN npm ci --omit=dev --no-audit --no-fund --loglevel=info \
     && rm host.tgz sdk.tgz \
     && npm cache clean --force
 WORKDIR /opt/pi-runtime
-COPY pi/package.json ./
-RUN npm install --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=info \
+COPY pi/package.json pi/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=info \
     && npm cache clean --force
 RUN npm install --global --ignore-scripts --no-audit --no-fund pnpm@10.15.0 \
     && npm cache clean --force

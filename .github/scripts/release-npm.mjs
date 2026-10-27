@@ -5,7 +5,9 @@ import { existsSync } from 'node:fs'
 import { appendFile, cp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { npmTagFor, versionParts } from './npm-channel.mjs'
+import { assertDevelopmentTags, npmTagFor, versionParts } from './npm-channel.mjs'
+
+export { assertDevelopmentTags } from './npm-channel.mjs'
 
 const registry = 'https://registry.npmjs.org'
 const sdkName = '@jetcrab/pi-desk-sdk'
@@ -452,14 +454,6 @@ async function prepare(entries, output) {
       `## 已验证 npm 制品\n\n${entries.map((entry) => `- ${entry.manifest.name}@${entry.manifest.version}`).join('\n')}\n`
     )
   }
-}
-
-export function assertDevelopmentTags(tags, name, version) {
-  assert.ok(
-    typeof tags.latest === 'string' && /^\d+\.\d+\.\d+$/.test(tags.latest),
-    `${name} 尚无稳定 latest，开发制品已构建但不能发布；请先完成首次正式发布`
-  )
-  if (version) assert.equal(tags.dev, version, `${name} 的 dev 标签未指向本次版本`)
 }
 
 async function readRegistry(url, { method = 'GET', deadline = Date.now() + 96_000 } = {}) {

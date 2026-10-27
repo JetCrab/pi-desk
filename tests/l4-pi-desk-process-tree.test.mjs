@@ -14,6 +14,14 @@ const execFileAsync = promisify(execFile)
 const testRoot = resolve('temp/tests/pi-desk-process-tree', String(process.pid))
 const spawnedRoots = new Set()
 const spawnedChildren = new Set()
+// 原生终止可能依次执行 taskkill 和孤儿快照；外层还需容纳准备、观察及 after 清理。
+const windowsTreeBudget = {
+  prepare: 5_000,
+  terminate: 2 * 15_000,
+  observe: 5_000,
+  cleanup: 2 * 15_000
+}
+const windowsTreeTimeout = Object.values(windowsTreeBudget).reduce((sum, value) => sum + value, 0)
 
 function delay(milliseconds) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds))
@@ -31,21 +39,17 @@ async function withTimeout(promise, label, timeoutMs = 5_000) {
   })
 }
 
-async function waitForFile(path, label) {
-  await withTimeout(
-    (async () => {
-      while (true) {
-        try {
-          await readFile(path, 'utf8')
-          return
-        } catch (error) {
-          if (error.code !== 'ENOENT') throw error
-          await delay(20)
-        }
-      }
-    })(),
-    label
-  )
+async function waitForFile(path, label, deadline) {
+  while (Date.now() < deadline) {
+    try {
+      await readFile(path, 'utf8')
+      return
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+      await delay(20)
+    }
+  }
+  throw new Error(`${label}等待超时`)
 }
 
 async function spawnProcessTree(mode, root) {
@@ -74,13 +78,14 @@ async function spawnProcessTree(mode, root) {
       }
     })
   `
+  const deadline = Date.now() + windowsTreeBudget.prepare
   const rootChild = spawn(process.execPath, ['-e', rootScript], {
     stdio: 'ignore',
     windowsHide: true
   })
   spawnedRoots.add(rootChild)
-  await waitForFile(rootPidFile, `${mode} root PID`)
-  await waitForFile(childPidFile, `${mode} child PID`)
+  await waitForFile(rootPidFile, `${mode} root PID`, deadline)
+  await waitForFile(childPidFile, `${mode} child PID`, deadline)
   const childPid = Number((await readFile(childPidFile, 'utf8')).trim())
   spawnedChildren.add(childPid)
   return {
@@ -105,7 +110,7 @@ test(
   'Windows清理仍存活managed root时终止整棵进程树',
   {
     skip: process.platform !== 'win32',
-    timeout: 15_000
+    timeout: windowsTreeTimeout
   },
   async (context) => {
     const root = join(testRoot, 'live-root')
@@ -132,7 +137,7 @@ test(
   'Windows root先退出时按旧ParentProcessId清理仍存活的孙进程',
   {
     skip: process.platform !== 'win32',
-    timeout: 15_000
+    timeout: windowsTreeTimeout
   },
   async (context) => {
     const root = join(testRoot, 'orphan-root')
@@ -153,19 +158,15 @@ test(
     assert.equal(await processExists(tree.rootPid), false)
     assert.equal(await processExists(tree.childPid), true)
     await terminateManagedTree(tree.rootChild)
-    await withTimeout(
-      (async () => {
-        while (await processExists(tree.childPid)) await delay(25)
-      })(),
-      'orphan child exit'
-    )
+    const deadline = Date.now() + windowsTreeBudget.observe
+    while (processExists(tree.childPid) && Date.now() < deadline) await delay(25)
     assert.equal(await processExists(tree.childPid), false)
   }
 )
 
 test(
   'Windows已退出且没有子进程的命令可以正常完成清理',
-  { skip: process.platform !== 'win32', timeout: 15_000 },
+  { skip: process.platform !== 'win32', timeout: windowsTreeTimeout },
   async () => {
     const child = spawn(process.execPath, ['-e', 'process.exit(0)'], {
       stdio: 'ignore',
@@ -180,7 +181,7 @@ test(
 
 test(
   'Windows孤儿进程清理不依赖CIM或WMI查询',
-  { skip: process.platform !== 'win32', timeout: 15_000 },
+  { skip: process.platform !== 'win32', timeout: windowsTreeTimeout },
   async (context) => {
     const source = await readFile(
       new URL('../src/server/l4_foundation/process/l4-process-tree.js', import.meta.url),
@@ -224,7 +225,7 @@ test(
 
 test(
   'Windows孤儿清理拒绝仍存活的根PID并保留其子进程',
-  { skip: process.platform !== 'win32', timeout: 15_000 },
+  { skip: process.platform !== 'win32', timeout: windowsTreeTimeout },
   async (context) => {
     const root = join(testRoot, 'root-identity')
     await mkdir(root, { recursive: true })
@@ -263,7 +264,8 @@ test('Windows孤儿清理失败保留执行阶段、耗时及底层异常', asyn
     require(name) {
       if (name !== 'node:child_process') return require(name)
       return {
-        execFile(_file, _args, _options, callback) {
+        execFile(_file, _args, options, callback) {
+          assert.equal(options.timeout, 15_000, '原生清理预算保持独立，不由外层提前取消')
           queueMicrotask(() => callback(failure))
         }
       }

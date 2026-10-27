@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
+import { assertDevelopmentTags } from './npm-channel.mjs'
 
-export async function readPublishedVersions(name, fetchImpl = fetch) {
+export async function readPublishedVersions(
+  name,
+  fetchImpl = fetch,
+  { requireStableLatest = false } = {}
+) {
   assert.match(name, /^@jetcrab\/pi-desk(?:-[a-z0-9-]+)?$/)
   const response = await fetchImpl(
     `https://registry.npmjs.org/${encodeURIComponent(name)}?devVersions=${Date.now()}`,
@@ -13,7 +18,10 @@ export async function readPublishedVersions(name, fetchImpl = fetch) {
   })
   if (!response.ok) {
     await response.body?.cancel()
-    if (response.status === 404) return []
+    if (response.status === 404) {
+      if (requireStableLatest) assertDevelopmentTags({}, name)
+      return []
+    }
     throw new Error(`无法读取 ${name} 的已发布版本：HTTP ${response.status}`)
   }
   const chunks = []
@@ -35,5 +43,6 @@ export async function readPublishedVersions(name, fetchImpl = fetch) {
       !Array.isArray(metadata.versions),
     `${name} 的已发布版本清单无效`
   )
+  if (requireStableLatest) assertDevelopmentTags(metadata['dist-tags'] ?? {}, name)
   return Object.keys(metadata.versions)
 }

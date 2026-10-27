@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import childProcess from 'node:child_process'
 import { once } from 'node:events'
-import fs, { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { syncBuiltinESMExports } from 'node:module'
-import { basename, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { pathToFileURL } from 'node:url'
 import { verifyNpmInstall } from '../.github/scripts/verify-npm-install.mjs'
 import { waitForPortReleased } from './l4-browser-cdp-runtime.mjs'
 import { selectCiChecks } from '../.github/scripts/select-ci-checks.mjs'
@@ -85,10 +86,24 @@ test('安装态验收在 Job 超时前结束并为失败和取消保留现场', 
   assert.ok(upload.with.path.includes('temp/run/npm-release/'))
 })
 
-async function withVerificationWorker(t, scenarios, check) {
+async function withVerificationWorker(t, scenarios, check, modes = ['--worker']) {
   const parent = resolve(import.meta.dirname, '../temp/run/npm-release')
   await mkdir(parent, { recursive: true })
   const root = await mkdtemp(join(parent, 'recovery-'))
+  await mkdir(join(root, 'package'), { recursive: true })
+  await writeFile(
+    join(root, 'package/package.json'),
+    JSON.stringify({ name: '@jetcrab/pi-desk', version: '1.0.0' })
+  )
+  await writeFile(
+    join(root, 'package.json'),
+    JSON.stringify({ devDependencies: { '@earendil-works/pi-coding-agent': '1.2.0' } })
+  )
+  const archive = join(root, 'host.tgz')
+  await execute(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-czf', 'host.tgz', 'package'], {
+    cwd: root,
+    timeout: 5_000
+  })
   const spawn = childProcess.spawn
   const launches = []
   const pending = []
@@ -97,7 +112,7 @@ async function withVerificationWorker(t, scenarios, check) {
     pending.length ? Promise.resolve(pending.shift()) : new Promise((done) => waiting.push(done))
   let passed = false
   const replacement = t.mock.method(childProcess, 'spawn', (command, args, options) => {
-    if (args[1] !== '--worker') return spawn(command, args, options)
+    if (!modes.includes(args[1])) return spawn(command, args, options)
     const scenario = scenarios[launches.length]
     assert.ok(scenario, '不得超出授权的自动恢复次数')
     const script = `
@@ -105,6 +120,7 @@ async function withVerificationWorker(t, scenarios, check) {
       const { mkdirSync, writeFileSync } = require('node:fs')
       const { join } = require('node:path')
       const directory = process.argv[1]
+      mkdirSync(directory, { recursive: true })
       const [kind, phase] = process.argv[2].split(':')
       if (phase === 'install-pi' || phase === 'commands') process.send({ phase: 'install-host', status: 'complete' })
       if (phase === 'commands') process.send({ phase: 'install-pi', status: 'complete' })
@@ -130,7 +146,7 @@ async function withVerificationWorker(t, scenarios, check) {
             process.send({ phase: 'commands', status: 'complete' })
           } else if (phase === 'cleanup') {
             writeFileSync(join(directory, 'failure.log'), '最初的验收错误\\n')
-            process.send({ phase: 'commands', status: 'failed', recoverable: false })
+            process.send({ phase: 'commands', status: 'failed', recoverable: false, error: '最初的验收错误' })
           }
           process.send({ phase })
           console.log('阻塞前的命令输出')
@@ -152,7 +168,8 @@ async function withVerificationWorker(t, scenarios, check) {
       directory: args[2],
       attemptDirectory: args[6],
       reused: JSON.parse(args[7]),
-      agentDir: options.env.PI_CODING_AGENT_DIR
+      agentDir: options.env.PI_CODING_AGENT_DIR,
+      piVersion: args[8]
     }
     launches.push(launch)
     if (waiting.length) waiting.shift()(launch)
@@ -164,8 +181,8 @@ async function withVerificationWorker(t, scenarios, check) {
   try {
     const verification = verifyNpmInstall({
       root,
-      sdkArchive: 'sdk.tgz',
-      hostArchive: 'host.tgz',
+      sdkArchive: archive,
+      hostArchive: archive,
       version: '1.0.0'
     })
     verification.catch(() => undefined)
@@ -253,6 +270,7 @@ test(
         const second = await next()
         await second.ready
         assert.deepEqual(second.reused, ['install-host', 'install-pi'])
+        assert.equal(second.piVersion, '1.2.0', 'Pi 输入取本次源码的精确 devDependency')
         assert.equal(second.directory, first.directory)
         assert.notEqual(second.agentDir, first.agentDir)
         assert.notEqual(second.attemptDirectory, first.attemptDirectory)
@@ -287,7 +305,7 @@ test('确定性的校验失败不重试，也不能因清理超时掩盖原始�
     await first.ready
     const state = JSON.parse(await readFile(join(first.attemptDirectory, 'state.json'), 'utf8'))
     t.mock.timers.tick(90_000)
-    await assert.rejects(verification, /验收阶段超时：释放验收资源/)
+    await assert.rejects(verification, /最初的验收错误/)
     t.mock.timers.reset()
     await assertWorkerReleased(first, state)
     assert.equal(launches.length, 1)
@@ -317,23 +335,16 @@ test('功能验收通过后收尾卡住，强制释放成功就保留验收结�
 })
 
 test('验收成功后临时目录删除失败只告警，不推翻验收', { timeout: 30_000 }, async (t) => {
-  const remove = fs.rm
-  const replacement = t.mock.method(fs, 'rm', async (path, options) => {
-    if (basename(String(path)).startsWith('installed-')) {
-      throw Object.assign(new Error('受控目录占用'), { code: 'EBUSY' })
-    }
-    return remove(path, options)
-  })
-  syncBuiltinESMExports()
-  t.after(() => {
-    replacement.mock.restore()
-    syncBuiltinESMExports()
-  })
   const warning = t.mock.method(console, 'warn', () => {})
-  await withVerificationWorker(t, ['success'], async ({ verification }) => {
-    await verification
-  })
-  assert.equal(warning.mock.calls.length, 2)
+  await withVerificationWorker(
+    t,
+    ['success', 'assertion:remove'],
+    async ({ verification }) => {
+      await verification
+    },
+    ['--worker', '--remove']
+  )
+  assert.equal(warning.mock.calls.length, 1)
   assert.ok(
     warning.mock.calls.every(({ arguments: args }) => args[0].includes('临时目录清理未完成'))
   )
@@ -362,6 +373,177 @@ test('安装态验收正常结束时清理本次日志与隔离 Agent 目录', {
     assert.deepEqual(await readdir(join(root, 'temp/run/npm-release')), [])
     assert.deepEqual(await readdir(join(root, 'temp/pi/npm-release')), [])
   })
+})
+
+test('读取入口阻塞也在监督截止内终止，保留阶段和后代释放证据', { timeout: 30_000 }, async (t) => {
+  await withVerificationWorker(
+    t,
+    ['hang:prepare'],
+    async ({ verification, next, launches }) => {
+      const launch = await next()
+      await launch.ready
+      const state = JSON.parse(await readFile(join(launch.attemptDirectory, 'state.json'), 'utf8'))
+      t.mock.timers.tick(60_000)
+      await assert.rejects(verification, /验收阶段超时：准备验收/)
+      t.mock.timers.reset()
+      await assertWorkerReleased(launch, state)
+      assert.equal(launches.length, 1)
+    },
+    ['--prepare']
+  )
+})
+
+test('总预算耗尽终止正在执行的尝试，不再恢复', { timeout: 30_000 }, async (t) => {
+  await withVerificationWorker(t, ['hang:commands'], async ({ verification, next, launches }) => {
+    const launch = await next()
+    await launch.ready
+    const state = JSON.parse(await readFile(join(launch.attemptDirectory, 'state.json'), 'utf8'))
+    for (let index = 0; index < 4; index++) {
+      launch.worker.emit('message', { phase: 'install-host' })
+      t.mock.timers.tick(239_000)
+    }
+    launch.worker.emit('message', { phase: 'commands' })
+    t.mock.timers.tick(64_000)
+    await assert.rejects(verification, /完整生命周期上限 18 分钟/)
+    t.mock.timers.reset()
+    await assertWorkerReleased(launch, state)
+    assert.equal(launches.length, 1)
+  })
+})
+
+test('目录删除阻塞有独立截止，底层命令和端口释放后才返回', { timeout: 30_000 }, async (t) => {
+  const warning = t.mock.method(console, 'warn', () => {})
+  await withVerificationWorker(
+    t,
+    ['success', 'hang:remove'],
+    async ({ verification, next }) => {
+      await (
+        await next()
+      ).ready
+      const launch = await next()
+      await launch.ready
+      const state = JSON.parse(await readFile(join(launch.attemptDirectory, 'state.json'), 'utf8'))
+      t.mock.timers.tick(10_000)
+      await verification
+      t.mock.timers.reset()
+      await assertWorkerReleased(launch, state)
+      assert.match(warning.mock.calls[0].arguments[0], /删除验收临时目录/)
+    },
+    ['--worker', '--remove']
+  )
+})
+
+test('Pi 安装只使用源码精确版本，并在实际安装版本不符时阻断', { timeout: 30_000 }, async (t) => {
+  const parent = resolve(import.meta.dirname, '../temp/run/npm-release')
+  await mkdir(parent, { recursive: true })
+  const root = await mkdtemp(join(parent, 'pi-input-'))
+  let passed = false
+  const spawn = childProcess.spawn
+  const preload = join(root, 'controlled-install.mjs')
+  await writeFile(
+    preload,
+    `
+    import childProcess from 'node:child_process'
+    import fs from 'node:fs'
+    import promises from 'node:fs/promises'
+    import { join } from 'node:path'
+    import { syncBuiltinESMExports } from 'node:module'
+    const directory = process.argv[3]
+    const original = childProcess.execFileSync
+    childProcess.execFileSync = (file, args, options) => {
+      if (!['npm', 'cmd.exe'].includes(file)) return original(file, args, options)
+      fs.appendFileSync(${JSON.stringify(join(root, 'commands.log'))}, JSON.stringify([file, args]) + '\\n')
+      const pi = args.join(' ').includes('@earendil-works/pi-coding-agent@')
+      const target = pi ? join(directory, 'pi-runtime/node_modules/@earendil-works/pi-coding-agent') : join(directory, 'node_modules/@jetcrab/pi-desk')
+      fs.mkdirSync(target, { recursive: true })
+      fs.writeFileSync(join(target, 'package.json'), JSON.stringify({ name: pi ? '@earendil-works/pi-coding-agent' : '@jetcrab/pi-desk', version: pi ? process.env.CONTROLLED_PI_VERSION : '1.0.0-dev' }))
+      if (!pi) fs.writeFileSync(join(directory, 'package-lock.json'), JSON.stringify({ packages: {} }))
+      return ''
+    }
+    const mkdir = promises.mkdir
+    promises.mkdir = (path, options) => {
+      if (String(path) === join(process.env.PI_CODING_AGENT_DIR, 'sessions')) throw new Error('受控运行前停止')
+      return mkdir(path, options)
+    }
+    const settle = Promise.allSettled
+    if (process.env.CONTROLLED_PI_VERSION === '1.2.0') {
+      Promise.allSettled = async (operations) => [
+        ...await settle.call(Promise, operations),
+        { status: 'rejected', reason: new Error('受控收尾失败') }
+      ]
+    }
+    syncBuiltinESMExports()
+  `
+  )
+  let firstAttemptDirectory
+  let installedVersion
+  const replacement = t.mock.method(childProcess, 'spawn', (command, args, options) => {
+    if (args[1] !== '--worker') return spawn(command, args, options)
+    firstAttemptDirectory ??= args[6]
+    return spawn(command, ['--import', pathToFileURL(preload).href, ...args], {
+      ...options,
+      env: { ...options.env, CONTROLLED_PI_VERSION: installedVersion }
+    })
+  })
+  syncBuiltinESMExports()
+  try {
+    await mkdir(join(root, 'package'))
+    await writeFile(
+      join(root, 'package/package.json'),
+      JSON.stringify({ name: '@jetcrab/pi-desk', version: '1.0.0-dev' })
+    )
+    await execute(
+      process.platform === 'win32' ? 'tar.exe' : 'tar',
+      ['-czf', 'host.tgz', 'package'],
+      { cwd: root, timeout: 5_000 }
+    )
+    for (const [declared, installed, expected] of [
+      ['1.2.0', '1.2.0', /受控运行前停止/],
+      ['1.2.0', '9.9.9', /安装的 Pi 版本必须与源码 devDependency 一致/],
+      ['^1.2.0', '1.2.0', /Pi devDependency 必须为精确版本/]
+    ]) {
+      await writeFile(
+        join(root, 'package.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          devDependencies: { '@earendil-works/pi-coding-agent': declared }
+        })
+      )
+      installedVersion = installed
+      await assert.rejects(
+        verifyNpmInstall({
+          root,
+          sdkArchive: join(root, 'host.tgz'),
+          hostArchive: join(root, 'host.tgz')
+        }),
+        expected
+      )
+    }
+    assert.match(
+      await readFile(join(firstAttemptDirectory, 'failure.log'), 'utf8'),
+      /受控运行前停止/
+    )
+    assert.match(await readFile(join(firstAttemptDirectory, 'cleanup.log'), 'utf8'), /受控收尾失败/)
+    const commands = (await readFile(join(root, 'commands.log'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(JSON.parse)
+    assert.equal(commands.length, 4, '范围版本在调用 npm 前就失败')
+    const piCommands = commands.filter(([, args]) =>
+      args.join(' ').includes('@earendil-works/pi-coding-agent@')
+    )
+    assert.equal(piCommands.length, 2)
+    for (const [, args] of piCommands) {
+      assert.match(args.join(' '), /@earendil-works\/pi-coding-agent@1\.2\.0/)
+      assert.doesNotMatch(args.join(' '), /@latest/)
+    }
+    passed = true
+  } finally {
+    replacement.mock.restore()
+    syncBuiltinESMExports()
+    if (passed) await rm(root, { recursive: true, force: true })
+    else console.error(`Pi 安装输入测试现场：${root}`)
+  }
 })
 
 test('Source checks 在两个平台执行核心与真实命令验收', async () => {
