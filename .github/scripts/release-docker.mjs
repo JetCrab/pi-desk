@@ -190,8 +190,9 @@ export async function runDockerInputCommand(tool, args, { cwd, phase, timeout })
     cwd,
     detached: process.platform !== 'win32',
     windowsHide: true,
-    stdio: ['ignore', 'inherit', 'pipe']
+    stdio: ['ignore', 'pipe', 'pipe']
   })
+  child.stdout.on('data', (chunk) => process.stdout.write(chunk))
   let stderr = ''
   child.stderr.on('data', (chunk) => {
     process.stderr.write(chunk)
@@ -244,6 +245,7 @@ export async function runDockerInputCommand(tool, args, { cwd, phase, timeout })
         `${error.message}\n进程释放失败：${cleanupError.message}`
       )
     } finally {
+      child.stdout.destroy()
       child.stderr.destroy()
       child.unref()
     }

@@ -245,10 +245,14 @@ test(
 
 test('命令非零退出保留阶段、退出码与stderr', async (t) => {
   const { directory } = await fixture(t)
+  const output = t.mock.method(process.stdout, 'write', () => true)
   await assert.rejects(
     runDockerInputCommand(
       process.execPath,
-      ['-e', "process.stderr.write('registry unavailable');process.exit(9)"],
+      [
+        '-e',
+        "console.log('command progress');process.stderr.write('registry unavailable');process.exit(9)"
+      ],
       {
         cwd: directory,
         phase: 'lock-pi',
@@ -256,6 +260,9 @@ test('命令非零退出保留阶段、退出码与stderr', async (t) => {
       }
     ),
     /docker:lock-pi.*退出码=9[\s\S]*registry unavailable/
+  )
+  assert.ok(
+    output.mock.calls.some(({ arguments: args }) => String(args[0]).includes('command progress'))
   )
 })
 
