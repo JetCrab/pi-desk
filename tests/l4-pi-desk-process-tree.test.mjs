@@ -110,7 +110,8 @@ async function runWindowsSnapshotFixture({
   rows,
   live = false,
   bare = false,
-  rootIsHelper = false
+  rootIsHelper = false,
+  exitDuringIdentity = false
 }) {
   const source = await readFile(
     new URL('../src/server/l4_foundation/process/l4-process-tree.js', import.meta.url),
@@ -149,8 +150,13 @@ function Open-FakeProcess {
     $ticks = $times[[Math]::Min($read, $times.Count - 1)]
     $p = [PSCustomObject]@{ Id = $Id; HasExited = $false; StartTicks = $null }
     if ($null -ne $ticks) { $p.StartTicks = [long]$ticks }
+    if ($${exitDuringIdentity} -and $Id -eq 333 -and $read -gt 0) {
+        $p.PSObject.Properties.Remove('HasExited')
+        $p | Add-Member NoteProperty ExitReads 0
+        $p | Add-Member ScriptProperty HasExited { $this.ExitReads++; return $this.ExitReads -gt 1 } { param($value) $this.ExitReads = 2 }
+    }
     $p | Add-Member -MemberType ScriptMethod -Name Kill -Value {
-        [void]$script:kills.Add([int]$this.Id)
+        if (-not $this.HasExited) { [void]$script:kills.Add([int]$this.Id) }
         $this.HasExited = $true
     }
     $p | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($ms) return $true }
@@ -232,6 +238,12 @@ test(
         name: '合法孤儿按子进程先于父进程的顺序清理',
         rows: [owner, ancestor, [333, 111, [110_000]], [444, 333, [120_000]]],
         kills: [444, 333]
+      },
+      {
+        name: '候选检查后自然退出仍可从原句柄验证身份',
+        rows: [owner, ancestor, [333, 111, [110_000]]],
+        exitDuringIdentity: true,
+        kills: []
       },
       {
         name: 'PID创建时间只变化一个Tick也拒绝终止新代际',

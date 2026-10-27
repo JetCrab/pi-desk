@@ -192,7 +192,8 @@ public static class PiDeskProcessSnapshot
     '[Console]::Out.WriteLine("snapshot-read: $($clock.ElapsedMilliseconds)ms")',
     'function Open-ManagedProcess($processId) { [PiDeskProcessSnapshot]::Open($processId) }',
     String.raw`function Read-CreationTicks($p) {
-    if (-not $p -or $p.HasExited) { throw "Process has exited" }
+    if (-not $p) { throw "Process handle unavailable" }
+    # 已持有句柄在进程退出后仍保留创建时间，不能把退出竞争当作身份失败。
     $ticks = $p.StartTicks
     if ($null -eq $ticks -or $ticks -le 0) { throw "Process creation time unavailable" }
     return [long]$ticks
