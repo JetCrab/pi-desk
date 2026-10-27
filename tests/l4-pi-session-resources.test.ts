@@ -12,6 +12,7 @@ type ResourcesModule = typeof import('../src/server/l4_foundation/pi/l4-pi-sessi
 const require = createRequire(import.meta.url)
 const jiti = createJiti(import.meta.url, {
   moduleCache: false,
+  tsconfigPaths: fileURLToPath(new URL('../tsconfig.json', import.meta.url)),
   alias: { 'server-only': join(dirname(require.resolve('server-only')), 'empty.js') }
 })
 

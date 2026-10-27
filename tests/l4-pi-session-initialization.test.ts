@@ -50,6 +50,16 @@ async function loadModules(): Promise<[PiModule, WorkerModule]> {
   ])
 }
 
+async function pluginErrors(cwd: string): Promise<string> {
+  const { readL4PiPluginNativeDiagnostics } = await jiti.import<
+    typeof import('../src/server/l4_foundation/pi/l4-pi-plugin-native-diagnostic')
+  >('../src/server/l4_foundation/pi/l4-pi-plugin-native-diagnostic.ts')
+  return readL4PiPluginNativeDiagnostics()
+    .filter((item) => item.cwd === cwd)
+    .map((item) => item.message)
+    .join('\n')
+}
+
 async function loadWorkSessionModule(): Promise<WorkSessionModule> {
   return jiti.import<WorkSessionModule>('../src/server/l3_modules/work-session/l3-work-session.ts')
 }
@@ -282,7 +292,7 @@ export default function initializationFixture(pi) {
 }
 `
 
-test('降级保持L3 WorkSession的workId、sessionId和branchId不变', { timeout: 20_000 }, async () => {
+test('跳过失败插件保持正常会话及L3 WorkSession身份不变', { timeout: 20_000 }, async () => {
   const savedEnvironment = savePiEnvironment()
   const paths = await prepareFixture('work-session-source-stability')
   let runtime: PiWorkSessionRuntime | undefined
@@ -311,8 +321,9 @@ test('降级保持L3 WorkSession的workId、sessionId和branchId不变', { timeo
     })
     const worker = Reflect.get(runtime, 'chatWorker') as Worker
     const chatRuntime = await worker.getRuntime()
-    assert.equal(chatRuntime.extensionMode, 'basic')
-    assert.match(chatRuntime.initializationError ?? '', /work-session source fixture failure/)
+    assert.equal(chatRuntime.extensionMode, 'normal')
+    assert.equal(chatRuntime.initializationError, null)
+    assert.match(await pluginErrors(paths.cwd), /work-session source fixture failure/)
     assert.deepEqual(
       {
         workId: workSession.workId,
@@ -399,7 +410,7 @@ test('Pi Session 初始化真实恢复历史模型并合并并发打开请求', 
 })
 
 test(
-  '插件import、factory和session_start错误均降级到基础会话并保留诊断',
+  '插件import、factory和session_start错误仅记录局部诊断，健康扩展继续工作',
   { timeout: 45_000 },
   async () => {
     const savedEnvironment = savePiEnvironment()
@@ -426,16 +437,25 @@ test(
         let succeeded = false
         try {
           await writeExtension(paths, scenario.source)
+          await writeFile(
+            join(paths.agentDir, 'extensions/healthy.ts'),
+            `export default function (pi) {
+              pi.registerCommand('healthy', { description: 'fixture', handler: async () => {} })
+            }`
+          )
           setPiEnvironment(paths)
           const manager = SessionManager.create(paths.cwd, paths.sessionDir)
           const sessionId = manager.getSessionId()
           worker = new L4PiChatWorker(paths.cwd, manager)
           const runtime = await worker.getRuntime()
-          assert.equal(runtime.extensionMode, 'basic', scenario.name)
-          assert.ok(runtime.initializationError?.includes('fixture failure'), scenario.name)
-          assert.match(runtime.initializationError ?? '', /插件 initialization-fixture/)
-          assert.match(runtime.initializationError ?? '', /来源：/)
-          assert.match(runtime.initializationError ?? '', /当前步骤耗时：/)
+          assert.equal(runtime.extensionMode, 'normal', scenario.name)
+          assert.equal(runtime.initializationError, null)
+          const diagnostic = await pluginErrors(paths.cwd)
+          assert.match(diagnostic, /fixture failure/)
+          assert.match(diagnostic, /插件 initialization-fixture/)
+          assert.match(diagnostic, /来源：/)
+          assert.match(diagnostic, /当前步骤耗时：/)
+          assert.ok((await worker.listNativeCommands()).some((item) => item.name === 'healthy'))
           assert.equal(runtime.model?.provider, 'local-fixture')
           assert.equal(manager.getSessionId(), sessionId)
           assert.ok(Reflect.get(worker, 'session'))
@@ -451,7 +471,7 @@ test(
   }
 )
 
-test('默认重载重新启用扩展并清诊断，再次失败仍回到basic', { timeout: 45_000 }, async () => {
+test('默认重载可重试失败扩展，再次失败也不降级整个会话', { timeout: 45_000 }, async () => {
   const savedEnvironment = savePiEnvironment()
   const paths = await prepareFixture('reload-recovery')
   const globalState = globalThis as Record<string, unknown>
@@ -468,8 +488,9 @@ test('默认重载重新启用扩展并清诊断，再次失败仍回到basic', 
     const manager = SessionManager.create(paths.cwd, paths.sessionDir)
     worker = new L4PiChatWorker(paths.cwd, manager)
     const failed = await worker.getRuntime()
-    assert.equal(failed.extensionMode, 'basic')
-    assert.match(failed.initializationError ?? '', /reload fixture failure/)
+    assert.equal(failed.extensionMode, 'normal')
+    assert.equal(failed.initializationError, null)
+    assert.match(await pluginErrors(paths.cwd), /reload fixture failure/)
 
     recordAt(globalState, initMarker).fail = false
     await worker.reload()
@@ -481,8 +502,9 @@ test('默认重载重新启用扩展并清诊断，再次失败仍回到basic', 
     recordAt(globalState, initMarker).fail = true
     await worker.reload()
     const failedAgain = await worker.getRuntime()
-    assert.equal(failedAgain.extensionMode, 'basic')
-    assert.match(failedAgain.initializationError ?? '', /reload fixture failure/)
+    assert.equal(failedAgain.extensionMode, 'normal')
+    assert.equal(failedAgain.initializationError, null)
+    assert.match(await pluginErrors(paths.cwd), /reload fixture failure/)
     succeeded = true
   } finally {
     await worker?.dispose()
@@ -628,7 +650,7 @@ test('官方 MCP 在会话启动后连接并随重载和基础模式释放', { t
   }
 })
 
-test('正常模式重载失败保留历史并恢复可发送的基础会话', { timeout: 45_000 }, async (t) => {
+test('重载中单插件失败保留历史、其他插件和模型发送能力', { timeout: 45_000 }, async (t) => {
   const savedEnvironment = savePiEnvironment()
   const provider = await startFakeModelServer()
   const cases = [
@@ -665,8 +687,9 @@ test('正常模式重载失败保留历史并恢复可发送的基础会话', { 
         await writeExtension(paths, scenario.source)
         await worker.reload()
         const runtime = await worker.getRuntime()
-        assert.equal(runtime.extensionMode, 'basic', scenario.name)
-        assert.match(runtime.initializationError ?? '', /reload (factory|start) broken/)
+        assert.equal(runtime.extensionMode, 'normal', scenario.name)
+        assert.equal(runtime.initializationError, null)
+        assert.match(await pluginErrors(paths.cwd), /reload (factory|start) broken/)
         assert.equal(manager.getSessionId(), sessionId)
         assert.deepEqual(
           manager.getBranch().map((entry) => entry.id),
@@ -674,7 +697,7 @@ test('正常模式重载失败保留历史并恢复可发送的基础会话', { 
         )
         assert.equal(
           (await worker.listNativeCommands()).some((command) => command.name === 'mcp'),
-          false
+          true
         )
 
         await worker.send({ mode: 'auto', text: 'continue after reload failure', images: [] })
@@ -706,7 +729,90 @@ test('正常模式重载失败保留历史并恢复可发送的基础会话', { 
   }
 })
 
-test('排队超时与插件工厂超时分别给出可定位诊断', { timeout: 150_000 }, async () => {
+test(
+  '缺失多个包且维护未结束时，多个正常会话仍能加载健康扩展、发消息和重载',
+  { timeout: 30_000 },
+  async () => {
+    const saved = savePiEnvironment()
+    const provider = await startFakeModelServer()
+    const paths = await prepareFixture(
+      'missing-during-maintenance',
+      `http://127.0.0.1:${provider.port}/v1`
+    )
+    const workers: Worker[] = []
+    let release!: () => void
+    let writing: Promise<void> | undefined
+    let succeeded = false
+    try {
+      setPiEnvironment(paths)
+      const settingsPath = join(paths.agentDir, 'settings.json')
+      const settings = JSON.parse(await readFile(settingsPath, 'utf8')) as Record<string, unknown>
+      settings.packages = ['npm:@fixture/missing-one@1.0.0', 'npm:@fixture/missing-two@1.0.0']
+      await writeFile(settingsPath, JSON.stringify(settings))
+      await writeExtension(
+        paths,
+        `export default function (pi) {
+      pi.registerCommand('healthy', { description: 'healthy fixture', handler: async () => {} })
+    }`
+      )
+      const [{ SessionManager }, { L4PiChatWorker }] = await loadModules()
+      const { runL4PiPackageRootExclusive } = await jiti.import<
+        typeof import('../src/server/l4_foundation/pi/l4-pi-package-root-gate')
+      >('../src/server/l4_foundation/pi/l4-pi-package-root-gate.ts')
+      writing = runL4PiPackageRootExclusive(
+        () =>
+          new Promise<void>((done) => {
+            release = done
+          })
+      )
+      await waitUntil(() => Boolean(release), '模拟维护已持有写锁')
+      const managers = [SessionManager.inMemory(paths.cwd), SessionManager.inMemory(paths.cwd)]
+      for (const manager of managers) workers.push(new L4PiChatWorker(paths.cwd, manager))
+      const opened = await Promise.all(workers.map((worker) => worker.getRuntime()))
+      assert.ok(
+        opened.every(
+          (runtime) => runtime.extensionMode === 'normal' && runtime.initializationError === null
+        )
+      )
+      for (const worker of workers) {
+        assert.ok((await worker.listNativeCommands()).some((item) => item.name === 'healthy'))
+        await worker.send({
+          mode: 'auto',
+          text: 'chat during broken package maintenance',
+          images: []
+        })
+      }
+      await waitUntil(
+        () =>
+          managers.every(
+            (manager, index) =>
+              manager
+                .getEntries()
+                .some((entry) => entry.type === 'message' && entry.message.role === 'assistant') &&
+              workers[index].readPluginReloadBlockReason() === null
+          ),
+        '两个会话在维护释放前均已完成发送'
+      )
+      assert.equal(provider.getRequestCount(), 2)
+      await workers[0].reload()
+      assert.equal((await workers[0].getRuntime()).extensionMode, 'normal')
+      assert.match(await pluginErrors(paths.cwd), /missing-one/)
+      assert.match(await pluginErrors(paths.cwd), /missing-two/)
+      assert.deepEqual(JSON.parse(await readFile(settingsPath, 'utf8')).packages, settings.packages)
+      assert.equal(existsSync(join(paths.agentDir, 'npm')), false, '发现缺包不能隐式安装或改写配置')
+      succeeded = true
+    } finally {
+      release?.()
+      await writing
+      for (const worker of workers) await worker.dispose()
+      await provider.close()
+      restorePiEnvironment(saved)
+      if (succeeded) await rm(paths.runRoot, { recursive: true, force: true })
+    }
+  }
+)
+
+test('维护写锁不阻塞新会话，插件工厂超时仍有可定位诊断', { timeout: 150_000 }, async () => {
   const saved = savePiEnvironment()
   const paths = await prepareFixture('timeout-diagnostics')
   const globalState = globalThis as Record<string, unknown>
@@ -731,18 +837,12 @@ test('排队超时与插件工厂超时分别给出可定位诊断', { timeout: 
     await waitUntil(() => Boolean(releaseQueue), '测试资源门已持有')
     const queuedStartedAt = performance.now()
     worker = new L4PiChatWorker(paths.cwd, SessionManager.inMemory(paths.cwd))
-    const queuedInitialization = Reflect.get(worker, 'initialization')
     const queued = await worker.getRuntime()
-    assert.ok(performance.now() - queuedStartedAt >= 60_000)
-    assert.equal(queued.extensionMode, 'basic')
-    assert.match(queued.initializationError ?? '', /等待插件资源队列/)
-    assert.doesNotMatch(queued.initializationError ?? '', /插件 initialization-fixture/)
-    assert.match(queued.initializationError ?? '', /当前步骤耗时：\d+ 毫秒/)
-    retired = Reflect.get(queuedInitialization, 'execution') as Promise<unknown>
+    assert.ok(performance.now() - queuedStartedAt < 10_000)
+    assert.equal(queued.extensionMode, 'normal')
+    assert.equal(queued.initializationError, null)
     releaseQueue!()
     await blocker
-    await retired.catch(() => undefined)
-    assert.equal((await worker.getRuntime()).initializationError, queued.initializationError)
     await worker.dispose()
     worker = undefined
 
@@ -783,7 +883,71 @@ test('排队超时与插件工厂超时分别给出可定位诊断', { timeout: 
   }
 })
 
-test('挂起初始化撤销旧访问，基础聊天接管且限制退役任务数量', { timeout: 90_000 }, async () => {
+test('退役任务上限仅约束同一个资源Owner，保留局部重试保护', { timeout: 30_000 }, async () => {
+  const saved = savePiEnvironment()
+  const paths = await prepareFixture('retired-owner-limit')
+  const globalState = globalThis as Record<string, unknown>
+  delete globalState[initMarker]
+  const workers: Worker[] = []
+  const executions: Promise<unknown>[] = []
+  let succeeded = false
+  try {
+    setPiEnvironment(paths)
+    await writeExtension(paths, hangingExtension)
+    const [{ SessionManager }, { L4PiChatWorker }] = await loadModules()
+    const { L4PiSessionResources } = await jiti.import<
+      typeof import('../src/server/l4_foundation/pi/l4-pi-session-resources')
+    >('../src/server/l4_foundation/pi/l4-pi-session-resources.ts')
+    const resources = new L4PiSessionResources()
+    for (let index = 0; index < 4; index += 1) {
+      const worker = new L4PiChatWorker(
+        paths.cwd,
+        SessionManager.inMemory(paths.cwd),
+        undefined,
+        undefined,
+        resources
+      )
+      workers.push(worker)
+      const opening = worker.getRuntime().catch(() => undefined)
+      await waitUntil(
+        () => recordsAt(globalState, initMarker)[index]?.started === true,
+        '旧实例已进入启动钩子'
+      )
+      executions.push(
+        Reflect.get(Reflect.get(worker, 'initialization'), 'execution') as Promise<unknown>
+      )
+      await worker.dispose()
+      await opening
+    }
+    recordAt(globalState, initMarker).hang = false
+    const capped = new L4PiChatWorker(
+      paths.cwd,
+      SessionManager.inMemory(paths.cwd),
+      undefined,
+      undefined,
+      resources
+    )
+    workers.push(capped)
+    assert.equal((await capped.getRuntime()).extensionMode, 'basic')
+    assert.match((await capped.getRuntime()).initializationError ?? '', /当前会话.*任务过多/)
+    const independent = new L4PiChatWorker(paths.cwd, SessionManager.inMemory(paths.cwd))
+    workers.push(independent)
+    assert.equal((await independent.getRuntime()).extensionMode, 'normal')
+    succeeded = true
+  } finally {
+    for (const instance of recordsAt(globalState, initMarker)) {
+      callIfFunction(instance, 'releaseStart')
+      callIfFunction(instance, 'releaseShutdown')
+    }
+    await Promise.allSettled(executions)
+    for (const worker of workers) await worker.dispose()
+    restorePiEnvironment(saved)
+    delete globalState[initMarker]
+    if (succeeded) await rm(paths.runRoot, { recursive: true, force: true })
+  }
+})
+
+test('挂起初始化撤销旧访问，退役任务不阻止其他会话加载插件', { timeout: 90_000 }, async () => {
   const savedEnvironment = savePiEnvironment()
   const provider = await startFakeModelServer()
   const paths = await prepareFixture('retired-limit', `http://127.0.0.1:${provider.port}/v1`)
@@ -852,13 +1016,14 @@ test('挂起初始化撤销旧访问，基础聊天接管且限制退役任务�
       assert.equal(managers[index]?.getSessionId(), initialSessionIds[index])
       assert.deepEqual(runtimes[index]?.[1], runtime)
     }
-    const initialInstances = recordsAt(globalState, initMarker)
+    const initialInstances = [...recordsAt(globalState, initMarker)]
     assert.equal(initialInstances.length, initialSessionIds.length)
     assert.deepEqual(
       new Set(initialInstances.map((instance) => instance.sessionId)),
       new Set(initialSessionIds)
     )
 
+    recordAt(globalState, initMarker).hang = false
     const fifthCwd = join(paths.runRoot, 'project-4')
     await mkdir(fifthCwd, { recursive: true })
     const fifthManager = SessionManager.create(fifthCwd, paths.sessionDir)
@@ -867,9 +1032,9 @@ test('挂起初始化撤销旧访问，基础聊天接管且限制退役任务�
     workers.push(fifthWorker)
     eventLists.push([])
     const cappedRuntime = await fifthWorker.getRuntime()
-    assert.equal(cappedRuntime.extensionMode, 'basic')
-    assert.match(cappedRuntime.initializationError ?? '', /插件初始化或关闭任务过多/)
-    assert.equal(recordsAt(globalState, initMarker).length, initialSessionIds.length)
+    assert.equal(cappedRuntime.extensionMode, 'normal')
+    assert.equal(cappedRuntime.initializationError, null)
+    assert.equal(recordsAt(globalState, initMarker).length, initialSessionIds.length + 1)
 
     unregisterNewResourceCleanup = registerSessionResourceCleanup((sessionId) => {
       if (sessionId === firstSessionId) newResourceCleanupCount += 1
@@ -917,7 +1082,7 @@ test('挂起初始化撤销旧访问，基础聊天接管且限制退役任务�
     const persistedAfterSend = await readFile(firstSessionFile, 'utf8')
     const leafAfterSend = firstManager.getLeafId()
 
-    const instances = recordsAt(globalState, initMarker)
+    const instances = initialInstances
     for (const instance of instances) callIfFunction(instance, 'releaseStart')
     await waitUntil(
       () => instances.every((instance) => instance.finished === true),
@@ -965,7 +1130,7 @@ test('挂起初始化撤销旧访问，基础聊天接管且限制退役任务�
     eventLists.push([])
     const postCleanupRuntime = await sixthWorker.getRuntime()
     assert.equal(postCleanupRuntime.extensionMode, 'normal')
-    assert.equal(recordsAt(globalState, initMarker).length, initialSessionIds.length + 1)
+    assert.equal(recordsAt(globalState, initMarker).length, initialSessionIds.length + 2)
     assert.equal(provider.getRequestCount(), 1)
     await workers[0]?.dispose()
     assert.equal(oldResourceCleanupCount, 2)
@@ -990,7 +1155,7 @@ test('挂起初始化撤销旧访问，基础聊天接管且限制退役任务�
   }
 })
 
-test('session_start失败后旧session_shutdown悬挂不阻塞基础发送', { timeout: 30_000 }, async () => {
+test('session_start错误只留局部诊断，关闭钩子仍由生命周期释放', { timeout: 30_000 }, async () => {
   const savedEnvironment = savePiEnvironment()
   const provider = await startFakeModelServer()
   const paths = await prepareFixture('shutdown-hang', `http://127.0.0.1:${provider.port}/v1`)
@@ -1013,12 +1178,10 @@ test('session_start失败后旧session_shutdown悬挂不阻塞基础发送', { t
     worker.subscribe((event) => events.push(event))
     const startedAt = Date.now()
     const runtime = await worker.getRuntime()
-    assert.equal(runtime.extensionMode, 'basic')
-    assert.match(runtime.initializationError ?? '', /session_start shutdown fixture failure/)
-    await waitUntil(
-      () => recordAt(globalState, initMarker).shutdownStarted === true,
-      '旧关闭钩子启动'
-    )
+    assert.equal(runtime.extensionMode, 'normal')
+    assert.equal(runtime.initializationError, null)
+    assert.match(await pluginErrors(paths.cwd), /session_start shutdown fixture failure/)
+    assert.equal(recordAt(globalState, initMarker).shutdownStarted, false)
     assert.ok(Date.now() - startedAt < 10_000)
     assert.equal(manager.getSessionId(), sessionId)
 
@@ -1041,12 +1204,18 @@ test('session_start失败后旧session_shutdown悬挂不阻塞基础发送', { t
     assert.equal(provider.getRequestCount(), 1)
     assert.ok(
       events.some(
-        (event) => event.type === 'runtime_changed' && event.runtime.extensionMode === 'basic'
+        (event) => event.type === 'runtime_changed' && event.runtime.extensionMode === 'normal'
       )
+    )
+    const closing = worker.dispose()
+    await waitUntil(
+      () => recordAt(globalState, initMarker).shutdownStarted === true,
+      '关闭钩子启动'
     )
     releaseShutdown = Reflect.get(recordAt(globalState, initMarker), 'releaseShutdown') as
       (() => void) | undefined
     releaseShutdown?.()
+    await closing
     succeeded = true
   } finally {
     releaseShutdown ??= Reflect.get(recordAt(globalState, initMarker), 'releaseShutdown') as
@@ -1060,7 +1229,7 @@ test('session_start失败后旧session_shutdown悬挂不阻塞基础发送', { t
   }
 })
 
-test('基础会话自身初始化失败时拒绝请求和订阅且不递归降级', { timeout: 20_000 }, async () => {
+test('核心配置损坏仍拒绝执行，但历史快照与订阅不等待失败初始化', { timeout: 20_000 }, async () => {
   const savedEnvironment = savePiEnvironment()
   const paths = await prepareFixture('basic-failure')
   let worker: Worker | undefined
@@ -1085,15 +1254,22 @@ test('基础会话自身初始化失败时拒绝请求和订阅且不递归降�
     )
     manage = new WorkSessionManage(join(paths.runRoot, 'work-sessions.json'))
     const item = await manage.createWorkSession(paths.cwd)
-    await assert.rejects(
-      manage.prepareChatSourceSyncs([
-        {
-          source: { workId: item.workId, sessionId: item.sessionId, branchId: item.branchId },
-          cursor: null
-        }
-      ]),
-      /Expected property name/
+    const [sync] = await manage.prepareChatSourceSyncs([
+      {
+        source: { workId: item.workId, sessionId: item.sessionId, branchId: item.branchId },
+        cursor: null
+      }
+    ])
+    assert.ok(sync)
+    assert.deepEqual(sync.event.messages, [])
+    const { getL4PiWorkSessionRuntime } = await jiti.import<PiWorkSessionRuntimeModule>(
+      '../src/server/l4_foundation/pi/l4-pi-work-session-runtime.ts'
     )
+    const managedWorker = Reflect.get(
+      getL4PiWorkSessionRuntime(item.sessionId),
+      'chatWorker'
+    ) as Worker
+    await assert.rejects(managedWorker.getRuntime(), /Expected property name/)
     succeeded = true
   } finally {
     if (manage) {
@@ -1162,7 +1338,7 @@ test('dispose在插件初始化中途撤销实例且不创建基础替代实例'
   }
 })
 
-test('删除初始化中的会话正常结束订阅且不影响同批有效会话', { timeout: 30_000 }, async (t) => {
+test('挂起初始化时同批订阅立即完成，删除不影响其他有效会话', { timeout: 30_000 }, async (t) => {
   const savedEnvironment = savePiEnvironment()
   const paths = await prepareFixture('delete-during-subscription')
   const globalState = globalThis as Record<string, unknown>
@@ -1187,6 +1363,10 @@ test('删除初始化中的会话正常结束订阅且不影响同批有效会�
     })
     const keptSubscription = { source: sourceFor(kept), cursor: null }
     await manage.prepareChatSourceSyncs([keptSubscription])
+    await waitUntil(
+      () => recordsAt(globalState, initMarker)[0]?.finished === true,
+      '健康会话已启动'
+    )
 
     recordAt(globalState, initMarker).hang = true
     const deleted = await manage.createWorkSession(paths.cwd)
@@ -1195,18 +1375,22 @@ test('删除初始化中的会话正常结束订阅且不影响同批有效会�
       manage.prepareChatSourceSyncs([deletedSubscription]),
       manage.prepareChatSourceSyncs([deletedSubscription, keptSubscription])
     ])
+    // 必须在初始化结束/删除前交付快照，模拟刷新与第二客户端重新订阅。
+    const [single, batch] = await pending
     await waitUntil(
       () => recordsAt(globalState, initMarker)[1]?.started === true,
       '待删除会话已进入真实插件初始化'
     )
     assert.equal(await manage.removeWorkSession(deleted.workId), true)
-    const [single, batch] = await pending
     assert.ok(single && single.status === 'fulfilled')
-    assert.deepEqual(single.value, [])
+    assert.deepEqual(
+      single.value.map((sync) => sync.source),
+      [deletedSubscription.source]
+    )
     assert.ok(batch && batch.status === 'fulfilled')
     assert.deepEqual(
       batch.value.map((sync) => sync.source),
-      [keptSubscription.source]
+      [deletedSubscription.source, keptSubscription.source]
     )
     assert.equal(batch.value[0]?.event.runtime.initializationError, null)
     assert.equal(errors.mock.callCount(), 0)

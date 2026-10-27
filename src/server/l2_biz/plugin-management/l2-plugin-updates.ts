@@ -20,7 +20,6 @@ import {
   resolveL4PluginInstall
 } from '@server/l4_foundation/pi/l4-pi-plugin-registry'
 import type { L4PiPluginSource } from '@server/l4_foundation/pi/l4-pi-plugin-sources'
-import { runL4PiPackageRootExclusive } from '@server/l4_foundation/pi/l4-pi-package-root-gate'
 
 const UPDATE_CACHE_TTL_MS = 5 * 60 * 1000
 const UPDATE_CACHE_MAX_ENTRIES = 128
@@ -163,9 +162,7 @@ export class L2PluginUpdates {
             cwd: this.cwd,
             settingsManager
           })
-          const updates = await runL4PiPackageRootExclusive(() =>
-            manager.checkForAvailableUpdates()
-          )
+          const updates = await manager.checkForAvailableUpdates()
           const value: L2PluginUpdateStatus = {
             ...empty,
             updateAvailable: updates.some((item) => item.scope === 'user')

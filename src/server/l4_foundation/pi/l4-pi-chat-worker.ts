@@ -769,7 +769,22 @@ export class L4PiChatWorker {
     return () => this.listeners.delete(listener)
   }
 
-  async getRuntime(): Promise<L4PiChatRuntimeSnapshot> {
+  async getRuntime(waitForInitialization = true): Promise<L4PiChatRuntimeSnapshot> {
+    if (!waitForInitialization) {
+      if (this.disposed) throw new Error('Pi chat worker has been disposed')
+      // 订阅/重连先交付当前快照；初始化结果沿已有 runtime_changed 独立推送。
+      if (!this.session && !this.sessionLifecycle) {
+        void this.ensureSession().catch((cause: unknown) => {
+          if (this.disposed || this.session) return
+          this.initializationError = (cause instanceof Error ? cause.message : String(cause)).slice(
+            0,
+            32_000
+          )
+          this.emit({ type: 'runtime_changed', runtime: this.runtimeSnapshot() })
+        })
+      }
+      return this.runtimeSnapshot()
+    }
     const initialization = this.ensureSession()
     let release = (): void => undefined
     const interaction = new Promise<void>((resolve) => {

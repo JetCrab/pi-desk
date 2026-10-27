@@ -411,8 +411,12 @@ export class L4PiPluginOwnerRuntime {
     }
     this.cancelRecovery(source)
     this.maintainingSources.add(source)
+    const deadline = performance.now() + 15_000
     try {
       while (this.owners.some((owner) => owner.source === source && owner.activeCalls.size > 0)) {
+        if (performance.now() >= deadline) {
+          throw new Error(`插件 ${source} 的在途调用未在15秒内结束，本次维护失败，可稍后手动重试`)
+        }
         onWaiting(`插件 ${source} 仍有调用正在执行`)
         await delay(250, undefined, { signal: lifetime })
       }

@@ -228,6 +228,68 @@ test('关闭服务取消本批准备，已准备项和后续队列均不能再�
   })
 })
 
+test('多个缺失包不封锁逐项修复、卸载或其他插件的正式应用', { timeout: 30_000 }, async () => {
+  await fixture(async (management, agentDir) => {
+    const sources = ['npm:missing-one@1.0.0', 'npm:missing-two@1.0.0']
+    await writeFile(join(agentDir, 'settings.json'), JSON.stringify({ packages: sources }))
+    const updates = Reflect.get(management, 'updates') as object
+    Reflect.set(updates, 'resolveInstall', async (source: string) => ({ source, updateTag: null }))
+    Reflect.set(management, 'probeCandidate', async (): Promise<null> => null)
+    const preparedSources: string[] = []
+    const originalExecute = Reflect.get(management, 'executeMutation') as (
+      input: Mutation,
+      prepared: Prepared
+    ) => Promise<void>
+    Reflect.set(
+      management,
+      'executeMutation',
+      async (input: Mutation, prepared: Prepared): Promise<void> => {
+        preparedSources.push(input.source)
+        await originalExecute.call(management, input, prepared)
+      }
+    )
+    // 正式应用在调用包进程之前打桩：不能被其他缺包或待重启来源提前挡住。
+    const globalState = globalThis as Record<string, unknown>
+    const runtimeKey = '__piDeskGlobalPluginRuntime'
+    const previous = globalState[runtimeKey]
+    const replaced: string[] = []
+    globalState[runtimeKey] = {
+      withSourceIdle: async (_source: string, operation: () => Promise<void>): Promise<void> =>
+        operation(),
+      replaceSource: async (source: string): Promise<void> => {
+        replaced.push(source)
+        throw new Error('fixture reached package application')
+      }
+    }
+    const deferred = Reflect.get(management, 'deferredMaintenance') as Map<
+      string,
+      L4PiDeskPackageMaintenanceRequest
+    >
+    deferred.set('npm:unrelated-locked', {
+      action: 'reinstall',
+      source: 'npm:unrelated-locked@1.0.0'
+    })
+    try {
+      await management.reinstall(sources[0])
+      await management.del(sources[1])
+      await management
+        .waitForOperations(sources, new AbortController().signal)
+        .catch(() => undefined)
+      await Reflect.get(management, 'operationTail')
+      assert.deepEqual(preparedSources, sources)
+      assert.deepEqual(replaced, sources)
+      for (const source of sources)
+        assert.equal(
+          operations(management).get(source)?.message,
+          'fixture reached package application'
+        )
+      assert.equal(deferred.size, 1)
+    } finally {
+      globalState[runtimeKey] = previous
+    }
+  })
+})
+
 test('批量更新跳过非更高版本，安装精确目标只解析一次', { timeout: 30_000 }, async () => {
   await fixture(async (management, agentDir) => {
     const names = ['newer', 'same', 'older']
