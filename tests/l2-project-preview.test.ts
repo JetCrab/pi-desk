@@ -5,7 +5,10 @@ import {
   L2BuildLoginHref,
   L2ResolveAuthReturnTo
 } from '../src/common/l2_biz/auth/l2-auth-return-to'
-import { buildL2ProjectPreviewHref } from '../src/common/l2_biz/project-preview/l2-project-preview-navigation'
+import {
+  buildL2ProjectPreviewHref,
+  buildL2ProjectPreviewTitle
+} from '../src/common/l2_biz/project-preview/l2-project-preview-navigation'
 import { createL2ProjectPreviewOwner } from '../src/client/l2_biz/project-preview/l2-project-preview-biz'
 import {
   L2_PROJECT_PREVIEW_GLOBAL_DEFAULT,
@@ -85,6 +88,22 @@ test('项目地址与登录回跳保留目录编码，不允许离站或登录�
     assert.equal(L2ResolveAuthReturnTo(unsafe), '/', String(unsafe))
     assert.equal(L2BuildLoginHref(unsafe), '/login', String(unsafe))
   }
+})
+
+test('独立预览标题以项目为主体，选择页与根目录有回退并跟随语言', () => {
+  for (const cwd of [null, undefined, '', '   ']) {
+    assert.equal(buildL2ProjectPreviewTitle(cwd, 'zh-CN'), '项目预览 · Pi Desk')
+  }
+  assert.equal(
+    buildL2ProjectPreviewTitle(' C:\\项目 空格\\a#b&c\\ ', 'zh-CN'),
+    'a#b&c · 项目预览 · Pi Desk'
+  )
+  assert.equal(
+    buildL2ProjectPreviewTitle('/srv/example/', 'en'),
+    'example · Project preview · Pi Desk'
+  )
+  assert.equal(buildL2ProjectPreviewTitle('/', 'zh-CN'), '/ · 项目预览 · Pi Desk')
+  assert.equal(buildL2ProjectPreviewTitle('C:\\', 'zh-CN'), 'C: · 项目预览 · Pi Desk')
 })
 
 test('独立预览恢复隐藏历史不读取，首次展示只读取一次，旧模式保持立即恢复', async (context) => {

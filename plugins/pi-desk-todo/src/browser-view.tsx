@@ -69,7 +69,6 @@ const STYLES = `
 .pi-desk-todo-status{flex:none;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground));font-size:.75rem}
 .pi-desk-todo-note{margin:.25rem 0 0;font-size:.8125rem;overflow-wrap:anywhere;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground))}
 .pi-desk-todo-leaf[data-status="3"] .pi-desk-todo-note,.pi-desk-todo-leaf[data-status="3"] .pi-desk-todo-status{color:var(--status-warning,var(--foreground))}
-.pi-desk-todo-footer{flex:none;border-top:1px solid var(--pi-desk-plugin-border,var(--border));padding:.5rem .875rem;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground));font-size:.75rem}
 .pi-desk-todo-change{display:grid;gap:.375rem;padding:.75rem .375rem;overflow-wrap:anywhere}
 .pi-desk-todo-change p{margin:0}.pi-desk-todo-change-label{color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground));font-size:.75rem}
 .pi-desk-todo-error{display:flex;align-items:center;gap:.5rem;justify-content:space-between;padding:.375rem .5rem;color:var(--pi-desk-plugin-destructive,var(--destructive));font-size:.8125rem;overflow-wrap:anywhere}
@@ -90,7 +89,6 @@ const LABELS = {
     details: '查看任务进度，点击保持展开',
     updated: '进度更新',
     changed: '任务进度已更新',
-    footer: '点击摘要保持展开 · Esc 关闭详情',
     failure: '任务进度同步失败',
     retry: '重试'
   },
@@ -107,7 +105,6 @@ const LABELS = {
     details: 'View task progress; click to keep open',
     updated: 'Progress update',
     changed: 'Task progress updated',
-    footer: 'Click the summary to keep open · Esc closes details',
     failure: 'Could not sync task progress',
     retry: 'Retry'
   }
@@ -432,9 +429,6 @@ function TodoProgress({
                 </>
               )}
             </PluginScroll>
-            {notice && !full ? null : (
-              <footer className="pi-desk-todo-footer">{labels.footer}</footer>
-            )}
           </div>
         </PluginPopover>
         <PluginButton

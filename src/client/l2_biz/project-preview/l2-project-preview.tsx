@@ -63,6 +63,7 @@ export function L2ProjectPreview({
     narrow,
     stacked,
     width,
+    changeRowHeight,
     openGit,
     refresh
   } = useL2ProjectPreview(clientId, cwd, refreshOnFocus, onUnauthorized)
@@ -71,9 +72,6 @@ export function L2ProjectPreview({
   const gitState = git.getWorkspace(cwd)!
   const repositories = gitState.snapshot.repositories
   const state = files.state
-  const diffPath = state.activeDiff
-    ? [state.activeDiff.repositoryRoot, state.activeDiff.path].filter(Boolean).join('/')
-    : null
   const fileTree = (
     <L3ProjectFileBrowser
       cwd={cwd}
@@ -98,10 +96,14 @@ export function L2ProjectPreview({
           gitRuntime={git}
           paths={state.tabs}
           activePath={state.activePath}
-          diffPath={diffPath}
+          diffs={state.diffs}
+          activeDiff={state.activeDiff}
           mobile={narrow}
           actions={actions}
-          onActivate={(path) => files.openFile(path)}
+          onActivate={(target) => {
+            if (typeof target === 'string') files.openFile(target)
+            else files.openDiff(target.repositoryRoot, target.path, target.comparison)
+          }}
           onClose={(path, scope) => files.closeTabs(path, scope)}
         />
       )}
@@ -143,6 +145,7 @@ export function L2ProjectPreview({
           state={history.state}
           cwd={cwd}
           changeRows={history.getChangeRows()}
+          changeRowHeight={changeRowHeight}
           onSelectChange={(path) => history.selectChange(path)}
           onToggleDirectory={(path) => history.toggleChangeDirectory(path)}
           onReveal={(path, type) => files.revealFile(path, type)}

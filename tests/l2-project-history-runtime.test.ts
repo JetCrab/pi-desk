@@ -95,9 +95,14 @@ test('作者筛选携带组合查询、分页并只用已加载提交生成建�
   assert.equal(requests.at(-1)?.query.page.index, 1)
   assert.deepEqual(runtime.state.authorSuggestions, ['Loaded Author 1'])
 
+  const beforePage = requests.length
   runtime.loadMoreLog()
+  runtime.loadMoreLog()
+  assert.equal(requests.length, beforePage + 1)
   await waitImmediate()
   assert.equal(requests.at(-1)?.query.page.index, 2)
+  runtime.loadMoreLog()
+  assert.equal(requests.length, beforePage + 1)
   assert.deepEqual(runtime.state.authorSuggestions, ['Loaded Author 1', 'Loaded Author 2'])
 
   runtime.setRepository('second')
@@ -193,9 +198,21 @@ test('累计比较、提交单次比较、返回累计保持固定范围并可�
   assert.equal(runtime.state.changes.data?.commit, null)
   runtime.openChange('src/app.ts')
   assert.equal(files.state.activeDiff?.status, 'loading')
+  await waitImmediate()
+  const opened = files.state.activeDiff
+  runtime.selectCommit(selected)
+  await waitImmediate()
+  assert.equal(files.state.activeDiff, opened)
+  runtime.setRevision('target', 'refs/heads/another')
+  await waitImmediate()
+  assert.equal(files.state.activeDiff, opened)
+  runtime.setRepository('another-repository')
+  await waitImmediate()
+  assert.equal(files.state.activeDiff, opened)
   assert.ok(calls.includes('merge-base'))
   assert.ok(calls.includes('commit'))
   runtime.dispose()
+  files.dispose()
 })
 
 test('恢复已选提交时保留先恢复的历史 Diff', async () => {
@@ -280,4 +297,93 @@ test('搜索与分页触发独立请求，dispose后迟到结果不再发布', a
   await new Promise((resolve) => setTimeout(resolve, 300))
   assert.ok(logCalls >= 1)
   assert.equal(aborted, true)
+})
+
+function historyReader(overrides: Partial<L3ProjectReader>): L3ProjectReader {
+  return {
+    list: async () => ({ entries: [], truncated: false }),
+    search: async () => ({ fileMatches: [], contentMatches: [], truncated: false }),
+    get: async (path) => ({ kind: 'text', path, content: '', size: 0 }),
+    diff: async (_root, path) => ({
+      kind: 'text',
+      original: { path, content: 'old' },
+      modified: { path, content: 'new' }
+    }),
+    snapshot: async () => ({ repositories: [] }),
+    branches: async () => branches(),
+    log: async () => log('a'.repeat(40)),
+    changes: async () => changes('a'.repeat(40)),
+    ...overrides
+  }
+}
+
+test('追加失败保留已有提交和位置，手动重试仍请求失败页；达到上限停止', async (context) => {
+  let fail = true
+  const requested: number[] = []
+  const reader = historyReader({
+    log: async (_root, query) => {
+      requested.push(query.page.index)
+      if (query.page.index === 2 && fail) throw new Error('分页失败')
+      return {
+        ...log('a'.repeat(40)),
+        items: [commit(String(query.page.index).repeat(40))],
+        hasMore: true
+      }
+    }
+  })
+  const files = filesRuntime(reader)
+  const runtime = new L2ProjectHistoryRuntime(reader, files)
+  context.after(() => {
+    runtime.dispose()
+    files.dispose()
+  })
+  runtime.setRepository('')
+  await waitImmediate()
+  runtime.setScroll('log', 320)
+  runtime.loadMoreLog()
+  await waitImmediate()
+  assert.equal(runtime.state.log.status, 'error')
+  assert.equal(runtime.state.log.data?.items.length, 1)
+  assert.equal(runtime.scroll.log, 320)
+  fail = false
+  runtime.loadMoreLog()
+  await waitImmediate()
+  assert.deepEqual(requested, [1, 2, 2])
+  assert.equal(runtime.state.log.status, 'ready')
+  assert.equal(runtime.state.log.data?.items.length, 2)
+  assert.equal(runtime.scroll.log, 320)
+  runtime.state.log.data!.items = Array.from({ length: 2000 }, (_, index) =>
+    commit(index.toString(16).padStart(40, '0'))
+  )
+  runtime.loadMoreLog()
+  assert.deepEqual(requested, [1, 2, 2])
+})
+
+test('24px变更树折叠时保持可见锚点，触控行高切换保持同一行', async (context) => {
+  const reader = historyReader({
+    changes: async () => ({
+      ...changes('a'.repeat(40)),
+      items: ['a/one.ts', 'a/two.ts', 'b/three.ts', 'b/four.ts'].map((path) => ({
+        path,
+        oldPath: null,
+        status: 'modified'
+      }))
+    })
+  })
+  const files = filesRuntime(reader)
+  const runtime = new L2ProjectHistoryRuntime(reader, files)
+  context.after(() => {
+    runtime.dispose()
+    files.dispose()
+  })
+  runtime.setChangeRowHeight(24)
+  runtime.setRepository('')
+  await waitImmediate()
+  const before = runtime.getChangeRows().findIndex((row) => row.path === 'b/three.ts')
+  runtime.setScroll('changes', before * 24 + 6)
+  runtime.toggleChangeDirectory('a')
+  const after = runtime.getChangeRows().findIndex((row) => row.path === 'b/three.ts')
+  assert.equal(runtime.scroll.changes, after * 24 + 6)
+  runtime.setChangeRowHeight(36)
+  assert.equal(runtime.scroll.changes, after * 36 + 9)
 })

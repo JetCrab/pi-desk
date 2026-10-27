@@ -1,5 +1,6 @@
 export const L2_PROJECT_HISTORY_MESSAGES = {
   en: {
+    previewTitle: 'Project preview',
     chooseProject: 'Open a project',
     switchProject: 'Switch project',
     directoryPath: 'Directory path',
@@ -26,7 +27,7 @@ export const L2_PROJECT_HISTORY_MESSAGES = {
     noCommits: 'No commits',
     scanLimit: 'History scan limit reached. Choose a more specific branch or commit.',
     loadedLimit: '2,000 commits loaded. Narrow your search.',
-    loadMoreCommits: 'Load more commits',
+    noMoreCommits: 'All commits loaded',
     backCommits: 'Back to commits',
     commitChanges: 'Commit changes',
     cumulativeChanges: 'Cumulative changes',
@@ -90,6 +91,7 @@ export const L2_PROJECT_HISTORY_MESSAGES = {
     historyReadFailed: 'Could not read Git history'
   },
   'zh-CN': {
+    previewTitle: '项目预览',
     chooseProject: '打开项目',
     switchProject: '切换项目',
     directoryPath: '目录路径',
@@ -116,7 +118,7 @@ export const L2_PROJECT_HISTORY_MESSAGES = {
     noCommits: '没有提交记录',
     scanLimit: '历史扫描达到上限，请选择更具体的分支或提交。',
     loadedLimit: '已加载 2000 条，请缩小查询范围。',
-    loadMoreCommits: '加载更多提交',
+    noMoreCommits: '已加载全部提交',
     backCommits: '返回提交列表',
     commitChanges: '提交变更',
     cumulativeChanges: '累计变更',

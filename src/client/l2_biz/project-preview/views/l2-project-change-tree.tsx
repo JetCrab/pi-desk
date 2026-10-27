@@ -1,7 +1,7 @@
 'use client'
 
 import { ChevronRightIcon, Columns2Icon, FolderIcon, FolderOpenIcon } from 'lucide-react'
-import type { KeyboardEvent } from 'react'
+import { useRef, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { L4GitChanges } from '@common/l4_foundation/git/l4-git-history-contract'
 import type { L3ProjectRevealTargetType } from '@common/l3_modules/project-files/l3-project-files-contract'
@@ -28,6 +28,7 @@ interface Props {
   changes: L4GitChanges['items']
   selectedPath: string | null
   scrollTop: number
+  rowHeight: number
   onScroll: (value: number) => void
   onSelect: (path: string) => void
   onToggle: (path: string) => void
@@ -42,6 +43,7 @@ export function L2ProjectChangeTree({
   changes,
   selectedPath,
   scrollTop,
+  rowHeight,
   onScroll,
   onSelect,
   onToggle,
@@ -49,6 +51,12 @@ export function L2ProjectChangeTree({
   onReveal
 }: Props): React.JSX.Element {
   const { t } = useTranslation('projectHistory')
+  const pendingFocus = useRef<string | null>(null)
+  const focusRow = (element: HTMLElement | null, key: string): void => {
+    if (!element || pendingFocus.current !== key) return
+    pendingFocus.current = null
+    element.focus({ preventScroll: true })
+  }
   const changesByPath = new Map(changes.map((change) => [change.path, change]))
   const keyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.defaultPrevented || !event.currentTarget.contains(event.target as Node)) return
@@ -84,14 +92,17 @@ export function L2ProjectChangeTree({
     const target = rows[next]
     if (!target) return
     const viewport = event.currentTarget
-    if (next * 36 < viewport.scrollTop) viewport.scrollTop = next * 36
-    else if ((next + 1) * 36 > viewport.scrollTop + viewport.clientHeight)
-      viewport.scrollTop = (next + 1) * 36 - viewport.clientHeight
-    requestAnimationFrame(() => {
-      ;[...viewport.querySelectorAll<HTMLElement>('[data-tree-key]')]
-        .find((item) => item.dataset.treeKey === target.key)
-        ?.focus()
-    })
+    if (next * rowHeight < viewport.scrollTop) viewport.scrollTop = next * rowHeight
+    else if ((next + 1) * rowHeight > viewport.scrollTop + viewport.clientHeight)
+      viewport.scrollTop = (next + 1) * rowHeight - viewport.clientHeight
+    pendingFocus.current = target.key
+    // 虚拟行可能尚未挂载，未命中时由该行的 ref 在提交后接续聚焦。
+    focusRow(
+      [...viewport.querySelectorAll<HTMLElement>('[data-tree-key]')].find(
+        (item) => item.dataset.treeKey === target.key
+      ) ?? null,
+      target.key
+    )
   }
 
   return (
@@ -100,6 +111,7 @@ export function L2ProjectChangeTree({
       label={t('changeFiles')}
       items={rows}
       scrollTop={scrollTop}
+      rowHeight={rowHeight}
       onScroll={onScroll}
       onKeyDown={keyDown}
       render={(row) => {
@@ -125,6 +137,7 @@ export function L2ProjectChangeTree({
             onReveal={onReveal}
             trigger={
               <div
+                ref={(element) => focusRow(element, row.key)}
                 role="treeitem"
                 tabIndex={0}
                 aria-level={row.depth + 1}
@@ -132,10 +145,13 @@ export function L2ProjectChangeTree({
                 aria-selected={row.type === 'file' && selectedPath === row.path}
                 data-tree-key={row.key}
                 className={cn(
-                  'flex h-9 min-w-0 cursor-pointer items-center gap-2 pr-2 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                  'flex min-w-0 cursor-pointer items-center gap-1 pr-1 text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
                   row.type === 'file' && selectedPath === row.path && 'bg-accent'
                 )}
-                style={{ paddingLeft: 8 + row.depth * 16 }}
+                style={{
+                  height: rowHeight,
+                  paddingLeft: 4 + row.depth * (rowHeight === 24 ? 12 : 24)
+                }}
                 title={
                   change?.oldPath && row.type === 'file'
                     ? `${joinL3ProjectPath(repositoryRoot, change.oldPath)} → ${projectPath}`
@@ -190,6 +206,7 @@ export function L2ProjectChangeTree({
                   <Button
                     size="icon-sm"
                     variant="ghost"
+                    className={rowHeight === 24 ? 'size-6' : undefined}
                     aria-label={t('viewDiffPath', { path: row.path })}
                     onDoubleClick={(event) => event.stopPropagation()}
                     onClick={(event) => {

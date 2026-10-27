@@ -33,9 +33,10 @@ const changed: L4GitPreviewDiff = {
 
 test('行标记正文与基线原子更新，跳转 Diff 使用同一快照而非再次读取', async () => {
   let calls = 0
+  let result = changed
   const runtime = createRuntime(async () => {
     calls += 1
-    return changed
+    return result
   })
   try {
     runtime.openFile('nested/file.ts')
@@ -58,6 +59,20 @@ test('行标记正文与基线原子更新，跳转 Diff 使用同一快照而�
     assert.equal(diff.path, 'file.ts')
     assert.equal(diff.initialLine, 2)
     assert.equal(calls, 1)
+    runtime.openFile('nested/file.ts')
+    result = {
+      kind: 'text',
+      original: { path: 'old.ts', content: 'before\n' },
+      modified: { path: 'file.ts', content: 'newer snapshot\n' }
+    }
+    await runtime.compareFile('nested/file.ts', target, new AbortController().signal)
+    runtime.openFileDiff('nested/file.ts', 1)
+    const reopened = runtime.state.activeDiff
+    assert.equal(runtime.state.diffs.length, 1)
+    assert.ok(reopened?.status === 'text')
+    assert.equal(reopened.modified.content, 'newer snapshot\n')
+    assert.equal(reopened.initialLine, 1)
+    assert.equal(calls, 2)
   } finally {
     runtime.dispose()
   }

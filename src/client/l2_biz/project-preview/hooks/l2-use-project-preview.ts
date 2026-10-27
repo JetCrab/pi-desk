@@ -12,6 +12,18 @@ import {
   type L2ProjectPreviewProject
 } from '../l2-project-preview-storage'
 
+function subscribePointer(listener: () => void): () => void {
+  const media = window.matchMedia('(pointer: fine)')
+  media.addEventListener('change', listener)
+  return () => media.removeEventListener('change', listener)
+}
+function readFinePointer(): boolean {
+  return window.matchMedia('(pointer: fine)').matches
+}
+function readServerPointer(): boolean {
+  return false
+}
+
 type Page = 'files' | 'code' | 'git'
 type HistoryPane = 'log' | 'files'
 interface PreviewState extends Pick<L2ProjectPreviewOwner, 'files' | 'git' | 'history'> {
@@ -25,6 +37,7 @@ interface PreviewState extends Pick<L2ProjectPreviewOwner, 'files' | 'git' | 'hi
   narrow: boolean
   stacked: boolean
   width: number
+  changeRowHeight: number
   openGit: (root?: string) => void
   refresh: () => void
 }
@@ -67,6 +80,12 @@ export function useL2ProjectPreview(
   const stacked = narrow || size.height < 680
   const repositories = git.getWorkspace(cwd)!.snapshot.repositories
   const state = files.state
+  const finePointer = useSyncExternalStore(subscribePointer, readFinePointer, readServerPointer)
+  const changeRowHeight = finePointer ? 24 : 36
+
+  useEffect(() => {
+    history.setChangeRowHeight(changeRowHeight)
+  }, [history, changeRowHeight])
 
   useEffect(() => {
     saveCurrent.current = (): void => {
@@ -97,6 +116,11 @@ export function useL2ProjectPreview(
           logScroll: history.scroll.log,
           changesScroll: history.scroll.changes
         },
+        diffs: files.state.diffs.map(({ repositoryRoot, path, comparison }) => ({
+          repositoryRoot,
+          path,
+          ...(comparison ? { comparison } : {})
+        })),
         activeDiff: files.state.activeDiff
           ? {
               repositoryRoot: files.state.activeDiff.repositoryRoot,
@@ -198,6 +222,7 @@ export function useL2ProjectPreview(
     narrow,
     stacked,
     width: size.width,
+    changeRowHeight,
     openGit(root): void {
       updateGlobal({ gitOpen: true })
       setPage('git')

@@ -214,9 +214,13 @@ export function L2FileWorkspaceView({
             gitRuntime={gitRuntime}
             paths={workspace.tabs}
             activePath={activePath}
-            diffPath={diffPath}
+            diffs={workspace.diffs}
+            activeDiff={activeDiff}
             mobile={mobile}
-            onActivate={(path) => runtime.activateFile(workId, path)}
+            onActivate={(target) => {
+              if (typeof target === 'string') runtime.activateFile(workId, target)
+              else runtime.openDiff(workId, target.repositoryRoot, target.path)
+            }}
             onClose={(path, scope) => runtime.closeTabs(workId, path, scope)}
           />
           <L3ProjectDocumentView

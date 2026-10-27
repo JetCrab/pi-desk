@@ -235,37 +235,47 @@ export function L3ConversationTailSpacerObserver({ active = true }: { active?: b
       scheduleRefresh()
     })
     let previousHeight: number | undefined
+    let previousWidth: number | undefined
     let viewportDifference = 0
     let resizeReleaseFrame: number | null = null
     let resizeReleaseTimer: number | null = null
     const viewportObserver = new ResizeObserver(([entry]) => {
-      const height = entry?.contentRect.height
-      if (height === undefined) return
+      if (!entry) return
+      const { height, width } = entry.contentRect
       const difference = height - (previousHeight ?? height)
+      const widthDifference = width - (previousWidth ?? width)
       previousHeight = height
-      if (!difference) {
+      previousWidth = width
+      if (!difference && !widthDifference) {
         scheduleRefresh()
         return
       }
 
       logL3ConversationScroll('viewport:resize', scrollElement, {
         difference,
+        widthDifference,
         isAtBottom: state.isAtBottom,
         escapedFromLock: state.escapedFromLock
       })
-      // 库只观察内容高度；视口缩放引起的滚动也不能被当成用户上翻。
-      viewportDifference = difference
-      state.resizeDifference = difference
+      // 库只观察内容高度；仅宽度变化时保留库标记的内容高度差。
+      if (difference) {
+        viewportDifference = difference
+        state.resizeDifference = difference
+      }
       if (refreshFrame !== null) {
         window.cancelAnimationFrame(refreshFrame)
         refreshFrame = null
       }
-      // 视口变高时浏览器可能已截短 scrollTop；绘制前补齐留白并同步跟底，避免下一帧再弹回。
+      // 宽度重排和高度变化都在绘制前同步跟底；库的 instant 仍会等到下一帧。
       refreshL3ConversationTailSpacer(scrollElement)
       if (state.isAtBottom) {
         state.scrollTop = Math.max(0, state.calculatedTargetScrollTop)
       }
-      logL3ConversationScroll('viewport:resize:positioned', scrollElement, { difference })
+      logL3ConversationScroll('viewport:resize:positioned', scrollElement, {
+        difference,
+        widthDifference
+      })
+      if (!difference) return
       if (resizeReleaseFrame !== null) window.cancelAnimationFrame(resizeReleaseFrame)
       if (resizeReleaseTimer !== null) window.clearTimeout(resizeReleaseTimer)
       resizeReleaseFrame = window.requestAnimationFrame(() => {

@@ -372,24 +372,35 @@ async function verifyPreviewOpening(control) {
   const previewPages = async () =>
     (await targets()).filter((item) => new URL(item.url).pathname === '/project-preview')
   const nativeHandles = new Map()
-  const nativeWindow = async (handle = null) => {
+  const nativeWindow = async (handle = null, readTitle = false) => {
     const script = `Add-Type @'
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 public class PreviewWindowTest {
   public delegate bool Callback(IntPtr h, IntPtr p);
   [DllImport("user32.dll")] public static extern bool EnumWindows(Callback c, IntPtr p);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
-  public static void Run(uint pid, long close) {
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder text, int count);
+  public static void Run(uint pid, long close, bool readTitle) {
     EnumWindows((h,p) => { uint owner; GetWindowThreadProcessId(h,out owner);
-      if(owner == pid) { if(close == 0) Console.WriteLine(h.ToInt64()); else if(h.ToInt64() == close && !PostMessage(h,0x10,IntPtr.Zero,IntPtr.Zero)) throw new Exception("关闭消息发送失败"); }
+      if(owner == pid) {
+        if(readTitle) {
+          if(h.ToInt64() == close) {
+            var text = new StringBuilder(4096);
+            GetWindowText(h, text, text.Capacity);
+            Console.WriteLine(Convert.ToBase64String(Encoding.UTF8.GetBytes(text.ToString())));
+          }
+        } else if(close == 0) Console.WriteLine(h.ToInt64());
+        else if(h.ToInt64() == close && !PostMessage(h,0x10,IntPtr.Zero,IntPtr.Zero)) throw new Exception("关闭消息发送失败");
+      }
       return true;
     }, IntPtr.Zero);
   }
 }
 '@
-[PreviewWindowTest]::Run(${child.pid}, ${handle ?? 0})`
+[PreviewWindowTest]::Run(${child.pid}, ${handle ?? 0}, $${readTitle})`
     const { stdout } = await promisify(execFile)(
       'powershell.exe',
       [
@@ -400,7 +411,21 @@ public class PreviewWindowTest {
       ],
       { timeout: 15_000, windowsHide: true }
     )
-    return stdout.trim().split(/\s+/).filter(Boolean)
+    return readTitle
+      ? Buffer.from(stdout.trim(), 'base64').toString('utf8')
+      : stdout.trim().split(/\s+/).filter(Boolean)
+  }
+  const expectTitle = async (target, title) => {
+    let actual = ''
+    await until(async () => {
+      actual = await nativeWindow(nativeHandles.get(target.id), true)
+      return actual === title
+    }, `原生窗口标题：${title}`).catch(async (cause) => {
+      const current = (await targets()).find((item) => item.id === target.id)
+      throw new Error(`标题不同步：expected=${title} native=${actual} page=${current?.title}`, {
+        cause
+      })
+    })
   }
   let knownHandles = new Set(await nativeWindow())
   const registerWindow = async (target) => {
@@ -440,9 +465,16 @@ public class PreviewWindowTest {
     '预览不能先开工作台'
   )
   await registerWindow(first)
+  await expectTitle(first, '项目预览窗口')
+  const firstPage = await connect(first)
+  await firstPage.evaluate(`document.title = 'example · 项目预览 · Pi Desk'`)
+  await expectTitle(first, 'example · 项目预览 · Pi Desk')
   await invoke('open_target_command', { url: targetUrl, preview: true })
   await until(async () => (await previewPages()).length === 2, '第二个独立预览窗口')
-  await registerWindow((await previewPages()).find((item) => item.id !== first.id))
+  const second = (await previewPages()).find((item) => item.id !== first.id)
+  await registerWindow(second)
+  await expectTitle(second, '项目预览窗口')
+  await expectTitle(first, 'example · 项目预览 · Pi Desk')
   await closeWindow(first)
   assert.equal((await previewPages()).length, 1)
   await invoke('open_target_command', { url: targetUrl, preview: false })
@@ -456,6 +488,7 @@ public class PreviewWindowTest {
     () => workspace.evaluate(`Boolean(document.getElementById('open-preview'))`),
     '工作台页面加载'
   )
+  await expectTitle(workspaceTarget, 'Pi Desk · 127.0.0.1')
   await workspace.click('open-preview')
   const deep = await until(
     async () => (await previewPages()).find((item) => item.url.includes('cwd=')),
@@ -595,6 +628,7 @@ public class PreviewWindowTest {
     true,
     120_000
   )
+  await expectTitle(liveTarget, '项目预览 · Pi Desk')
   await live.send('Page.navigate', {
     url: `${sourceUrl}project-preview?cwd=${encodeURIComponent(project)}`
   })
@@ -615,6 +649,17 @@ public class PreviewWindowTest {
     true,
     60_000
   )
+  await expectTitle(liveTarget, 'preview-project · 项目预览 · Pi Desk')
+  await live.evaluate(
+    `[...document.querySelectorAll('button')].find(item=>item.textContent.trim()==='切换项目').click()`
+  )
+  await expectTitle(liveTarget, '项目预览 · Pi Desk')
+  await live.evaluate('history.back()')
+  await expectTitle(liveTarget, 'preview-project · 项目预览 · Pi Desk')
+  await live.evaluate('history.forward()')
+  await expectTitle(liveTarget, '项目预览 · Pi Desk')
+  await live.evaluate('history.back()')
+  await expectTitle(liveTarget, 'preview-project · 项目预览 · Pi Desk')
   for (const theme of ['light', 'dark']) {
     await live.evaluate(`document.documentElement.classList.toggle('dark',${theme === 'dark'})`)
     await live.evaluate(
@@ -627,7 +672,7 @@ public class PreviewWindowTest {
   for (const item of await previewPages()) await closeWindow(item)
   assert.equal((await previewPages()).length, 0)
   await invoke('delete_target_command', { url: sourceUrl })
-  console.info('原生预览入口、启动就绪、窗口销毁、权限与真实文件预览通过')
+  console.info('原生预览入口、动态标题与导航、启动就绪、窗口销毁、权限与真实文件预览通过')
 }
 
 try {

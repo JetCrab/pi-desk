@@ -1,5 +1,12 @@
 'use client'
-import { useLayoutEffect, useRef, useState, type ReactNode, type KeyboardEventHandler } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type KeyboardEventHandler
+} from 'react'
 
 export function L2ProjectHistoryList<T>({
   items,
@@ -8,7 +15,10 @@ export function L2ProjectHistoryList<T>({
   onScroll,
   render,
   role = 'listbox',
-  onKeyDown
+  onKeyDown,
+  rowHeight = 36,
+  onNearEnd,
+  footer
 }: {
   items: readonly T[]
   label: string
@@ -17,6 +27,9 @@ export function L2ProjectHistoryList<T>({
   render: (item: T, index: number) => ReactNode
   role?: 'listbox' | 'tree'
   onKeyDown?: KeyboardEventHandler<HTMLDivElement>
+  rowHeight?: number
+  onNearEnd?: () => void
+  footer?: ReactNode
 }): React.JSX.Element {
   const viewport = useRef<HTMLDivElement>(null)
   const [window, setWindow] = useState({ top: scrollTop, height: 300 })
@@ -33,10 +46,23 @@ export function L2ProjectHistoryList<T>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useLayoutEffect(() => {
-    if (viewport.current) viewport.current.scrollTop = scrollTop
-  }, [items, scrollTop])
-  const start = Math.max(0, Math.floor(window.top / 36) - 8)
-  const end = Math.min(items.length, Math.ceil((window.top + window.height) / 36) + 8)
+    const element = viewport.current
+    if (!element) return
+    element.scrollTop = scrollTop
+    setWindow((previous) =>
+      previous.top === element.scrollTop ? previous : { ...previous, top: element.scrollTop }
+    )
+  }, [items, scrollTop, rowHeight])
+  useEffect(() => {
+    if (
+      items.length &&
+      window.height > 0 &&
+      items.length * rowHeight - window.top - window.height <= 200
+    )
+      onNearEnd?.()
+  }, [items.length, rowHeight, window.top, window.height, onNearEnd])
+  const start = Math.max(0, Math.floor(window.top / rowHeight) - 8)
+  const end = Math.min(items.length, Math.ceil((window.top + window.height) / rowHeight) + 8)
   return (
     <div
       ref={viewport}
@@ -51,11 +77,12 @@ export function L2ProjectHistoryList<T>({
         onScroll(top)
       }}
     >
-      <div style={{ height: items.length * 36, position: 'relative' }}>
-        <div style={{ position: 'absolute', top: start * 36, left: 0, right: 0 }}>
+      <div style={{ height: items.length * rowHeight, position: 'relative' }}>
+        <div style={{ position: 'absolute', top: start * rowHeight, left: 0, right: 0 }}>
           {items.slice(start, end).map((item, index) => render(item, start + index))}
         </div>
       </div>
+      {footer}
     </div>
   )
 }

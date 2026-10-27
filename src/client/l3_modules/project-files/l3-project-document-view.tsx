@@ -33,7 +33,7 @@ import { useL4CodePreferences } from '@client/l4_foundation/ui/code/l4-code-pref
 import { L4ImageViewer } from '@client/l4_foundation/ui/l4-image-viewer'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
-import type { L3ProjectFileRuntime } from './l3-project-file-runtime'
+import { getL3FileDiffKey, type L3ProjectFileRuntime } from './l3-project-file-runtime'
 import type { L3ProjectGitBrowser } from './l3-project-git-runtime'
 import { useL3ProjectDocumentGit } from './l3-project-document-git'
 import { L3CodeSurfaceToolbarButton } from './l3-code-surface-toolbar-button'
@@ -158,7 +158,10 @@ export function L3ProjectDocumentView({
         {activeDiff ? (
           <>
             <span className="mr-auto shrink-0 px-1 text-xs text-muted-foreground">
-              {activeDiff.label ?? t('headToWorking')}
+              {activeDiff.label ??
+                (activeDiff.comparison
+                  ? `${activeDiff.comparison.baseCommit?.slice(0, 7) ?? '∅'} → ${activeDiff.comparison.targetCommit.slice(0, 7)}`
+                  : t('headToWorking'))}
               {activeDiff.status === 'text' &&
               activeDiff.original.content === activeDiff.modified.content
                 ? t('noDiffChanges')
@@ -333,7 +336,7 @@ export function L3ProjectDocumentView({
         {activeDiff ? (
           activeDiff.status === 'text' ? (
             <L4CodeDiff
-              key={`${activeDiff.repositoryRoot}:${activeDiff.path}`}
+              key={getL3FileDiffKey(activeDiff)}
               ref={diffRef}
               original={activeDiff.original}
               modified={activeDiff.modified}
@@ -352,7 +355,7 @@ export function L3ProjectDocumentView({
                 {activeDiff.modifiedMetadata}
               </pre>
             </div>
-          ) : activeDiff.status === 'loading' ? (
+          ) : activeDiff.status === 'loading' || activeDiff.status === 'unloaded' ? (
             <Loading />
           ) : (
             <div className="flex size-full flex-col items-center justify-center gap-3 p-6 text-center text-sm">

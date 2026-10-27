@@ -72,16 +72,29 @@ function emptySearch(input: L4ProjectSearchInput): L3FileSearch {
     error: null
   }
 }
-interface DiffOptions {
+export interface L3FileDiffTarget {
   repositoryRoot: string
   path: string
   comparison?: L4GitHistoricalDiff
+}
+export type L3FileTabTarget = string | L3FileDiffTarget
+export function getL3FileDiffKey(target: L3FileDiffTarget): string {
+  return JSON.stringify([
+    target.repositoryRoot,
+    target.path,
+    target.comparison?.baseCommit ?? null,
+    target.comparison?.targetCommit ?? null,
+    target.comparison?.oldPath ?? null
+  ])
+}
+interface DiffOptions extends L3FileDiffTarget {
   editorState?: L4CodeDiffState | null
   label?: string
   initialLine?: number
 }
 export type L3FileDiff = DiffOptions &
   (
+    | { status: 'unloaded' }
     | { status: 'loading' }
     | {
         status: 'text'
@@ -101,6 +114,7 @@ export interface L3ProjectFileState {
   search: L3FileSearch
   searchOpen: boolean
   documents: Map<string, L3FileDocument>
+  diffs: L3FileDiff[]
   activeDiff: L3FileDiff | null
 }
 interface RuntimeOptions {
@@ -118,7 +132,8 @@ export interface L3ProjectFileBrowsingState {
   expandedPaths: string[]
   treeScrollTop: number
   searchQuery: string
-  activeDiff: { repositoryRoot: string; path: string; comparison?: L4GitHistoricalDiff } | null
+  diffs?: L3FileDiffTarget[]
+  activeDiff: L3FileDiffTarget | null
 }
 function projectText(
   key: keyof (typeof L3_PROJECT_FILES_LOCALE_MESSAGES)['zh-CN'],
@@ -153,6 +168,7 @@ export class L3ProjectFileRuntime {
     search: emptySearch({ query: '', ...DEFAULT_SEARCH_OPTIONS }),
     searchOpen: false,
     documents: new Map(),
+    diffs: [],
     activeDiff: null
   }
   private readonly listeners = new Set<() => void>()
@@ -169,7 +185,7 @@ export class L3ProjectFileRuntime {
   private readonly restoredPreviewScrollTops = new Map<string, number>()
   private searchRequest: AbortController | null = null
   private navigation: L4CodeLineNavigation | null = null
-  private diffRequest: AbortController | null = null
+  private readonly diffRequests = new Map<string, AbortController>()
   private revision = 0
   private disposed = false
 
@@ -225,8 +241,9 @@ export class L3ProjectFileRuntime {
     return { editorStates, fileViewModes }
   }
   restoreBrowsing(input: L3ProjectFileBrowsingState): void {
-    this.state.tabs = [...input.tabs]
-    for (const path of input.tabs) {
+    if (this.disposed) return
+    this.state.tabs = input.tabs.slice(0, this.options.maxTabs)
+    for (const path of this.state.tabs) {
       this.restoredTabs.add(path)
       const editorState = input.editorStates[path]
       if (editorState) this.restoredEditorStates.set(path, editorState)
@@ -234,18 +251,30 @@ export class L3ProjectFileRuntime {
       if (viewMode) this.restoredFileViewModes.set(path, viewMode)
     }
     this.state.activePath =
-      input.activePath && input.tabs.includes(input.activePath) ? input.activePath : null
+      input.activePath && this.state.tabs.includes(input.activePath) ? input.activePath : null
     this.state.expandedPaths = new Set(input.expandedPaths)
     this.state.treeScrollTop = input.treeScrollTop
     this.state.search = emptySearch({ query: input.searchQuery, ...DEFAULT_SEARCH_OPTIONS })
-    for (const path of input.tabs) this.state.documents.set(path, { status: 'unloaded' })
-    for (const path of input.expandedPaths) void this.ensureDirectory(path)
-    if (input.activeDiff) {
-      this.openDiff(
-        input.activeDiff.repositoryRoot,
-        input.activeDiff.path,
-        input.activeDiff.comparison
+    for (const path of this.state.tabs) this.state.documents.set(path, { status: 'unloaded' })
+    const targets = [...(input.diffs ?? []), ...(input.activeDiff ? [input.activeDiff] : [])]
+    for (const target of targets) {
+      if (this.state.diffs.some((diff) => getL3FileDiffKey(diff) === getL3FileDiffKey(target)))
+        continue
+      if (
+        this.options.maxTabs &&
+        this.state.tabs.length + this.state.diffs.length >= this.options.maxTabs
       )
+        break
+      this.state.diffs.push({ ...target, status: 'unloaded' })
+    }
+    for (const path of input.expandedPaths) void this.ensureDirectory(path)
+    this.publish()
+    const activeTarget = input.activeDiff
+    const activeDiff = activeTarget
+      ? this.state.diffs.find((diff) => getL3FileDiffKey(diff) === getL3FileDiffKey(activeTarget))
+      : null
+    if (activeDiff) {
+      this.openDiff(activeDiff.repositoryRoot, activeDiff.path, activeDiff.comparison)
     } else if (this.state.activePath) {
       void this.ensureDocument(this.state.activePath)
     }
@@ -421,13 +450,12 @@ export class L3ProjectFileRuntime {
         normalized)
       : normalized
     if (!this.state.tabs.includes(path)) {
-      if (this.options.maxTabs && this.state.tabs.length >= this.options.maxTabs) {
-        this.options.onNotice?.(projectText('maxOpenFiles', { count: this.options.maxTabs }))
+      if (!this.canOpenTab()) {
         return
       }
       this.state.tabs.push(path)
     }
-    this.clearDiff()
+    this.state.activeDiff = null
     if (!this.state.documents.has(path)) this.state.documents.set(path, { status: 'unloaded' })
     this.state.activePath = path
     this.navigation = line === undefined ? null : { line }
@@ -436,55 +464,76 @@ export class L3ProjectFileRuntime {
     void this.ensureDocument(path, line !== undefined)
     this.publish()
   }
-  closeTabs(target: string | null, scope: L3FileTabCloseScope): void {
+  closeTabs(target: L3FileTabTarget | null, scope: L3FileTabCloseScope): void {
+    if (this.disposed) return
     const state = this.state
-    const tabs: (string | null)[] = [...state.tabs, ...(state.activeDiff ? [null] : [])]
-    const index = tabs.indexOf(target)
+    const tabs: (string | L3FileDiff)[] = [...state.tabs, ...state.diffs]
+    const resolved =
+      target === null
+        ? state.activeDiff
+        : typeof target === 'string'
+          ? target
+          : state.diffs.find((diff) => getL3FileDiffKey(diff) === getL3FileDiffKey(target))
+    const index = resolved === null || resolved === undefined ? -1 : tabs.indexOf(resolved)
     if (index < 0 && scope !== 'all') return
     const removed = new Set(
       tabs.filter(
         (tab, position) =>
           scope === 'all' ||
           (scope === 'current'
-            ? tab === target
+            ? tab === resolved
             : scope === 'others'
-              ? tab !== target
+              ? tab !== resolved
               : scope === 'left'
                 ? position < index
                 : position > index)
       )
     )
     if (!removed.size) return
-    const previousActive = state.activeDiff ? null : state.activePath
-    for (const path of removed) {
-      if (path === null) {
-        this.clearDiff()
+    const previousActive = state.activeDiff ?? state.activePath
+    for (const tab of removed) {
+      if (typeof tab !== 'string') {
+        this.invalidateDiff(tab)
         continue
       }
-      this.documentRequests.get(path)?.abort()
-      this.documentRequests.delete(path)
-      this.releaseDocument(state.documents.get(path))
-      state.documents.delete(path)
-      this.restoredEditorStates.delete(path)
-      this.restoredFileViewModes.delete(path)
-      this.restoredPreviewScrollTops.delete(path)
-      this.closeMissing.delete(path)
-      this.restoredTabs.delete(path)
+      this.documentRequests.get(tab)?.abort()
+      this.documentRequests.delete(tab)
+      this.releaseDocument(state.documents.get(tab))
+      state.documents.delete(tab)
+      this.restoredEditorStates.delete(tab)
+      this.restoredFileViewModes.delete(tab)
+      this.restoredPreviewScrollTops.delete(tab)
+      this.closeMissing.delete(tab)
+      this.restoredTabs.delete(tab)
     }
     state.tabs = state.tabs.filter((path) => !removed.has(path))
+    state.diffs = state.diffs.filter((diff) => !removed.has(diff))
     if (state.activePath && removed.has(state.activePath)) {
-      this.navigation = null
-      const activeIndex = tabs.indexOf(state.activePath)
+      const fileTabs = tabs.filter((tab): tab is string => typeof tab === 'string')
+      const activeIndex = fileTabs.indexOf(state.activePath)
       state.activePath =
-        tabs.slice(activeIndex + 1).find((path) => path !== null && !removed.has(path)) ??
+        fileTabs.slice(activeIndex + 1).find((path) => !removed.has(path)) ??
+        fileTabs
+          .slice(0, activeIndex)
+          .reverse()
+          .find((path) => !removed.has(path)) ??
+        null
+    }
+    if (previousActive !== null && removed.has(previousActive)) {
+      this.navigation = null
+      const activeIndex = tabs.indexOf(previousActive)
+      const next =
+        tabs.slice(activeIndex + 1).find((tab) => !removed.has(tab)) ??
         tabs
           .slice(0, activeIndex)
           .reverse()
-          .find((path) => path !== null && !removed.has(path)) ??
-        null
+          .find((tab) => !removed.has(tab))
+      state.activeDiff = typeof next === 'object' ? next : null
+      if (typeof next === 'string') state.activePath = next
     }
     this.publish()
-    if (!state.activeDiff && state.activePath && previousActive !== state.activePath)
+    if (state.activeDiff) void this.ensureDiff(state.activeDiff)
+    else if (state.activePath && previousActive !== state.activePath)
       void this.ensureDocument(state.activePath)
   }
   reloadFile(path: string): void {
@@ -634,16 +683,32 @@ export class L3ProjectFileRuntime {
     if (this.disposed || document?.status !== 'text' || document.comparison?.status !== 'ready')
       return
     const comparison = document.comparison
-    this.clearDiff()
-    this.state.activeDiff = {
-      status: 'text',
-      repositoryRoot: comparison.repositoryRoot,
-      path: comparison.path,
-      original: comparison.original,
-      modified: { path: comparison.path, content: document.content },
-      initialLine
+    let diff = this.state.diffs.find(
+      (item) =>
+        !item.comparison &&
+        item.repositoryRoot === comparison.repositoryRoot &&
+        item.path === comparison.path
+    )
+    if (!diff) {
+      if (!this.canOpenTab()) return
+      diff = {
+        status: 'text',
+        repositoryRoot: comparison.repositoryRoot,
+        path: comparison.path,
+        original: comparison.original,
+        modified: { path: comparison.path, content: document.content }
+      }
+      this.state.diffs.push(diff)
+    } else {
+      this.invalidateDiff(diff)
+      Object.assign(diff, {
+        status: 'text',
+        original: comparison.original,
+        modified: { path: comparison.path, content: document.content }
+      })
     }
-    this.publish()
+    if (initialLine !== undefined) diff.initialLine = initialLine
+    this.openDiff(diff.repositoryRoot, diff.path)
   }
   openDiff(
     repositoryRoot: string,
@@ -652,30 +717,35 @@ export class L3ProjectFileRuntime {
     label?: string
   ): void {
     if (this.disposed) return
-    this.clearDiff()
-    this.state.activeDiff = {
-      status: 'loading',
-      repositoryRoot,
-      path,
-      comparison,
-      label
+    const target = { repositoryRoot, path, comparison }
+    let diff = this.state.diffs.find((item) => getL3FileDiffKey(item) === getL3FileDiffKey(target))
+    if (!diff) {
+      if (!this.canOpenTab()) return
+      diff = { ...target, status: 'unloaded', label }
+      this.state.diffs.push(diff)
+    } else if (label !== undefined) {
+      diff.label = label
     }
+    this.navigation = null
+    this.state.activeDiff = diff
     this.publish()
-    void this.ensureDiff()
+    void this.ensureDiff(diff)
   }
   closeDiff(): void {
     this.closeTabs(null, 'current')
   }
   reloadDiff(): void {
-    const previous = this.state.activeDiff
-    if (!previous) return
-    this.clearDiff()
-    this.state.activeDiff = { ...previous, status: 'loading' }
+    const diff = this.state.activeDiff
+    if (!diff || this.disposed) return
+    this.invalidateDiff(diff)
     this.publish()
-    void this.ensureDiff()
+    void this.ensureDiff(diff)
   }
   saveDiffState(expected: L3FileDiff, state: L4CodeDiffState | null): void {
-    if (this.state.activeDiff === expected) expected.editorState = state
+    // 卸载回调仍属于原标签；尚未创建编辑器时的空状态不能抹掉已有位置。
+    if (this.disposed || !this.state.diffs.includes(expected) || !state) return
+    expected.editorState = state
+    delete expected.initialLine
   }
   setDiffViewMode(diffViewMode: 'side-by-side' | 'inline'): void {
     if (this.state.activeDiff) saveL4CodePreferences({ diffViewMode })
@@ -694,10 +764,12 @@ export class L3ProjectFileRuntime {
       this.invalidateDocument(path)
       this.closeMissing.add(path)
     }
-    if (this.state.activeDiff?.repositoryRoot === repositoryRoot) this.reloadDiff()
-    else this.publish()
-    if (!this.state.activeDiff && this.state.activePath)
-      void this.ensureDocument(this.state.activePath)
+    for (const diff of this.state.diffs) {
+      if (diff.repositoryRoot === repositoryRoot && !diff.comparison) this.invalidateDiff(diff)
+    }
+    this.publish()
+    if (this.state.activeDiff) void this.ensureDiff(this.state.activeDiff)
+    else if (this.state.activePath) void this.ensureDocument(this.state.activePath)
   }
   saveEditorState(path: string, state: L4CodePreviewState | null): void {
     const document = this.state.documents.get(path)
@@ -725,49 +797,69 @@ export class L3ProjectFileRuntime {
     for (const request of this.documentRequests.values()) request.abort()
     this.documentRequests.clear()
     this.cancelSearch()
-    this.clearDiff()
+    for (const diff of this.state.diffs) this.invalidateDiff(diff)
+    this.state.diffs = []
+    this.state.activeDiff = null
     for (const document of this.state.documents.values()) this.releaseDocument(document)
     this.state.documents.clear()
     this.restoredPreviewScrollTops.clear()
     this.listeners.clear()
   }
-  private async ensureDiff(): Promise<void> {
-    const current = this.state.activeDiff
-    if (this.disposed || current?.status !== 'loading' || this.diffRequest) return
+  private async ensureDiff(diff: L3FileDiff): Promise<void> {
+    const key = getL3FileDiffKey(diff)
+    if (this.disposed || diff.status !== 'unloaded' || this.diffRequests.has(key)) return
     const request = new AbortController()
-    this.diffRequest = request
+    this.diffRequests.set(key, request)
+    Object.assign(diff, { status: 'loading' })
+    this.publish()
     try {
       const result = await this.reader.diff(
-        current.repositoryRoot,
-        current.path,
+        diff.repositoryRoot,
+        diff.path,
         request.signal,
-        current.comparison
+        diff.comparison
       )
-      if (this.diffRequest !== request) return
-      this.state.activeDiff =
+      if (this.diffRequests.get(key) !== request) return
+      // 标签对象贯穿整个生命周期，异步完成不能覆盖卸载回调保存的编辑位置。
+      Object.assign(
+        diff,
         result.kind === 'text'
-          ? { ...current, status: 'text', original: result.original, modified: result.modified }
+          ? { status: 'text', original: result.original, modified: result.modified }
           : result.kind === 'metadata'
             ? {
-                ...current,
                 status: 'metadata',
                 originalMetadata: result.original,
                 modifiedMetadata: result.modified
               }
-            : { ...current, status: result.kind, error: null }
+            : { status: result.kind, error: null }
+      )
     } catch (cause) {
-      if (this.diffRequest !== request) return
-      this.state.activeDiff = { ...current, status: 'error', error: message(cause) }
+      if (this.diffRequests.get(key) !== request) return
+      console.warn('[Pi Desk][ProjectFile] 读取 Diff 失败', {
+        cwd: this.cwd,
+        repositoryRoot: diff.repositoryRoot,
+        path: diff.path,
+        error: message(cause)
+      })
+      Object.assign(diff, { status: 'error', error: message(cause) })
     }
-    if (this.diffRequest !== request) return
-    this.diffRequest = null
+    if (this.diffRequests.get(key) !== request) return
+    this.diffRequests.delete(key)
     this.publish()
   }
-  private clearDiff(): void {
-    this.navigation = null
-    this.diffRequest?.abort()
-    this.diffRequest = null
-    this.state.activeDiff = null
+  private invalidateDiff(diff: L3FileDiff): void {
+    const key = getL3FileDiffKey(diff)
+    this.diffRequests.get(key)?.abort()
+    this.diffRequests.delete(key)
+    Object.assign(diff, { status: 'unloaded' })
+    for (const field of ['original', 'modified', 'originalMetadata', 'modifiedMetadata', 'error'])
+      Reflect.deleteProperty(diff, field)
+  }
+  private canOpenTab(): boolean {
+    const maxTabs = this.options.maxTabs
+    if (!maxTabs || this.state.tabs.length + this.state.diffs.length < maxTabs) return true
+    this.options.onNotice?.(projectText('maxOpenFiles', { count: maxTabs }))
+    return false
   }
   private cancelSearch(): void {
     this.searchRequest?.abort()

@@ -9,6 +9,7 @@ import { readL3ImagePreviewMode } from '@client/l3_modules/preferences/l3-work-s
 import {
   L3ProjectFileRuntime,
   type L3ProjectFileState,
+  type L3FileTabTarget,
   type L3FileTabCloseScope
 } from '@client/l3_modules/project-files/l3-project-file-runtime'
 import type { L2WorkSessionGitBiz } from '../git-workspace/l2-work-session-git-biz'
@@ -222,7 +223,7 @@ export class L2FileWorkspaceRuntime {
   closeFile(id: string, path: string): void {
     this.closeTabs(id, path, 'current')
   }
-  closeTabs(id: string, target: string | null, scope: L3FileTabCloseScope): void {
+  closeTabs(id: string, target: L3FileTabTarget | null, scope: L3FileTabCloseScope): void {
     this.workspaces.get(id)?.files.closeTabs(target, scope)
   }
   hideWindow(id: string): void {
