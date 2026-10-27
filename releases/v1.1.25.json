@@ -1,0 +1,114 @@
+{
+  "tag": "v1.1.25",
+  "date": 1793099574635,
+  "source": {
+    "base": "9e32f6f32f10cd63071db2506dde693a7c440415",
+    "head": "24ac07483a1d11694e029f7f352438147ee2af4d"
+  },
+  "packages": [
+    {
+      "name": "@jetcrab/pi-desk-sdk",
+      "version": "1.1.10"
+    },
+    {
+      "name": "@jetcrab/pi-desk",
+      "version": "1.1.25"
+    },
+    {
+      "name": "@jetcrab/pi-desk-bg-run",
+      "version": "1.1.10"
+    },
+    {
+      "name": "@jetcrab/pi-desk-ctx",
+      "version": "1.1.11"
+    },
+    {
+      "name": "@jetcrab/pi-desk-deliverables",
+      "version": "1.1.12"
+    },
+    {
+      "name": "@jetcrab/pi-desk-quota-viewer",
+      "version": "1.1.12"
+    },
+    {
+      "name": "@jetcrab/pi-desk-remote-debug",
+      "version": "1.1.11"
+    },
+    {
+      "name": "@jetcrab/pi-desk-subagent",
+      "version": "1.1.11"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tibo-monitor",
+      "version": "1.1.11"
+    },
+    {
+      "name": "@jetcrab/pi-desk-todo",
+      "version": "1.0.4"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tool-reason",
+      "version": "1.1.1"
+    },
+    {
+      "name": "@jetcrab/pi-desk-usage",
+      "version": "1.1.12"
+    },
+    {
+      "name": "@jetcrab/pi-desk-workspace",
+      "version": "1.1.8"
+    }
+  ],
+  "clients": [
+    {
+      "platform": "windows",
+      "version": "1.1.17",
+      "file": "PiDesk-Windows-x86-Setup.exe",
+      "sha256": "9ff87088ed7730932ffc7f32c9c0221ad7fe48a629b6b222a47899bad442f37a"
+    },
+    {
+      "platform": "macos",
+      "version": "1.1.17",
+      "file": "PiDesk-macOS-universal.dmg",
+      "sha256": "290b8c74b28601d3a1ed7db9ba83d2ae94f3f4a8dddc827b6bc55b713ac4422d"
+    },
+    {
+      "platform": "linux",
+      "version": "1.1.17",
+      "file": "PiDesk-Linux-x86_64.AppImage",
+      "sha256": "58934fa7fa59932abf17967162f70a36824495b7ff30760d59bcd8ae3a7c2f97"
+    },
+    {
+      "platform": "android",
+      "version": "1.1.0",
+      "file": "PiDesk-Android.apk",
+      "sha256": "298cb6eef6229dbe7d39666f3cc74104ef0f88177ce90bd3361e76aa5d199972"
+    }
+  ],
+  "changes": {
+    "added": [],
+    "features": [
+      "Browse local and remote branches in project history with a searchable, keyboard-accessible branch tree.",
+      "Keep multiple file comparisons open alongside regular file tabs, reuse existing comparisons, and restore comparison tabs when reopening project preview.",
+      "Load more project history automatically as you scroll, with retry support for failed loads."
+    ],
+    "changed": [
+      "Streamlined project preview headers, file tabs, and document controls, with denser file trees and improved narrow-screen history layouts.",
+      "Plugin maintenance now waits up to 15 seconds for active calls to finish; a timeout fails only that maintenance operation."
+    ],
+    "fixed": [
+      "Plugin maintenance no longer blocks chat subscriptions, refreshes, skill discovery, or maintenance of unrelated plugins.",
+      "Chat subscriptions and reconnects now receive the current state without waiting for plugin initialization or queued commands.",
+      "Missing or mismatched plugin packages, failed extension entries, and provider registration errors no longer disable other working plugins.",
+      "Stalled plugin initialization or cleanup in one work session no longer prevents other sessions from loading.",
+      "Project preview titles now follow project switches and browser navigation, including native desktop preview window titles.",
+      "Chat stays anchored to the bottom when width changes reflow messages.",
+      "Older sessions without Todo query support now hide the progress widget silently instead of showing a synchronization error.",
+      "Improved keyboard navigation between virtualized rows in the project history change tree."
+    ],
+    "removed": [
+      "Removed the interaction hint footer from Todo details."
+    ],
+    "breaking": []
+  }
+}
