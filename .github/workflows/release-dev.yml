@@ -82,6 +82,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_TARGET: ${{ inputs.target }}
+          REBUILD_ONLY: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish }}
         run: node .github/scripts/release-dev.mjs prepare
       - uses: actions/upload-artifact@v4
         if: steps.plan.outputs.packages != '[]'
@@ -191,6 +192,7 @@ jobs:
           RELEASE_PACKAGES_JSON: ${{ needs.plan.outputs.packages }}
         run: node .github/scripts/reuse-npm-artifacts.mjs
       - name: 保存已上传包的原始制品来源
+        if: github.event_name != 'workflow_dispatch' || inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/release-dev-reuse.mjs record
