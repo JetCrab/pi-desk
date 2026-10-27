@@ -43,6 +43,7 @@ import {
 } from './l3-project-git-model'
 import type { L3DirectoryState, L3ProjectFileRuntime } from './l3-project-file-runtime'
 import { L3ProjectPathMenu } from './l3-project-path-menu'
+import styles from './l3-project-file-browser.module.css'
 import {
   buildL3ProjectPathTree,
   compactL3PathTreeDirectory,
@@ -60,6 +61,7 @@ interface L3ProjectFileBrowserProps {
   onOpenGitBranches: (repositoryRoot: string) => void
   onFileOpened?: () => void
   rootTitle?: React.ReactNode
+  showRootTitle?: boolean
   gitReadOnly?: boolean
 }
 
@@ -155,6 +157,7 @@ export function L3ProjectFileBrowser({
   onOpenGitBranches,
   onFileOpened,
   rootTitle,
+  showRootTitle = true,
   gitReadOnly = false
 }: L3ProjectFileBrowserProps): React.JSX.Element {
   const { t } = useTranslation('projectFiles')
@@ -581,7 +584,7 @@ export function L3ProjectFileBrowser({
               type="button"
               disabled={gitReadOnly || repository.state !== 'ready'}
               className={cn(
-                buttonVariants({ variant: 'outline', size: 'sm' }),
+                buttonVariants({ variant: 'ghost', size: 'sm' }),
                 'max-w-28 shrink gap-1 font-mono text-xs text-muted-foreground'
               )}
               title={
@@ -589,6 +592,7 @@ export function L3ProjectFileBrowser({
                   ? t(gitReadOnly ? 'gitBranchReadOnly' : 'gitBranches')
                   : selectL4LocalizedText(repository.message, locale)
               }
+              aria-label={t(gitReadOnly ? 'gitBranchReadOnly' : 'gitBranches')}
               onClick={() => onOpenGitBranches(root)}
             >
               <GitBranchIcon className="size-3 shrink-0" />
@@ -678,6 +682,98 @@ export function L3ProjectFileBrowser({
     repositories.length === 1 && repositories[0]?.root === '' ? repositories[0] : null
   const showLayoutToggle = repositories.length > 0 && !singleProjectRootRepository
   const effectiveLayout = showLayoutToggle ? (gitWorkspace?.layout ?? 'directory') : 'directory'
+  const rootBranchButton = singleProjectRootRepository ? (
+    <button
+      type="button"
+      disabled={gitReadOnly || singleProjectRootRepository.state !== 'ready'}
+      className={cn(
+        buttonVariants({ variant: 'ghost', size: 'sm' }),
+        'max-w-32 shrink gap-1 font-mono text-xs text-muted-foreground',
+        !showRootTitle && 'min-w-0 flex-1 justify-start'
+      )}
+      aria-label={t(gitReadOnly ? 'gitBranchReadOnly' : 'gitBranches')}
+      title={
+        singleProjectRootRepository.state === 'ready'
+          ? `${t(gitReadOnly ? 'gitBranchReadOnly' : 'gitBranches')} · ${getL3GitHeadLabel(singleProjectRootRepository.head)}`
+          : selectL4LocalizedText(singleProjectRootRepository.message, locale)
+      }
+      onClick={() => onOpenGitBranches('')}
+    >
+      <GitBranchIcon className="size-3 shrink-0" />
+      <span className="truncate">
+        {singleProjectRootRepository.state === 'ready'
+          ? getL3GitHeadLabel(singleProjectRootRepository.head)
+          : t('unavailable')}
+      </span>
+    </button>
+  ) : null
+
+  const controls = (
+    <div
+      className="flex min-h-8 min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      tabIndex={showRootTitle ? undefined : 0}
+      aria-label={t('projectFiles', { name: projectName })}
+    >
+      {showLayoutToggle ? (
+        <div className="flex shrink-0 gap-0.5" role="group" aria-label={t('layout')}>
+          {(['directory', 'repository'] as const).map((layout) => (
+            <button
+              key={layout}
+              data-testid={`project-file-layout-${layout}`}
+              type="button"
+              aria-pressed={effectiveLayout === layout}
+              className={cn(
+                buttonVariants({ variant: 'ghost', size: 'sm' }),
+                effectiveLayout === layout && 'bg-accent text-accent-foreground'
+              )}
+              onClick={() => {
+                runtime.cancelDirectoryExpansion()
+                gitRuntime.setLayout(cwd, layout)
+              }}
+            >
+              {t(layout === 'directory' ? 'directory' : 'repository')}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {repositories.length > 0 ? (
+        <button
+          data-testid="project-git-changes-toggle"
+          type="button"
+          aria-pressed={gitWorkspace?.changesOnly ?? false}
+          className={cn(
+            buttonVariants({ variant: 'ghost', size: 'sm' }),
+            'min-w-0 gap-1',
+            gitWorkspace?.changesOnly && 'bg-accent text-accent-foreground'
+          )}
+          onClick={() => {
+            runtime.cancelDirectoryExpansion()
+            gitRuntime.setChangesOnly(cwd, !(gitWorkspace?.changesOnly ?? false))
+          }}
+        >
+          <ListFilterIcon className="size-3 shrink-0" />
+          <span className="truncate">{t('changesOnly')}</span>
+          <span className="rounded-md bg-muted px-1 font-mono text-xs">
+            {projectChanges.length}
+          </span>
+        </button>
+      ) : null}
+      {!showRootTitle ? rootBranchButton : null}
+      <button
+        ref={searchButtonRef}
+        type="button"
+        className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'ml-auto')}
+        aria-label={t('searchProject')}
+        title={t('searchProject')}
+        onClick={() => {
+          setSearchOpen(true)
+          requestAnimationFrame(() => searchInputRef.current?.focus())
+        }}
+      >
+        <SearchIcon className="size-3.5" />
+      </button>
+    </div>
+  )
 
   return (
     <section
@@ -706,8 +802,42 @@ export function L3ProjectFileBrowser({
           }
         />
       ) : (
-        <div className="space-y-1.5 border-b px-2.5 py-2">
-          <div className="flex min-h-7 min-w-0 items-center gap-2">
+        <div className="border-b px-1">
+          {showRootTitle ? (
+            <div className="flex min-h-7 min-w-0 items-center gap-1">
+              <L3ProjectPathMenu
+                cwd={cwd}
+                path=""
+                type="directory"
+                onReveal={
+                  runtime.canReveal ? (path, type) => runtime.revealFile(path, type) : undefined
+                }
+                trigger={
+                  rootTitle ? (
+                    <div className="flex min-w-0 flex-1">{rootTitle}</div>
+                  ) : (
+                    <div tabIndex={0} className="flex min-w-0 flex-1 items-baseline gap-1">
+                      <p className="shrink-0 truncate text-xs font-semibold" title={projectName}>
+                        {projectName}
+                      </p>
+                      <span className="text-xs text-muted-foreground">·</span>
+                      <p
+                        className="min-w-0 truncate font-mono text-xs text-muted-foreground"
+                        title={cwd}
+                      >
+                        {compactPath(cwd)}
+                      </p>
+                    </div>
+                  )
+                }
+              />
+              {rootBranchButton}
+            </div>
+          ) : null}
+
+          {showRootTitle ? (
+            controls
+          ) : (
             <L3ProjectPathMenu
               cwd={cwd}
               path=""
@@ -715,113 +845,9 @@ export function L3ProjectFileBrowser({
               onReveal={
                 runtime.canReveal ? (path, type) => runtime.revealFile(path, type) : undefined
               }
-              trigger={
-                rootTitle ? (
-                  <div className="flex min-w-0 flex-1">{rootTitle}</div>
-                ) : (
-                  <div tabIndex={0} className="flex min-w-0 flex-1 items-baseline gap-1">
-                    <p className="shrink-0 truncate text-xs font-semibold" title={projectName}>
-                      {projectName}
-                    </p>
-                    <span className="text-xs text-muted-foreground">·</span>
-                    <p
-                      className="min-w-0 truncate font-mono text-xs text-muted-foreground"
-                      title={cwd}
-                    >
-                      {compactPath(cwd)}
-                    </p>
-                  </div>
-                )
-              }
+              trigger={controls}
             />
-            {singleProjectRootRepository ? (
-              <button
-                type="button"
-                disabled={gitReadOnly || singleProjectRootRepository.state !== 'ready'}
-                className={cn(
-                  buttonVariants({ variant: 'outline', size: 'sm' }),
-                  'max-w-32 shrink gap-1 font-mono text-xs text-muted-foreground'
-                )}
-                title={
-                  singleProjectRootRepository.state === 'ready'
-                    ? t(gitReadOnly ? 'gitBranchReadOnly' : 'gitBranches')
-                    : selectL4LocalizedText(singleProjectRootRepository.message, locale)
-                }
-                onClick={() => onOpenGitBranches('')}
-              >
-                <GitBranchIcon className="size-3 shrink-0" />
-                <span className="truncate">
-                  {singleProjectRootRepository.state === 'ready'
-                    ? getL3GitHeadLabel(singleProjectRootRepository.head)
-                    : t('unavailable')}
-                </span>
-              </button>
-            ) : null}
-          </div>
-
-          <div className="flex min-h-8 min-w-0 items-center gap-1.5">
-            {showLayoutToggle ? (
-              <div
-                className="flex shrink-0 rounded-md border bg-background/55 p-0.5"
-                role="group"
-                aria-label={t('layout')}
-              >
-                {(['directory', 'repository'] as const).map((layout) => (
-                  <button
-                    key={layout}
-                    data-testid={`project-file-layout-${layout}`}
-                    type="button"
-                    aria-pressed={effectiveLayout === layout}
-                    className={cn(
-                      buttonVariants({ variant: 'ghost', size: 'sm' }),
-                      effectiveLayout === layout && 'bg-accent text-accent-foreground'
-                    )}
-                    onClick={() => {
-                      runtime.cancelDirectoryExpansion()
-                      gitRuntime.setLayout(cwd, layout)
-                    }}
-                  >
-                    {t(layout === 'directory' ? 'directory' : 'repository')}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {repositories.length > 0 ? (
-              <button
-                data-testid="project-git-changes-toggle"
-                type="button"
-                aria-pressed={gitWorkspace?.changesOnly ?? false}
-                className={cn(
-                  buttonVariants({ variant: 'outline', size: 'sm' }),
-                  'min-w-0 gap-1',
-                  gitWorkspace?.changesOnly && 'bg-accent text-accent-foreground'
-                )}
-                onClick={() => {
-                  runtime.cancelDirectoryExpansion()
-                  gitRuntime.setChangesOnly(cwd, !(gitWorkspace?.changesOnly ?? false))
-                }}
-              >
-                <ListFilterIcon className="size-3 shrink-0" />
-                <span className="truncate">{t('changesOnly')}</span>
-                <span className="rounded-md bg-muted px-1 font-mono text-xs">
-                  {projectChanges.length}
-                </span>
-              </button>
-            ) : null}
-            <button
-              ref={searchButtonRef}
-              type="button"
-              className={cn(buttonVariants({ variant: 'outline', size: 'icon-sm' }), 'ml-auto')}
-              aria-label={t('searchProject')}
-              title={t('searchProject')}
-              onClick={() => {
-                setSearchOpen(true)
-                requestAnimationFrame(() => searchInputRef.current?.focus())
-              }}
-            >
-              <SearchIcon className="size-3.5" />
-            </button>
-          </div>
+          )}
         </div>
       )}
 
@@ -852,8 +878,8 @@ export function L3ProjectFileBrowser({
         />
       ) : (
         <L4ScrollArea
-          className="min-h-0 flex-1"
-          viewportClassName="py-1.5"
+          className={cn(styles.tree, 'min-h-0 flex-1')}
+          viewportClassName="py-0.5"
           viewportRef={scrollRef}
           onViewportScroll={(event) => runtime.setTreeScrollTop(event.currentTarget.scrollTop)}
         >

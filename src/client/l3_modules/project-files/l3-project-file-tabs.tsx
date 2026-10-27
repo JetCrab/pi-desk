@@ -1,7 +1,7 @@
 'use client'
 
 import { ChevronDownIcon, ChevronUpIcon, FileCode2Icon, XIcon } from 'lucide-react'
-import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
@@ -23,6 +23,7 @@ interface L3ProjectFileTabsProps {
   activePath: string | null
   diffPath: string | null
   mobile: boolean
+  actions?: ReactNode
   onActivate: (path: string) => void
   onClose: (path: string | null, scope: L3FileTabCloseScope) => void
 }
@@ -49,6 +50,7 @@ export function L3ProjectFileTabs({
   activePath,
   diffPath,
   mobile,
+  actions,
   onActivate,
   onClose
 }: L3ProjectFileTabsProps): React.JSX.Element | null {
@@ -60,7 +62,9 @@ export function L3ProjectFileTabs({
   const [expanded, setExpanded] = useState(false)
   const [overflow, setOverflow] = useState(false)
   const [clippedIndexes, setClippedIndexes] = useState<readonly number[]>([])
-  const maxHeight = (mobile ? 2 : 3) * 36
+  const merged = actions !== undefined
+  const rowHeight = merged && !mobile ? 32 : 36
+  const maxHeight = (mobile ? 2 : 3) * rowHeight
   const tabs: { path: string | null; label: string; title: string }[] = paths.map((path) => ({
     path,
     label: fileLabel(path, paths),
@@ -95,8 +99,14 @@ export function L3ProjectFileTabs({
 
   if (tabs.length === 0) return null
   return (
-    <div className="shrink-0 border-b bg-muted" data-testid="file-tabs">
-      <div className="overflow-hidden" style={{ maxHeight: expanded ? undefined : maxHeight }}>
+    <div
+      className={cn('shrink-0 bg-muted', merged ? 'flex flex-wrap items-start' : 'border-b')}
+      data-testid="file-tabs"
+    >
+      <div
+        className={cn('overflow-hidden', merged && 'min-w-0 flex-[1_1_12rem]')}
+        style={{ maxHeight: expanded ? undefined : maxHeight }}
+      >
         <div
           ref={rowsRef}
           role="tablist"
@@ -137,7 +147,8 @@ export function L3ProjectFileTabs({
                       inert={clipped || undefined}
                       title={tab.title}
                       className={cn(
-                        'flex h-9 max-w-full items-center border-r border-b text-sm',
+                        'flex max-w-full items-center text-sm',
+                        merged ? (mobile ? 'h-9' : 'h-8') : 'h-9 border-r border-b',
                         mobile ? 'w-[min(50%,12rem)]' : 'max-w-60',
                         clipped && 'invisible',
                         selected
@@ -154,7 +165,7 @@ export function L3ProjectFileTabs({
                     type="button"
                     role="tab"
                     aria-selected={selected}
-                    className="flex h-9 min-w-0 flex-1 cursor-pointer items-center gap-2 pl-3 pr-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 pl-3 pr-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     onClick={() => {
                       if (suppressTouchClickRef.current) {
                         suppressTouchClickRef.current = false
@@ -260,6 +271,15 @@ export function L3ProjectFileTabs({
           })}
         </div>
       </div>
+      {merged && actions ? (
+        <div
+          className="ml-auto flex min-h-8 max-w-full flex-wrap items-center justify-end gap-1 px-1"
+          role="group"
+          aria-label={t('fileActions')}
+        >
+          {actions}
+        </div>
+      ) : null}
       {overflow ? (
         <Button
           variant="ghost"

@@ -89,7 +89,7 @@ export function L3ProjectSearchResults({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div
-        className="flex min-h-8 flex-wrap items-center justify-between gap-x-2 px-3 text-xs text-muted-foreground"
+        className="flex min-h-6 flex-wrap items-center justify-between gap-x-2 px-2 text-xs text-muted-foreground"
         role="status"
         aria-live="polite"
       >
@@ -167,11 +167,13 @@ export function L3ProjectSearchResults({
           ) : ready ? (
             <>
               {fileCount > 0 ? (
-                <section className="pt-1">
-                  <h3 className="flex min-h-8 items-center gap-2 px-3 text-xs text-muted-foreground">
-                    {t('searchFileHeading')}
-                    <span className="tabular-nums">{fileCount}</span>
-                  </h3>
+                <section>
+                  {search.scope === 'all' ? (
+                    <h3 className="flex min-h-6 items-center gap-2 px-2 text-xs text-muted-foreground">
+                      {t('searchFileHeading')}
+                      <span className="tabular-nums">{fileCount}</span>
+                    </h3>
+                  ) : null}
                   {files.map(({ path, ranges }) => {
                     const slash = path.lastIndexOf('/')
                     const decoration = fileDecoration(path)
@@ -185,22 +187,22 @@ export function L3ProjectSearchResults({
                         data-testid={`project-search-result-${path}`}
                         data-search-result="true"
                         className={cn(
-                          'mx-1.5 flex min-h-14 w-[calc(100%-0.75rem)] justify-start gap-2 px-2 py-2 text-left font-normal',
+                          'mx-1 flex min-h-6 w-[calc(100%-0.5rem)] justify-start gap-1 px-1 py-0 text-left font-normal [@media(pointer:coarse)]:min-h-9',
                           activePath === path && 'bg-accent'
                         )}
                         title={path}
                         onClick={() => onOpen(path)}
                       >
                         <span className="shrink-0">{renderFileIcon(path)}</span>
-                        <span className="min-w-0 flex-1">
-                          <span className={cn('block truncate text-sm', decoration.className)}>
+                        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+                          <span className={cn('truncate text-sm', decoration.className)}>
                             {highlight(path.slice(slash + 1), ranges, slash + 1)}
                           </span>
-                          <span className="mt-0.5 block truncate font-mono text-xs text-muted-foreground">
-                            {slash < 0
-                              ? t('searchProjectRoot')
-                              : highlight(path.slice(0, slash), ranges)}
-                          </span>
+                          {slash >= 0 ? (
+                            <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+                              {highlight(path.slice(0, slash), ranges)}
+                            </span>
+                          ) : null}
                         </span>
                         {decoration.badge ? (
                           <span
@@ -218,7 +220,7 @@ export function L3ProjectSearchResults({
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="ml-8 text-xs text-muted-foreground"
+                      className="ml-5 min-h-6 py-0 text-xs text-muted-foreground [@media(pointer:coarse)]:min-h-9"
                       onClick={() => setExpandedFiles(true)}
                     >
                       {t('searchExpandFiles', { count: fileCount - 3 })}
@@ -227,13 +229,15 @@ export function L3ProjectSearchResults({
                 </section>
               ) : null}
               {lineCount > 0 ? (
-                <section className={cn('pt-1', fileCount > 0 && 'mt-2 border-t')}>
-                  <h3 className="flex min-h-8 flex-wrap items-center gap-x-2 px-3 text-xs text-muted-foreground">
-                    {t('searchContentHeading')}
-                    <span>
-                      {t('searchContentCounts', { lines: lineCount, files: groups.size })}
-                    </span>
-                  </h3>
+                <section className={cn(fileCount > 0 && 'mt-1')}>
+                  {search.scope === 'all' ? (
+                    <h3 className="flex min-h-6 flex-wrap items-center gap-x-2 px-2 text-xs text-muted-foreground">
+                      {t('searchContentHeading')}
+                      <span>
+                        {t('searchContentCounts', { lines: lineCount, files: groups.size })}
+                      </span>
+                    </h3>
+                  ) : null}
                   {[...groups].map(([path, matches], index) => {
                     const slash = path.lastIndexOf('/')
                     const expanded = !collapsed.has(path)
@@ -243,7 +247,7 @@ export function L3ProjectSearchResults({
                         <Button
                           type="button"
                           variant="ghost"
-                          className="min-h-8 w-full justify-start gap-1.5 rounded-none px-3 text-left font-normal"
+                          className="min-h-6 w-full justify-start gap-1 rounded-none px-2 py-0 text-left font-normal [@media(pointer:coarse)]:min-h-9"
                           title={path}
                           aria-expanded={expanded}
                           aria-controls={groupId}
@@ -287,7 +291,7 @@ export function L3ProjectSearchResults({
                                 data-testid={`project-search-line-${path}-${line}`}
                                 data-search-result="true"
                                 className={cn(
-                                  'min-h-8 w-full justify-start gap-2 rounded-none border-l-2 border-transparent py-1 pr-3 pl-7 text-left font-mono font-normal',
+                                  'min-h-6 w-full justify-start gap-1 rounded-none border-l-2 border-transparent py-0 pr-2 pl-5 text-left font-mono font-normal [@media(pointer:coarse)]:min-h-9',
                                   selected?.path === path &&
                                     selected.line === line &&
                                     'border-l-foreground/50 bg-accent'
@@ -324,7 +328,7 @@ export function L3ProjectSearchResults({
         </div>
       </L4ScrollArea>
       {search.scope !== 'files' ? (
-        <p className="shrink-0 border-t px-3 py-1.5 text-xs leading-5 text-muted-foreground">
+        <p className="shrink-0 px-2 py-1 text-xs leading-5 text-muted-foreground">
           {t('searchTextLimit')}
         </p>
       ) : null}

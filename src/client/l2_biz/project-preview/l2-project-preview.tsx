@@ -78,6 +78,7 @@ export function L2ProjectPreview({
     <L3ProjectFileBrowser
       cwd={cwd}
       projectName={projectName}
+      showRootTitle={false}
       runtime={files}
       gitRuntime={git}
       onOpenGitBranches={openGit}
@@ -85,25 +86,26 @@ export function L2ProjectPreview({
     />
   )
   const code = (
-    <div className="flex size-full min-h-0 min-w-0 flex-col">
-      <L3ProjectFileTabs
-        cwd={cwd}
-        gitRuntime={git}
-        paths={state.tabs}
-        activePath={state.activePath}
-        diffPath={diffPath}
-        mobile={narrow}
-        onActivate={(path) => files.openFile(path)}
-        onClose={(path, scope) => files.closeTabs(path, scope)}
-      />
-      <L3ProjectDocumentView
-        runtime={files}
-        gitRuntime={git}
-        compact={width < 1100}
-        refreshOnFocus={refreshOnFocus}
-        onEscape={onEscape}
-      />
-    </div>
+    <L3ProjectDocumentView
+      runtime={files}
+      gitRuntime={git}
+      compact={width < 1100}
+      refreshOnFocus={refreshOnFocus}
+      onEscape={onEscape}
+      renderHeader={(actions) => (
+        <L3ProjectFileTabs
+          cwd={cwd}
+          gitRuntime={git}
+          paths={state.tabs}
+          activePath={state.activePath}
+          diffPath={diffPath}
+          mobile={narrow}
+          actions={actions}
+          onActivate={(path) => files.openFile(path)}
+          onClose={(path, scope) => files.closeTabs(path, scope)}
+        />
+      )}
+    />
   )
   const gitView = (
     <div className="flex size-full min-h-0 min-w-0 flex-col">
@@ -226,7 +228,7 @@ export function L2ProjectPreview({
       className="flex size-full min-h-0 min-w-0 flex-col overflow-hidden"
       data-testid="project-preview"
     >
-      <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b bg-muted px-3 py-2 pt-[max(8px,env(safe-area-inset-top))]">
+      <header className="flex min-h-9 shrink-0 items-center gap-1 bg-muted px-2 py-1 pt-[max(4px,env(safe-area-inset-top))]">
         {!stacked ? (
           <Button
             size="icon-sm"
@@ -241,15 +243,11 @@ export function L2ProjectPreview({
             )}
           </Button>
         ) : null}
-        <div className="min-w-0 flex-1">
-          {title ?? (
-            <h1 className="truncate text-lg font-semibold" title={cwd}>
-              {projectName}
-            </h1>
-          )}
-          <p className="truncate text-xs text-muted-foreground" title={cwd}>
-            {cwd}
-          </p>
+        <div className="flex min-w-0 flex-1 items-baseline gap-3" title={cwd}>
+          <div className="min-w-0 shrink-0 max-w-[50%] max-sm:max-w-full max-sm:shrink">
+            {title ?? <h1 className="truncate text-sm font-semibold">{projectName}</h1>}
+          </div>
+          <p className="min-w-0 truncate text-xs text-muted-foreground max-sm:hidden">{cwd}</p>
         </div>
         <Button
           size="sm"
@@ -272,11 +270,7 @@ export function L2ProjectPreview({
       ) : null}
       {stacked ? (
         <>
-          <div
-            className="flex shrink-0 gap-1 border-b px-2 py-1"
-            role="group"
-            aria-label={t('previewArea')}
-          >
+          <div className="flex shrink-0 gap-1 px-2 py-1" role="group" aria-label={t('previewArea')}>
             <Button
               size="sm"
               variant={page === 'files' ? 'secondary' : 'ghost'}
