@@ -33,7 +33,14 @@ export function developmentUnits(versions) {
 
 export async function prepareDevBatch(
   root,
-  { github, source, runId, target = 'all', readPublished = readPublishedVersions }
+  {
+    github,
+    source,
+    runId,
+    target = 'all',
+    rebuildOnly = false,
+    readPublished = readPublishedVersions
+  }
 ) {
   assert.match(source, /^[a-f0-9]{40}$/)
   assert.match(runId, /^\d+$/)
@@ -58,14 +65,20 @@ export async function prepareDevBatch(
     : {}
   if (state.checks === null && stable)
     await validateVersions(root, { base: stable.source.head, head: source })
+  const candidates = rebuildOnly ? Object.keys(versions) : selectDevUnits(versions, state)
   const selected =
     batch?.selected ??
-    selectDevUnits(versions, state).filter(
+    candidates.filter(
       (name) =>
-        versions[name] !== stableVersions[name] &&
+        (rebuildOnly || versions[name] !== stableVersions[name]) &&
         (target === 'all' || (target === 'npm' ? name.startsWith('pi-desk') : name === target))
     )
   const fixedVersions = { ...batch?.npmVersions }
+  if (rebuildOnly) {
+    for (const name of selected.filter((name) => name.startsWith('pi-desk'))) {
+      fixedVersions[name] ??= `${versions[name]}-dev`
+    }
+  }
   if (!batch && selected.some((name) => name.startsWith('pi-desk'))) {
     const batches = new Map()
     for (const [name, unit] of Object.entries(state.units)) {
@@ -84,7 +97,8 @@ export async function prepareDevBatch(
   }
   const prepared = await prepareDevelopmentVersions(root, {
     before: state.checks ?? '0'.repeat(40),
-    stableBase: stable?.source.head ?? null,
+    // 手动仅构建不会发布，允许验证当前稳定基础号；发布仍保留原版本门禁。
+    stableBase: rebuildOnly ? null : (stable?.source.head ?? null),
     selected: selected.filter((name) => name.startsWith('pi-desk')),
     versions: fixedVersions,
     readVersions: readPublished
@@ -172,7 +186,8 @@ async function main() {
     github,
     source,
     runId,
-    target: process.env.REQUESTED_TARGET || 'all'
+    target: process.env.REQUESTED_TARGET || 'all',
+    rebuildOnly: process.env.REBUILD_ONLY === 'true'
   })
   if (prepared.selected.length) {
     execFileSync(

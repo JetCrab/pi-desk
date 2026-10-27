@@ -57,6 +57,11 @@ const editorStateSchema = z.custom<L4CodePreviewState>(
     Array.isArray((value as { cursorState?: unknown }).cursorState) &&
     typeof (value as { viewState?: unknown }).viewState === 'object'
 )
+const diffSchema = z.object({
+  repositoryRoot: z.string(),
+  path: L4ProjectFilePathSchema,
+  comparison: L4GitHistoricalDiffSchema.optional()
+})
 const projectSchema = z.object({
   page: z.enum(['files', 'code', 'git']),
   historyPane: z.enum(['log', 'files']),
@@ -70,13 +75,8 @@ const projectSchema = z.object({
   changesOnly: z.boolean(),
   expandedRepositories: z.array(z.string()).max(100),
   history: historySchema,
-  activeDiff: z
-    .object({
-      repositoryRoot: z.string(),
-      path: L4ProjectFilePathSchema,
-      comparison: L4GitHistoricalDiffSchema.optional()
-    })
-    .nullable()
+  diffs: z.array(diffSchema).max(20).optional(),
+  activeDiff: diffSchema.nullable()
 })
 export type L2ProjectPreviewProject = z.infer<typeof projectSchema>
 const entrySchema = z.object({ cwd: z.string(), lastOpenedAt: z.number(), state: projectSchema })

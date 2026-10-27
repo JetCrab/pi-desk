@@ -19,6 +19,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ReactNode,
   type Ref
 } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -32,7 +33,7 @@ import { useL4CodePreferences } from '@client/l4_foundation/ui/code/l4-code-pref
 import { L4ImageViewer } from '@client/l4_foundation/ui/l4-image-viewer'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
-import type { L3ProjectFileRuntime } from './l3-project-file-runtime'
+import { getL3FileDiffKey, type L3ProjectFileRuntime } from './l3-project-file-runtime'
 import type { L3ProjectGitBrowser } from './l3-project-git-runtime'
 import { useL3ProjectDocumentGit } from './l3-project-document-git'
 import { L3CodeSurfaceToolbarButton } from './l3-code-surface-toolbar-button'
@@ -55,7 +56,8 @@ export function L3ProjectDocumentView({
   visible = true,
   refreshOnFocus = true,
   onEscape,
-  onSwitchPane
+  onSwitchPane,
+  renderHeader
 }: {
   ref?: Ref<L3ProjectDocumentHandle>
   runtime: L3ProjectFileRuntime
@@ -65,6 +67,7 @@ export function L3ProjectDocumentView({
   refreshOnFocus?: boolean
   onEscape: () => void
   onSwitchPane?: () => void
+  renderHeader?: (actions: ReactNode) => ReactNode
 }): React.JSX.Element {
   const { t } = useTranslation('projectFiles')
   const { wrapLines, diffViewMode, collapseUnchanged } = useL4CodePreferences()
@@ -149,6 +152,163 @@ export function L3ProjectDocumentView({
       else toast.error(t('copyContentFailed'))
     })
   }
+  const actions =
+    activeDiff || activePath ? (
+      <>
+        {activeDiff ? (
+          <>
+            <span className="mr-auto shrink-0 px-1 text-xs text-muted-foreground">
+              {activeDiff.label ??
+                (activeDiff.comparison
+                  ? `${activeDiff.comparison.baseCommit?.slice(0, 7) ?? '∅'} → ${activeDiff.comparison.targetCommit.slice(0, 7)}`
+                  : t('headToWorking'))}
+              {activeDiff.status === 'text' &&
+              activeDiff.original.content === activeDiff.modified.content
+                ? t('noDiffChanges')
+                : ''}
+            </span>
+            <L3CodeSurfaceToolbarButton
+              label={t('previousChange')}
+              onClick={() => diffRef.current?.previousChange()}
+            >
+              <ArrowUpIcon className="size-4" />
+            </L3CodeSurfaceToolbarButton>
+            <L3CodeSurfaceToolbarButton
+              label={t('nextChange')}
+              onClick={() => diffRef.current?.nextChange()}
+            >
+              <ArrowDownIcon className="size-4" />
+            </L3CodeSurfaceToolbarButton>
+            {!compact ? (
+              <L3CodeSurfaceToolbarButton
+                label={diffViewMode === 'side-by-side' ? t('inlineDiff') : t('sideBySideDiff')}
+                active={diffViewMode === 'inline'}
+                onClick={() =>
+                  runtime.setDiffViewMode(
+                    diffViewMode === 'side-by-side' ? 'inline' : 'side-by-side'
+                  )
+                }
+              >
+                <Columns2Icon className="size-4" />
+              </L3CodeSurfaceToolbarButton>
+            ) : null}
+            <L3CodeSurfaceToolbarButton
+              label={t(wrapLines ? 'wrapOff' : 'wrapOn')}
+              active={wrapLines}
+              onClick={() => runtime.setDiffWrapLines(!wrapLines)}
+            >
+              <WrapTextIcon className="size-4" />
+            </L3CodeSurfaceToolbarButton>
+            <L3CodeSurfaceToolbarButton
+              label={t(collapseUnchanged ? 'expandUnchanged' : 'collapseUnchanged')}
+              active={collapseUnchanged}
+              onClick={() => runtime.setDiffCollapseUnchanged(!collapseUnchanged)}
+            >
+              <FoldVerticalIcon className="size-4" />
+            </L3CodeSurfaceToolbarButton>
+            <L3CodeSurfaceToolbarButton
+              label={t('reloadDiff')}
+              onClick={() => runtime.reloadDiff()}
+            >
+              <RefreshCwIcon className="size-4" />
+            </L3CodeSurfaceToolbarButton>
+          </>
+        ) : (
+          <>
+            {previewKind && document?.status === 'text' && activePath ? (
+              <div
+                className="mr-auto flex shrink-0"
+                role="group"
+                aria-label={t(previewKind === 'markdown' ? 'markdownMode' : 'htmlMode')}
+              >
+                {(['preview', 'source'] as const).map((mode) => (
+                  <Button
+                    key={mode}
+                    variant={document.viewMode === mode ? 'secondary' : 'ghost'}
+                    size="sm"
+                    aria-pressed={document.viewMode === mode}
+                    onClick={() => {
+                      savePosition()
+                      runtime.setTextViewMode(activePath, mode)
+                    }}
+                  >
+                    {t(mode === 'preview' ? 'previewMode' : 'sourceMode')}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
+            {showSource && gitStatus ? (
+              <span
+                data-testid="file-git-status"
+                role="status"
+                className="mr-auto min-w-0 truncate text-xs text-muted-foreground"
+                title={comparison?.status === 'error' ? comparison.error : gitStatus}
+              >
+                {compact && comparison?.status === 'ready' && typeof count === 'number'
+                  ? t('gitChangesCompact', { count })
+                  : gitStatus}
+              </span>
+            ) : null}
+            {showSource && comparison?.status === 'ready' ? (
+              <>
+                {typeof count === 'number' && count > 0 ? (
+                  <>
+                    <L3CodeSurfaceToolbarButton
+                      label={t('previousChange')}
+                      onClick={() => previewRef.current?.previousChange()}
+                    >
+                      <ArrowUpIcon className="size-4" />
+                    </L3CodeSurfaceToolbarButton>
+                    <L3CodeSurfaceToolbarButton
+                      label={t('nextChange')}
+                      onClick={() => previewRef.current?.nextChange()}
+                    >
+                      <ArrowDownIcon className="size-4" />
+                    </L3CodeSurfaceToolbarButton>
+                  </>
+                ) : null}
+                <L3CodeSurfaceToolbarButton label={t('viewDiff')} onClick={() => openDiff()}>
+                  <GitCompareArrowsIcon className="size-4" />
+                </L3CodeSurfaceToolbarButton>
+              </>
+            ) : null}
+            {showSource && activePath ? (
+              <>
+                <L3CodeSurfaceToolbarButton
+                  label={t('findInFile')}
+                  onClick={() => previewRef.current?.openSearch()}
+                >
+                  <SearchIcon className="size-4" />
+                </L3CodeSurfaceToolbarButton>
+                {!compact ? (
+                  <L3CodeSurfaceToolbarButton
+                    label={t('goToLine')}
+                    onClick={() => previewRef.current?.gotoLine()}
+                  >
+                    <ListOrderedIcon className="size-4" />
+                  </L3CodeSurfaceToolbarButton>
+                ) : null}
+                <L3CodeSurfaceToolbarButton
+                  label={t(wrapLines ? 'wrapOff' : 'wrapOn')}
+                  active={wrapLines}
+                  onClick={() => runtime.setWrapLines(activePath, !wrapLines)}
+                >
+                  <WrapTextIcon className="size-4" />
+                </L3CodeSurfaceToolbarButton>
+                <L3CodeSurfaceToolbarButton label={t('copySelectionOrAll')} onClick={copyText}>
+                  <CopyIcon className="size-4" />
+                </L3CodeSurfaceToolbarButton>
+              </>
+            ) : null}
+            {activePath ? (
+              <L3CodeSurfaceToolbarButton label={t('reloadCurrentFile')} onClick={refresh}>
+                <RefreshCwIcon className="size-4" />
+              </L3CodeSurfaceToolbarButton>
+            ) : null}
+          </>
+        )}
+      </>
+    ) : null
   return (
     <div
       ref={hostRef}
@@ -162,167 +322,21 @@ export function L3ProjectDocumentView({
           hostRef.current?.querySelector<HTMLElement>('[data-testid="markdown-preview"]')?.focus()
       }}
     >
-      {activeDiff || activePath ? (
+      {renderHeader ? (
+        renderHeader(actions)
+      ) : actions ? (
         <div
           className="flex min-h-9 shrink-0 flex-wrap items-center justify-end gap-2 border-b px-3 py-1"
           aria-label={t('fileActions')}
         >
-          {activeDiff ? (
-            <>
-              <span className="mr-auto shrink-0 px-1 text-xs text-muted-foreground">
-                {activeDiff.label ?? t('headToWorking')}
-                {activeDiff.status === 'text' &&
-                activeDiff.original.content === activeDiff.modified.content
-                  ? t('noDiffChanges')
-                  : ''}
-              </span>
-              <L3CodeSurfaceToolbarButton
-                label={t('previousChange')}
-                onClick={() => diffRef.current?.previousChange()}
-              >
-                <ArrowUpIcon className="size-4" />
-              </L3CodeSurfaceToolbarButton>
-              <L3CodeSurfaceToolbarButton
-                label={t('nextChange')}
-                onClick={() => diffRef.current?.nextChange()}
-              >
-                <ArrowDownIcon className="size-4" />
-              </L3CodeSurfaceToolbarButton>
-              {!compact ? (
-                <L3CodeSurfaceToolbarButton
-                  label={diffViewMode === 'side-by-side' ? t('inlineDiff') : t('sideBySideDiff')}
-                  active={diffViewMode === 'inline'}
-                  onClick={() =>
-                    runtime.setDiffViewMode(
-                      diffViewMode === 'side-by-side' ? 'inline' : 'side-by-side'
-                    )
-                  }
-                >
-                  <Columns2Icon className="size-4" />
-                </L3CodeSurfaceToolbarButton>
-              ) : null}
-              <L3CodeSurfaceToolbarButton
-                label={t(wrapLines ? 'wrapOff' : 'wrapOn')}
-                active={wrapLines}
-                onClick={() => runtime.setDiffWrapLines(!wrapLines)}
-              >
-                <WrapTextIcon className="size-4" />
-              </L3CodeSurfaceToolbarButton>
-              <L3CodeSurfaceToolbarButton
-                label={t(collapseUnchanged ? 'expandUnchanged' : 'collapseUnchanged')}
-                active={collapseUnchanged}
-                onClick={() => runtime.setDiffCollapseUnchanged(!collapseUnchanged)}
-              >
-                <FoldVerticalIcon className="size-4" />
-              </L3CodeSurfaceToolbarButton>
-              <L3CodeSurfaceToolbarButton
-                label={t('reloadDiff')}
-                onClick={() => runtime.reloadDiff()}
-              >
-                <RefreshCwIcon className="size-4" />
-              </L3CodeSurfaceToolbarButton>
-            </>
-          ) : (
-            <>
-              {previewKind && document?.status === 'text' && activePath ? (
-                <div
-                  className="mr-auto flex shrink-0"
-                  role="group"
-                  aria-label={t(previewKind === 'markdown' ? 'markdownMode' : 'htmlMode')}
-                >
-                  {(['preview', 'source'] as const).map((mode) => (
-                    <Button
-                      key={mode}
-                      variant={document.viewMode === mode ? 'secondary' : 'ghost'}
-                      size="sm"
-                      aria-pressed={document.viewMode === mode}
-                      onClick={() => {
-                        savePosition()
-                        runtime.setTextViewMode(activePath, mode)
-                      }}
-                    >
-                      {t(mode === 'preview' ? 'previewMode' : 'sourceMode')}
-                    </Button>
-                  ))}
-                </div>
-              ) : null}
-              {showSource && gitStatus ? (
-                <span
-                  data-testid="file-git-status"
-                  role="status"
-                  className="mr-auto min-w-0 truncate text-xs text-muted-foreground"
-                  title={comparison?.status === 'error' ? comparison.error : gitStatus}
-                >
-                  {compact && comparison?.status === 'ready' && typeof count === 'number'
-                    ? t('gitChangesCompact', { count })
-                    : gitStatus}
-                </span>
-              ) : null}
-              {showSource && comparison?.status === 'ready' ? (
-                <>
-                  {typeof count === 'number' && count > 0 ? (
-                    <>
-                      <L3CodeSurfaceToolbarButton
-                        label={t('previousChange')}
-                        onClick={() => previewRef.current?.previousChange()}
-                      >
-                        <ArrowUpIcon className="size-4" />
-                      </L3CodeSurfaceToolbarButton>
-                      <L3CodeSurfaceToolbarButton
-                        label={t('nextChange')}
-                        onClick={() => previewRef.current?.nextChange()}
-                      >
-                        <ArrowDownIcon className="size-4" />
-                      </L3CodeSurfaceToolbarButton>
-                    </>
-                  ) : null}
-                  <L3CodeSurfaceToolbarButton label={t('viewDiff')} onClick={() => openDiff()}>
-                    <GitCompareArrowsIcon className="size-4" />
-                  </L3CodeSurfaceToolbarButton>
-                </>
-              ) : null}
-              {showSource && activePath ? (
-                <>
-                  <L3CodeSurfaceToolbarButton
-                    label={t('findInFile')}
-                    onClick={() => previewRef.current?.openSearch()}
-                  >
-                    <SearchIcon className="size-4" />
-                  </L3CodeSurfaceToolbarButton>
-                  {!compact ? (
-                    <L3CodeSurfaceToolbarButton
-                      label={t('goToLine')}
-                      onClick={() => previewRef.current?.gotoLine()}
-                    >
-                      <ListOrderedIcon className="size-4" />
-                    </L3CodeSurfaceToolbarButton>
-                  ) : null}
-                  <L3CodeSurfaceToolbarButton
-                    label={t(wrapLines ? 'wrapOff' : 'wrapOn')}
-                    active={wrapLines}
-                    onClick={() => runtime.setWrapLines(activePath, !wrapLines)}
-                  >
-                    <WrapTextIcon className="size-4" />
-                  </L3CodeSurfaceToolbarButton>
-                  <L3CodeSurfaceToolbarButton label={t('copySelectionOrAll')} onClick={copyText}>
-                    <CopyIcon className="size-4" />
-                  </L3CodeSurfaceToolbarButton>
-                </>
-              ) : null}
-              {activePath ? (
-                <L3CodeSurfaceToolbarButton label={t('reloadCurrentFile')} onClick={refresh}>
-                  <RefreshCwIcon className="size-4" />
-                </L3CodeSurfaceToolbarButton>
-              ) : null}
-            </>
-          )}
+          {actions}
         </div>
       ) : null}
       <div className="min-h-0 flex-1 overflow-hidden pb-[env(safe-area-inset-bottom)]">
         {activeDiff ? (
           activeDiff.status === 'text' ? (
             <L4CodeDiff
-              key={`${activeDiff.repositoryRoot}:${activeDiff.path}`}
+              key={getL3FileDiffKey(activeDiff)}
               ref={diffRef}
               original={activeDiff.original}
               modified={activeDiff.modified}
@@ -341,7 +355,7 @@ export function L3ProjectDocumentView({
                 {activeDiff.modifiedMetadata}
               </pre>
             </div>
-          ) : activeDiff.status === 'loading' ? (
+          ) : activeDiff.status === 'loading' || activeDiff.status === 'unloaded' ? (
             <Loading />
           ) : (
             <div className="flex size-full flex-col items-center justify-center gap-3 p-6 text-center text-sm">

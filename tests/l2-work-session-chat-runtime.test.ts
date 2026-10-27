@@ -218,6 +218,81 @@ function customMessage(text: string): Extract<L4PiChatMessage, { type: 'custom' 
   }
 }
 
+test('重新订阅只读快照不排在未结束的会话命令后面', { timeout: 10_000 }, async () => {
+  const entered = deferred<void>()
+  const release = deferred<void>()
+  const fixture = await createFixture({
+    send: async () => {
+      entered.resolve()
+      await release.promise
+      return { tempId: 'accepted' }
+    },
+    compact: async () => undefined
+  })
+  const runtime = fixture.chatRuntime.createSync(fixture.source, null).event.runtime
+  Object.defineProperty(fixture.piRuntime, 'readChatRuntime', {
+    value: async () => runtime,
+    configurable: true
+  })
+  const sending = fixture.chatRuntime.send({
+    source: fixture.source,
+    mode: 'auto',
+    text: 'pending',
+    images: []
+  })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await entered.promise
+    await Promise.race([
+      fixture.chatRuntime.prepareSource(fixture.source),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('快照仍在等待修改命令')), 1000)
+      })
+    ])
+    assert.deepEqual(fixture.chatRuntime.createSync(fixture.source, null).event.runtime, runtime)
+  } finally {
+    clearTimeout(timer)
+    release.resolve()
+    await sending
+    await fixture.dispose()
+  }
+})
+
+test('并发快照读取不能覆盖读取期间已经收到的新运行态', async () => {
+  let emit!: (event: PiChatWorkerEvent) => void
+  const fixture = await createFixture(
+    { send: async () => ({ tempId: 'unused' }), compact: async () => undefined },
+    (runtime) => {
+      emit = installChatSnapshot(runtime, () => [])
+    }
+  )
+  const release = deferred<void>()
+  const original = fixture.chatRuntime.createSync(fixture.source, null).event.runtime
+  Object.defineProperty(fixture.piRuntime, 'readChatRuntime', {
+    configurable: true,
+    value: async () => {
+      await release.promise
+      return original
+    }
+  })
+  const preparing = fixture.chatRuntime.prepareSource(fixture.source)
+  try {
+    const latest = {
+      ...original,
+      extensionMode: 'basic' as const,
+      initializationError: 'latest failure'
+    }
+    emit({ type: 'runtime_changed', runtime: latest })
+    release.resolve()
+    await preparing
+    assert.deepEqual(fixture.chatRuntime.createSync(fixture.source, null).event.runtime, latest)
+  } finally {
+    release.resolve()
+    await preparing
+    await fixture.dispose()
+  }
+})
+
 test('预览目录授权仅接受当前会话CWD与登记目录，重建后旧授权失效', async () => {
   let emit!: (event: PiChatWorkerEvent) => void
   const fixture = await createFixture(

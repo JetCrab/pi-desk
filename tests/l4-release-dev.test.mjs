@@ -106,6 +106,37 @@ test('部分原包及发布结果跨失败保留，但不替代完整构建与�
   }
 })
 
+test('手动仅构建重新编译且不替换原始制品，发布模式保留复用', async () => {
+  const dev = await readWorkflow('release-dev')
+  const npm = await readWorkflow('release-npm')
+  const plan = dev.jobs.plan.steps.find((step) => step.id === 'plan')
+  const record = dev.jobs['npm-artifacts'].steps.find((step) =>
+    step.run?.includes('release-dev-reuse.mjs record')
+  )
+  const restore = npm.jobs.build.steps.find((step) =>
+    step.run?.includes('release-dev-reuse.mjs restore')
+  )
+  for (const [event, publish, rebuild] of [
+    ['push', false, false],
+    ['workflow_dispatch', false, true],
+    ['workflow_dispatch', true, false]
+  ]) {
+    const github = {
+      event_name: event,
+      ref: 'refs/heads/dev',
+      event: { inputs: { publish: String(publish) } }
+    }
+    const context = {
+      github,
+      inputs: { publish },
+      steps: { artifacts: { outputs: { reusable: 'false' } } }
+    }
+    assert.equal(evaluateWorkflowCondition(plan.env.REBUILD_ONLY, context), rebuild)
+    assert.equal(evaluateWorkflowCondition(record.if, context), !rebuild)
+    assert.equal(evaluateWorkflowCondition(restore.if, context), !rebuild)
+  }
+})
+
 test('dev只保留统一入口，内部复用不取消连续批次', async () => {
   const read = async (name) =>
     parse(await readFile(new URL(`../.github/workflows/${name}.yml`, import.meta.url), 'utf8'))

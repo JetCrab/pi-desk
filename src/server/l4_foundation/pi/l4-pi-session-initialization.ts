@@ -32,7 +32,7 @@ import { L4PiUiRuntime } from './l4-pi-ui-runtime'
 const INITIALIZATION_TIMEOUT_MS = 60_000
 const CLEANUP_TIMEOUT_MS = 1_500
 const MAX_RETIRED_INITIALIZATIONS = 4
-const retiredInitializations = new Set<Promise<unknown>>()
+const retiredInitializations = new WeakMap<L4PiSessionResources, Set<Promise<unknown>>>()
 const STALE_MESSAGE = 'Pi 会话实例已失效，不能继续访问当前会话'
 
 interface InitializationOptions {
@@ -57,6 +57,7 @@ export class L4PiSessionInitialization {
   readonly ui: L4PiUiRuntime
   private readonly manager: SessionManager
   private readonly sessionId: string
+  private readonly retired: Set<Promise<unknown>>
   private active = true
   private accessRevoked = false
   private session: AgentSession | null = null
@@ -68,6 +69,9 @@ export class L4PiSessionInitialization {
 
   constructor(private readonly options: InitializationOptions) {
     this.sessionId = options.sessionManager.getSessionId()
+    // 只限制同一工作会话的重复尝试，不能因其他会话的插件清理挂起而拒绝加载。
+    this.retired = retiredInitializations.get(options.resources) ?? new Set()
+    retiredInitializations.set(options.resources, this.retired)
     this.ui = options.ui ?? new L4PiUiRuntime()
     this.capabilities = new L4PiCapabilityRuntime(options.readCapabilities)
     this.plugins = new L4PiSessionPluginRuntime({
@@ -116,29 +120,20 @@ export class L4PiSessionInitialization {
   async reload(): Promise<void> {
     this.assertActive()
     const session = await this.start()
-    let failure: Error | null = null
-    this.onLifecycleError = (error) => {
-      failure ??= error
-    }
     this.setStage('重载 Pi 配置')
-    try {
-      await session.reload({
-        beforeSessionStart: async () => {
-          this.assertActive()
-          this.validateResources(
-            session.resourceLoader,
-            session.settingsManager.drainErrors().map(({ error }) => ({
-              type: 'error',
-              message: error.message
-            }))
-          )
-        }
-      })
-      this.assertActive()
-      if (failure) throw failure
-    } finally {
-      this.onLifecycleError = null
-    }
+    await session.reload({
+      beforeSessionStart: async () => {
+        this.assertActive()
+        this.validateResources(
+          session.resourceLoader,
+          session.settingsManager.drainErrors().map(({ error }) => ({
+            type: 'error',
+            message: error.message
+          }))
+        )
+      }
+    })
+    this.assertActive()
   }
 
   setStage(stage: string): void {
@@ -154,11 +149,8 @@ export class L4PiSessionInitialization {
   private async initialize(refreshResources: boolean): Promise<AgentSession> {
     const startedAt = performance.now()
     this.assertActive()
-    if (
-      this.options.mode === 'normal' &&
-      retiredInitializations.size >= MAX_RETIRED_INITIALIZATIONS
-    ) {
-      throw new Error('尚未结束的插件初始化或关闭任务过多，请重启服务后再加载插件')
+    if (this.options.mode === 'normal' && this.retired.size >= MAX_RETIRED_INITIALIZATIONS) {
+      throw new Error('当前会话尚未结束的插件初始化或关闭任务过多，可先使用其他会话')
     }
     const failure = new Promise<never>((_, reject) => {
       this.onLifecycleError = reject
@@ -244,7 +236,7 @@ export class L4PiSessionInitialization {
           )
         : Promise.resolve()
     const cleanup = Promise.allSettled([this.execution, shutdown])
-    retiredInitializations.add(cleanup)
+    this.retired.add(cleanup)
     const timer = setTimeout(() => {
       console.warn('[Pi Desk][PiSession] 旧实例仍在后台清理，不阻塞基础聊天', {
         sessionId: this.sessionId,
@@ -255,7 +247,7 @@ export class L4PiSessionInitialization {
     timer.unref()
     void cleanup.then(() => {
       clearTimeout(timer)
-      retiredInitializations.delete(cleanup)
+      this.retired.delete(cleanup)
     })
   }
 
@@ -271,9 +263,13 @@ export class L4PiSessionInitialization {
     resourceLoader: ResourceLoader,
     diagnostics: AgentSessionServices['diagnostics']
   ): void {
-    const failures = resourceLoader
-      .getExtensions()
-      .errors.map(({ path, error }) => `${error}\n插件入口：${path}`)
+    // Pi 已将失败入口排除；保留局部诊断，不把其余可用扩展一起作废。
+    for (const { path, error } of resourceLoader.getExtensions().errors) {
+      const message = `${error}\n插件入口：${path}`
+      reportL4PiPluginNativeDiagnostic(this.options.cwd, message)
+      console.warn('[Pi Desk][PiSession] 已跳过失败扩展', { cwd: this.options.cwd, message })
+    }
+    const failures: string[] = []
     for (const diagnostic of diagnostics) {
       if (diagnostic.type === 'error') failures.push(diagnostic.message)
       else console.info('[Pi Desk][PiSession] 初始化诊断', { cwd: this.options.cwd, ...diagnostic })
@@ -369,7 +365,7 @@ export class L4PiSessionInitialization {
           sessionId: this.sessionId,
           message: diagnostic
         })
-        this.onLifecycleError?.(new Error(diagnostic))
+        reportL4PiPluginNativeDiagnostic(this.options.cwd, diagnostic)
         if (error.event === 'session_tree' || error.event === 'session_before_tree') {
           this.session?.extensionRunner
             .getUIContext()

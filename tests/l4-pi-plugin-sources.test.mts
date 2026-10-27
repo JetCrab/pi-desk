@@ -37,6 +37,8 @@ test('静态discover使用官方PackageManager、归属本地入口且不执行e
   const configuredFile = join(root, 'configured-extension.ts')
   const marker = join(root, 'factory-executed.txt')
   const missingPackage = 'npm:@pi-desk-fixture/not-installed-m3'
+  const mismatchedPackage = 'npm:@pi-desk-fixture/wrong-version@2.0.0'
+  const mismatchedRoot = join(agentDir, 'npm/node_modules/@pi-desk-fixture/wrong-version')
   context.after(() => rm(root, { recursive: true, force: true }))
 
   await Promise.all([
@@ -46,15 +48,28 @@ test('静态discover使用官方PackageManager、归属本地入口且不执行e
     mkdir(join(extensionDir, 'combined'), { recursive: true }),
     mkdir(join(extensionDir, '.hidden'), { recursive: true }),
     mkdir(join(extensionDir, 'node_modules', 'fixture-hidden'), { recursive: true }),
-    mkdir(packageRoot, { recursive: true })
+    mkdir(packageRoot, { recursive: true }),
+    mkdir(mismatchedRoot, { recursive: true })
   ])
   await writeFile(
     join(agentDir, 'settings.json'),
     JSON.stringify({
-      packages: [packageRoot, missingPackage],
+      packages: [packageRoot, missingPackage, mismatchedPackage],
       extensions: [configuredFile, configuredFile, '-extensions/combined/native.ts']
     }),
     'utf8'
+  )
+  await writeFile(
+    join(mismatchedRoot, 'package.json'),
+    JSON.stringify({
+      name: '@pi-desk-fixture/wrong-version',
+      version: '1.0.0',
+      piDesk: { entry: './index.js' }
+    })
+  )
+  await writeFile(
+    join(mismatchedRoot, 'index.js'),
+    'throw new Error("must not execute mismatched package")'
   )
   await writeFile(
     join(packageRoot, 'package.json'),
@@ -170,6 +185,9 @@ test('静态discover使用官方PackageManager、归属本地入口且不执行e
   assert.equal(bySource.get(missingPackage)?.kind, 'package')
   assert.equal(bySource.get(missingPackage)?.path, null)
   assert.match(bySource.get(missingPackage)?.error ?? '', /未安装/)
+  assert.equal(bySource.get(mismatchedPackage)?.version, '1.0.0')
+  assert.match(bySource.get(mismatchedPackage)?.error ?? '', /版本不匹配/)
+  assert.deepEqual(bySource.get(mismatchedPackage)?.nativePaths, [])
   assert.equal(bySource.get(resolve(extensionDir, 'bare.ts'))?.kind, 'extension')
   assert.equal(bySource.get(resolve(extensionDir, 'bare.ts'))?.enabled, true)
   assert.equal(bySource.get(resolve(extensionDir, 'bare.ts'))?.description, null)

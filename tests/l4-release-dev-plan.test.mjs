@@ -10,11 +10,19 @@ import {
 } from '../.github/scripts/release-dev.mjs'
 import { hasNpmArtifacts } from '../.github/scripts/reuse-npm-artifacts.mjs'
 
-function githubFixture() {
+function githubFixture(record = null) {
   const files = new Map()
+  if (record) {
+    files.set(`/contents/releases/${record.tag}.json`, {
+      encoding: 'base64',
+      content: Buffer.from(JSON.stringify(record)).toString('base64'),
+      sha: 'stable'
+    })
+  }
   let seq = 0
   return {
-    releases: async () => [],
+    releases: async () =>
+      record ? [{ tag_name: record.tag, draft: false, prerelease: false }] : [],
     request: async (path, options = {}) => {
       if (path === '/git/ref/heads/release-data') return { object: { sha: 'a'.repeat(40) } }
       assert.ok(path.startsWith('/contents/'), path)
@@ -30,7 +38,7 @@ function githubFixture() {
   }
 }
 
-test('同一失败批次重跑固定开发版本，不依赖新的Registry编号', async (t) => {
+async function repository(t) {
   const parent = resolve('temp/tests/release-dev-plan/fixed-versions')
   await mkdir(parent, { recursive: true })
   const root = await mkdtemp(join(parent, 'repo-'))
@@ -56,6 +64,11 @@ test('同一失败批次重跑固定开发版本，不依赖新的Registry编号
   git('add', '.')
   git('commit', '-m', 'fix: 准备1.0.8')
   const source = git('rev-parse', 'HEAD')
+  return { root, git, source }
+}
+
+test('同一失败批次重跑固定开发版本，不依赖新的Registry编号', async (t) => {
+  const { root, git, source } = await repository(t)
   const github = githubFixture()
   const first = await prepareDevBatch(root, {
     github,
@@ -76,6 +89,51 @@ test('同一失败批次重跑固定开发版本，不依赖新的Registry编号
   })
   assert.deepEqual(retried.batch, first.batch)
   assert.equal(retried.prepared.packages[0].version, '1.0.8-dev')
+})
+
+test('手动仅构建可重编当前稳定基础号，自动选择仍跳过且目标范围有效', async (t) => {
+  const { root, git, source } = await repository(t)
+  const github = githubFixture({
+    tag: 'v1.0.8',
+    date: 1,
+    source: { base: null, head: source },
+    packages: [{ name: '@jetcrab/pi-desk', version: '1.0.8' }],
+    clients: [],
+    changes: { breaking: [], features: [], added: [], changed: [], fixed: [], removed: [] }
+  })
+  const readPublished = async () => {
+    throw Error('仅构建不分配发布版本，也不读取Registry')
+  }
+  const automatic = await prepareDevBatch(root, { github, source, runId: '43', readPublished })
+  assert.deepEqual(automatic.batch.selected, [])
+  const manual = await prepareDevBatch(root, {
+    github,
+    source,
+    runId: '44',
+    rebuildOnly: true,
+    readPublished
+  })
+  assert.deepEqual(manual.batch.selected, ['pi-desk'])
+  assert.equal(manual.batch.npmVersions['pi-desk'], '1.0.8-dev')
+  git('restore', 'package.json')
+  const retried = await prepareDevBatch(root, {
+    github,
+    source,
+    runId: '44',
+    rebuildOnly: true,
+    readPublished
+  })
+  assert.deepEqual(retried.batch, manual.batch)
+  git('restore', 'package.json')
+  const windows = await prepareDevBatch(root, {
+    github,
+    source,
+    runId: '45',
+    target: 'windows',
+    rebuildOnly: true,
+    readPublished
+  })
+  assert.deepEqual(windows.batch.selected, [])
 })
 
 test('重跑只有同批完整且未过期的制品才能复用', () => {

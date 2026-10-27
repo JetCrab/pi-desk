@@ -139,13 +139,26 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
     let popup_target = value.to_string();
     let invalid = Arc::new(AtomicBool::new(false));
     let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()))
-        .title(format!(
-            "Pi Desk · {}{}",
-            if preview { "项目预览 · " } else { "" },
-            url.host_str().unwrap_or("网页")
-        ))
+        .title(if preview {
+            "项目预览 · Pi Desk".to_string()
+        } else {
+            format!("Pi Desk · {}", url.host_str().unwrap_or("网页"))
+        })
         .inner_size(1280.0, 820.0)
         .min_inner_size(720.0, 480.0)
+        .on_document_title_changed(move |window, title| {
+            if !preview || title.trim().is_empty() {
+                return;
+            }
+            if let Err(error) = window.set_title(&title) {
+                let state = window.app_handle().state::<ShellState>();
+                logging::write(
+                    &state.log_path,
+                    "preview-title-update-failed",
+                    &format!("label={} error={error}", window.label()),
+                );
+            }
+        })
         .on_navigation(move |next| {
             if next.origin() == origin {
                 return true;

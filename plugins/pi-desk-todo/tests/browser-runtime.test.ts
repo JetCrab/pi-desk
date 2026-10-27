@@ -156,6 +156,103 @@ test('断线恢复静默重建，不处理别的Source或dispose后的Push', asy
   assert.equal(pending.length, 2)
 })
 
+test('旧会话缺少查询方法时静默，重连仍兼容，Push后可恢复进度', async (context) => {
+  resetTodoBrowserRuntime()
+  const log = context.mock.method(console, 'error', (): void => undefined)
+  const { host, pending, connect } = fixture()
+  const controller = createTodoBrowserController(host, source)
+  context.after(() => {
+    controller.dispose()
+    resetTodoBrowserRuntime()
+  })
+  pending[0].reject(Object.assign(Error('Plugin method not found'), { code: 404 }))
+  await until(() => !controller.getSnapshot().loading)
+  assert.deepEqual(controller.getSnapshot().snapshot, { todo: null, hidden: false })
+  assert.equal(controller.getSnapshot().error, null)
+  connect(false)
+  connect(true)
+  pending[1].reject(Object.assign(Error('插件方法不存在'), { code: 404 }))
+  await until(() => !controller.getSnapshot().loading)
+  assert.equal(controller.getSnapshot().error, null)
+  assert.equal(log.mock.callCount(), 0)
+  push()
+  pending[2].finish(a)
+  await until(() => !controller.getSnapshot().loading)
+  assert.deepEqual(controller.getSnapshot().snapshot, a)
+})
+
+test('查询方法失效时清空已有进度和变更提示', async (context) => {
+  resetTodoBrowserRuntime()
+  const { host, pending } = fixture()
+  const controller = createTodoBrowserController(host, source)
+  context.after(() => {
+    controller.dispose()
+    resetTodoBrowserRuntime()
+  })
+  pending[0].finish(a)
+  await until(() => !controller.getSnapshot().loading)
+  push()
+  pending[1].finish(b)
+  await until(() => !controller.getSnapshot().loading)
+  assert.ok(controller.getSnapshot().change)
+  push()
+  pending[2].reject(Object.assign(Error('插件方法不存在'), { code: 404 }))
+  await until(() => !controller.getSnapshot().loading)
+  assert.deepEqual(controller.getSnapshot().snapshot, { todo: null, hidden: false })
+  assert.equal(controller.getSnapshot().change, null)
+  assert.equal(controller.getSnapshot().error, null)
+})
+
+for (const error of [
+  Object.assign(Error('工作会话来源已变化'), { code: 409 }),
+  Object.assign(Error('插件执行失败'), { code: 500 }),
+  Error('插件方法不存在')
+]) {
+  test(`非404查询异常保留错误并可重试：${error.message}`, async (context) => {
+    resetTodoBrowserRuntime()
+    const log = context.mock.method(console, 'error', (): void => undefined)
+    const { host, pending } = fixture()
+    const controller = createTodoBrowserController(host, source)
+    context.after(() => {
+      controller.dispose()
+      resetTodoBrowserRuntime()
+    })
+    pending[0].reject(error)
+    await until(() => !controller.getSnapshot().loading)
+    assert.deepEqual(controller.getSnapshot().error, { action: 'get', message: error.message })
+    assert.equal(log.mock.callCount(), 1)
+    const retry = controller.refresh()
+    pending[1].finish(a)
+    await retry
+    assert.deepEqual(controller.getSnapshot().snapshot, a)
+    assert.equal(controller.getSnapshot().error, null)
+  })
+}
+
+test('隐藏方法不存在时保留进度和错误，允许重试', async (context) => {
+  resetTodoBrowserRuntime()
+  const log = context.mock.method(console, 'error', (): void => undefined)
+  const { host, pending } = fixture()
+  const controller = createTodoBrowserController(host, source)
+  context.after(() => {
+    controller.dispose()
+    resetTodoBrowserRuntime()
+  })
+  pending[0].finish(a)
+  await until(() => !controller.getSnapshot().loading)
+  const hiding = controller.hide()
+  pending[1].reject(Object.assign(Error('插件方法不存在'), { code: 404 }))
+  await hiding
+  assert.deepEqual(controller.getSnapshot().snapshot, a)
+  assert.deepEqual(controller.getSnapshot().error, { action: 'hide', message: '插件方法不存在' })
+  assert.equal(log.mock.callCount(), 1)
+  const retry = controller.hide()
+  pending[2].finish({ ...a, hidden: true })
+  await retry
+  assert.equal(controller.getSnapshot().snapshot.hidden, true)
+  assert.equal(controller.getSnapshot().error, null)
+})
+
 test('关闭失败不隐藏；人工重试成功；dispose拒绝迟到回写', async (context) => {
   resetTodoBrowserRuntime()
   const { host, pending } = fixture()

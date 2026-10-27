@@ -18,6 +18,7 @@ import { cn } from '@client/l4_foundation/lib/l4-utils'
 import type { L2ProjectHistoryState } from '../runtime/l2-project-history-runtime'
 import { L2ProjectHistoryList } from './l2-project-history-list'
 import { L2ProjectChangeTree } from './l2-project-change-tree'
+import { L2ProjectBranchSelect } from './l2-project-branch-select'
 import type { L3PathTreeRow } from '@client/l3_modules/project-files/l3-project-path-tree'
 import type { L3ProjectRevealTargetType } from '@common/l3_modules/project-files/l3-project-files-contract'
 
@@ -25,6 +26,7 @@ interface Props {
   state: L2ProjectHistoryState
   cwd: string
   changeRows: readonly L3PathTreeRow[]
+  changeRowHeight: number
   onSelectChange: (path: string) => void
   onToggleDirectory: (path: string) => void
   onReveal: (path: string, type: L3ProjectRevealTargetType) => Promise<void>
@@ -86,30 +88,17 @@ export function L2ProjectHistoryView(props: Props): React.JSX.Element {
   const data = state.changes.data
   const context = `${state.repositoryRoot}:${data?.comparison.original}:${data?.comparison.target}`
   const selectedPath = state.selectedChangePath
-  const refs = [
-    { value: 'HEAD', label: t('currentHead') },
-    ...(state.branches.data?.local ?? []).map((name) => ({
-      value: `refs/heads/${name}`,
-      label: name,
-      description: t('localBranch')
-    })),
-    ...(state.branches.data?.remote ?? []).map((name) => ({
-      value: `refs/remotes/${name}`,
-      label: name,
-      description: t('remoteBranch')
-    }))
-  ]
   const upstream = state.branches.data?.upstream
   const commit = data?.commit
   const chooseCommit = (oid: string): void => {
     props.onCommit(oid)
     if (narrow) setMobilePane('files')
   }
-  const feedback = (error: string | null): React.JSX.Element | null =>
+  const feedback = (error: string | null, retry = props.onRefresh): React.JSX.Element | null =>
     error ? (
       <div role="alert" className="flex flex-wrap items-center gap-2 p-3 text-sm text-destructive">
         <span className="min-w-0 flex-1 break-words">{error}</span>
-        <Button size="sm" variant="outline" onClick={props.onRefresh}>
+        <Button size="sm" variant="outline" onClick={retry}>
           {t('retry')}
         </Button>
         {state.mode === 'compare' && state.strategy === 'merge-base' ? (
@@ -122,19 +111,47 @@ export function L2ProjectHistoryView(props: Props): React.JSX.Element {
 
   const log = (
     <div className="flex size-full min-h-0 min-w-0 flex-col">
-      {feedback(state.log.error)}
-      {state.log.status === 'loading' ? (
-        <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
-          <LoaderCircleIcon className="size-4 animate-spin" />
-          {t('loadingCommits')}
-        </div>
-      ) : null}
       <L2ProjectHistoryList
         key={`${state.repositoryRoot}:${state.mode}:${state.tip}:${state.base}:${state.target}:${state.query}:${state.author}`}
         items={state.log.data?.items ?? []}
         label={t('commitList')}
         scrollTop={scroll.log}
         onScroll={(value) => props.onScroll('log', value)}
+        onNearEnd={
+          state.log.status === 'ready' &&
+          state.log.data?.hasMore &&
+          state.log.data.items.length < 2000
+            ? props.onMoreLog
+            : undefined
+        }
+        footer={
+          <>
+            {feedback(state.log.error, state.log.data ? props.onMoreLog : props.onRefresh)}
+            {state.log.status === 'loading' ? (
+              <div
+                role="status"
+                className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground"
+              >
+                <LoaderCircleIcon className="size-4 animate-spin" />
+                {t('loadingCommits')}
+              </div>
+            ) : null}
+            {state.log.status === 'ready' && !state.log.data?.items.length ? (
+              <p className="px-3 py-4 text-sm text-muted-foreground">
+                {state.query || state.author ? t('noMatchingCommits') : t('noCommits')}
+              </p>
+            ) : null}
+            {state.log.data?.truncated ? (
+              <p className="px-3 py-2 text-xs text-muted-foreground">{t('scanLimit')}</p>
+            ) : (state.log.data?.items.length ?? 0) >= 2000 ? (
+              <p className="px-3 py-2 text-xs text-muted-foreground">{t('loadedLimit')}</p>
+            ) : state.log.status === 'ready' &&
+              state.log.data?.items.length &&
+              !state.log.data.hasMore ? (
+              <p className="px-3 py-2 text-xs text-muted-foreground">{t('noMoreCommits')}</p>
+            ) : null}
+          </>
+        }
         render={(item) => (
           <button
             key={item.oid}
@@ -168,26 +185,6 @@ export function L2ProjectHistoryView(props: Props): React.JSX.Element {
           </button>
         )}
       />
-      {state.log.status === 'ready' && !state.log.data?.items.length ? (
-        <p className="px-3 py-4 text-sm text-muted-foreground">
-          {state.query || state.author ? t('noMatchingCommits') : t('noCommits')}
-        </p>
-      ) : null}
-      {state.log.data?.truncated ? (
-        <p className="px-3 py-2 text-xs text-muted-foreground">{t('scanLimit')}</p>
-      ) : null}
-      {(state.log.data?.items.length ?? 0) >= 2000 ? (
-        <p className="px-3 py-2 text-xs text-muted-foreground">{t('loadedLimit')}</p>
-      ) : state.log.data?.hasMore ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={state.log.status === 'loading'}
-          onClick={props.onMoreLog}
-        >
-          {t('loadMoreCommits')}
-        </Button>
-      ) : null}
     </div>
   )
 
@@ -247,6 +244,7 @@ export function L2ProjectHistoryView(props: Props): React.JSX.Element {
               cwd={props.cwd}
               repositoryRoot={state.repositoryRoot ?? ''}
               rows={props.changeRows}
+              rowHeight={props.changeRowHeight}
               changes={data?.items ?? []}
               selectedPath={selectedPath}
               scrollTop={scroll.changes}
@@ -387,29 +385,29 @@ export function L2ProjectHistoryView(props: Props): React.JSX.Element {
           onChange={props.onRepository}
         />
         {state.mode === 'history' ? (
-          <L4SearchSelect
+          <L2ProjectBranchSelect
             className="w-48"
             ariaLabel={t('viewBranch')}
             value={state.tip}
-            options={refs}
+            branches={state.branches.data}
             onChange={(value) => props.onRevision('tip', value)}
           />
         ) : (
           <>
-            <L4SearchSelect
+            <L2ProjectBranchSelect
               className="w-44"
               ariaLabel={t('baseBranch')}
               placeholder={t('chooseBase')}
               value={state.base}
-              options={refs}
+              branches={state.branches.data}
               onChange={(value) => props.onRevision('base', value)}
             />
             <span className="text-xs text-muted-foreground">→</span>
-            <L4SearchSelect
+            <L2ProjectBranchSelect
               className="w-44"
               ariaLabel={t('targetBranch')}
               value={state.target}
-              options={refs}
+              branches={state.branches.data}
               onChange={(value) => props.onRevision('target', value)}
             />
             <L4SearchSelect

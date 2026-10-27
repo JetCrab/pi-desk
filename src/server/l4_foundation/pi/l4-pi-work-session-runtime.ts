@@ -215,7 +215,7 @@ export class L4PiWorkSessionRuntime {
 
   async readChatRuntime(): Promise<L4PiChatRuntimeSnapshot> {
     this.assertActive()
-    return this.chatWorker.getRuntime()
+    return this.chatWorker.getRuntime(false)
   }
 
   async readModelContext(): Promise<L4PiModelContext> {

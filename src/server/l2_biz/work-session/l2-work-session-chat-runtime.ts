@@ -359,17 +359,19 @@ export class L2WorkSessionChatRuntime {
 
   prepareSource(sourceInput: L2ChatSource): Promise<void> {
     const record = this.currentRecord(sourceInput)
-    return this.enqueueCommand(record, () => this.syncRecordRuntime(record))
+    // 快照读取不能排在重载、原生命令或插件初始化等修改操作后面。
+    return this.syncRecordRuntime(record)
   }
 
   private async syncRecordRuntime(record: L2WorkSessionChatRecord): Promise<void> {
     const source = record.source
+    const version = record.sourceEventVersion
     const runtime = await getL4PiWorkSessionRuntime(source.sessionId).readChatRuntime()
     const nextRuntime = L2ChatRuntimeSchema.parse({
       ...runtime,
       presentationMode: record.state.runtime.presentationMode
     })
-    if (!this.isCurrentSource(source)) return
+    if (!this.isCurrentSource(source) || record.sourceEventVersion !== version) return
     if (!sameRuntime(record.state.runtime, nextRuntime))
       this.applySourceEvent(source, { type: 'runtime_update', runtime: nextRuntime })
   }

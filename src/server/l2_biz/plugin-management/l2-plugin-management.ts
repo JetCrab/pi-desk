@@ -136,13 +136,6 @@ export class L2PluginManagementInvalidPackageError extends Error {
   }
 }
 
-export class L2PluginManagementPackageRootError extends Error {
-  constructor(readonly rootError: L4PiPackageRootConsistencyError) {
-    super(rootError.message)
-    this.name = 'L2PluginManagementPackageRootError'
-  }
-}
-
 export class L2PluginManagementRestartPendingError extends Error {
   constructor() {
     super('已有插件操作需要重启完成')
@@ -845,12 +838,6 @@ export class L2PluginManagement {
     let updateTag: string | null = null
     let pluginName: string | null = null
     if (mutation !== 'enable' && mutation !== 'disable') {
-      const packageRootError = await readL4PiPackageRootConsistencyError({
-        agentDir: this.agentDir,
-        configured,
-        repairSource: mutation === 'add' && reinstall ? operationSource : undefined
-      })
-      if (packageRootError) throw new L2PluginManagementPackageRootError(packageRootError)
       if (mutation !== 'add' && !target) throw new L2PluginManagementNotFoundError(source)
       this.setOperation(operationSource, 'checking', '正在确认插件版本和下载源')
       const candidate = this.candidateSource(source, target?.installedPath)
@@ -899,29 +886,11 @@ export class L2PluginManagement {
         setL4PiPluginUpdateTag(operationSource, updateTag, this.agentDir)
         this.updates.clear(operationSource)
       }
-      if (this.deferredMaintenance.size > 0) {
-        this.deferredMaintenance.set(operationSource, request)
-        waiting('等待重启后完成安装维护')
-        return
-      }
     }
     this.assertOpen()
     await runtime.withSourceIdle(
       operationSource,
       async () => {
-        if (request) {
-          const current = this.createPackageManager()
-          this.throwSettingsErrors(current.settingsManager)
-          const configured = current.packageManager
-            .listConfiguredPackages()
-            .filter((item) => item.scope === 'user')
-          const rootError = await readL4PiPackageRootConsistencyError({
-            agentDir: this.agentDir,
-            configured,
-            repairSource: mutation === 'add' && input.reinstall ? operationSource : undefined
-          })
-          if (rootError) throw new L2PluginManagementPackageRootError(rootError)
-        }
         this.assertOpen()
         this.setOperation(
           operationSource,
@@ -957,7 +926,8 @@ export class L2PluginManagement {
               await runL4PiPackageMaintenance({
                 maintenance: request!,
                 agentDir: this.agentDir,
-                cwd: this.packageManagerCwd
+                cwd: this.packageManagerCwd,
+                signal: this.lifetime.signal
               })
               if (mutation !== 'del') await this.verifyInstalledPackage(request!.source)
             })
@@ -1372,11 +1342,8 @@ export class L2PluginManagement {
     if (!force && this.capabilityCache) return this.capabilityCache
 
     try {
-      this.capabilityCache = await runL4PiPackageRootExclusive(() => {
-        this.assertOpen()
-        if (!force && this.capabilityCache) return Promise.resolve(this.capabilityCache)
-        return runL4PiPluginCapabilityProbe(this.cwd, this.agentDir)
-      })
+      this.assertOpen()
+      this.capabilityCache = await runL4PiPluginCapabilityProbe(this.cwd, this.agentDir)
       this.publish()
       console.info('[Pi Desk][PluginManagement] 插件能力盘点完成', {
         packageCount: this.capabilityCache.packages.length,

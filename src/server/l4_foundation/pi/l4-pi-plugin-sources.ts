@@ -160,7 +160,11 @@ export async function discoverL4PiPluginSources(
 
   try {
     // 显式 skip，列清单不能触发缺失包安装、扩展导入或 AgentSession。
-    const resolved = await manager.resolve(async () => 'skip')
+    const resolved = await manager.resolve(async (source) => {
+      const item = sources.get(source)
+      if (item) item.error ??= '插件包未安装或版本不匹配'
+      return 'skip'
+    })
     for (const item of sources.values()) item.hasPiResources = false
     for (const resource of [
       ...resolved.extensions,

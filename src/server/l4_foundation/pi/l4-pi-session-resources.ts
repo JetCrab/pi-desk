@@ -16,7 +16,7 @@ import {
   type SourceInfo
 } from '@earendil-works/pi-coding-agent'
 import { clearL4PiPluginCodeCache, loadL4PiDeskPluginEntry } from './l4-pi-plugin-module-loader'
-import { runL4PiPackageRootExclusive } from './l4-pi-package-root-gate'
+import { reportL4PiPluginNativeDiagnostic } from './l4-pi-plugin-native-diagnostic'
 import { createL4PiPluginDisabledFilter } from './l4-pi-plugin-disabled'
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0]
@@ -93,15 +93,8 @@ export class L4PiSessionResources {
       onProgress?.('等待已选择的插件资源准备完成')
       return this.selection
     }
-    onProgress?.(`等待插件资源队列\n工作目录：${cwd}`)
-    const queuedAt = performance.now()
-    this.selection = runL4PiPackageRootExclusive(() => {
-      const durationMs = Math.round(performance.now() - queuedAt)
-      if (durationMs >= 1000) {
-        console.info('[Pi Desk][PluginResources] 插件资源队列等待结束', { cwd, durationMs })
-      }
-      return this.discover(cwd, agentDir, settings, onProgress)
-    })
+    // 维护允许暂时缺包；只读发现不能排在 npm 网络操作后面。
+    this.selection = this.discover(cwd, agentDir, settings, onProgress)
     return this.selection
   }
 
@@ -122,7 +115,10 @@ export class L4PiSessionResources {
     })
     const paths = await runLoadStage('发现已配置的插件与资源', onProgress, () =>
       manager.resolve(async (source) => {
-        throw new Error(`插件包未安装：${source}`)
+        const message = `插件包未安装或版本不匹配，已跳过：${source}`
+        reportL4PiPluginNativeDiagnostic(cwd, message)
+        console.warn('[Pi Desk][PluginResources]', { cwd, message })
+        return 'skip'
       })
     )
     const disabled = await createL4PiPluginDisabledFilter(agentDir, manager, settings)
@@ -307,25 +303,30 @@ export class L4PiSessionResources {
       }
     })
     const runtime = resourceLoader.getExtensions().runtime
+    const reportProviderError = (extensionPath: string, cause: unknown): void => {
+      const message = `${extensionPath}: ${String(cause)}`
+      reportL4PiPluginNativeDiagnostic(cwd, message)
+      diagnostics.push({ type: 'warning', message })
+    }
     for (const { name, config, extensionPath } of runtime.pendingProviderRegistrations) {
       try {
         modelRuntime.registerProvider(name, config)
       } catch (cause) {
-        diagnostics.push({ type: 'error', message: `${extensionPath}: ${String(cause)}` })
+        reportProviderError(extensionPath, cause)
       }
     }
     for (const { provider, extensionPath } of runtime.pendingNativeProviderRegistrations) {
       try {
         modelRuntime.registerNativeProvider(provider)
       } catch (cause) {
-        diagnostics.push({ type: 'error', message: `${extensionPath}: ${String(cause)}` })
+        reportProviderError(extensionPath, cause)
       }
     }
     for (const { definition, extensionPath } of runtime.pendingVirtualModelRegistrations) {
       try {
         modelRuntime.registerVirtualModel(definition)
       } catch (cause) {
-        diagnostics.push({ type: 'error', message: `${extensionPath}: ${String(cause)}` })
+        reportProviderError(extensionPath, cause)
       }
     }
     runtime.pendingProviderRegistrations = []

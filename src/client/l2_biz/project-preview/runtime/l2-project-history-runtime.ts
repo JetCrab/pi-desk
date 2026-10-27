@@ -86,6 +86,7 @@ export class L2ProjectHistoryRuntime {
   private readonly collapsedDirectories = new Set<string>()
   private changeTree = buildL3ProjectPathTree([])
   private changeRows: L3PathTreeRow[] = []
+  private changeRowHeight = 36
   constructor(
     private readonly reader: L3ProjectReader,
     private readonly files: L3ProjectFileRuntime
@@ -135,6 +136,13 @@ export class L2ProjectHistoryRuntime {
 
   setScroll(pane: 'log' | 'changes', value: number): void {
     this.scroll[pane] = value
+  }
+
+  setChangeRowHeight(height: number): void {
+    if (this.changeRowHeight === height) return
+    this.scroll.changes = (this.scroll.changes / this.changeRowHeight) * height
+    this.changeRowHeight = height
+    this.publish()
   }
 
   setRepository(root: string): void {
@@ -213,18 +221,16 @@ export class L2ProjectHistoryRuntime {
     const oid = typeof commit === 'string' ? commit : commit.oid
     this.state.selectedCommit = oid
     this.scroll.changes = 0
-    this.clearHistoricalDiff()
     void this.loadChanges({ commit: oid, ...(parent ? { parent } : {}) }, 1)
   }
   showAggregate(): void {
     if (!this.range) return
     this.state.selectedCommit = null
-    this.clearHistoricalDiff()
     void this.loadChanges(this.range, 1)
   }
   loadMoreLog(): void {
     if (
-      this.state.log.status !== 'ready' ||
+      (this.state.log.status !== 'ready' && this.state.log.status !== 'error') ||
       !this.state.log.data?.hasMore ||
       this.state.log.data.items.length >= 2000
     )
@@ -416,7 +422,6 @@ export class L2ProjectHistoryRuntime {
     this.state.log = empty()
     this.state.changes = empty()
     this.resetChangeTree()
-    this.clearHistoricalDiff()
     this.publish()
   }
   private resetChangeTree(): void {
@@ -427,18 +432,16 @@ export class L2ProjectHistoryRuntime {
     this.scroll.changes = 0
   }
   private rebuildChangeRows(): void {
-    const index = Math.floor(this.scroll.changes / 36)
+    const height = this.changeRowHeight
+    const index = Math.floor(this.scroll.changes / height)
     const anchor = this.changeRows[index]
-    const offset = this.scroll.changes % 36
+    const offset = this.scroll.changes % height
     this.changeRows = flattenL3ProjectPathTree(this.changeTree, this.collapsedDirectories)
     const next = anchor ? this.changeRows.findIndex((row) => row.key === anchor.key) : -1
     this.scroll.changes =
       next >= 0
-        ? next * 36 + offset
-        : Math.min(this.scroll.changes, Math.max(0, (this.changeRows.length - 1) * 36))
-  }
-  private clearHistoricalDiff(): void {
-    if (this.files.state.activeDiff?.comparison) this.files.closeDiff()
+        ? next * height + offset
+        : Math.min(this.scroll.changes, Math.max(0, (this.changeRows.length - 1) * height))
   }
   private begin(key: 'branches' | 'log' | 'changes'): AbortController {
     this.cancel(key)

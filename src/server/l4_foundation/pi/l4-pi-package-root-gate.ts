@@ -1,6 +1,6 @@
 import 'server-only'
 
-/** 只保护安装目录的读写；扩展工厂和生命周期不能持有此锁。 */
+/** 只串行安装目录写入；只读发现、聊天与扩展生命周期不得等待此锁。 */
 export function runL4PiPackageRootExclusive<T>(operation: () => Promise<T>): Promise<T> {
   const previous = globalThis.__piDeskPackageRootTail ?? Promise.resolve()
   const result = previous.then(operation, operation)

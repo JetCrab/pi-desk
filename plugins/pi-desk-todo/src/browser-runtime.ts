@@ -138,6 +138,11 @@ export function createTodoBrowserController(
         } catch (cause) {
           if (disposed) return
           if (!ready || (action === 'get' && (dirty || pendingHide))) continue
+          // Browser 更新不会重载旧 Native 会话，缺少查询方法时不打扰聊天。
+          if (action === 'get' && cause instanceof Error && 'code' in cause && cause.code === 404) {
+            update({ snapshot: { todo: null, hidden: false }, change: null, error: null })
+            continue
+          }
           console.error(`[todo] ${action === 'hide' ? '隐藏' : '查询'}进度失败`, cause)
           update({
             error: { action, message: cause instanceof Error ? cause.message : String(cause) }

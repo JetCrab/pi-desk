@@ -74,6 +74,36 @@ test('维护等待在途调用自然完成，同时拒绝新调用后再卸载',
   await assert.rejects(runtime.invoke('idle-fixture', 'get', {}), /not found/i)
 })
 
+test('挂起的插件调用使本项维护有界失败，不遗留维护占用', { timeout: 10_000 }, async (context) => {
+  const { runtime, release, entered } = await fixture(context)
+  const active = runtime.invoke('idle-fixture', 'wait', {})
+  await entered
+  let now = performance.now()
+  context.mock.method(performance, 'now', () => now)
+  await assert.rejects(
+    runtime.withSourceIdle(
+      'fixture',
+      async () => {
+        throw new Error('不应应用')
+      },
+      new AbortController().signal,
+      () => {
+        now += 15_001
+      }
+    ),
+    /15秒内结束/
+  )
+  assert.deepEqual(await runtime.invoke('idle-fixture', 'get', {}), { active: true })
+  release()
+  assert.deepEqual(await active, { aborted: false })
+  await runtime.withSourceIdle(
+    'fixture',
+    async () => undefined,
+    new AbortController().signal,
+    () => undefined
+  )
+})
+
 test('撤销等待不取消插件调用且解除维护占用', { timeout: 10_000 }, async (context) => {
   const { runtime, release, entered } = await fixture(context)
   const active = runtime.invoke('idle-fixture', 'wait', {})

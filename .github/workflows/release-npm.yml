@@ -111,7 +111,9 @@ jobs:
             ${{ runner.os }}-next-npm-dev-${{ hashFiles('pnpm-lock.yaml') }}-
             ${{ runner.os }}-next-npm-dev-
       - name: 恢复同版本尚未完成发布的原始开发包
-        if: steps.artifacts.outputs.reusable != 'true' && github.ref == 'refs/heads/dev'
+        if: >-
+          steps.artifacts.outputs.reusable != 'true' && github.ref == 'refs/heads/dev' &&
+          (github.event_name != 'workflow_dispatch' || github.event.inputs.publish == 'true')
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/release-dev-reuse.mjs restore

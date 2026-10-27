@@ -23,6 +23,10 @@ import {
   verifyProjectPreviewEntries,
   verifyPreviewConnectionLifecycle
 } from './fixtures/l2-project-preview-entries.mjs'
+import {
+  prepareProjectPreviewBrowsing,
+  verifyProjectPreviewBrowsing
+} from './fixtures/l2-project-preview-browsing.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const task = `independent-preview-${Date.now()}-${process.pid}`
@@ -218,6 +222,9 @@ async function go(cwd) {
 }
 async function run() {
   await prepare()
+  const browsingFixture = process.argv.includes('--browsing-only')
+    ? await prepareProjectPreviewBrowsing(project)
+    : null
   port = await reservePort()
   browserPort = await reservePort()
   service = spawnE2eServer({
@@ -279,6 +286,23 @@ async function run() {
       diagnostics: () => serverOutput
     })
     await progress('原预览弹窗、真实新标签入口及原窗口继续使用通过')
+  }
+  if (browsingFixture) {
+    await verifyProjectPreviewBrowsing({
+      page,
+      project,
+      port,
+      fixture: browsingFixture,
+      wait,
+      click,
+      textButton,
+      input,
+      settled,
+      capture,
+      progress
+    })
+    passed = true
+    return
   }
   if (process.argv.includes('--entries-only')) {
     await verifyEntries()

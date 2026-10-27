@@ -45,7 +45,7 @@ export function L2ProjectPreviewPage({
           refreshOnFocus={false}
           onUnauthorized={onUnauthorized}
           actions={
-            <Button size="sm" variant="outline" onClick={() => onSelect(null)}>
+            <Button size="sm" variant="ghost" onClick={() => onSelect(null)}>
               <FolderOpenIcon className="size-4" />
               <span>{t('switchProject')}</span>
             </Button>

@@ -15,7 +15,6 @@ import {
   L2PluginManagementInvalidPackageError,
   L2PluginManagementNotFoundError,
   L2PluginManagementOperationConflictError,
-  L2PluginManagementPackageRootError,
   L2PluginManagementRestartPendingError,
   L2PluginManagementRestartUnavailableError
 } from '@server/l2_biz/plugin-management/l2-plugin-management'
@@ -42,9 +41,6 @@ function pluginOperationError(error: unknown, action: string): Response {
     (error instanceof Error && error.name === 'L2PluginManagementOperationConflictError')
   ) {
     return createL4ApiErrorResponse(409, error.message)
-  }
-  if (error instanceof L2PluginManagementPackageRootError) {
-    return createL4ApiErrorResponse(409, error.message, error.rootError.i18n)
   }
   if (error instanceof L2PluginReloadBlockedError) {
     return createL4ApiErrorResponse(409, error.message, {

@@ -1,7 +1,7 @@
 'use client'
 
 import { ChevronDownIcon, ChevronUpIcon, FileCode2Icon, XIcon } from 'lucide-react'
-import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
@@ -11,7 +11,12 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger
 } from '@client/l4_foundation/ui/shadcn/context-menu'
-import type { L3FileTabCloseScope } from './l3-project-file-runtime'
+import {
+  getL3FileDiffKey,
+  type L3FileDiffTarget,
+  type L3FileTabTarget,
+  type L3FileTabCloseScope
+} from './l3-project-file-runtime'
 import { L3FileContextMenuContent } from './l3-file-context-menu-content'
 import type { L3ProjectGitBrowser } from './l3-project-git-runtime'
 import { findL3GitFile, getL3GitChangeBadge, getL3GitChangeClass } from './l3-project-git-model'
@@ -21,10 +26,12 @@ interface L3ProjectFileTabsProps {
   gitRuntime: L3ProjectGitBrowser
   paths: readonly string[]
   activePath: string | null
-  diffPath: string | null
+  diffs: readonly L3FileDiffTarget[]
+  activeDiff: L3FileDiffTarget | null
   mobile: boolean
-  onActivate: (path: string) => void
-  onClose: (path: string | null, scope: L3FileTabCloseScope) => void
+  actions?: ReactNode
+  onActivate: (target: L3FileTabTarget) => void
+  onClose: (target: L3FileTabTarget | null, scope: L3FileTabCloseScope) => void
 }
 
 const CLOSE_ACTIONS: readonly { scope: L3FileTabCloseScope; label: string }[] = [
@@ -47,8 +54,10 @@ export function L3ProjectFileTabs({
   gitRuntime,
   paths,
   activePath,
-  diffPath,
+  diffs,
+  activeDiff,
   mobile,
+  actions,
   onActivate,
   onClose
 }: L3ProjectFileTabsProps): React.JSX.Element | null {
@@ -60,15 +69,53 @@ export function L3ProjectFileTabs({
   const [expanded, setExpanded] = useState(false)
   const [overflow, setOverflow] = useState(false)
   const [clippedIndexes, setClippedIndexes] = useState<readonly number[]>([])
-  const maxHeight = (mobile ? 2 : 3) * 36
-  const tabs: { path: string | null; label: string; title: string }[] = paths.map((path) => ({
+  const merged = actions !== undefined
+  const rowHeight = merged && !mobile ? 32 : 36
+  const maxHeight = (mobile ? 2 : 3) * rowHeight
+  const allPaths = [
+    ...paths,
+    ...diffs.map((diff) => [diff.repositoryRoot, diff.path].filter(Boolean).join('/'))
+  ]
+  const tabs: {
+    target: L3FileTabTarget
+    key: string
+    path: string
+    label: string
+    revisions?: string
+    title: string
+    testId: string
+  }[] = paths.map((path) => ({
+    target: path,
+    key: `file:${path}`,
     path,
-    label: fileLabel(path, paths),
-    title: path
+    label: fileLabel(path, allPaths),
+    title: path,
+    testId: `file-tab-${path}`
   }))
-  if (diffPath)
-    tabs.push({ path: null, label: `${fileLabel(diffPath, paths)} · Diff`, title: diffPath })
-  const active = diffPath ? null : activePath
+  for (const diff of diffs) {
+    const path = [diff.repositoryRoot, diff.path].filter(Boolean).join('/')
+    const comparison = diff.comparison
+    const revisions = comparison
+      ? `${comparison.baseCommit?.slice(0, 7) ?? '∅'} → ${comparison.targetCommit.slice(0, 7)}`
+      : ''
+    const key = getL3FileDiffKey(diff)
+    tabs.push({
+      target: diff,
+      key: `diff:${key}`,
+      path,
+      label: `${fileLabel(path, allPaths)} · Diff`,
+      revisions,
+      title: [
+        path,
+        comparison?.oldPath,
+        comparison ? `${comparison.baseCommit ?? '∅'} → ${comparison.targetCommit}` : null
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      testId: `file-diff-tab-${path}${comparison ? `-${key}` : ''}`
+    })
+  }
+  const active = activeDiff ? `diff:${getL3FileDiffKey(activeDiff)}` : `file:${activePath}`
 
   useLayoutEffect(() => {
     const rows = rowsRef.current
@@ -91,12 +138,18 @@ export function L3ProjectFileTabs({
     const observer = new ResizeObserver(inspect)
     observer.observe(rows)
     return () => observer.disconnect()
-  }, [active, diffPath, maxHeight, paths])
+  }, [active, diffs, maxHeight, paths])
 
   if (tabs.length === 0) return null
   return (
-    <div className="shrink-0 border-b bg-muted" data-testid="file-tabs">
-      <div className="overflow-hidden" style={{ maxHeight: expanded ? undefined : maxHeight }}>
+    <div
+      className={cn('shrink-0 bg-muted', merged ? 'flex flex-wrap items-start' : 'border-b')}
+      data-testid="file-tabs"
+    >
+      <div
+        className={cn('overflow-hidden', merged && 'min-w-0 flex-[1_1_12rem]')}
+        style={{ maxHeight: expanded ? undefined : maxHeight }}
+      >
         <div
           ref={rowsRef}
           role="tablist"
@@ -105,18 +158,20 @@ export function L3ProjectFileTabs({
         >
           {tabs.map((tab, index) => {
             const clipped = !expanded && clippedIndexes.includes(index)
-            const selected = tab.path === active
+            const selected = tab.key === active
+            const isDiff = typeof tab.target !== 'string'
             const change =
-              tab.path && snapshot?.status === 'ready'
+              !isDiff && snapshot?.status === 'ready'
                 ? findL3GitFile(cwd, tab.path, snapshot.repositories)?.change
                 : undefined
-            const closeLabel =
-              tab.path === null
-                ? t('closeDiff', { name: tab.title.split('/').at(-1) })
-                : t('closeFile', { name: tab.title.split('/').at(-1) })
+            const closeLabel = isDiff
+              ? t('closeDiff', {
+                  name: `${tab.path.split('/').at(-1)}${tab.revisions ? ` · ${tab.revisions}` : ''}`
+                })
+              : t('closeFile', { name: tab.path.split('/').at(-1) })
             return (
               <ContextMenu
-                key={tab.path ?? 'diff'}
+                key={tab.key}
                 onOpenChange={(open, details) => {
                   if (
                     open &&
@@ -130,15 +185,20 @@ export function L3ProjectFileTabs({
                   render={
                     <div
                       data-file-tab
-                      data-testid={
-                        tab.path === null ? `file-diff-tab-${tab.title}` : `file-tab-${tab.path}`
-                      }
+                      data-testid={tab.testId}
                       aria-hidden={clipped || undefined}
                       inert={clipped || undefined}
                       title={tab.title}
                       className={cn(
-                        'flex h-9 max-w-full items-center border-r border-b text-sm',
-                        mobile ? 'w-[min(50%,12rem)]' : 'max-w-60',
+                        'flex max-w-full items-center text-sm',
+                        merged ? (mobile ? 'h-9' : 'h-8') : 'h-9 border-r border-b',
+                        mobile
+                          ? tab.revisions
+                            ? 'w-full'
+                            : 'w-[min(50%,12rem)]'
+                          : tab.revisions
+                            ? 'max-w-80'
+                            : 'max-w-60',
                         clipped && 'invisible',
                         selected
                           ? 'bg-background text-foreground shadow-[inset_0_-2px_0_var(--primary)]'
@@ -154,13 +214,13 @@ export function L3ProjectFileTabs({
                     type="button"
                     role="tab"
                     aria-selected={selected}
-                    className="flex h-9 min-w-0 flex-1 cursor-pointer items-center gap-2 pl-3 pr-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 pl-3 pr-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     onClick={() => {
                       if (suppressTouchClickRef.current) {
                         suppressTouchClickRef.current = false
                         return
                       }
-                      if (tab.path !== null) onActivate(tab.path)
+                      onActivate(tab.target)
                     }}
                     onKeyDown={(event) => {
                       if (event.key === 'F10' && event.shiftKey) {
@@ -201,6 +261,9 @@ export function L3ProjectFileTabs({
                     <span className={cn('truncate', change && getL3GitChangeClass(change))}>
                       {tab.label}
                     </span>
+                    {tab.revisions ? (
+                      <span className="shrink-0 font-mono text-xs">{tab.revisions}</span>
+                    ) : null}
                     {change ? (
                       <span
                         className={cn('shrink-0 text-xs', getL3GitChangeClass(change))}
@@ -214,8 +277,8 @@ export function L3ProjectFileTabs({
                     variant="ghost"
                     size="icon"
                     data-testid={
-                      tab.path === null
-                        ? `file-diff-tab-close-${tab.title}`
+                      isDiff
+                        ? tab.testId.replace('file-diff-tab-', 'file-diff-tab-close-')
                         : `file-tab-close-${tab.path}`
                     }
                     aria-label={closeLabel}
@@ -225,7 +288,7 @@ export function L3ProjectFileTabs({
                         suppressTouchClickRef.current = false
                         return
                       }
-                      onClose(tab.path, 'current')
+                      onClose(tab.target, 'current')
                     }}
                   >
                     <XIcon className="size-3.5" />
@@ -247,7 +310,7 @@ export function L3ProjectFileTabs({
                         }
                         onClick={() => {
                           suppressTouchClickRef.current = false
-                          onClose(tab.path, scope)
+                          onClose(tab.target, scope)
                         }}
                       >
                         {t(label)}
@@ -260,6 +323,15 @@ export function L3ProjectFileTabs({
           })}
         </div>
       </div>
+      {merged && actions ? (
+        <div
+          className="ml-auto flex min-h-8 max-w-full flex-wrap items-center justify-end gap-1 px-1"
+          role="group"
+          aria-label={t('fileActions')}
+        >
+          {actions}
+        </div>
+      ) : null}
       {overflow ? (
         <Button
           variant="ghost"
