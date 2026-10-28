@@ -237,7 +237,7 @@ export function L2PluginContributionHost({
           state.status === 'error' && 'hidden'
         )}
       />
-      {state.status === 'loading' ? (
+      {state.status === 'loading' && kind !== 'widget' && kind !== 'session-header-item' ? (
         <div
           role="status"
           className={cn(

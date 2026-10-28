@@ -1,7 +1,7 @@
 'use client'
 
 import { EllipsisIcon } from 'lucide-react'
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { BrowserSessionHeaderItemTarget, PluginSource } from '@jetcrab/pi-desk-sdk/browser'
 import { useL4PluginRegistry } from '@client/l4_foundation/plugin-host/l4-plugin-host-context'
@@ -14,6 +14,7 @@ import {
   PopoverTitle,
   PopoverTrigger
 } from '@client/l4_foundation/ui/shadcn/popover'
+import { cn } from '@client/l4_foundation/lib/l4-utils'
 import { L2PluginContributionHost } from './l2-plugin-contribution-host'
 import { calculateL2PluginSessionHeaderInlineCount } from './l2-plugin-session-header-layout'
 import { L2PluginSessionHeaderAction } from './views/l2-plugin-session-header-action'
@@ -36,12 +37,14 @@ function HeaderItemView({
   item,
   source,
   presentation,
-  onSelected
+  onSelected,
+  onContentChange
 }: {
   item: HeaderItem
   source: PluginSource
   presentation: 'inline' | 'overflow'
   onSelected?: () => void
+  onContentChange?: (item: HeaderItem, hasContent: boolean) => void
 }): React.JSX.Element {
   const definition = item.descriptor[presentation]
   const target = useMemo<BrowserSessionHeaderItemTarget>(
@@ -49,6 +52,22 @@ function HeaderItemView({
     [presentation, source]
   )
   const sourceKey = JSON.stringify([source.workId, source.sessionId, source.branchId, presentation])
+  const contentRef = useRef<HTMLDivElement>(null)
+  const [hasContent, setHasContent] = useState(false)
+
+  useLayoutEffect(() => {
+    const content = contentRef.current
+    if (!content) return
+    const measure = (): void => {
+      const visible = content.getBoundingClientRect().height > 0
+      setHasContent(visible)
+      onContentChange?.(item, visible)
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [item, onContentChange, sourceKey])
+
   if (definition.type === 'action') {
     return (
       <L2PluginSessionHeaderAction
@@ -68,21 +87,29 @@ function HeaderItemView({
       data-plugin-name={item.pluginName}
       data-contribution-name={item.descriptor.contributionName}
       data-presentation={presentation}
-      className="min-w-0 shrink-0"
+      className={cn(
+        'min-w-0 shrink-0',
+        presentation === 'overflow' && 'w-full',
+        !hasContent && 'pointer-events-none invisible absolute'
+      )}
+      aria-hidden={!hasContent}
+      inert={!hasContent}
       style={
         presentation === 'inline' && item.descriptor.inline.type === 'custom'
           ? { width: `${item.descriptor.inline.minWidthRem}rem` }
           : undefined
       }
     >
-      <L2PluginContributionHost
-        pluginName={item.pluginName}
-        kind="session-header-item"
-        contributionName={item.descriptor.contributionName}
-        target={target}
-        targetKey={sourceKey}
-        layout="inline"
-      />
+      <div ref={contentRef}>
+        <L2PluginContributionHost
+          pluginName={item.pluginName}
+          kind="session-header-item"
+          contributionName={item.descriptor.contributionName}
+          target={target}
+          targetKey={sourceKey}
+          layout="inline"
+        />
+      </div>
     </div>
   )
 }
@@ -106,16 +133,31 @@ export function L2PluginSessionHeader({
   )
   const rootRef = useRef<HTMLDivElement>(null)
   const measurementsRef = useRef<HTMLDivElement>(null)
+  const customContentRef = useRef(new Map<HeaderItem, boolean>())
+  const measureRef = useRef<(() => void) | null>(null)
+  const onContentChange = useCallback((item: HeaderItem, hasContent: boolean): void => {
+    if (customContentRef.current.get(item) === hasContent) return
+    customContentRef.current.set(item, hasContent)
+    measureRef.current?.()
+  }, [])
   const [measurement, setMeasurement] = useState<{
     items: readonly HeaderItem[]
     count: number
+    occupied: boolean
   } | null>(null)
   const [open, setOpen] = useState(false)
-  const count = measurement?.items === items ? measurement.count : 0
+  const count = measurement?.items === items ? measurement.count : items.length
+  const occupied =
+    measurement?.items === items
+      ? measurement.occupied
+      : items.some((item) => item.descriptor.inline.type === 'action')
   const inlineItems = items.slice(0, count)
   const overflowItems = items.slice(count)
 
   useLayoutEffect(() => {
+    for (const item of customContentRef.current.keys()) {
+      if (!items.includes(item)) customContentRef.current.delete(item)
+    }
     const root = rootRef.current
     const measurements = measurementsRef.current
     if (!root || !measurements || items.length === 0) return
@@ -127,42 +169,57 @@ export function L2PluginSessionHeader({
       const gap = gapProbe.getBoundingClientRect().width
       const available =
         root.getBoundingClientRect().width - titleProbe.getBoundingClientRect().width - gap
+      const widths = probes.map((probe, index) =>
+        items[index].descriptor.inline.type === 'custom' &&
+        !customContentRef.current.get(items[index])
+          ? 0
+          : probe.getBoundingClientRect().width
+      )
       const nextCount = calculateL2PluginSessionHeaderInlineCount(
-        probes.map((probe) => probe.getBoundingClientRect().width),
+        widths,
         available,
         moreProbe.getBoundingClientRect().width,
         gap
       )
+      const nextOccupied = widths.some((width) => width > 0)
       if (nextCount === items.length) setOpen(false)
       setMeasurement((current) =>
-        current?.items === items && current.count === nextCount
+        current?.items === items && current.count === nextCount && current.occupied === nextOccupied
           ? current
-          : { items, count: nextCount }
+          : { items, count: nextCount, occupied: nextOccupied }
       )
     }
+    measureRef.current = measure
     const observer = new ResizeObserver(measure)
     observer.observe(root)
     for (const probe of [...probes, titleProbe, moreProbe, gapProbe]) observer.observe(probe)
     measure()
-    return () => observer.disconnect()
+    return () => {
+      measureRef.current = null
+      observer.disconnect()
+    }
   }, [items])
 
   return (
     <div
       ref={rootRef}
-      className="relative flex min-w-0 flex-1 items-center gap-1"
+      className="relative flex min-w-0 flex-1 items-center"
       data-testid="plugin-session-header"
     >
       <div className="min-w-[3rem] flex-1">{title}</div>
       {items.length > 0 ? (
         <>
-          <div className="flex shrink-0 items-center gap-1" data-testid="session-header-items">
+          <div
+            className={cn('flex shrink-0 items-center gap-1', occupied && 'ml-1')}
+            data-testid="session-header-items"
+          >
             {inlineItems.map((item) => (
               <HeaderItemView
                 key={itemKey(item)}
                 item={item}
                 source={source}
                 presentation="inline"
+                onContentChange={onContentChange}
               />
             ))}
             {overflowItems.length > 0 ? (

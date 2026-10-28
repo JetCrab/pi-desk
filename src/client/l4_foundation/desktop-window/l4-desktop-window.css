@@ -1,0 +1,107 @@
+:root {
+  --pi-desk-window-inset: 0px;
+  --pi-desk-content-height: calc(100dvh - var(--pi-desk-window-inset));
+}
+
+:root[data-pi-desk-window] {
+  --pi-desk-window-inset: 2rem;
+}
+
+:root[data-pi-desk-window] body {
+  padding-top: var(--pi-desk-window-inset);
+}
+
+.pi-desk-titlebar {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  height: var(--pi-desk-window-inset);
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar, var(--background));
+  color: var(--foreground);
+  user-select: none;
+}
+
+.pi-desk-titlebar[hidden] {
+  display: none;
+}
+
+.pi-desk-titlebar-title {
+  flex: 1;
+  min-width: 0;
+  padding: 0 0.75rem;
+  overflow: hidden;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pi-desk-titlebar[data-focused='false'] .pi-desk-titlebar-title {
+  color: var(--muted-foreground);
+}
+
+.pi-desk-titlebar-controls {
+  display: flex;
+  align-self: stretch;
+  flex: none;
+}
+
+.pi-desk-titlebar-controls > button {
+  display: grid;
+  width: 2.875rem;
+  min-height: 0;
+  height: 100%;
+  place-items: center;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
+  cursor: default;
+  transition: background-color 150ms ease-out;
+}
+
+.pi-desk-titlebar-controls > button:hover {
+  background: var(--accent);
+}
+
+.pi-desk-titlebar-controls > button:active {
+  background: color-mix(in oklab, var(--foreground) 14%, transparent);
+  box-shadow: none;
+}
+
+.pi-desk-titlebar-controls > button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
+}
+
+.pi-desk-titlebar-controls > .pi-desk-titlebar-close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+.pi-desk-titlebar-controls > .pi-desk-titlebar-close:active {
+  background: #a92518;
+  color: #fff;
+}
+
+.pi-desk-titlebar-controls svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pi-desk-titlebar-controls > button {
+    transition: none;
+  }
+}

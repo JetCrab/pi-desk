@@ -32,15 +32,9 @@ const todo = {
   title: '接口迁移',
   items: [
     { id: 'prepare', title: '梳理接口与依赖', status: 2 },
-    {
-      id: 'migrate',
-      title: '分端迁移',
-      children: [
-        { id: 'client', title: '客户端迁移', status: 2 },
-        { id: 'backend', title: '后台迁移', status: 1 },
-        { id: 'sales', title: '销售端迁移', status: 3, note: '等待确认旧接口兼容范围' }
-      ]
-    },
+    { id: 'client', title: '客户端迁移', status: 2 },
+    { id: 'backend', title: '后台迁移', status: 1 },
+    { id: 'sales', title: '销售端迁移', status: 3, note: '等待确认旧接口兼容范围' },
     { id: 'verify', title: '验证与交付', status: 0 }
   ]
 }
@@ -433,35 +427,64 @@ try {
       await first.eval(`document.querySelectorAll('[data-testid="todo-widget"]').length`),
       1
     )
-    await first.wait(`document.querySelector('[data-testid="todo-change"]')`, '变更短提示')
-    await first.wait(`!document.querySelector('[data-testid="todo-change"]')`, '四秒收起', 7000)
-    await first.wait(
-      `!document.querySelector('[data-testid="todo-popover"]')`,
-      '短提示退出动画结束'
-    )
+    for (const client of [first, second]) {
+      await client.wait(
+        `document.querySelector('[data-testid="todo-summary"]')?.textContent.includes('2/5')`,
+        '初始进度同步'
+      )
+      assert.equal(
+        await client.eval(`Boolean(document.querySelector('[data-testid="todo-popover"]'))`),
+        false,
+        '登记进度不自动打开浮层'
+      )
+    }
     await bounds(first)
     await first.screenshot('summary-dark.png')
-    passed.push('E01：真实Native工具全量登记，输入框上方单份摘要，多端同步')
+    passed.push('E01：真实Native工具全量登记，单份摘要和多端同步，不自动打开浮层')
 
     const updated = structuredClone(todo)
-    updated.items[1].children[1].status = 2
+    updated.items.find((item) => item.id === 'backend').status = 2
     const before = await first.eval(
       `document.querySelector('[data-testid="todo-widget"]').getBoundingClientRect().top`
     )
     await first.eval(`document.querySelector('[data-work-id="${works[0]}"] textarea').focus()`)
     await register(first, updated)
+    for (const client of [first, second]) {
+      await client.wait(
+        `document.querySelector('[data-testid="todo-summary"]')?.textContent.includes('3/5')`,
+        '最新进度同步'
+      )
+      assert.equal(
+        await client.eval(`Boolean(document.querySelector('[data-testid="todo-popover"]'))`),
+        false,
+        '更新进度不自动打开浮层'
+      )
+    }
     assert.equal(
       await first.eval(
         `document.activeElement===document.querySelector('[data-work-id="${works[0]}"] textarea')`
       ),
       true,
-      '更新短提示不抢输入焦点'
+      '进度更新不抢输入焦点'
     )
     await first.hover('[data-testid="todo-summary"]')
-    await first.wait(`document.querySelector('[data-testid="todo-popover"]')`, '悬停任务树')
+    await first.wait(`document.querySelector('[data-testid="todo-popover"]')`, '悬停任务列表')
     await first.wait(
       `document.querySelector('[data-testid="todo-popover"]').textContent.includes('等待确认旧接口兼容范围')`,
-      '二级状态与原因'
+      '任务状态与原因'
+    )
+    assert.equal(
+      await first.eval(
+        `document.querySelectorAll('[data-testid="todo-popover"] [data-todo-id]').length`
+      ),
+      5
+    )
+    assert.equal(
+      await first.eval(
+        `document.querySelector('[data-testid="todo-summary"]').textContent.includes('3/5')`
+      ),
+      true,
+      '完成数按单层任务计算'
     )
     assert.equal(
       await first.eval(
@@ -470,17 +493,21 @@ try {
       before
     )
     await bounds(first)
-    await first.screenshot('tree-dark.png')
+    await first.screenshot('list-dark.png')
     await first.click('[data-testid="todo-summary"]')
-    await first.click('[data-todo-id="migrate"] button[aria-expanded]')
-    assert.equal(
-      await first.eval(
-        `document.querySelector('[data-testid="todo-popover"]').contains(document.activeElement)`
-      ),
-      true,
-      '焦点进入任务树折叠按钮'
-    )
     await first.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 })
+    assert.equal(
+      await first.eval(`Boolean(document.querySelector('[data-testid="todo-popover"]'))`),
+      true,
+      '点击后移开鼠标仍保持详情展开'
+    )
+    const runningAgain = structuredClone(updated)
+    runningAgain.items.find((item) => item.id === 'backend').status = 1
+    await register(first, runningAgain)
+    await first.wait(
+      `document.querySelector('[data-testid="todo-popover"] [data-todo-id="backend"]')?.getAttribute('data-status')==='1'`,
+      '展开中的详情实时更新'
+    )
     await first.key('Escape', 'Escape', 27)
     await first.wait(`!document.querySelector('[data-testid="todo-popover"]')`, 'Escape关闭详情')
     await first.wait(
@@ -489,22 +516,31 @@ try {
       5000
     )
     await first.eval(`document.querySelector('[data-work-id="${works[0]}"] textarea').focus()`)
-    await register(first, updated)
-    await first.wait(`document.querySelector('[data-testid="todo-change"]')`, '再次登记短提示')
-    await first.wait(
-      `!document.querySelector('[data-testid="todo-popover"]')`,
-      '再次短提示自动收起',
-      7000
-    )
+    const completed = {
+      ...todo,
+      items: todo.items.map(({ id, title }) => ({ id, title, status: 2 }))
+    }
+    await register(first, completed)
+    for (const client of [first, second]) {
+      await client.wait(
+        `(()=>{const text=document.querySelector('[data-testid="todo-summary"]')?.textContent;return text?.includes('全部完成')&&text.includes('5/5')})()`,
+        '全部完成状态同步'
+      )
+      assert.equal(
+        await client.eval(`Boolean(document.querySelector('[data-testid="todo-popover"]'))`),
+        false,
+        '完成进度不自动打开浮层，关闭后的详情不重开'
+      )
+    }
     assert.equal(
       await first.eval(
         `document.activeElement===document.querySelector('[data-work-id="${works[0]}"] textarea')`
       ),
       true,
-      '查看详情后的后续短提示收起也不抢输入焦点'
+      '查看详情后的进度更新仍保持输入焦点'
     )
     passed.push(
-      'E02：短暂提示不抢焦点、hover详情、二级阻塞原因、点击保持、Escape回焦及后续提示焦点保持'
+      'E02：进度和完成状态静默更新、hover详情、点击保持、展开中实时更新、Escape回焦，后续更新不重开浮层或抢焦点'
     )
 
     if (scope !== 'focus') {
@@ -514,13 +550,13 @@ try {
         `!document.querySelector('[data-testid="todo-widget"]')`,
         '其他页面同步隐藏'
       )
-      assert.deepEqual(await method(first, 'get'), { todo: updated, hidden: true })
+      assert.deepEqual(await method(first, 'get'), { todo: completed, hidden: true })
       await first.send('Page.reload')
       await first.wait(
         `window.__todoReady && document.querySelector('[data-pi-desk-plugin="todo"][data-pi-desk-kind="widget"]')`,
         '页面刷新恢复挂载'
       )
-      assert.deepEqual(await method(first, 'get'), { todo: updated, hidden: true })
+      assert.deepEqual(await method(first, 'get'), { todo: completed, hidden: true })
       assert.equal(
         await first.eval(`document.querySelectorAll('[data-testid="todo-widget"]').length`),
         0
@@ -590,7 +626,6 @@ try {
     passed.push('E06：真实会话reload重建扩展，两个页面get均为空且不从历史恢复')
 
     await register(first, todo)
-    await first.wait(`!document.querySelector('[data-testid="todo-change"]')`, '提示结束')
     await first.size(390, 900)
     await first.click('[data-testid="todo-summary"]')
     await first.wait(`document.querySelector('[data-testid="todo-popover"]')`, '移动端点击展开')
@@ -606,6 +641,22 @@ try {
     )
     await bounds(first)
     await first.screenshot('narrow-zoom-light.png')
+    await register(first, {
+      ...todo,
+      items: [
+        ...todo.items.slice(0, -1),
+        ...Array.from({ length: 8 }, (_, index) => ({
+          id: `check-${index}`,
+          title: `检查接口 ${index + 1} 兼容性`,
+          status: 0
+        })),
+        todo.items.at(-1)
+      ]
+    })
+    await first.wait(
+      `(()=>{const viewport=document.querySelector('[data-testid="todo-popover"] [data-slot="plugin-scroll-viewport"]');return viewport&&viewport.scrollHeight>viewport.clientHeight})()`,
+      '长任务列表确实超出可用高度'
+    )
     await first.send('Input.dispatchMouseEvent', {
       type: 'mouseWheel',
       ...(await first.point('[data-testid="todo-popover"]')),
@@ -620,13 +671,13 @@ try {
       const a=viewport.getBoundingClientRect(),b=item.getBoundingClientRect();
       return viewport.scrollTop>0&&b.top>=a.top&&b.bottom<=a.bottom+1;
     })()`,
-      '长任务树滚动到最后一项',
+      '长任务列表滚动到最后一项',
       5000
     )
     await first.screenshot('narrow-scrolled-light.png')
     await first.click('[data-testid="todo-dismiss"]')
     await first.wait(`!document.querySelector('[data-testid="todo-widget"]')`, '窄屏大字号关闭')
-    passed.push('E05：390px、300px＋150%字号、明暗主题，长树可滚到底，不挡输入且×可点击')
+    passed.push('E05：390px、300px＋150%字号、明暗主题，长列表可滚到底，不挡输入且×可点击')
   }
   for (const client of clients) assert.deepEqual(client.errors, [], '浏览器无未处理异常')
   console.log(passed.join('\n'))

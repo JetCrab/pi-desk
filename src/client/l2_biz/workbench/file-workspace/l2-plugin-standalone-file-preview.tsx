@@ -152,7 +152,7 @@ export function L2PluginStandaloneFilePreview({
       <L4AppDialogContent
         className={
           mobile
-            ? 'inset-0 h-dvh max-h-none w-dvw max-w-none translate-x-0 translate-y-0 rounded-none border-0 ring-0'
+            ? 'inset-x-0 top-[var(--pi-desk-window-inset)] bottom-0 h-[var(--pi-desk-content-height)] max-h-none w-dvw max-w-none translate-x-0 translate-y-0 rounded-none border-0 ring-0'
             : 'h-[min(94dvh,1080px)] w-[min(96dvw,1600px)] max-w-none'
         }
       >

@@ -23,7 +23,12 @@ fn main() {
             && Path::new(frontend).is_relative(),
         "桌面 frontendDist 必须是相对资源目录，不能使用 URL 或绝对路径：{frontend}"
     );
-    for name in ["index.html", "l1-desktop-main.js", "l4-desktop-ui.css"] {
+    for name in [
+        "index.html",
+        "l1-desktop-main.js",
+        "l1-desktop-main.css",
+        "l4-desktop-ui.css",
+    ] {
         let file = Path::new(frontend).join(name);
         assert!(
             file.is_file(),
@@ -31,5 +36,9 @@ fn main() {
             file.display()
         );
     }
-    tauri_build::build()
+    tauri_build::try_build(tauri_build::Attributes::new().plugin(
+        "window-chrome",
+        tauri_build::InlinedPlugin::new().commands(&["bridge"]),
+    ))
+    .expect("无法生成桌面构建资源")
 }

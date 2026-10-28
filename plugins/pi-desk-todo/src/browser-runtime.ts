@@ -3,7 +3,7 @@ import type {
   PluginPushMessage,
   PluginSource
 } from '@jetcrab/pi-desk-sdk/browser'
-import { parseTodoInput, type TodoInput, type TodoLeaf, type TodoSnapshot } from './contract.js'
+import { parseTodoInput, type TodoSnapshot } from './contract.js'
 
 type PushListener = (source: PluginSource) => void
 const pushListeners = new Set<PushListener>()
@@ -28,7 +28,6 @@ export interface TodoBrowserState {
   loading: boolean
   hiding: boolean
   error: { action: 'get' | 'hide'; message: string } | null
-  change: { path: string; status: TodoLeaf['status'] | null; note?: string } | null
 }
 
 export interface TodoBrowserController {
@@ -44,26 +43,19 @@ function parseSnapshot(value: unknown): TodoSnapshot {
     throw new Error('Todo 会话快照格式不正确')
   }
   if (typeof value.hidden !== 'boolean') throw new Error('Todo hidden 必须是布尔值')
-  return { todo: value.todo === null ? null : parseTodoInput(value.todo), hidden: value.hidden }
-}
-
-function describeChange(
-  previous: TodoInput | null,
-  current: TodoInput
-): NonNullable<TodoBrowserState['change']> {
-  const locate = (todo: TodoInput): Array<{ leaf: TodoLeaf; path: string }> =>
-    todo.items.flatMap((item) =>
-      'children' in item
-        ? item.children.map((leaf) => ({ leaf, path: `${item.title} › ${leaf.title}` }))
-        : [{ leaf: item, path: item.title }]
-    )
-  const before = new Map(previous ? locate(previous).map(({ leaf }) => [leaf.id, leaf]) : [])
-  const changes = locate(current).filter(
-    ({ leaf }) => JSON.stringify(before.get(leaf.id)) !== JSON.stringify(leaf)
-  )
-  if (!previous || changes.length !== 1) return { path: current.title, status: null }
-  const { leaf, path } = changes[0]!
-  return { path, status: leaf.status, ...(leaf.note ? { note: leaf.note } : {}) }
+  let todo = value.todo
+  // Browser 热更新不重载 Native 会话，旧二级快照只在读取边界摊平。
+  if (todo && typeof todo === 'object' && 'items' in todo && Array.isArray(todo.items)) {
+    todo = {
+      ...todo,
+      items: todo.items.flatMap((item: unknown): unknown[] =>
+        item && typeof item === 'object' && 'children' in item && Array.isArray(item.children)
+          ? item.children
+          : [item]
+      )
+    }
+  }
+  return { todo: todo === null ? null : parseTodoInput(todo), hidden: value.hidden }
 }
 
 function sameSource(left: PluginSource, right: PluginSource): boolean {
@@ -83,8 +75,7 @@ export function createTodoBrowserController(
     snapshot: { todo: null, hidden: false },
     loading: false,
     hiding: false,
-    error: null,
-    change: null
+    error: null
   }
   const listeners = new Set<() => void>()
   const waiters = new Set<() => void>()
@@ -92,8 +83,6 @@ export function createTodoBrowserController(
   let pumping = false
   let dirty = false
   let pendingHide = false
-  let pendingChanged = false
-  let baselineRequested = true
   let ready = host.connection.getSnapshot().status === 'ready'
 
   function update(patch: Partial<TodoBrowserState>): void {
@@ -113,34 +102,19 @@ export function createTodoBrowserController(
         const action = pendingHide ? 'hide' : 'get'
         pendingHide = false
         dirty = false
-        const notify = pendingChanged && !baselineRequested && action === 'get'
-        pendingChanged = false
-        baselineRequested = false
         update({ loading: true, error: null })
         try {
           const snapshot = parseSnapshot(await host.piDesk.invokeSession(source, action, {}))
           if (disposed) return
           // 查询期间收到新通知或隐藏操作时，丢弃旧结果，只应用队列收敛后的快照。
-          if (!ready || dirty || pendingHide) {
-            if (!baselineRequested) pendingChanged ||= notify
-            continue
-          }
-          const previous = state.snapshot
-          update({
-            snapshot,
-            change:
-              notify && snapshot.todo && !snapshot.hidden
-                ? describeChange(previous.todo, snapshot.todo)
-                : action === 'hide'
-                  ? null
-                  : state.change
-          })
+          if (!ready || dirty || pendingHide) continue
+          update({ snapshot })
         } catch (cause) {
           if (disposed) return
           if (!ready || (action === 'get' && (dirty || pendingHide))) continue
           // Browser 更新不会重载旧 Native 会话，缺少查询方法时不打扰聊天。
           if (action === 'get' && cause instanceof Error && 'code' in cause && cause.code === 404) {
-            update({ snapshot: { todo: null, hidden: false }, change: null, error: null })
+            update({ snapshot: { todo: null, hidden: false }, error: null })
             continue
           }
           console.error(`[todo] ${action === 'hide' ? '隐藏' : '查询'}进度失败`, cause)
@@ -168,30 +142,21 @@ export function createTodoBrowserController(
     return completion
   }
 
-  function refresh(changed = false): Promise<void> {
+  function refresh(): Promise<void> {
     if (disposed) return Promise.resolve()
     dirty = true
-    if (changed) pendingChanged = true
-    else {
-      baselineRequested = true
-      pendingChanged = false
-      update({ change: null })
-    }
     return schedule()
   }
 
   const onPush: PushListener = (target): void => {
-    if (ready && sameSource(source, target)) void refresh(true)
+    if (ready && sameSource(source, target)) void refresh()
   }
   pushListeners.add(onPush)
   const unsubscribeConnection = host.connection.subscribe(() => {
     const nextReady = host.connection.getSnapshot().status === 'ready'
     if (ready === nextReady) return
     ready = nextReady
-    baselineRequested = true
-    pendingChanged = false
     dirty = true
-    update({ change: null })
     if (ready) void refresh()
   })
 
@@ -222,7 +187,7 @@ export function createTodoBrowserController(
     hide(): Promise<void> {
       if (disposed || state.hiding) return Promise.resolve()
       pendingHide = true
-      update({ hiding: true, error: null, change: null })
+      update({ hiding: true, error: null })
       return schedule()
     },
     dispose

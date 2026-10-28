@@ -35,7 +35,7 @@ export function L2PluginComposerPanel({
     <L4AppDialogRoot open onOpenChange={(open) => !open && onClose()}>
       <L4AppDialogContent
         finalFocus={false}
-        className="h-[min(720px,calc(100dvh-2rem))] max-w-4xl max-sm:h-dvh max-sm:max-h-dvh max-sm:w-full max-sm:max-w-none max-sm:rounded-none max-sm:border-0"
+        className="h-[min(720px,calc(100dvh-2rem))] max-w-4xl max-sm:h-[var(--pi-desk-content-height)] max-sm:max-h-[var(--pi-desk-content-height)] max-sm:w-full max-sm:max-w-none max-sm:rounded-none max-sm:border-0"
       >
         <L4AppDialogHeader className="border-b px-4 py-3 pr-12">
           <div className="flex min-w-0 items-center gap-3">

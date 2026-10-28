@@ -150,7 +150,9 @@ export function nativeCheckTargets(paths) {
   return {
     desktop_checks: changed.some(
       (path) =>
-        path.startsWith('apps/desktop/') || path === '.github/scripts/check-desktop-tunnel.mjs'
+        path.startsWith('apps/desktop/') ||
+        path.startsWith('src/client/l4_foundation/desktop-window/') ||
+        path === '.github/scripts/check-desktop-tunnel.mjs'
     ),
     android_checks: changed.some((path) => path.startsWith('apps/android/')),
     tunnel_checks: changed.some((path) => path.startsWith('apps/tunnel/'))

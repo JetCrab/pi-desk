@@ -464,7 +464,11 @@ async function planNative(root, baseline, options = {}) {
     const rust = rustPackage(desktop[2], desktopFiles[2])
     const old = baseline.read(desktopFiles[0])
     const previous = old === null ? null : json(old, desktopFiles[0]).version
-    const affected = await changed(['apps/desktop', 'apps/tunnel/common'])
+    const affected = await changed([
+      'apps/desktop',
+      'apps/tunnel/common',
+      'src/client/l4_foundation/desktop-window'
+    ])
     const version = select('desktop', manifest.version, previous, affected)
     if (manifest.version !== version) {
       manifest.version = version

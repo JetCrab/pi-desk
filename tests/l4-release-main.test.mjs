@@ -414,48 +414,53 @@ test('开发发布按原始制品恢复，不依赖同一次Actions重试编号'
   }
 })
 
-test('桌面四份版本和Android构建号在提交准备时自动保持一致', async (t) => {
-  const repo = await fixture(t)
-  repo.git('switch', '-c', 'dev')
-  await repo.save(
-    'apps/desktop/src-tauri/tauri.conf.json',
-    '{\n  "version": "1.0.0",\n  "bundle": { "targets": ["nsis"] }\n}\n'
-  )
-  await repo.save(
-    'apps/desktop/src-tauri/Cargo.toml',
-    '[package]\nname="pi-desk-desktop"\nversion="1.0.0"\n'
-  )
-  await repo.save(
-    'apps/desktop/src-tauri/Cargo.lock',
-    '[[package]]\nname="pi-desk-desktop"\nversion="1.0.0"\n'
-  )
-  const base = repo.commit()
-  await repo.save('apps/desktop/web/main.ts', 'export const feature=true')
-  await repo.save('apps/android/app/src/main.kt', 'fun feature() = true')
-  repo.git('add', '.')
-  await prepareCommitVersions(repo.root, { base })
-  assert.equal(
-    JSON.parse(await readFile(join(repo.root, 'apps/desktop/package.json'), 'utf8')).version,
-    '1.0.1'
-  )
-  assert.equal(
-    JSON.parse(await readFile(join(repo.root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'))
-      .version,
-    '1.0.1'
-  )
-  assert.match(
-    await readFile(join(repo.root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'),
-    /"targets": \["nsis"\]/
-  )
-  for (const file of ['Cargo.toml', 'Cargo.lock'])
-    assert.match(
-      await readFile(join(repo.root, 'apps/desktop/src-tauri', file), 'utf8'),
-      /version="1\.0\.1"/
+for (const desktopSource of [
+  'apps/desktop/web/main.ts',
+  'src/client/l4_foundation/desktop-window/l4-desktop-titlebar.tsx'
+]) {
+  test(`桌面四份版本和Android构建号在提交准备时自动保持一致：${desktopSource}`, async (t) => {
+    const repo = await fixture(t)
+    repo.git('switch', '-c', 'dev')
+    await repo.save(
+      'apps/desktop/src-tauri/tauri.conf.json',
+      '{\n  "version": "1.0.0",\n  "bundle": { "targets": ["nsis"] }\n}\n'
     )
-  const android = await readFile(join(repo.root, 'apps/android/app/build.gradle.kts'), 'utf8')
-  assert.match(android, /versionName = "1\.0\.1"/)
-  assert.match(android, /versionCode = 2/)
-})
+    await repo.save(
+      'apps/desktop/src-tauri/Cargo.toml',
+      '[package]\nname="pi-desk-desktop"\nversion="1.0.0"\n'
+    )
+    await repo.save(
+      'apps/desktop/src-tauri/Cargo.lock',
+      '[[package]]\nname="pi-desk-desktop"\nversion="1.0.0"\n'
+    )
+    const base = repo.commit()
+    await repo.save(desktopSource, 'export const feature=true')
+    await repo.save('apps/android/app/src/main.kt', 'fun feature() = true')
+    repo.git('add', '.')
+    await prepareCommitVersions(repo.root, { base })
+    assert.equal(
+      JSON.parse(await readFile(join(repo.root, 'apps/desktop/package.json'), 'utf8')).version,
+      '1.0.1'
+    )
+    assert.equal(
+      JSON.parse(await readFile(join(repo.root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'))
+        .version,
+      '1.0.1'
+    )
+    assert.match(
+      await readFile(join(repo.root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'),
+      /"targets": \["nsis"\]/
+    )
+    for (const file of ['Cargo.toml', 'Cargo.lock'])
+      assert.match(
+        await readFile(join(repo.root, 'apps/desktop/src-tauri', file), 'utf8'),
+        /version="1\.0\.1"/
+      )
+    const android = await readFile(join(repo.root, 'apps/android/app/build.gradle.kts'), 'utf8')
+    assert.match(android, /versionName = "1\.0\.1"/)
+    assert.match(android, /versionCode = 2/)
+  })
+}
 
 test('版本校验失败不得留下部分修改清单', async (t) => {
   const repo = await fixture(t)
@@ -513,14 +518,23 @@ test('Docker运行配方属于主包版本，文档不单独升版', async (t) =
   assert.deepEqual(docs.npm, [])
 })
 
-test('客户端代码变更未升版和历史回退均被阻止', async (t) => {
-  const repo = await fixture(t)
-  const previous = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
-  await repo.save('apps/desktop/web/main.ts', 'export const changed = true')
-  assert.throws(() => createReleasePlan(repo.root, { head: repo.commit(), previous }), /版本未递增/)
-  await repo.save('apps/desktop/package.json', { version: '0.9.0' })
-  assert.throws(() => createReleasePlan(repo.root, { head: repo.commit(), previous }), /递增/)
-})
+for (const desktopSource of [
+  'apps/desktop/web/main.ts',
+  'src/client/l4_foundation/desktop-window/l4-desktop-titlebar.tsx'
+]) {
+  test(`客户端代码变更未升版和历史回退均被阻止：${desktopSource}`, async (t) => {
+    const repo = await fixture(t)
+    const previous = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
+    await repo.pkg('pi-desk', '1.0.1')
+    await repo.save(desktopSource, 'export const changed = true')
+    assert.throws(
+      () => createReleasePlan(repo.root, { head: repo.commit(), previous }),
+      /(?:windows|macos|linux) 运行内容变化但版本未递增/
+    )
+    await repo.save('apps/desktop/package.json', { version: '0.9.0' })
+    assert.throws(() => createReleasePlan(repo.root, { head: repo.commit(), previous }), /递增/)
+  })
+}
 
 test('草稿、开发版和平台Release不能推进正式变更基线', () => {
   const valid = {

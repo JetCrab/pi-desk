@@ -552,14 +552,14 @@ textarea:disabled {
 }
 .desktop-control {
   width: min(100%, 960px);
-  min-height: 100dvh;
+  min-height: var(--pi-desk-content-height, 100dvh);
 }
 .desktop-control .app-header {
   border-bottom: 1px solid var(--border);
 }
 .control-loading,
 .desktop-control .empty {
-  min-height: calc(100dvh - 180px);
+  min-height: calc(var(--pi-desk-content-height, 100dvh) - 180px);
   display: grid;
   align-content: center;
   justify-items: center;

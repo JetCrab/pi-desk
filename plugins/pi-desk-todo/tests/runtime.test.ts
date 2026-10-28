@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { Check } from 'typebox/value'
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import {
   SESSION_PLUGIN_METHOD_EVENT,
@@ -12,27 +13,16 @@ import {
 import extension from '../src/index.js'
 import { TodoRuntime } from '../src/runtime.js'
 import { TodoInputSchema } from '../src/schema.js'
-import {
-  countTodoItems,
-  deriveTodoStatus,
-  parseTodoInput,
-  type TodoInput
-} from '../src/contract.js'
+import { countTodoItems, parseTodoInput, type TodoInput } from '../src/contract.js'
 
 function input(): TodoInput {
   return {
     title: '接口迁移',
     items: [
       { id: 'prepare', title: '接口梳理', status: 2 },
-      {
-        id: 'migration',
-        title: '分端迁移',
-        children: [
-          { id: 'client', title: '客户端', status: 2 },
-          { id: 'backend', title: '后台', status: 1 },
-          { id: 'sales', title: '销售端', status: 3, note: '等待兼容范围确认' }
-        ]
-      },
+      { id: 'client', title: '客户端', status: 2 },
+      { id: 'backend', title: '后台', status: 1 },
+      { id: 'sales', title: '销售端', status: 3, note: '等待兼容范围确认' },
       { id: 'verify', title: '联调验证', status: 0 }
     ]
   }
@@ -49,30 +39,20 @@ function runtime(): { value: TodoRuntime; pushes: string[] } {
   return { value: new TodoRuntime(plugin), pushes }
 }
 
-test('状态Schema说明0/1/2/3，父子完成数分别计算', () => {
+test('单层Schema说明0/1/2/3，完成数直接按任务计算', () => {
   const schema = JSON.stringify(TodoInputSchema)
   for (const text of ['0', '1', '2', '3', '待开始', '进行中', '已完成', '受阻'])
     assert.ok(schema.includes(text))
+  assert.equal(Check(TodoInputSchema, input()), true)
+  assert.equal(schema.includes('children'), false)
+  const nested = {
+    title: '旧结构',
+    items: [{ id: 'stage', title: '迁移', children: input().items }]
+  }
+  assert.equal(Check(TodoInputSchema, nested), false)
+  assert.throws(() => parseTodoInput(nested), /children/)
   const parsed = parseTodoInput(input())
-  assert.deepEqual(countTodoItems(parsed.items), { completed: 1, total: 3 })
-  const parent = parsed.items[1]
-  assert.ok('children' in parent)
-  assert.deepEqual(countTodoItems(parent.children), { completed: 1, total: 3 })
-  assert.equal(deriveTodoStatus(parent), 1)
-  assert.equal(
-    deriveTodoStatus({
-      ...parent,
-      children: parent.children.map((child) => ({ ...child, status: 2 as const }))
-    }),
-    2
-  )
-  assert.equal(
-    deriveTodoStatus({
-      ...parent,
-      children: [{ id: 'wait', title: '等待', status: 3, note: '等待确认' }]
-    }),
-    3
-  )
+  assert.deepEqual(countTodoItems(parsed.items), { completed: 2, total: 5 })
 })
 
 test('全量替换仅保留一份，隐藏保留内存，新登记重新显示', () => {
@@ -115,6 +95,16 @@ test('非法全量登记原子拒绝并保留已有进度', () => {
           id: 'x',
           title: '父节点',
           status: 2,
+          children: [{ id: 'child', title: '子任务', status: 0 }]
+        }
+      ]
+    },
+    {
+      title: '错误',
+      items: [
+        {
+          id: 'x',
+          title: '父节点',
           children: [{ id: 'child', title: '子任务', status: 0 }]
         }
       ]

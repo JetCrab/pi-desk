@@ -1,4 +1,4 @@
-use crate::{logging, runtime::ShellState};
+use crate::{logging, runtime::ShellState, window_chrome};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -33,11 +33,21 @@ pub fn open_control(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("control") {
         return show(&window);
     }
+    let navigate_app = app.clone();
     let window = WebviewWindowBuilder::new(app, "control", WebviewUrl::App("index.html".into()))
         .title("Pi Desk")
         .inner_size(960.0, 720.0)
         .min_inner_size(720.0, 560.0)
+        .on_navigation(move |_| {
+            if let Some(window) = navigate_app.get_webview_window("control") {
+                window_chrome::restore(&window, "navigation");
+            }
+            true
+        })
         .on_page_load(|window, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                window_chrome::restore(&window, "page-started");
+            }
             let state = window.app_handle().state::<ShellState>();
             logging::write(
                 &state.log_path,
@@ -47,6 +57,8 @@ pub fn open_control(app: &AppHandle) -> Result<(), String> {
         })
         .build()
         .map_err(|error| format!("打开控制中心失败：{error}"))?;
+    #[cfg(windows)]
+    watch_process(&window, None)?;
     let hidden = window.clone();
     window.on_window_event(move |event| {
         if let WindowEvent::CloseRequested { api, .. } = event {
@@ -134,6 +146,7 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
     let origin = url.origin();
     let popup_origin = origin.clone();
     let navigate_app = app.clone();
+    let navigate_label = label.clone();
     let popup_app = app.clone();
     let popup_label = label.clone();
     let popup_target = value.to_string();
@@ -156,15 +169,21 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
             }
         })
         .on_navigation(move |next| {
-            if next.origin() == origin {
-                return true;
-            }
-            if !matches!(next.scheme(), "http" | "https") {
+            let accepted = if next.origin() == origin {
+                true
+            } else if !matches!(next.scheme(), "http" | "https") {
                 let state = navigate_app.state::<ShellState>();
                 logging::write(&state.log_path, "browser-navigation-denied", next.as_str());
-                return false;
+                false
+            } else {
+                open_external(&navigate_app, next, "navigation").is_err()
+            };
+            if accepted {
+                if let Some(window) = navigate_app.get_webview_window(&navigate_label) {
+                    window_chrome::restore(&window, "navigation");
+                }
             }
-            open_external(&navigate_app, next, "navigation").is_err()
+            accepted
         })
         .on_new_window(move |next, _| {
             let state = popup_app.state::<ShellState>();
@@ -196,6 +215,9 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
             }
         })
         .on_page_load(|window, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                window_chrome::restore(&window, "page-started");
+            }
             let state = window.app_handle().state::<ShellState>();
             logging::write(
                 &state.log_path,
@@ -214,7 +236,7 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
         .build()
         .map_err(|error| format!("创建网页窗口失败：{error}"))?;
     #[cfg(windows)]
-    watch_process(&window, invalid.clone())?;
+    watch_process(&window, Some(invalid.clone()))?;
     labels.insert(
         key.clone(),
         BrowserWindow {
@@ -302,7 +324,7 @@ fn remove_matching(app: &AppHandle, matches: impl Fn(&BrowserWindow) -> bool) {
 }
 
 #[cfg(windows)]
-fn watch_process(window: &WebviewWindow, invalid: Arc<AtomicBool>) -> Result<(), String> {
+fn watch_process(window: &WebviewWindow, invalid: Option<Arc<AtomicBool>>) -> Result<(), String> {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
         COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
         COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
@@ -329,7 +351,12 @@ fn watch_process(window: &WebviewWindow, invalid: Arc<AtomicBool>) -> Result<(),
                                 | COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
                         );
                         if requires_recreation {
-                            invalid.store(true, Ordering::Release);
+                            if let Some(invalid) = &invalid {
+                                invalid.store(true, Ordering::Release);
+                            }
+                            if let Some(window) = event_app.get_webview_window(&event_label) {
+                                window_chrome::restore(&window, "process-failed");
+                            }
                         }
                         let state = event_app.state::<ShellState>();
                         logging::write(

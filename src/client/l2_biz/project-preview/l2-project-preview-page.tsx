@@ -34,7 +34,7 @@ export function L2ProjectPreviewPage({
   const { t } = useTranslation('projectHistory')
   return (
     <main
-      className="flex h-dvh min-w-0 flex-col overflow-hidden bg-background text-foreground"
+      className="flex h-[var(--pi-desk-content-height)] min-w-0 flex-col overflow-hidden bg-background text-foreground"
       data-testid="project-preview-page"
     >
       {cwd ? (

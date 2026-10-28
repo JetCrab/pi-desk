@@ -34,14 +34,14 @@ function fixture(): {
   host: Pick<BrowserPluginHost, 'connection' | 'piDesk'>
   pending: Array<{
     method: string
-    finish: (snapshot: TodoSnapshot) => void
+    finish: (snapshot: PluginJsonObject) => void
     reject: (error: Error) => void
   }>
   connect: (ready: boolean) => void
 } {
   const pending: Array<{
     method: string
-    finish: (snapshot: TodoSnapshot) => void
+    finish: (snapshot: PluginJsonObject) => void
     reject: (error: Error) => void
   }> = []
   let status: BrowserConnectionSnapshot['status'] = 'ready'
@@ -91,18 +91,59 @@ test('初始基线静默，查询期间Push合并且不应用旧结果', async (
   pending[0].finish(a)
   await until(() => !controller.getSnapshot().loading)
   assert.deepEqual(controller.getSnapshot().snapshot, a)
-  assert.equal(controller.getSnapshot().change, null)
   push()
   assert.equal(pending.length, 2)
   push()
   push()
   pending[1].finish(a)
   await until(() => pending.length === 3)
+  assert.deepEqual(controller.getSnapshot().snapshot, a)
   pending[2].finish(b)
   await until(() => !controller.getSnapshot().loading)
   assert.deepEqual(controller.getSnapshot().snapshot, b)
-  assert.equal(controller.getSnapshot().change?.status, 2)
   assert.equal(pending.length, 3)
+})
+
+test('旧Native二级快照摊平，单层任务重排和改名同步到最新快照', async (context) => {
+  resetTodoBrowserRuntime()
+  const { host, pending } = fixture()
+  const controller = createTodoBrowserController(host, source)
+  context.after(() => {
+    controller.dispose()
+    resetTodoBrowserRuntime()
+  })
+  const prepare = { id: 'prepare', title: '准备', status: 2 }
+  const client = { id: 'client', title: '客户端', status: 2 }
+  const backend = { id: 'backend', title: '后台', status: 1 }
+  pending[0].finish({
+    todo: {
+      title: '迁移',
+      items: [prepare, { id: 'stage', title: '分端迁移', children: [client, backend] }]
+    },
+    hidden: false
+  })
+  await until(() => !controller.getSnapshot().loading)
+  assert.deepEqual(controller.getSnapshot().snapshot, {
+    todo: { title: '迁移', items: [prepare, client, backend] },
+    hidden: false
+  })
+  push()
+  pending[1].finish({
+    todo: {
+      title: '迁移',
+      items: [{ ...backend, title: '后台接口', status: 3, note: '等待确认' }, prepare, client]
+    },
+    hidden: false
+  })
+  await until(() => !controller.getSnapshot().loading)
+  assert.deepEqual(controller.getSnapshot().snapshot, {
+    todo: {
+      title: '迁移',
+      items: [{ id: 'backend', title: '后台接口', status: 3, note: '等待确认' }, prepare, client]
+    },
+    hidden: false
+  })
+  assert.equal(controller.getSnapshot().error, null)
 })
 
 test('hide保留服务端内容，Push与hide响应交错仍以最新查询为准', async (context) => {
@@ -128,7 +169,6 @@ test('hide保留服务端内容，Push与hide响应交错仍以最新查询为�
   pending[3].finish(a)
   await until(() => !controller.getSnapshot().loading)
   assert.deepEqual(controller.getSnapshot().snapshot, a)
-  assert.ok(controller.getSnapshot().change)
 })
 
 test('断线恢复静默重建，不处理别的Source或dispose后的Push', async (context) => {
@@ -150,7 +190,6 @@ test('断线恢复静默重建，不处理别的Source或dispose后的Push', asy
   pending[1].finish(b)
   await until(() => !controller.getSnapshot().loading)
   assert.deepEqual(controller.getSnapshot().snapshot, b)
-  assert.equal(controller.getSnapshot().change, null)
   signal.abort()
   push()
   assert.equal(pending.length, 2)
@@ -181,7 +220,7 @@ test('旧会话缺少查询方法时静默，重连仍兼容，Push后可恢复�
   assert.deepEqual(controller.getSnapshot().snapshot, a)
 })
 
-test('查询方法失效时清空已有进度和变更提示', async (context) => {
+test('查询方法失效时清空已有进度', async (context) => {
   resetTodoBrowserRuntime()
   const { host, pending } = fixture()
   const controller = createTodoBrowserController(host, source)
@@ -194,12 +233,11 @@ test('查询方法失效时清空已有进度和变更提示', async (context) =
   push()
   pending[1].finish(b)
   await until(() => !controller.getSnapshot().loading)
-  assert.ok(controller.getSnapshot().change)
+  assert.deepEqual(controller.getSnapshot().snapshot, b)
   push()
   pending[2].reject(Object.assign(Error('插件方法不存在'), { code: 404 }))
   await until(() => !controller.getSnapshot().loading)
   assert.deepEqual(controller.getSnapshot().snapshot, { todo: null, hidden: false })
-  assert.equal(controller.getSnapshot().change, null)
   assert.equal(controller.getSnapshot().error, null)
 })
 

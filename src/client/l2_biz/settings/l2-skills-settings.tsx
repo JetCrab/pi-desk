@@ -209,7 +209,7 @@ export function L2SkillsSettings({
       </div>
       <L4AppDialogRoot open={drawerOpen} onOpenChange={setDrawerOpen}>
         <L4AppDialogContent
-          className="left-0 top-0 z-[130] h-dvh max-h-dvh w-[min(360px,calc(100dvw-2rem))] max-w-none translate-x-0 translate-y-0 rounded-l-none"
+          className="left-0 top-[var(--pi-desk-window-inset)] z-[130] h-[var(--pi-desk-content-height)] max-h-[var(--pi-desk-content-height)] w-[min(360px,calc(100dvw-2rem))] max-w-none translate-x-0 translate-y-0 rounded-l-none"
           finalFocus={false}
         >
           <L4AppDialogHeader className="shrink-0 border-b px-4 py-3 pr-12">

@@ -228,4 +228,8 @@ test('桌面三平台共用产品版本但分别记录成功，检查与打包�
     nativeCheckTargets(['apps/desktop/src-tauri/src/runtime_tests.rs', 'apps/android/README.md']),
     { desktop_checks: true, android_checks: false, tunnel_checks: false }
   )
+  assert.deepEqual(
+    nativeCheckTargets(['src/client/l4_foundation/desktop-window/l4-desktop-titlebar.tsx']),
+    { desktop_checks: true, android_checks: false, tunnel_checks: false }
+  )
 })

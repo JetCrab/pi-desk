@@ -129,7 +129,10 @@ export function createReleasePlan(
     const old = previous?.clients.find((item) => item.platform === platform)
     if (!old || versionIncreased(old.version, version, platform))
       return { platform, version, build: true }
-    const paths = platform === 'android' ? ['apps/android'] : ['apps/desktop', 'apps/tunnel/common']
+    const paths =
+      platform === 'android'
+        ? ['apps/android']
+        : ['apps/desktop', 'apps/tunnel/common', 'src/client/l4_foundation/desktop-window']
     assert.ok(!runtimeChanged(root, base, head, paths), `${platform} 运行内容变化但版本未递增`)
     return { platform, version, build: false, reuse: { tag: previous.tag, ...old } }
   })

@@ -2040,7 +2040,7 @@ export function L2Workbench({
   )
 
   return (
-    <main className="pi-desk-workbench flex h-dvh overflow-hidden bg-background">
+    <main className="pi-desk-workbench flex h-[var(--pi-desk-content-height)] overflow-hidden bg-background">
       <L2WorkbenchSidebarLayout
         mobile={mobile}
         open={sidebarOpen}
