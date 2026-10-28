@@ -50,7 +50,20 @@ function browserEntry(version) {
   const view = () => import('./view.js')
   plugin.registerWidget('above', { load: () => view().then(m => m.above) })
   plugin.registerWidget('below', { placement: 'belowEditor', load: () => view().then(m => m.below) })
-  plugin.registerWidget('empty', { load: async () => ({ mount() {} }) })
+  plugin.registerWidget('empty', { load: () => {
+    const view = {
+      mount() {
+        window.__slotEmptyMounted = true
+      }
+    }
+    if (window.__slotEmptyReady) return Promise.resolve(view)
+    return new Promise(resolve => {
+      window.__slotResolveEmpty = () => {
+        window.__slotEmptyReady = true
+        resolve(view)
+      }
+    })
+  } })
   const action = label => ({ type: 'action', icon: {type:'builtin',name:'wrench'}, label,
     async onSelect({source,host,signal}) {
       await host.piDesk.invokeGlobal('action', { workId: source.workId })
@@ -65,6 +78,22 @@ function browserEntry(version) {
   plugin.registerSessionHeaderItem('c-check', {inline:action('环境检查'),overflow:action('环境检查')})
   plugin.registerSessionHeaderItem('d-mixed', {inline:action('更多状态'),overflow:{type:'custom',load:()=>view().then(m=>m.info)}})
   plugin.registerSessionHeaderItem('e-custom', {inline:{type:'custom',minWidthRem:5,load:()=>view().then(m=>m.info)},overflow:action('状态详情')})
+  plugin.registerSessionHeaderItem('f-empty', {
+    inline: {
+      type: 'custom',
+      minWidthRem: 60,
+      load: () => {
+        if (window.__slotHeaderReady) return view().then(m => m.emptyHeader)
+        return new Promise(resolve => {
+          window.__slotResolveHeaderEmpty = () => {
+            window.__slotHeaderReady = true
+            resolve(view().then(m => m.emptyHeader))
+          }
+        })
+      }
+    },
+    overflow: { type: 'custom', load: () => view().then(m => m.emptyHeader) }
+  })
 }
 `
 }
@@ -154,6 +183,22 @@ export const run={mount({container,target,host,signal}) {
   return ()=>{stop();button.removeEventListener('click',click)}
  })
 }}
+export const emptyHeader = {
+  mount({ container, target }) {
+    const root = document.createElement('div')
+    root.dataset.testid = 'fixture-header-empty-' + target.presentation
+    container.append(root)
+    const setContent = text => {
+      root.textContent = text
+    }
+    window.__slotSetHeaderContent = setContent
+    window.__slotHeaderMountCount = (window.__slotHeaderMountCount ?? 0) + 1
+    return () => {
+      if (window.__slotSetHeaderContent === setContent) delete window.__slotSetHeaderContent
+      root.remove()
+    }
+  }
+}
 export const info={mount({container,target,signal}) {
  return observe(container,target,signal,root=>{
    root.textContent='自定义信息'
@@ -404,6 +449,7 @@ try {
   await createFixture()
   const appPort = await port()
   cdpPort = await port()
+  console.time('隔离服务启动')
   server = spawnE2eServer({
     projectRoot,
     agentDir,
@@ -415,6 +461,10 @@ try {
     }
   })
   await waitHttp(`http://127.0.0.1:${appPort}/api/health`, 90000)
+  console.timeEnd('隔离服务启动')
+  console.time('首页开发态编译')
+  await waitHttp(`http://127.0.0.1:${appPort}/`, 120000)
+  console.timeEnd('首页开发态编译')
   browser = spawn(
     'C:/Program Files/Google/Chrome/Application/chrome.exe',
     [
@@ -454,14 +504,64 @@ try {
     `document.querySelector('[data-testid="fixture-widget-below"]') && document.querySelector('[data-testid="fixture-run-inline"]')`,
     '上下挂件与标题自定义视图'
   )
+  await wait(client, `typeof window.__slotResolveEmpty === 'function'`, '空挂件加载开始')
+  const loading = await evaluate(
+    client,
+    `(()=>{const host=document.querySelector('[data-pi-desk-kind="widget"][data-pi-desk-contribution="empty"]').parentElement;return {height:host.getBoundingClientRect().height,text:host.textContent,status:!!host.querySelector('[role="status"]'),mounted:window.__slotEmptyMounted===true}})()`
+  )
+  assert.deepEqual(loading, { height: 0, text: '', status: false, mounted: false })
+  await capture(client, 'widgets-loading-light.png')
+  results.push('E00：挂件加载中无加载提示，宿主整体零高度')
+  await evaluate(client, 'window.__slotResolveEmpty()')
+  await wait(client, `window.__slotEmptyMounted === true`, '空挂件挂载完成')
   const order = await evaluate(
     client,
-    `(()=>{const above=document.querySelector('[data-testid="fixture-widget-above"]').getBoundingClientRect();const below=document.querySelector('[data-testid="fixture-widget-below"]').getBoundingClientRect();const editor=document.querySelector('[data-work-id="${workIds[0]}"] textarea').getBoundingClientRect();const empty=document.querySelector('[data-pi-desk-kind="widget"][data-pi-desk-contribution="empty"]');return {above:above.bottom<=editor.top,below:below.top>=editor.bottom,emptyHeight:empty?.getBoundingClientRect().height}})()`
+    `(()=>{const above=document.querySelector('[data-testid="fixture-widget-above"]').getBoundingClientRect();const below=document.querySelector('[data-testid="fixture-widget-below"]').getBoundingClientRect();const editor=document.querySelector('[data-work-id="${workIds[0]}"] textarea').getBoundingClientRect();const empty=document.querySelector('[data-pi-desk-kind="widget"][data-pi-desk-contribution="empty"]').parentElement;return {above:above.bottom<=editor.top,below:below.top>=editor.bottom,emptyHeight:empty.getBoundingClientRect().height}})()`
   )
   assert.equal(order.above, true)
   assert.equal(order.below, true)
   assert.equal(order.emptyHeight, 0)
-  results.push('E01：上下Widget位置正确，空挂件无占位')
+  results.push('E01：上下Widget位置正确，空挂件宿主整体无占位')
+  await wait(client, `typeof window.__slotResolveHeaderEmpty === 'function'`, '标题空条目开始加载')
+  const headerLoading = await evaluate(
+    client,
+    `(()=>{const header=document.querySelector('[data-testid="plugin-session-header-custom"][data-contribution-name="f-empty"][data-presentation="inline"]');return {outOfFlow:getComputedStyle(header).position==='absolute',hidden:header.getAttribute('aria-hidden')==='true',loading:!!header.querySelector('[role="status"]'),more:!!document.querySelector('[data-testid="session-header-more"]')}})()`
+  )
+  assert.deepEqual(headerLoading, { outOfFlow: true, hidden: true, loading: false, more: false })
+  await capture(client, 'header-loading-light.png')
+  results.push('E06：标题自定义项静默加载，无宽度占位且不触发更多')
+  await evaluate(client, 'window.__slotResolveHeaderEmpty()')
+  await wait(
+    client,
+    `document.querySelector('[data-testid="fixture-header-empty-inline"]')`,
+    '标题空条目挂载完成'
+  )
+  await viewport(client, 2400, 1000)
+  const baselineHeader = await evaluate(
+    client,
+    `({width:document.querySelector('[data-testid="session-header-items"]').getBoundingClientRect().width,mounts:window.__slotHeaderMountCount})`
+  )
+  await evaluate(client, `window.__slotSetHeaderContent('临时状态')`)
+  await wait(
+    client,
+    `document.querySelector('[data-testid="plugin-session-header-custom"][data-contribution-name="f-empty"][data-presentation="inline"]').getAttribute('aria-hidden')==='false'`,
+    '标题内容出现后参与布局'
+  )
+  const headerExpansion = await evaluate(
+    client,
+    `(()=>{const header=document.querySelector('[data-testid="session-header-items"]');return {width:header.getBoundingClientRect().width,expected:60*parseFloat(getComputedStyle(document.documentElement).fontSize)+parseFloat(getComputedStyle(header).columnGap)}})()`
+  )
+  assert.equal(headerExpansion.width - baselineHeader.width, headerExpansion.expected)
+  await evaluate(client, `window.__slotSetHeaderContent('')`)
+  await wait(
+    client,
+    `document.querySelector('[data-testid="session-header-items"]').getBoundingClientRect().width===${baselineHeader.width}`,
+    '标题清空后释放宽度与间距'
+  )
+  assert.equal(await evaluate(client, 'window.__slotHeaderMountCount'), baselineHeader.mounts)
+  await viewport(client, 1600, 1000)
+  await capture(client, 'header-empty-light.png')
+  results.push('E07：标题空内容无宽度和间距，内容出现与清空不重复挂载')
   await click(client, '[aria-label="运行模拟项目"]')
   await wait(client, `document.querySelector('[aria-label="停止模拟项目"]')`, '自定义动态状态')
   await click(client, '[data-testid="session-header-items"] button[aria-label="会话信息"]')
@@ -479,9 +579,17 @@ try {
   await click(client, '[data-testid="session-header-more"]')
   await wait(
     client,
-    `document.querySelector('[data-testid="fixture-run-overflow"]')`,
+    `document.querySelector('[data-testid="fixture-run-overflow"]') && document.querySelector('[data-testid="fixture-header-empty-overflow"]')`,
     '折叠自定义挂载'
   )
+  assert.deepEqual(
+    await evaluate(
+      client,
+      `(()=>{const empty=document.querySelector('[data-testid="plugin-session-header-custom"][data-contribution-name="f-empty"][data-presentation="overflow"]');return {outOfFlow:getComputedStyle(empty).position==='absolute',hidden:empty.getAttribute('aria-hidden')==='true',loading:!!document.querySelector('[data-testid="session-header-overflow"] [role="status"]')}})()`
+    ),
+    { outOfFlow: true, hidden: true, loading: false }
+  )
+  results.push('E08：更多菜单中的空自定义条目无占位和加载提示')
   assert.equal(
     await evaluate(
       client,

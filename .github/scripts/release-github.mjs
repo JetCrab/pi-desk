@@ -30,13 +30,30 @@ export function createGitHubClient({ repository, token, fetchImpl = fetch }) {
           : {})
       },
       body: body === undefined ? undefined : Buffer.isBuffer(body) ? body : JSON.stringify(body)
-    }).catch(() => {
-      throw new Error('GitHub 请求网络失败或超时')
+    }).catch((error) => {
+      const reason = [error.message, error.cause?.message, error.cause?.code ?? error.code]
+        .filter(Boolean)
+        .join('；')
+        .replaceAll(token, '[redacted]')
+      throw new Error(`GitHub ${method} ${path} 网络失败或超时：${reason}`, { cause: error })
     })
-    if (allow404 && response.status === 404) return null
-    assert.ok(response.ok, `GitHub 请求失败：HTTP ${response.status}`)
+    if (allow404 && response.status === 404) {
+      await response.body?.cancel()
+      return null
+    }
+    if (!response.ok) {
+      await response.body?.cancel()
+      throw new Error(`GitHub ${method} ${path} 请求失败：HTTP ${response.status}`)
+    }
     if (response.status === 204) return null
-    return binary ? Buffer.from(await response.arrayBuffer()) : response.json()
+    try {
+      return binary ? Buffer.from(await response.arrayBuffer()) : await response.json()
+    } catch (error) {
+      throw new Error(
+        `GitHub ${method} ${path} 响应读取失败：${error.message.replaceAll(token, '[redacted]')}`,
+        { cause: error }
+      )
+    }
   }
   async function releases() {
     const result = []

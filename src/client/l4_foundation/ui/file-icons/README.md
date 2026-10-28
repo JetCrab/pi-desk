@@ -1,6 +1,6 @@
 # 文件类型图标
 
-`l4-file-icon.tsx` 是宿主文件类型图标入口。特殊文件名优先于扩展名，未知类型回退 Lucide 文档图标；操作图标继续使用 Lucide。
+`l4-file-icon.tsx` 是文件树、搜索、预览页签与聊天读取消息共用的文件类型图标入口。常用类型保留彩色图标；环境与工具配置共用中性配置图标，其他已识别代码类型回退通用代码图标，未知文件回退文档图标。目录与操作图标继续使用中性色 Lucide。
 
 `material/` 保留 [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) 的 18 个原始 SVG，来源版本为 `cb1dfb6d9cb73b15681a93939983d75dbba7bf5b`，采用 MIT 许可，完整许可见 [`material/LICENSE`](./material/LICENSE)。
 

@@ -1,4 +1,4 @@
-import { FileTextIcon } from 'lucide-react'
+import { FileCode2Icon, FileTextIcon, Settings2Icon } from 'lucide-react'
 import Image, { type StaticImageData } from 'next/image'
 import agentIcon from './material/agent.svg'
 import consoleIcon from './material/console.svg'
@@ -74,6 +74,40 @@ const EXTENSION_ICONS = new Map<string, StaticImageData>(
   })
 )
 
+const CONFIG_EXTENSIONS = new Set(['env', 'toml', 'ini', 'conf', 'cfg', 'properties'])
+const CONFIG_NAMES = new Set([
+  '.editorconfig',
+  '.npmrc',
+  '.yarnrc',
+  '.prettierignore',
+  '.eslintignore'
+])
+const CODE_EXTENSIONS = new Set([
+  'c',
+  'cpp',
+  'cc',
+  'cxx',
+  'h',
+  'hpp',
+  'cs',
+  'go',
+  'rs',
+  'java',
+  'kt',
+  'kts',
+  'rb',
+  'php',
+  'swift',
+  'dart',
+  'vue',
+  'svelte',
+  'scss',
+  'sass',
+  'less',
+  'sql',
+  'xml'
+])
+
 export function L4FileIcon({
   path,
   className
@@ -83,13 +117,26 @@ export function L4FileIcon({
 }): React.JSX.Element {
   const fileName = path.replaceAll('\\', '/').split('/').at(-1)?.toLowerCase() ?? ''
   const extension = fileName.includes('.') ? fileName.slice(fileName.lastIndexOf('.') + 1) : ''
+  const config =
+    CONFIG_EXTENSIONS.has(extension) ||
+    CONFIG_NAMES.has(fileName) ||
+    fileName.startsWith('.env.') ||
+    fileName.startsWith('.eslintrc') ||
+    fileName.startsWith('.prettierrc') ||
+    fileName.startsWith('eslint.config.') ||
+    fileName.startsWith('prettier.config.')
+  if (config) return <Settings2Icon className={className} aria-hidden="true" />
+
   // 特殊文件名优先于扩展名；只查静态子集，不在卡片内生成完整主题映射。
   const icon =
     FILE_NAME_ICONS.get(fileName) ??
     (fileName.startsWith('dockerfile.') ? dockerIcon : undefined) ??
     EXTENSION_ICONS.get(extension)
 
-  if (!icon) return <FileTextIcon className={className} aria-hidden="true" />
+  if (!icon) {
+    const Fallback = CODE_EXTENSIONS.has(extension) ? FileCode2Icon : FileTextIcon
+    return <Fallback className={className} aria-hidden="true" />
+  }
 
   return (
     <Image

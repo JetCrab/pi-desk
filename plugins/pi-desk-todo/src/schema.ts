@@ -5,7 +5,7 @@ const id = Type.String({
   minLength: 1,
   maxLength: MAX_TODO_BYTES,
   pattern: '\\S',
-  description: '在本次完整任务树中唯一的节点 ID'
+  description: '任务 ID，列表内唯一'
 })
 const title = Type.String({
   minLength: 1,
@@ -13,7 +13,7 @@ const title = Type.String({
   pattern: '\\S',
   description: '面向用户的实际工作进度标题'
 })
-const leaf = Type.Object(
+const item = Type.Object(
   {
     id,
     title,
@@ -26,26 +26,13 @@ const leaf = Type.Object(
   },
   { additionalProperties: false }
 )
-const stage = Type.Object(
-  {
-    id,
-    title,
-    children: Type.Array(leaf, {
-      minItems: 1,
-      maxItems: MAX_TODO_NODES - 1,
-      description: '阶段内的二级叶子任务，不支持更深层级；父阶段不接受 status 或 note'
-    })
-  },
-  { additionalProperties: false }
-)
-
 export const TodoInputSchema = Type.Object(
   {
     title,
-    items: Type.Array(Type.Union([leaf, stage]), {
+    items: Type.Array(item, {
       minItems: 1,
       maxItems: MAX_TODO_NODES,
-      description: '完整替换当前进度的顶层任务或父阶段；全树 ID 唯一，总节点最多 100 个'
+      description: '完整替换的任务列表，最多 100 项'
     })
   },
   {

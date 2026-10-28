@@ -9,7 +9,6 @@ const MAX_BYTES = MAX_TODO_BYTES
 
 export type TodoInput = Static<typeof TodoInputSchema>
 export type TodoItem = TodoInput['items'][number]
-export type TodoLeaf = Extract<TodoItem, { status: number }>
 export type TodoSnapshot = { todo: TodoInput | null; hidden: boolean }
 
 function object(value: unknown, fields: readonly string[]): Record<string, unknown> {
@@ -33,19 +32,15 @@ export function parseTodoInput(input: unknown): TodoInput {
   const root = object(input, ['title', 'items'])
   const title = text(root.title, 'title')
   if (!Array.isArray(root.items) || root.items.length === 0 || root.items.length > MAX_NODES) {
-    throw new Error('Todo items 必须是非空数组，顶层最多 100 个节点')
+    throw new Error('Todo items 必须是非空数组，最多 100 个任务')
   }
   const ids = new Set<string>()
-  const identity = (node: Record<string, unknown>): { id: string; title: string } => {
-    const id = text(node.id, 'id')
-    if (ids.has(id)) throw new Error(`Todo 节点 ID 重复：${id}`)
-    ids.add(id)
-    if (ids.size > MAX_NODES) throw new Error('Todo 全树最多 100 个节点')
-    return { id, title: text(node.title, 'title') }
-  }
-  const parseLeaf = (value: unknown): TodoLeaf => {
+  const items = root.items.map((value): TodoItem => {
     const node = object(value, ['id', 'title', 'status', 'note'])
-    const fields = identity(node)
+    const id = text(node.id, 'id')
+    if (ids.has(id)) throw new Error(`Todo 任务 ID 重复：${id}`)
+    ids.add(id)
+    const title = text(node.title, 'title')
     const status = node.status
     if (status !== 0 && status !== 1 && status !== 2 && status !== 3) {
       throw new Error('Todo status 必须是数字 0、1、2 或 3')
@@ -59,22 +54,7 @@ export function parseTodoInput(input: unknown): TodoInput {
     if (status === 3 && (typeof node.note !== 'string' || !node.note.trim())) {
       throw new Error('Todo 受阻任务必须提供非空 note')
     }
-    return { ...fields, status, ...(node.note === undefined ? {} : { note: node.note }) }
-  }
-  const items = root.items.map((value): TodoItem => {
-    if (value && typeof value === 'object' && 'children' in value) {
-      const node = object(value, ['id', 'title', 'children'])
-      const fields = identity(node)
-      if (
-        !Array.isArray(node.children) ||
-        node.children.length === 0 ||
-        node.children.length >= MAX_NODES
-      ) {
-        throw new Error('Todo 父阶段必须包含 1-99 个二级叶子任务')
-      }
-      return { ...fields, children: node.children.map(parseLeaf) }
-    }
-    return parseLeaf(value)
+    return { id, title, status, ...(node.note === undefined ? {} : { note: node.note }) }
   })
   const todo = { title, items }
   if (new TextEncoder().encode(JSON.stringify(todo)).byteLength > MAX_BYTES) {
@@ -83,18 +63,9 @@ export function parseTodoInput(input: unknown): TodoInput {
   return todo
 }
 
-export function deriveTodoStatus(item: TodoItem): 0 | 1 | 2 | 3 {
-  if ('status' in item) return item.status
-  if (item.children.every((child) => child.status === 2)) return 2
-  if (item.children.some((child) => child.status === 1)) return 1
-  if (item.children.some((child) => child.status === 3)) return 3
-  if (item.children.some((child) => child.status === 2)) return 1
-  return 0
-}
-
 export function countTodoItems(items: readonly TodoItem[]): { completed: number; total: number } {
   return {
-    completed: items.filter((item) => deriveTodoStatus(item) === 2).length,
+    completed: items.filter((item) => item.status === 2).length,
     total: items.length
   }
 }

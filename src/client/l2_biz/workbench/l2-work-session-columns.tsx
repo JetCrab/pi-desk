@@ -77,6 +77,7 @@ interface L2WorkSessionColumnsProps
   setChatCapabilityMode: L2WorkbenchBiz['setChatCapabilityMode']
   branchPicker: L2WorkbenchBranchPickerModel | null
   branchPendingWorkId: string | null
+  onResendMessage: (source: L2ChatSource, entryId: string) => void
   fileRuntime: L2FileWorkspaceRuntime
   onOpenFileSidebar: (workId: string) => void
   onPreviewFile: (source: L2ChatSource, path: string) => void
@@ -148,6 +149,7 @@ interface WorkSessionColumnProps extends L2WorkbenchComposerSlots, L2WorkbenchPl
   setChatCapabilityMode: L2WorkbenchBiz['setChatCapabilityMode']
   branchPicker: L2WorkbenchBranchPickerModel | null
   branchPending: boolean
+  onResendMessage: (source: L2ChatSource, entryId: string) => void
   mobile: boolean
   fileRuntime: L2FileWorkspaceRuntime
   onOpenFileSidebar: (workId: string) => void
@@ -193,6 +195,7 @@ const WorkSessionColumn = memo(function WorkSessionColumn({
   setChatCapabilityMode,
   branchPicker,
   branchPending,
+  onResendMessage,
   mobile,
   fileRuntime,
   onOpenFileSidebar,
@@ -360,6 +363,8 @@ const WorkSessionColumn = memo(function WorkSessionColumn({
               chatRuntime={chatRuntime}
               inputRuntime={chatInputRuntime}
               onPreviewFile={onPreviewFile}
+              onResend={onResendMessage}
+              resendDisabled={replacementDisabled || branchPending || branchPicker !== null}
             />
             <footer className="bg-background pt-3" data-carousel-swipe-lock>
               <L2WorkbenchChatComposer
@@ -516,6 +521,7 @@ export function L2WorkSessionColumns({
   setChatCapabilityMode,
   branchPicker,
   branchPendingWorkId,
+  onResendMessage,
   fileRuntime,
   onOpenFileSidebar,
   onPreviewFile,
@@ -705,6 +711,7 @@ export function L2WorkSessionColumns({
               setChatCapabilityMode={setChatCapabilityMode}
               branchPicker={branchPicker?.workId === workSession.workId ? branchPicker : null}
               branchPending={branchPendingWorkId === workSession.workId}
+              onResendMessage={onResendMessage}
               mobile
               fileRuntime={fileRuntime}
               onOpenFileSidebar={onOpenFileSidebar}
@@ -805,6 +812,7 @@ export function L2WorkSessionColumns({
                   setChatCapabilityMode={setChatCapabilityMode}
                   branchPicker={branchPicker?.workId === workSession.workId ? branchPicker : null}
                   branchPending={branchPendingWorkId === workSession.workId}
+                  onResendMessage={onResendMessage}
                   mobile={mobile}
                   fileRuntime={fileRuntime}
                   onOpenFileSidebar={onOpenFileSidebar}

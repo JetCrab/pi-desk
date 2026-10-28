@@ -44,6 +44,12 @@ import type {
   L2SortWorkSessionsRequest,
   L2WorkSessionListResponse
 } from '@common/l2_biz/work-session/l2-work-session-contract'
+import {
+  L2WorkSessionSearchResponseSchema,
+  type L2WorkSessionSearchRequest,
+  type L2WorkSessionSearchResponse
+} from '@common/l2_biz/work-session/l2-work-session-search-contract'
+import { L2PiSessionHistoryResponseSchema } from '@common/l2_biz/pi-session/l2-pi-session-contract'
 import type {
   L2WorkSessionBranchRequest,
   L2WorkSessionBranchResponse,
@@ -108,6 +114,10 @@ export interface L2WorkbenchBiz {
   setChatCapabilityMode: (input: L2ChatCapabilityModeSetRequest) => Promise<void>
   invokePluginMethod: (input: L2PluginInvokeRequest) => Promise<L2PluginInvokeResponse>
   listWorkSessions: () => Promise<L2AppBootstrapResponse>
+  searchWorkSessions: (
+    input: L2WorkSessionSearchRequest,
+    signal?: AbortSignal
+  ) => Promise<L2WorkSessionSearchResponse>
   applyAppRuntimeUpdate: (input: L3AppRuntimeApplyRequest) => Promise<void>
   sortWorkSessions: (input: L2SortWorkSessionsRequest) => Promise<L2WorkSessionListResponse>
   deleteWorkSession: (workId: string) => Promise<L2WorkSessionListResponse>
@@ -200,6 +210,11 @@ export function createL2WorkbenchBiz(
     },
     invokePluginMethod: (input) => appSocket.request(L2PluginSocketContracts.invoke, input),
     listWorkSessions: () => appSocket.request(L2WorkSessionSocketContracts.list, {}),
+    async searchWorkSessions(input, signal): Promise<L2WorkSessionSearchResponse> {
+      return L2WorkSessionSearchResponseSchema.parse(
+        await request<unknown>('/api/work-sessions/search', input, signal)
+      )
+    },
     async applyAppRuntimeUpdate(input): Promise<void> {
       await appSocket.request(L3AppRuntimeSocketContracts.apply, input)
     },
@@ -236,8 +251,11 @@ export function createL2WorkbenchBiz(
       saveL4PiDirectoryEntriesCache(response)
       return response
     },
-    listSessionHistory: (input, signal) =>
-      request<L2PiSessionHistoryResponse>('/api/pi/sessions/list', input, signal),
+    async listSessionHistory(input, signal): Promise<L2PiSessionHistoryResponse> {
+      return L2PiSessionHistoryResponseSchema.parse(
+        await request<unknown>('/api/pi/sessions/list', input, signal)
+      )
+    },
     listSessionUserMessages: (input, signal) =>
       request<L2PiSessionUserMessageListResponse>(
         '/api/pi/session-user-messages/list',

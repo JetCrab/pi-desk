@@ -75,12 +75,13 @@ export class L3ProjectGitRuntime implements L3ProjectGitBrowser {
     this.listeners.clear()
   }
   private async load(refresh: boolean): Promise<void> {
-    if (this.disposed) return
-    this.request?.abort()
+    if (this.disposed || this.request) return
     const request = new AbortController()
     this.request = request
-    this.state.snapshot = { ...this.state.snapshot, status: 'loading', error: null }
-    this.publish()
+    if (this.state.snapshot.status !== 'ready') {
+      this.state.snapshot = { ...this.state.snapshot, status: 'loading', error: null }
+      this.publish()
+    }
     try {
       const result = await this.reader.snapshot(request.signal, refresh)
       if (this.request !== request) return

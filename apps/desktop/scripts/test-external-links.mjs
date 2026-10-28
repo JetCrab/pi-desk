@@ -54,7 +54,7 @@ function handle(request, response) {
   }
   response.setHeader('Content-Type', 'text/html; charset=utf-8')
   if (previewOnly && request.url.startsWith('/project-preview')) {
-    response.end('<!doctype html><html><title>项目预览窗口</title><h1>项目预览窗口</h1></html>')
+    response.end('<!doctype html><html><title>Pi Desk</title><h1>项目预览窗口</h1></html>')
     return
   }
   if (request.url.startsWith('/opened/')) {
@@ -465,16 +465,17 @@ public class PreviewWindowTest {
     '预览不能先开工作台'
   )
   await registerWindow(first)
-  await expectTitle(first, '项目预览窗口')
+  await expectTitle(first, 'Pi Desk')
   const firstPage = await connect(first)
-  await firstPage.evaluate(`document.title = 'example · 项目预览 · Pi Desk'`)
-  await expectTitle(first, 'example · 项目预览 · Pi Desk')
+  const exampleTitle = 'example – C:\\example'
+  await firstPage.evaluate(`document.title = ${JSON.stringify(exampleTitle)}`)
+  await expectTitle(first, exampleTitle)
   await invoke('open_target_command', { url: targetUrl, preview: true })
   await until(async () => (await previewPages()).length === 2, '第二个独立预览窗口')
   const second = (await previewPages()).find((item) => item.id !== first.id)
   await registerWindow(second)
-  await expectTitle(second, '项目预览窗口')
-  await expectTitle(first, 'example · 项目预览 · Pi Desk')
+  await expectTitle(second, 'Pi Desk')
+  await expectTitle(first, exampleTitle)
   await closeWindow(first)
   assert.equal((await previewPages()).length, 1)
   await invoke('open_target_command', { url: targetUrl, preview: false })
@@ -488,7 +489,9 @@ public class PreviewWindowTest {
     () => workspace.evaluate(`Boolean(document.getElementById('open-preview'))`),
     '工作台页面加载'
   )
-  await expectTitle(workspaceTarget, 'Pi Desk · 127.0.0.1')
+  await expectTitle(workspaceTarget, 'Pi Desk')
+  await workspace.evaluate(`document.title = '工作台内容标题'`)
+  await expectTitle(workspaceTarget, 'Pi Desk')
   await workspace.click('open-preview')
   const deep = await until(
     async () => (await previewPages()).find((item) => item.url.includes('cwd=')),
@@ -628,7 +631,7 @@ public class PreviewWindowTest {
     true,
     120_000
   )
-  await expectTitle(liveTarget, '项目预览 · Pi Desk')
+  await expectTitle(liveTarget, 'Pi Desk')
   await live.send('Page.navigate', {
     url: `${sourceUrl}project-preview?cwd=${encodeURIComponent(project)}`
   })
@@ -649,17 +652,18 @@ public class PreviewWindowTest {
     true,
     60_000
   )
-  await expectTitle(liveTarget, 'preview-project · 项目预览 · Pi Desk')
+  const projectTitle = `preview-project – ${project}`
+  await expectTitle(liveTarget, projectTitle)
   await live.evaluate(
     `[...document.querySelectorAll('button')].find(item=>item.textContent.trim()==='切换项目').click()`
   )
-  await expectTitle(liveTarget, '项目预览 · Pi Desk')
+  await expectTitle(liveTarget, 'Pi Desk')
   await live.evaluate('history.back()')
-  await expectTitle(liveTarget, 'preview-project · 项目预览 · Pi Desk')
+  await expectTitle(liveTarget, projectTitle)
   await live.evaluate('history.forward()')
-  await expectTitle(liveTarget, '项目预览 · Pi Desk')
+  await expectTitle(liveTarget, 'Pi Desk')
   await live.evaluate('history.back()')
-  await expectTitle(liveTarget, 'preview-project · 项目预览 · Pi Desk')
+  await expectTitle(liveTarget, projectTitle)
   for (const theme of ['light', 'dark']) {
     await live.evaluate(`document.documentElement.classList.toggle('dark',${theme === 'dark'})`)
     await live.evaluate(

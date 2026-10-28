@@ -4,14 +4,17 @@ export function calculateL2PluginSessionHeaderInlineCount(
   moreWidth: number,
   gap: number
 ): number {
-  const total = widths.reduce((sum, width) => sum + width, 0) + Math.max(0, widths.length - 1) * gap
+  const occupiedCount = widths.filter((width) => width > 0).length
+  const total = widths.reduce((sum, width) => sum + width, 0) + Math.max(0, occupiedCount - 1) * gap
   if (total <= availableWidth) return widths.length
 
   let used = moreWidth
   let count = 0
   for (const width of widths) {
-    if (used + gap + width > availableWidth) break
-    used += gap + width
+    if (width > 0) {
+      if (used + gap + width > availableWidth) break
+      used += gap + width
+    }
     count += 1
   }
   return count

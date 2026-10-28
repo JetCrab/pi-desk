@@ -281,7 +281,7 @@ export function L2Settings({
       }}
     >
       <L4AppDialogContent
-        className="h-[min(48rem,calc(100dvh-2rem))] max-w-6xl max-sm:h-dvh max-sm:max-h-dvh max-sm:w-dvw max-sm:max-w-none max-sm:rounded-none max-sm:border-0"
+        className="h-[min(48rem,calc(100dvh-2rem))] max-w-6xl max-sm:h-[var(--pi-desk-content-height)] max-sm:max-h-[var(--pi-desk-content-height)] max-sm:w-dvw max-sm:max-w-none max-sm:rounded-none max-sm:border-0"
         finalFocus={false}
         showCloseButton={!guardPending}
       >

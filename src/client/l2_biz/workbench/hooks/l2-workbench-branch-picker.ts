@@ -23,7 +23,10 @@ interface L2WorkbenchBranchPickerSource {
 }
 
 export type L2WorkbenchBranchIntent =
-  { action: 'tree'; entryId: string } | { action: 'fork'; entryId: string } | { action: 'clone' }
+  | { action: 'tree'; entryId: string }
+  | { action: 'fork'; entryId: string }
+  | { action: 'resend'; entryId: string }
+  | { action: 'clone' }
 
 interface L2WorkbenchRunningConfirmation {
   intent: L2WorkbenchBranchIntent
@@ -57,6 +60,7 @@ interface UseL2WorkbenchBranchPickerResult {
   selectEntry: (entryId: string) => void
   requestAction: (entryId: string, action: 'tree' | 'fork') => void
   clone: (workId: string) => void
+  resend: (source: L2WorkbenchBranchPickerSource, entryId: string) => void
   confirmRunning: () => void
   cancelRunning: () => void
   pendingWorkId: string | null
@@ -92,6 +96,8 @@ function branchRequest(
       return { ...binding, action: 'tree', entryId: intent.entryId }
     case 'fork':
       return { ...binding, action: 'fork', entryId: intent.entryId }
+    case 'resend':
+      return { ...binding, action: 'resend', entryId: intent.entryId }
     case 'clone':
       return { ...binding, action: 'clone' }
   }
@@ -123,6 +129,7 @@ export function useL2WorkbenchBranchPicker({
   const detailAbortControllerRef = useRef<AbortController | null>(null)
   const detailCacheRef = useRef(new Map<string, L2WorkSessionTreeEntryGetResponse>())
   const operationStartRef = useRef<string | null>(null)
+  const executingRef = useRef(false)
 
   const resetPicker = useCallback((): void => {
     treeRequestIdRef.current += 1
@@ -270,12 +277,18 @@ export function useL2WorkbenchBranchPicker({
       operationSource: L2WorkbenchBranchPickerSource,
       intent: L2WorkbenchBranchIntent
     ): Promise<void> => {
-      if (disabled) return
+      if (disabled || executingRef.current) return
+      executingRef.current = true
+      let releaseDraft: (() => void) | undefined
       const preservedTreeText =
         intent.action === 'tree' ? chatInputRuntime.getState(operationSource).text : null
       setOperation({ source: operationSource, intent, phase: 'executing' })
       setError(null)
       try {
+        if (intent.action === 'resend') {
+          await chatInputRuntime.loadSource(operationSource)
+          releaseDraft = chatInputRuntime.preserveDraftOnBranch(operationSource)
+        }
         const response = await workbenchBiz.branchWorkSession(
           branchRequest(operationSource, intent)
         )
@@ -290,7 +303,9 @@ export function useL2WorkbenchBranchPicker({
         if (!target) throw new Error(l2WorkbenchText('branchTargetMissing'))
 
         const targetSource = sourceFor(target)
-        if (intent.action === 'tree') {
+        if (intent.action === 'resend') {
+          focusWorkSession(target.workId)
+        } else if (intent.action === 'tree') {
           focusWorkSession(target.workId)
           await chatInputRuntime.loadSource(targetSource)
           chatInputRuntime.setText(
@@ -312,6 +327,9 @@ export function useL2WorkbenchBranchPicker({
         operationStartRef.current = null
         setConfirmation((current) => (current ? { ...current, waiting: false } : null))
         reportOperationError(errorMessage(cause, l2WorkbenchText('branchOperationFailed')))
+      } finally {
+        releaseDraft?.()
+        executingRef.current = false
       }
     },
     [
@@ -347,7 +365,7 @@ export function useL2WorkbenchBranchPicker({
 
   const requestIntent = useCallback(
     (operationSource: L2WorkbenchBranchPickerSource, intent: L2WorkbenchBranchIntent): void => {
-      if (disabled || operation) return
+      if (disabled || operation || confirmation || executingRef.current) return
       operationStartRef.current = null
       const current = workSessions.find(
         (workSession) => workSession.workId === operationSource.workId
@@ -374,7 +392,16 @@ export function useL2WorkbenchBranchPicker({
       setSource(operationSource)
       setError(null)
     },
-    [disabled, execute, mobile, operation, reportOperationError, startAfterRunning, workSessions]
+    [
+      confirmation,
+      disabled,
+      execute,
+      mobile,
+      operation,
+      reportOperationError,
+      startAfterRunning,
+      workSessions
+    ]
   )
 
   const requestAction = useCallback(
@@ -383,6 +410,13 @@ export function useL2WorkbenchBranchPicker({
       requestIntent(source, { action, entryId })
     },
     [requestIntent, source]
+  )
+
+  const resend = useCallback(
+    (messageSource: L2WorkbenchBranchPickerSource, entryId: string): void => {
+      requestIntent(messageSource, { action: 'resend', entryId })
+    },
+    [requestIntent]
   )
 
   const clone = useCallback(
@@ -422,9 +456,9 @@ export function useL2WorkbenchBranchPicker({
 
   const cancelRunning = useCallback((): void => {
     if (confirmation?.waiting || operation) return
-    const cloneOnly = confirmation?.intent.action === 'clone' && tree === null
+    const confirmationOnly = tree === null
     setConfirmation(null)
-    if (cloneOnly) resetPicker()
+    if (confirmationOnly) resetPicker()
   }, [confirmation, operation, resetPicker, tree])
 
   useEffect(() => {
@@ -531,6 +565,7 @@ export function useL2WorkbenchBranchPicker({
     selectEntry,
     requestAction,
     clone,
+    resend,
     confirmRunning,
     cancelRunning,
     pendingWorkId: operation?.source.workId ?? null

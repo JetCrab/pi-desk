@@ -24,6 +24,7 @@ import { L4AppToastProvider } from '@client/l4_foundation/ui/l4-app-toast'
 import { TooltipProvider } from '@client/l4_foundation/ui/shadcn/tooltip'
 import { createL4BrowserUuid } from '@client/l4_foundation/lib/l4-browser-uuid'
 import { L4ClientIdContext } from '@client/l4_foundation/lib/l4-client-id'
+import { L4DesktopTitlebar } from '@client/l4_foundation/desktop-window/l4-desktop-titlebar'
 
 const resources = {
   en: {
@@ -76,6 +77,7 @@ export function L1AppProviders({
           <L4CodePreferencesProvider>
             <L4RegionProvider resources={resources} initialSettings={initialSettings}>
               <L4AppToastProvider>
+                <L4DesktopTitlebar />
                 <L4RegionNotice />
                 <TooltipProvider>{children}</TooltipProvider>
               </L4AppToastProvider>

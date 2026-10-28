@@ -1,6 +1,6 @@
 'use client'
 
-import { ChevronRightIcon, FileIcon, LoaderCircleIcon, SearchIcon } from 'lucide-react'
+import { ChevronRightIcon, LoaderCircleIcon, SearchIcon } from 'lucide-react'
 import { useId, useState, type ReactElement, type ReactNode, type Ref } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
@@ -268,7 +268,7 @@ export function L3ProjectSearchResults({
                               expanded && 'rotate-90'
                             )}
                           />
-                          <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                          <span className="shrink-0">{renderFileIcon(path)}</span>
                           <span className="min-w-0 truncate text-sm">
                             {path.slice(slash + 1)}
                             <span className="ml-1.5 text-xs text-muted-foreground">

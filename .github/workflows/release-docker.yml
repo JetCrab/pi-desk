@@ -59,6 +59,16 @@ jobs:
       - name: 从正式 npm 制品准备镜像输入
         if: steps.image.outputs.reused != 'true'
         run: node .github/scripts/release-docker.mjs prepare
+      - name: 在构建前归档本批安装锁与原包
+        if: steps.image.outputs.reused != 'true' && steps.image.outputs.inputs_reused != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-inputs-${{ github.run_id }}
+          path: ${{ env.DOCKER_ARTIFACT_DIR }}/context/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
       - uses: docker/setup-buildx-action@v3
         if: steps.image.outputs.reused != 'true'
       - name: 构建 linux/amd64 运行镜像

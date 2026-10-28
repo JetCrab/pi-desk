@@ -5,6 +5,11 @@ import {
   L3PiSessionIdSchema
 } from '@common/l3_modules/pi/l3-pi-contract'
 import { L4TimestampMsSchema } from '@common/l4_foundation/l4-timestamp-contract'
+import {
+  L3PiSessionSearchScopeSchema,
+  L3PiSessionSearchMatchSchema,
+  L3PiSessionSearchQuerySchema
+} from '@common/l3_modules/pi/l3-pi-session-search-contract'
 
 export const L2PiDirectorySchema = z
   .object({
@@ -59,22 +64,8 @@ export const L2PiDirectoryEntryListResponseSchema = z
   })
   .strict()
 
-export const L2PiSessionHistorySearchScopeSchema = z.enum([
-  'title',
-  'user',
-  'assistant',
-  'sessionId'
-])
-
-export const L2PiSessionHistoryMatchSchema = z
-  .object({
-    scope: L2PiSessionHistorySearchScopeSchema,
-    count: z.number().int().positive(),
-    entryId: L3PiEntryIdSchema.nullable(),
-    timestampMs: L4TimestampMsSchema.nullable(),
-    preview: z.string().min(1).max(160)
-  })
-  .strict()
+export const L2PiSessionHistorySearchScopeSchema = L3PiSessionSearchScopeSchema
+export const L2PiSessionHistoryMatchSchema = L3PiSessionSearchMatchSchema
 
 export const L2PiSessionHistoryItemSchema = z
   .object({
@@ -90,14 +81,10 @@ export const L2PiSessionHistoryItemSchema = z
   })
   .strict()
 
-export const L2PiSessionHistoryQuerySchema = z
-  .object({
-    cwd: L3PiCwdSchema,
-    query: z.string().trim().max(120).default(''),
-    forceRefresh: z.boolean().default(false),
-    searchIn: z.array(L2PiSessionHistorySearchScopeSchema).min(1).max(4).default(['title', 'user'])
-  })
-  .strict()
+export const L2PiSessionHistoryQuerySchema = L3PiSessionSearchQuerySchema.extend({
+  cwd: L3PiCwdSchema,
+  forceRefresh: z.boolean().default(false)
+})
 
 export const L2PiSessionHistoryResponseSchema = z
   .object({

@@ -82,39 +82,82 @@ export async function prepareBatch(
   assert.match(source, /^[a-f0-9]{40}$/)
   const releases = await github.releases()
   const latest = latestSuccessfulRelease(releases)
-  const previous = latest ? await loadReleaseRecord(github, latest.tag_name) : null
-  await validateVersions(root, { base: previous?.source.head ?? null, head: source })
   const release = releases.find(
     (item) => releaseTagPattern.test(item.tag_name) && item.target_commitish === source
   )
   let plan = fixedPlan
   if (release && !release.draft) {
     plan = completedPlan(await loadReleaseRecord(github, release.tag_name))
-  } else if (!plan && release?.assets.some((item) => item.name === 'plan.json')) {
+  } else {
+    const previous = latest ? await loadReleaseRecord(github, latest.tag_name) : null
+    await validateVersions(root, { base: previous?.source.head ?? null, head: source })
+  }
+  if (!plan && release?.assets.some((item) => item.name === 'plan.json')) {
     plan = JSON.parse(await github.asset(release, 'plan.json'))
   } else if (!plan) {
     plan = await findReleasePlan({ github, source, runId, repository, directory: output, download })
   }
   assert.ok(plan || !release, '已有草稿缺少未过期的固定计划，不能重新分配批次')
   const reusable = !!plan
-  plan ??= createReleasePlan(root, {
-    head: source,
-    previous,
-    reservedTags: [
-      ...releases.map((item) => item.tag_name),
-      ...git(root, 'tag', '--list', 'v*').split('\n')
-    ]
-  })
+  if (!plan) {
+    const previous = latest ? await loadReleaseRecord(github, latest.tag_name) : null
+    plan = createReleasePlan(root, {
+      head: source,
+      previous,
+      reservedTags: [
+        ...releases.map((item) => item.tag_name),
+        ...git(root, 'tag', '--list', 'v*').split('\n')
+      ]
+    })
+    const conflicts = (candidate) =>
+      candidate.record.source.head !== source &&
+      !releases.some((item) => item.tag_name === candidate.record.tag && !item.draft) &&
+      plan.npm.some(
+        (name) =>
+          candidate.npm.includes(name) &&
+          candidate.record.packages.some(
+            (item) =>
+              item.name === `@jetcrab/${name}` &&
+              item.version ===
+                plan.record.packages.find((entry) => entry.name === item.name).version
+          )
+      )
+    let pending
+    for (const draft of releases.filter(
+      (item) => item.draft && releaseTagPattern.test(item.tag_name)
+    )) {
+      if (!draft.assets.some((item) => item.name === 'plan.json')) continue
+      const candidate = JSON.parse(await github.asset(draft, 'plan.json'))
+      validateRecord(candidate.record)
+      if (conflicts(candidate)) {
+        pending = candidate
+        break
+      }
+    }
+    pending ??= await findReleasePlan({
+      github,
+      runId,
+      repository,
+      directory: output,
+      download,
+      accept: conflicts
+    })
+    assert.ok(
+      !pending,
+      `同版本制品已由未完成批次 ${pending?.record.tag} 固定，停止新批次构建；请使用 workflow_dispatch 的 resume_tag=${pending?.record.tag} 续跑原源码和原包`
+    )
+  }
   validateRecord(plan.record)
   assert.equal(plan.record.source.head, source, '固定计划源码不同，停止发布')
   await mkdir(output, { recursive: true })
   await writeFile(join(output, 'plan.json'), jsonBytes(plan))
   const published = !!release && !release.draft
   const restored = join(output, 'restored')
+  let npmVerified = published || !plan.npm.length
   if (!published) {
     await restoreDraft({ github, release, plan, directory: restored, runId })
-    if (reusable)
-      await restoreReleaseArtifacts({
+    if (reusable) {
+      const restoration = await restoreReleaseArtifacts({
         github,
         plan,
         runId,
@@ -122,6 +165,8 @@ export async function prepareBatch(
         directory: restored,
         download
       })
+      npmVerified = restoration.npmVerified
+    }
   }
   const values = {
     sha: source,
@@ -130,10 +175,12 @@ export async function prepareBatch(
     published,
     deploy: !published || latest?.tag_name === plan.record.tag,
     npm: JSON.stringify(plan.npm),
-    npm_ready: plan.npm.every((name) => {
-      const item = plan.record.packages.find((entry) => entry.name === `@jetcrab/${name}`)
-      return existsSync(join(restored, 'npm', archiveName(item)))
-    }),
+    npm_ready:
+      npmVerified &&
+      plan.npm.every((name) => {
+        const item = plan.record.packages.find((entry) => entry.name === `@jetcrab/${name}`)
+        return existsSync(join(restored, 'npm', archiveName(item)))
+      }),
     notes_ready: published || existsSync(join(restored, 'notes/changes.json')),
     tunnel: !published && plan.tunnel,
     docker: !published && plan.npm.includes('pi-desk'),

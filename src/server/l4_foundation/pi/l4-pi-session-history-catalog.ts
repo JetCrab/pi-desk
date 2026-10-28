@@ -26,13 +26,20 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import { z } from 'zod'
 import { findL4PiSessionFile } from './l4-pi-session-discovery'
+import {
+  compactL4PiSessionPreview as compactPreview,
+  matchL4PiSessionSearch,
+  normalizeL4PiSessionSearch as normalizeSearch,
+  readL4PiSessionMessageText as messageText,
+  readL4PiSessionTimestamp as timestampMs,
+  type L4PiSessionSearchMatch,
+  type L4PiSessionSearchScope
+} from './l4-pi-session-search'
 
 const SCAN_CONCURRENCY = 10
-const MATCH_PREVIEW_MAX_LENGTH = 120
-const MATCH_PREVIEW_PREFIX_LENGTH = 16
 const FIRST_MESSAGE_PREVIEW_MAX_LENGTH = 160
 const CACHE_VALIDATION_INTERVAL_MS = 2_000
-const CACHE_IDLE_MS = 15 * 60_000
+const CACHE_IDLE_MS = 60_000
 const CACHE_CWD_LIMIT = 8
 const CACHE_TEXT_BYTES_LIMIT = 32 * 1024 * 1024
 const CACHE_FILE_LIMIT = 4_096
@@ -41,7 +48,7 @@ const LEGACY_CACHE_FILE_NAME = 'pi-session-history.json'
 const PERSISTED_CACHE_VERSION = 2
 const CACHE_DISK_BYTES_LIMIT = 64 * 1024 * 1024
 
-export type L4PiSessionHistorySearchScope = 'title' | 'user' | 'assistant' | 'sessionId'
+export type L4PiSessionHistorySearchScope = L4PiSessionSearchScope
 
 const DEFAULT_SEARCH_IN: readonly L4PiSessionHistorySearchScope[] = ['title', 'user']
 
@@ -72,13 +79,7 @@ interface L4PiSessionAssistantMessage {
   text: string
 }
 
-export interface L4PiSessionHistoryMatch {
-  scope: L4PiSessionHistorySearchScope
-  count: number
-  entryId: string | null
-  timestampMs: number | null
-  preview: string
-}
+export type L4PiSessionHistoryMatch = L4PiSessionSearchMatch
 
 export interface L4PiSessionHistoryItem {
   sessionId: string
@@ -184,6 +185,7 @@ interface L4PiSessionHistoryCatalogState {
   epochs: Map<string, number>
   activeLoads: Map<string, L4PiSessionHistoryCatalogLoad>
   catalogs: Map<string, L4PiSessionHistoryCatalog>
+  cleanupTimer: ReturnType<typeof setTimeout> | null
 }
 
 interface L4PiSessionScanState {
@@ -365,7 +367,8 @@ function historyCatalogState(): L4PiSessionHistoryCatalogState {
     globalThis.__piDeskPiSessionHistoryCatalogState = {
       epochs: new Map(),
       activeLoads: new Map(),
-      catalogs: new Map()
+      catalogs: new Map(),
+      cleanupTimer: null
     }
   }
   return globalThis.__piDeskPiSessionHistoryCatalogState
@@ -373,37 +376,6 @@ function historyCatalogState(): L4PiSessionHistoryCatalogState {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function timestampMs(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value
-  if (typeof value !== 'string') return null
-  const parsed = Date.parse(value)
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
-}
-
-function normalizeSearch(value: string): string {
-  return value.trim().toLowerCase()
-}
-
-function compactPreview(text: string, maxLength: number): string {
-  const content = text.replace(/\s+/g, ' ').trim()
-  if (content.length <= maxLength) return content
-  return `${content.slice(0, maxLength - 1).trimEnd()}…`
-}
-
-function messageText(message: unknown): string {
-  if (!isRecord(message)) return ''
-  const content = message.content
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-
-  return content
-    .flatMap((part) => {
-      if (!isRecord(part) || part.type !== 'text' || typeof part.text !== 'string') return []
-      return [part.text]
-    })
-    .join('\n')
 }
 
 function messageTimestamp(entry: Record<string, unknown>, fallback: number): number {
@@ -696,11 +668,31 @@ async function refreshCatalog(
   }
 }
 
-function pruneCatalogs(now: number): void {
-  const state = historyCatalogState()
+function scheduleCatalogRelease(state: L4PiSessionHistoryCatalogState): void {
+  if (state.cleanupTimer) clearTimeout(state.cleanupTimer)
+  state.cleanupTimer = null
+  if (state.catalogs.size === 0) return
+  const expiresAt = Math.min(
+    ...Array.from(state.catalogs.values(), (catalog) => catalog.lastAccessedAt + CACHE_IDLE_MS)
+  )
+  state.cleanupTimer = setTimeout(
+    () => {
+      state.cleanupTimer = null
+      pruneCatalogs(Date.now(), state)
+    },
+    Math.max(0, expiresAt - Date.now())
+  )
+  state.cleanupTimer.unref()
+}
+
+function pruneCatalogs(
+  now: number,
+  state: L4PiSessionHistoryCatalogState = historyCatalogState()
+): void {
   for (const [cwd, catalog] of state.catalogs) {
-    if (now - catalog.lastAccessedAt > CACHE_IDLE_MS) state.catalogs.delete(cwd)
+    if (now - catalog.lastAccessedAt >= CACHE_IDLE_MS) state.catalogs.delete(cwd)
   }
+  scheduleCatalogRelease(state)
 }
 
 function touchCatalog(catalog: L4PiSessionHistoryCatalog, now: number): L4PiSessionHistoryCatalog {
@@ -708,6 +700,7 @@ function touchCatalog(catalog: L4PiSessionHistoryCatalog, now: number): L4PiSess
   const state = historyCatalogState()
   state.catalogs.delete(catalog.cwd)
   state.catalogs.set(catalog.cwd, catalog)
+  scheduleCatalogRelease(state)
   return catalog
 }
 
@@ -715,6 +708,7 @@ function storeCatalog(catalog: L4PiSessionHistoryCatalog, persist: boolean): voi
   const state = historyCatalogState()
   if (catalog.files.size > CACHE_FILE_LIMIT || catalog.textBytes > CACHE_TEXT_BYTES_LIMIT) {
     state.catalogs.delete(catalog.cwd)
+    scheduleCatalogRelease(state)
     if (persist) {
       const path = persistedHistoryCachePath(catalog.cwd)
       try {
@@ -747,6 +741,7 @@ function storeCatalog(catalog: L4PiSessionHistoryCatalog, persist: boolean): voi
     state.catalogs.delete(oldest[0])
     totalBytes -= oldest[1].textBytes
   }
+  scheduleCatalogRelease(state)
   if (persist) persistHistoryCatalog(catalog)
 }
 
@@ -768,8 +763,9 @@ async function getCatalog(
   const state = historyCatalogState()
   const now = Date.now()
   pruneCatalogs(now)
-  const catalog = state.catalogs.get(cwd) ?? readPersistedHistoryCatalog(cwd)
-  const epoch = forceRefresh ? incrementEpoch(cwd) : currentEpoch(cwd)
+  const cached = state.catalogs.get(cwd)
+  const catalog = cached ? touchCatalog(cached, now) : readPersistedHistoryCatalog(cwd)
+  const epoch = forceRefresh && state.activeLoads.has(cwd) ? incrementEpoch(cwd) : currentEpoch(cwd)
   if (forceRefresh && catalog) catalog.dirty = true
   const active = state.activeLoads.get(cwd)
   if (active && active.epoch === epoch) return active.promise
@@ -783,10 +779,12 @@ async function getCatalog(
     return touchCatalog(catalog, now)
   }
 
-  const load = (async (): Promise<L4PiSessionHistoryCatalog> => {
+  const load: Promise<L4PiSessionHistoryCatalog> = Promise.resolve().then(async () => {
     const refresh = await refreshCatalog(cwd, catalog)
     const refreshed = refresh.catalog
-    if (currentEpoch(cwd) === epoch) storeCatalog(refreshed, refresh.changed)
+    if (state.activeLoads.get(cwd)?.promise === load && currentEpoch(cwd) === epoch) {
+      storeCatalog(refreshed, refresh.changed)
+    }
     console.info('[Pi Desk][PiSessionHistoryCatalog] 已更新历史会话内存投影', {
       cwd,
       sessionCount: refreshed.sessions.length,
@@ -795,43 +793,15 @@ async function getCatalog(
       forceRefresh
     })
     return refreshed
-  })()
+  })
   state.activeLoads.set(cwd, { epoch, promise: load })
   try {
     return await load
   } finally {
-    if (state.activeLoads.get(cwd)?.promise === load) state.activeLoads.delete(cwd)
-  }
-}
-
-function previewForMatch(text: string, normalizedQuery: string): string {
-  const normalizedText = text.toLowerCase()
-  const matchIndex = normalizedText.indexOf(normalizedQuery)
-  if (matchIndex < 0) return ''
-
-  const start = Math.max(0, matchIndex - MATCH_PREVIEW_PREFIX_LENGTH)
-  const requiredEnd = matchIndex + normalizedQuery.length
-  const end = Math.min(text.length, Math.max(start + MATCH_PREVIEW_MAX_LENGTH, requiredEnd))
-  const content = text.slice(start, end).replace(/\s+/g, ' ').trim()
-  return `${start > 0 ? '…' : ''}${content}${end < text.length ? '…' : ''}`
-}
-
-function messageMatch(
-  scope: 'user' | 'assistant',
-  messages: readonly L4PiSessionUserMessage[] | readonly L4PiSessionAssistantMessage[],
-  normalizedQuery: string
-): L4PiSessionHistoryMatch | null {
-  const matching = messages.filter((message) =>
-    message.text.toLowerCase().includes(normalizedQuery)
-  )
-  if (matching.length === 0) return null
-  const latest = matching.at(-1)!
-  return {
-    scope,
-    count: matching.length,
-    entryId: latest.entryId,
-    timestampMs: latest.timestampMs,
-    preview: previewForMatch(latest.text, normalizedQuery)
+    if (state.activeLoads.get(cwd)?.promise === load) {
+      state.activeLoads.delete(cwd)
+      state.epochs.delete(cwd)
+    }
   }
 }
 
@@ -854,33 +824,7 @@ function projectHistoryItem(
     }
   }
 
-  const matches: L4PiSessionHistoryMatch[] = []
-  if (searchIn.has('title') && session.name?.toLowerCase().includes(normalizedQuery)) {
-    matches.push({
-      scope: 'title',
-      count: 1,
-      entryId: null,
-      timestampMs: null,
-      preview: compactPreview(session.name, FIRST_MESSAGE_PREVIEW_MAX_LENGTH)
-    })
-  }
-  if (searchIn.has('user')) {
-    const match = messageMatch('user', session.userMessages, normalizedQuery)
-    if (match) matches.push(match)
-  }
-  if (searchIn.has('assistant')) {
-    const match = messageMatch('assistant', session.assistantMessages, normalizedQuery)
-    if (match) matches.push(match)
-  }
-  if (searchIn.has('sessionId') && session.sessionId.toLowerCase().includes(normalizedQuery)) {
-    matches.push({
-      scope: 'sessionId',
-      count: 1,
-      entryId: null,
-      timestampMs: null,
-      preview: session.sessionId
-    })
-  }
+  const matches = matchL4PiSessionSearch(session, normalizedQuery, searchIn)
   if (matches.length === 0) return null
 
   return {
@@ -917,7 +861,10 @@ async function getSessionRecord(
 ): Promise<L4PiSessionHistoryRecord | null> {
   const cwd = resolve(cwdInput)
   pruneCatalogs(Date.now())
-  const catalog = historyCatalogState().catalogs.get(cwd) ?? readPersistedHistoryCatalog(cwd)
+  const memoryCatalog = historyCatalogState().catalogs.get(cwd)
+  const catalog = memoryCatalog
+    ? touchCatalog(memoryCatalog, Date.now())
+    : readPersistedHistoryCatalog(cwd)
   const previous = catalog?.sessions.find((session) => session.sessionId === sessionId)
   const path = await findL4PiSessionFile(cwd, sessionId, previous?.path)
   if (!path) return null
@@ -972,8 +919,10 @@ export function resolveCachedL4PiSessionHistoryPath(
   cwd: string,
   sessionId: string
 ): string | undefined {
+  pruneCatalogs(Date.now())
   const catalog = historyCatalogState().catalogs.get(resolve(cwd))
   if (!catalog || catalog.dirty) return undefined
+  touchCatalog(catalog, Date.now())
   return catalog.sessions.find((session) => session.sessionId === sessionId)?.path
 }
 
@@ -981,7 +930,7 @@ export function invalidateL4PiSessionHistoryCache(cwd?: string): void {
   const state = historyCatalogState()
   if (cwd) {
     const normalizedCwd = resolve(cwd)
-    incrementEpoch(normalizedCwd)
+    if (state.activeLoads.has(normalizedCwd)) incrementEpoch(normalizedCwd)
     const catalog = state.catalogs.get(normalizedCwd)
     if (catalog) catalog.dirty = true
     return
@@ -989,7 +938,7 @@ export function invalidateL4PiSessionHistoryCache(cwd?: string): void {
 
   const affectedCwds = new Set([...state.catalogs.keys(), ...state.activeLoads.keys()])
   for (const catalogCwd of affectedCwds) {
-    incrementEpoch(catalogCwd)
+    if (state.activeLoads.has(catalogCwd)) incrementEpoch(catalogCwd)
     const catalog = state.catalogs.get(catalogCwd)
     if (catalog) catalog.dirty = true
   }

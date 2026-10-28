@@ -214,9 +214,45 @@ jobs:
           node .github/scripts/restore-sdk.mjs "$NPM_ARTIFACT_DIR/command-smoke/sdk.tgz" plugins/pi-desk-sdk
           pnpm test:pidesk
       - name: 验收同一批实际 tarball 的安装态命令
+        if: runner.os != 'Windows'
         timeout-minutes: 20
         shell: bash
         run: node .github/scripts/verify-npm-install.mjs "$NPM_ARTIFACT_DIR/command-smoke/sdk.tgz" "$NPM_ARTIFACT_DIR/command-smoke/host.tgz"
+      - name: Windows 原生启动并记录安装态进程
+        if: runner.os == 'Windows'
+        timeout-minutes: 20
+        shell: pwsh
+        run: |
+          $directory = Join-Path $env:GITHUB_WORKSPACE "temp/run/npm-release/launcher-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          $stdout = Join-Path $directory 'stdout.log'
+          $stderr = Join-Path $directory 'stderr.log'
+          $arguments = @('.github/scripts/verify-npm-install.mjs', "`"$env:NPM_ARTIFACT_DIR/command-smoke/sdk.tgz`"", "`"$env:NPM_ARTIFACT_DIR/command-smoke/host.tgz`"")
+          $child = Start-Process -FilePath (Get-Command node.exe).Source -ArgumentList $arguments -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $null = $child.Handle
+          Write-Host "安装态监督进程启动：pid=$($child.Id)，PowerShell pid=$PID"
+          $clock = [System.Diagnostics.Stopwatch]::StartNew()
+          try {
+            while (-not $child.WaitForExit(15000)) {
+              Write-Host "安装态监督进程仍在运行：pid=$($child.Id)，耗时=$([int]$clock.Elapsed.TotalSeconds)s"
+              Get-Content $stdout -Tail 8
+              Get-Content $stderr -Tail 8
+              if ($clock.Elapsed.TotalMinutes -ge 19) {
+                throw '安装态监督进程未在19分钟内退出'
+              }
+            }
+            $child.Refresh()
+            Write-Host "安装态监督进程退出：pid=$($child.Id)，code=$($child.ExitCode)"
+            Get-Content $stdout
+            Get-Content $stderr
+            exit $child.ExitCode
+          } finally {
+            if (-not $child.HasExited) {
+              $child.Kill($true)
+              if (-not $child.WaitForExit(15000)) { throw '安装态监督进程终止后仍未退出' }
+            }
+            $child.Dispose()
+          }
       - name: 保留安装态验收失败现场
         if: failure() || cancelled()
         timeout-minutes: 3

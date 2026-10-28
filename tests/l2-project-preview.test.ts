@@ -90,20 +90,21 @@ test('项目地址与登录回跳保留目录编码，不允许离站或登录�
   }
 })
 
-test('独立预览标题以项目为主体，选择页与根目录有回退并跟随语言', () => {
+test('独立预览标题显示项目名与完整路径，未选择项目时显示Pi Desk', () => {
   for (const cwd of [null, undefined, '', '   ']) {
-    assert.equal(buildL2ProjectPreviewTitle(cwd, 'zh-CN'), '项目预览 · Pi Desk')
+    assert.equal(buildL2ProjectPreviewTitle(cwd), 'Pi Desk')
   }
   assert.equal(
-    buildL2ProjectPreviewTitle(' C:\\项目 空格\\a#b&c\\ ', 'zh-CN'),
-    'a#b&c · 项目预览 · Pi Desk'
+    buildL2ProjectPreviewTitle(' C:\\项目 空格\\a#b&c\\ '),
+    'a#b&c – C:\\项目 空格\\a#b&c\\'
   )
+  assert.equal(buildL2ProjectPreviewTitle('/srv/example/'), 'example – /srv/example/')
   assert.equal(
-    buildL2ProjectPreviewTitle('/srv/example/', 'en'),
-    'example · Project preview · Pi Desk'
+    buildL2ProjectPreviewTitle('C:/code/work/SubCloud'),
+    'SubCloud – C:/code/work/SubCloud'
   )
-  assert.equal(buildL2ProjectPreviewTitle('/', 'zh-CN'), '/ · 项目预览 · Pi Desk')
-  assert.equal(buildL2ProjectPreviewTitle('C:\\', 'zh-CN'), 'C: · 项目预览 · Pi Desk')
+  assert.equal(buildL2ProjectPreviewTitle('/'), '/')
+  assert.equal(buildL2ProjectPreviewTitle('C:\\'), 'C: – C:\\')
 })
 
 test('独立预览恢复隐藏历史不读取，首次展示只读取一次，旧模式保持立即恢复', async (context) => {

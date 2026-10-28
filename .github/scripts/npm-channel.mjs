@@ -24,6 +24,14 @@ export function npmTagFor(ref, version) {
   return development ? 'dev' : 'latest'
 }
 
+export function assertDevelopmentTags(tags, name, version) {
+  assert.ok(
+    typeof tags.latest === 'string' && /^\d+\.\d+\.\d+$/.test(tags.latest),
+    `${name} 尚无稳定 latest；请先完成首次正式发布，再发布开发版本`
+  )
+  if (version) assert.equal(tags.dev, version, `${name} 的 dev 标签未指向本次版本`)
+}
+
 export function versionIncreased(before, after, path) {
   const next = versionParts(after).map((value) => value ?? Infinity)
   if (before === after) return false

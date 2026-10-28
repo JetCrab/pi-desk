@@ -44,7 +44,7 @@ const workSessionStorePath = join(agentDir, 'pi-desk', 'work-sessions.json')
 const outputRoot = join(legacyRoot, 'screenshots')
 const desktopOutput = join(outputRoot, '客户端_桌面', '代码查看器__固定会话交互.png')
 const desktopContextMenuOutput = join(outputRoot, '客户端_桌面', '项目文件__右键菜单.png')
-const desktopTabsOutput = join(outputRoot, '客户端_桌面', '代码查看器__多行标签批量菜单.png')
+const desktopTabsOutput = join(outputRoot, '客户端_桌面', '代码查看器__标签批量菜单.png')
 const desktopExpandedOutput = join(outputRoot, '客户端_桌面', '代码查看器__放大目录正文.png')
 const desktopResizeOutput = join(outputRoot, '客户端_桌面', '代码查看器__会话内宽度调整.png')
 const mobileOutput = join(outputRoot, '客户端_移动端', '代码查看器__全屏预览.png')
@@ -120,7 +120,7 @@ async function createFixture() {
   for (const [index, path] of mobileTabPaths.entries()) {
     await writeFile(
       join(primaryProjectDir, path.replaceAll('/', '\\')),
-      `export const mobilePreview${index + 1} = '手机多行标签验收文件 ${index + 1}'\n`,
+      `export const mobilePreview${index + 1} = '手机文件标签验收文件 ${index + 1}'\n`,
       'utf8'
     )
   }
@@ -152,7 +152,7 @@ ${Array.from({ length: 80 }, (_, index) => `// readingLine${index + 1} = ${index
   for (const [index, path] of multiTabPaths.entries()) {
     await writeFile(
       join(focusedProjectDir, path.replaceAll('/', '\\')),
-      `export const tabPreview${index + 1} = '多行标签验收文件 ${index + 1}'\n`,
+      `export const tabPreview${index + 1} = '文件标签验收文件 ${index + 1}'\n`,
       'utf8'
     )
   }
@@ -537,14 +537,14 @@ async function openManyFiles(client, paths) {
     await waitFor(
       client,
       `document.querySelector(${JSON.stringify(projectFileSelector)}) !== null`,
-      `多行标签文件加载：${path}`,
+      `文件标签加载：${path}`,
       () => serverOutput
     )
     await click(client, projectFileSelector)
     await waitFor(
       client,
       `document.querySelector(${JSON.stringify(fileTabSelector)}) !== null`,
-      `多行标签打开：${path}`,
+      `文件标签打开：${path}`,
       () => serverOutput
     )
   }
@@ -556,6 +556,7 @@ async function openFileTabContextMenu(client, path, inputType = 'mouse') {
     `(() => {
       const element = document.querySelector(${JSON.stringify(`[data-testid="file-tab-${path}"]`)});
       if (!(element instanceof HTMLElement)) return null;
+      element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       const rect = element.getBoundingClientRect();
       return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     })()`
@@ -918,9 +919,9 @@ async function main() {
         const rows = new Set(
           [...tabs.querySelectorAll('[data-file-tab]')].map((item) => item.getBoundingClientRect().top)
         );
-        return rows.size >= 4;
+        return rows.size === 1 && tablist.scrollWidth > tablist.clientWidth;
       })()`,
-      '桌面多行文件标签展开',
+      '桌面文件标签单行滚动',
       () => serverOutput
     )
     const tabsLayout = await evaluate(
@@ -939,13 +940,14 @@ async function main() {
           horizontalScroll: tablist.scrollWidth > tablist.clientWidth,
           activeHidden: active?.getAttribute('aria-hidden') === 'true',
           activeInert: active?.hasAttribute('inert') === true,
-          expandControl: tabs.querySelector('[aria-expanded]')?.getAttribute('aria-expanded') ?? null
+          activeVisible: active && active.getBoundingClientRect().left >= tablist.getBoundingClientRect().left - 1 && active.getBoundingClientRect().right <= tablist.getBoundingClientRect().right + 1
         };
       })()`
     )
     assert.ok(tabsLayout)
-    assert.ok(tabsLayout.rowCount >= 4, JSON.stringify(tabsLayout))
-    assert.equal(tabsLayout.horizontalScroll, false, JSON.stringify(tabsLayout))
+    assert.equal(tabsLayout.rowCount, 1, JSON.stringify(tabsLayout))
+    assert.equal(tabsLayout.horizontalScroll, true, JSON.stringify(tabsLayout))
+    assert.equal(tabsLayout.activeVisible, true, JSON.stringify(tabsLayout))
     assert.equal(tabsLayout.activeHidden, false, JSON.stringify(tabsLayout))
     assert.equal(tabsLayout.activeInert, false, JSON.stringify(tabsLayout))
     const tabsOrderBeforeMenu = tabsLayout.order

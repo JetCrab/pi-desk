@@ -31,6 +31,8 @@ interface L2WorkbenchChatViewProps {
   chatRuntime: L2WorkbenchChatRuntime
   inputRuntime: L2WorkbenchChatInputRuntime
   onPreviewFile: (source: L2ChatSource, path: string) => void
+  onResend: (source: L2ChatSource, entryId: string) => void
+  resendDisabled: boolean
 }
 
 function L2WorkbenchChatViewComponent({
@@ -39,7 +41,9 @@ function L2WorkbenchChatViewComponent({
   workSession,
   chatRuntime,
   inputRuntime,
-  onPreviewFile
+  onPreviewFile,
+  onResend,
+  resendDisabled
 }: L2WorkbenchChatViewProps): React.JSX.Element {
   const { t } = useTranslation('workbench')
   const source = useMemo(
@@ -104,6 +108,10 @@ function L2WorkbenchChatViewComponent({
     (path: string): void => onPreviewFile(source, path),
     [onPreviewFile, source]
   )
+  const resend = useCallback(
+    (entryId: string): void => onResend(source, entryId),
+    [onResend, source]
+  )
   const saveViewportSnapshot = useCallback(
     (snapshot: L2WorkbenchChatViewportSnapshot): void => {
       chatRuntime.saveViewportSnapshot(source, snapshot)
@@ -156,6 +164,8 @@ function L2WorkbenchChatViewComponent({
                         onLoadDetail={loadDetail}
                         onAcquireImage={acquireImage}
                         onPreviewFile={previewFile}
+                        onResend={resend}
+                        resendDisabled={resendDisabled || state.syncStatus !== 'ready'}
                       />
                     )
                   })}

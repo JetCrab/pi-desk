@@ -1,7 +1,7 @@
 .page {
   display: grid;
   grid-template-rows: auto 1fr;
-  min-height: 100dvh;
+  min-height: var(--pi-desk-content-height, 100dvh);
   padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right))
     max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
   background: var(--background);

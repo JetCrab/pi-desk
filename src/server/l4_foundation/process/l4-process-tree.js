@@ -7,23 +7,15 @@ const { setTimeout: delay } = require('node:timers/promises')
 const { promisify } = require('node:util')
 const execFileAsync = promisify(execFile)
 
-function exited(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return true
-  try {
-    process.kill(child.pid, 0)
-    return false
-  } catch (error) {
-    if (error.code === 'ESRCH') return true
-    throw error
-  }
-}
-
-async function stopWindowsOrphans(pid) {
-  // 父进程已退出时 taskkill /T 找不到它；原生快照避免 CIM/WMI 查询阻塞。
+async function stopWindowsTree(child) {
+  const pid = child.pid
+  // /T 无法限定旧 PPID 的代际；存活根与孤儿统一按验证后的 PID 逐个终止。
   const script = [
     "$ProgressPreference = 'SilentlyContinue'",
     "$ErrorActionPreference = 'Stop'",
     `$rootPid = ${pid}`,
+    `$ownerPid = ${process.pid}`,
+    `$rootExited = $${child.exitCode != null || child.signalCode != null}`,
     '$clock = [System.Diagnostics.Stopwatch]::StartNew()',
     '[Console]::Out.WriteLine("powershell-ready: $($clock.ElapsedMilliseconds)ms")',
     String.raw`Add-Type -TypeDefinition @'
@@ -58,6 +50,107 @@ public static class PiDeskProcessSnapshot
     private static extern bool Process32NextW(IntPtr snapshot, ref ProcessEntry entry);
     [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetProcessTimes(IntPtr handle, out FileTime created, out FileTime exited, out FileTime kernel, out FileTime user);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(IntPtr handle, uint exitCode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileTime
+    {
+        public uint Low;
+        public uint High;
+    }
+
+    public sealed class ManagedProcess : IDisposable
+    {
+        private IntPtr handle;
+        private readonly int processId;
+
+        internal ManagedProcess(IntPtr handle, int processId)
+        {
+            this.handle = handle;
+            this.processId = processId;
+        }
+
+        public long StartTicks
+        {
+            get
+            {
+                FileTime created, exited, kernel, user;
+                if (!GetProcessTimes(handle, out created, out exited, out kernel, out user))
+                {
+                    throw new Win32Exception();
+                }
+                long fileTime = ((long)created.High << 32) | created.Low;
+                return DateTime.FromFileTimeUtc(fileTime).Ticks;
+            }
+        }
+
+        public bool HasExited
+        {
+            get
+            {
+                return WaitForExit(0);
+            }
+        }
+
+        public void Kill()
+        {
+            if (!TerminateProcess(handle, 1))
+            {
+                int error = Marshal.GetLastWin32Error();
+                // 已进入终止的进程也可能返回 ACCESS_DENIED，此时等待同一句柄完成退出。
+                if (!HasExited && (error != 5 || !WaitForExit(5000)))
+                {
+                    throw new Win32Exception(error, "终止进程失败：pid=" + processId + "，Win32=" + error);
+                }
+            }
+        }
+
+        public bool WaitForExit(int milliseconds)
+        {
+            uint result = WaitForSingleObject(handle, (uint)milliseconds);
+            if (result == 0)
+            {
+                return true;
+            }
+            if (result == 258)
+            {
+                return false;
+            }
+            throw new Win32Exception();
+        }
+
+        public void Dispose()
+        {
+            if (handle != IntPtr.Zero)
+            {
+                CloseHandle(handle);
+                handle = IntPtr.Zero;
+            }
+        }
+    }
+
+    public static ManagedProcess Open(int processId)
+    {
+        // QUERY_LIMITED_INFORMATION | SYNCHRONIZE | TERMINATE；同一持有句柄用于查询与终止。
+        IntPtr handle = OpenProcess(0x101001, false, processId);
+        if (handle == IntPtr.Zero)
+        {
+            int error = Marshal.GetLastWin32Error();
+            if (error == 87)
+            {
+                return null;
+            }
+            throw new Win32Exception(error);
+        }
+        return new ManagedProcess(handle, processId);
+    }
 
     public static Dictionary<int, int> ReadParents()
     {
@@ -97,33 +190,69 @@ public static class PiDeskProcessSnapshot
     '[Console]::Out.WriteLine("snapshot-compiled: $($clock.ElapsedMilliseconds)ms")',
     '$all = [PiDeskProcessSnapshot]::ReadParents()',
     '[Console]::Out.WriteLine("snapshot-read: $($clock.ElapsedMilliseconds)ms")',
-    '$root = Get-Process -Id $rootPid -ErrorAction SilentlyContinue',
-    'if ($root -and -not $root.HasExited) { throw "Managed PID is still present; refusing orphan cleanup" }',
+    'function Open-ManagedProcess($processId) { [PiDeskProcessSnapshot]::Open($processId) }',
+    String.raw`function Read-CreationTicks($p) {
+    if (-not $p) { throw "Process handle unavailable" }
+    # 已持有句柄在进程退出后仍保留创建时间，不能把退出竞争当作身份失败。
+    $ticks = $p.StartTicks
+    if ($null -eq $ticks -or $ticks -le 0) { throw "Process creation time unavailable" }
+    return [long]$ticks
+}`,
+    '$owner = Open-ManagedProcess $ownerPid',
+    'try { $ownerTicks = Read-CreationTicks $owner } finally { if ($owner) { $owner.Dispose() } }',
+    '$protected = [System.Collections.Generic.HashSet[int]]::new()',
+    '$ancestor = $ownerPid',
+    String.raw`while ($protected.Add($ancestor)) {
+    if (-not $all.ContainsKey($ancestor)) { break }
+    $ancestor = $all[$ancestor]
+}`,
+    '[void]$protected.Add($PID)',
     '$ids = [System.Collections.Generic.HashSet[int]]::new()',
     '[void]$ids.Add($rootPid)',
     '$descendants = [System.Collections.Generic.List[int]]::new(); $created = @{}',
+    '$root = Open-ManagedProcess $rootPid',
+    String.raw`try {
+    if ($root -and -not $root.HasExited) {
+        if ($rootExited) { throw "Managed PID is still present; refusing orphan cleanup" }
+        if ($protected.Contains($rootPid) -or -not $all.ContainsKey($rootPid) -or $all[$rootPid] -ne $ownerPid) {
+            throw "Managed root is not an owned child; refusing cleanup"
+        }
+        $rootTicks = Read-CreationTicks $root
+        if ($rootTicks -le $ownerTicks) { throw "Managed root predates owner; refusing cleanup" }
+        $created[$rootPid] = $rootTicks
+        $descendants.Add($rootPid)
+    } else {
+        # 已退出根没有可查询的创建时间，只能以仍存活 owner 的代际为下界。
+        $created[$rootPid] = $ownerTicks
+    }
+} finally {
+    if ($root) { $root.Dispose() }
+}`,
     String.raw`do {
     $added = $false
     foreach ($item in $all.GetEnumerator()) {
-        if ($ids.Contains($item.Value) -and $ids.Add($item.Key)) {
+        if (-not $created.ContainsKey($item.Value) -or -not $ids.Add($item.Key)) { continue }
+        if ($protected.Contains($item.Key)) { continue }
+        try { $p = Open-ManagedProcess $item.Key } catch { continue }
+        try {
+            if (-not $p -or $p.HasExited) { continue }
+            try { $ticks = Read-CreationTicks $p } catch { continue }
+            if ($ticks -le $ownerTicks -or $ticks -le $created[$item.Value]) { continue }
+            $created[$item.Key] = $ticks
             $descendants.Add($item.Key)
-            $p = Get-Process -Id $item.Key -ErrorAction SilentlyContinue
-            if ($p -and -not $p.HasExited) {
-                $created[$item.Key] = $p.StartTime
-            }
             $added = $true
+        } finally {
+            if ($p) { $p.Dispose() }
         }
     }
 } while ($added)`,
     '[Console]::Out.WriteLine("descendants-selected: $($clock.ElapsedMilliseconds)ms count=$($descendants.Count)")',
     String.raw`for ($i = $descendants.Count - 1; $i -ge 0; $i--) {
     $pidToStop = $descendants[$i]
-    if (-not $created.ContainsKey($pidToStop)) {
-        continue
-    }
-    $p = Get-Process -Id $pidToStop -ErrorAction SilentlyContinue
-    if ($p -and -not $p.HasExited) {
-        if ([Math]::Abs(($p.StartTime.ToUniversalTime() - $created[$pidToStop].ToUniversalTime()).TotalSeconds) -gt 1) {
+    $p = Open-ManagedProcess $pidToStop
+    try {
+        if (-not $p -or $p.HasExited) { continue }
+        if ((Read-CreationTicks $p) -ne $created[$pidToStop]) {
             throw "PID identity changed; refusing cleanup"
         }
         try {
@@ -136,6 +265,8 @@ public static class PiDeskProcessSnapshot
                 throw
             }
         }
+    } finally {
+        if ($p) { $p.Dispose() }
     }
 }`
   ].join('; ')
@@ -157,7 +288,7 @@ public static class PiDeskProcessSnapshot
     )
   } catch (error) {
     throw new Error(
-      `清理 Windows 孤儿进程失败：rootPid=${pid}，code=${error.code}，signal=${error.signal ?? '无'}，超时终止=${error.killed === true}，耗时=${Math.round(performance.now() - startedAt)}ms；${error.stderr?.trim().slice(-2000) ?? ''}\n${error.stdout?.trim().slice(-2000) ?? ''}`,
+      `清理 Windows 进程树失败：rootPid=${pid}，code=${error.code}，signal=${error.signal ?? '无'}，超时终止=${error.killed === true}，耗时=${Math.round(performance.now() - startedAt)}ms；${error.stderr?.trim().slice(-2000) ?? ''}\n${error.stdout?.trim().slice(-2000) ?? ''}`,
       { cause: error }
     )
   }
@@ -166,19 +297,7 @@ public static class PiDeskProcessSnapshot
 async function terminateManagedTree(child) {
   if (!child?.pid) return
   if (process.platform === 'win32') {
-    if (!exited(child)) {
-      try {
-        await execFileAsync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
-          windowsHide: true,
-          timeout: 15_000,
-          maxBuffer: 1024 * 1024
-        })
-        return
-      } catch (error) {
-        if (!exited(child)) throw error
-      }
-    }
-    await stopWindowsOrphans(child.pid)
+    await stopWindowsTree(child)
     return
   }
 

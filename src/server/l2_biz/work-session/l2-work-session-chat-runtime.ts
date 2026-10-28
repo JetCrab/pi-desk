@@ -190,11 +190,13 @@ export class L2WorkSessionChatRuntime {
       await disposeL4PiWorkSessionRuntime(previous.sessionId)
   }
 
-  async refreshWorkSession(workSession: WorkSession): Promise<void> {
+  async refreshWorkSession(workSession: WorkSession, acceptingCommands = true): Promise<void> {
     const previousSource = this.recordsByWorkId.get(workSession.workId)?.source
     await this.closeRecord(workSession.workId)
     if (previousSource) this.publish({ type: 'source_invalidated', source: previousSource })
-    this.recordsByWorkId.set(workSession.workId, this.buildRecord(workSession))
+    const record = this.buildRecord(workSession)
+    record.acceptingCommands = acceptingCommands
+    this.recordsByWorkId.set(workSession.workId, record)
   }
 
   async removeWorkSession(workSession: WorkSession): Promise<void> {

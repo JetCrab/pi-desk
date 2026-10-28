@@ -2,7 +2,16 @@
 
 import { useId, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronsUpDownIcon } from 'lucide-react'
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ChevronsUpDownIcon,
+  FolderIcon,
+  FolderOpenIcon,
+  GitBranchIcon,
+  GitCommitHorizontalIcon
+} from 'lucide-react'
 import type { L4GitReadBranches } from '@common/l4_foundation/git/l4-git-history-contract'
 import {
   buildL3GitBranchTree,
@@ -239,8 +248,26 @@ export function L2ProjectBranchSelect({
               className
             )}
           >
-            <span className={cn('min-w-0 truncate', !value && 'text-muted-foreground')}>
-              {selectedLabel || placeholder || common('selectPlaceholder')}
+            <span
+              className={cn(
+                'flex min-w-0 flex-1 items-center gap-2',
+                !value && 'text-muted-foreground'
+              )}
+            >
+              {value === 'HEAD' ? (
+                <GitCommitHorizontalIcon
+                  aria-hidden="true"
+                  className="size-4 shrink-0 text-muted-foreground"
+                />
+              ) : (
+                <GitBranchIcon
+                  aria-hidden="true"
+                  className="size-4 shrink-0 text-muted-foreground"
+                />
+              )}
+              <span className="min-w-0 truncate">
+                {selectedLabel || placeholder || common('selectPlaceholder')}
+              </span>
             </span>
             <ChevronsUpDownIcon className="text-muted-foreground" />
           </Button>
@@ -282,6 +309,15 @@ export function L2ProjectBranchSelect({
           {rows.map((row) => {
             const selected = !row.expandable && row.key === value
             const expandedRow = row.expandable ? expanded.has(row.key) : undefined
+            const RowIcon = row.expandable
+              ? row.level === 1
+                ? null
+                : expandedRow
+                  ? FolderOpenIcon
+                  : FolderIcon
+              : row.key === 'HEAD'
+                ? GitCommitHorizontalIcon
+                : GitBranchIcon
             return (
               <button
                 key={row.key}
@@ -325,6 +361,9 @@ export function L2ProjectBranchSelect({
                 ) : (
                   <span aria-hidden="true" className="size-3.5 shrink-0" />
                 )}
+                {RowIcon ? (
+                  <RowIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+                ) : null}
                 <span className="min-w-0 flex-1 break-all">{row.label}</span>
                 {selected ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
               </button>

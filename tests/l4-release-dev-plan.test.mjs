@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
@@ -83,9 +83,7 @@ test('同一失败批次重跑固定开发版本，不依赖新的Registry编号
     github,
     source,
     runId: '42',
-    readPublished: async () => {
-      throw Error('重试不应重新分配版本')
-    }
+    readPublished: async () => ['1.0.7', '1.0.8-dev', '1.0.9-dev']
   })
   assert.deepEqual(retried.batch, first.batch)
   assert.equal(retried.prepared.packages[0].version, '1.0.8-dev')
@@ -136,6 +134,80 @@ test('手动仅构建可重编当前稳定基础号，自动选择仍跳过且�
   assert.deepEqual(windows.batch.selected, [])
 })
 
+test('开发发布在保存批次前检查稳定latest，不为新包执行构建准备', async (t) => {
+  const { root, source } = await repository(t)
+  const github = githubFixture()
+  const original = await readFile(join(root, 'package.json'), 'utf8')
+  const requests = t.mock.method(globalThis, 'fetch', async () => new Response('', { status: 404 }))
+  await assert.rejects(
+    prepareDevBatch(root, { github, source, runId: '46' }),
+    /尚无稳定 latest.*首次正式发布/
+  )
+  assert.equal(requests.mock.calls.length, 1)
+  assert.equal(await github.request('/contents/dev/batches/46.json?ref=release-data'), null)
+  assert.equal(await readFile(join(root, 'package.json'), 'utf8'), original)
+  const manual = await prepareDevBatch(root, { github, source, runId: '49', rebuildOnly: true })
+  assert.equal(manual.batch.npmVersions['pi-desk'], '1.0.8-dev')
+  assert.equal(requests.mock.calls.length, 1, '仅构建不查询Registry首次发布条件')
+})
+
+test('开发发布前置检查拒绝预发布latest，并复用同次查询选择版本', async (t) => {
+  const { root, source } = await repository(t)
+  const github = githubFixture()
+  let latest = '1.0.7-dev'
+  const requests = t.mock.method(globalThis, 'fetch', async () =>
+    Response.json({
+      name: '@jetcrab/pi-desk',
+      versions: { '1.0.7': {}, '1.0.8-dev': {} },
+      'dist-tags': { latest }
+    })
+  )
+  await assert.rejects(prepareDevBatch(root, { github, source, runId: '47' }), /尚无稳定 latest/)
+  latest = '1.0.7'
+  const prepared = await prepareDevBatch(root, { github, source, runId: '47' })
+  assert.equal(prepared.batch.npmVersions['pi-desk'], '1.0.8-dev')
+  assert.equal(requests.mock.calls.length, 2, '每次准备只读取一次包元数据')
+})
+
+test('正式发布已取代固定dev批次时明确停止，不覆盖计划或回退标签', async (t) => {
+  const { root, git, source } = await repository(t)
+  const github = githubFixture()
+  const first = await prepareDevBatch(root, {
+    github,
+    source,
+    runId: '48',
+    readPublished: async () => ['1.0.7']
+  })
+  git('restore', 'package.json')
+  const original = await readFile(join(root, 'package.json'), 'utf8')
+  const stable = githubFixture({
+    tag: 'v1.0.8',
+    date: 1,
+    source: { base: null, head: source },
+    packages: [{ name: '@jetcrab/pi-desk', version: '1.0.8' }],
+    clients: [],
+    changes: { breaking: [], features: [], added: [], changed: [], fixed: [], removed: [] }
+  })
+  github.releases = stable.releases
+  const request = github.request
+  github.request = (path, options) =>
+    path.startsWith('/contents/releases/') ? stable.request(path, options) : request(path, options)
+  await assert.rejects(
+    prepareDevBatch(root, {
+      github,
+      source,
+      runId: '48',
+      readPublished: async () => {
+        assert.fail('已被取代的批次不再进入Registry预检')
+      }
+    }),
+    /已被正式版 1\.0\.8 取代.*不回退 dev 标签/
+  )
+  const saved = await request('/contents/dev/batches/48.json?ref=release-data')
+  assert.deepEqual(JSON.parse(Buffer.from(saved.content, 'base64').toString()), first.batch)
+  assert.equal(await readFile(join(root, 'package.json'), 'utf8'), original)
+})
+
 test('重跑只有同批完整且未过期的制品才能复用', () => {
   const packages = { name: 'npm-packages-42', expired: false }
   const smoke = { name: 'npm-command-smoke-42', expired: false }
@@ -154,6 +226,10 @@ test('桌面三平台共用产品版本但分别记录成功，检查与打包�
   })
   assert.deepEqual(
     nativeCheckTargets(['apps/desktop/src-tauri/src/runtime_tests.rs', 'apps/android/README.md']),
+    { desktop_checks: true, android_checks: false, tunnel_checks: false }
+  )
+  assert.deepEqual(
+    nativeCheckTargets(['src/client/l4_foundation/desktop-window/l4-desktop-titlebar.tsx']),
     { desktop_checks: true, android_checks: false, tunnel_checks: false }
   )
 })

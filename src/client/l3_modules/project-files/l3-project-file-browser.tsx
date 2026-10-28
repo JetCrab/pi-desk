@@ -1,15 +1,10 @@
 'use client'
 
 import {
-  BracesIcon,
   ChevronRightIcon,
-  FileCode2Icon,
-  FileIcon,
-  FileTextIcon,
   FolderGit2Icon,
   FolderIcon,
   GitBranchIcon,
-  ImageIcon,
   ListFilterIcon,
   LoaderCircleIcon,
   SearchIcon
@@ -23,11 +18,12 @@ import { cn } from '@client/l4_foundation/lib/l4-utils'
 import {
   FileTree,
   FileTreeFile,
-  FileTreeFolder,
   FileTreeIcon,
   FileTreeName
 } from '@client/l4_foundation/ui/ai-elements/file-tree'
 import { L4ScrollArea } from '@client/l4_foundation/ui/l4-scroll-area'
+import { L4FileIcon } from '@client/l4_foundation/ui/file-icons/l4-file-icon'
+import { L3ProjectTreeFolder } from './views/l3-project-tree-folder'
 import { buttonVariants } from '@client/l4_foundation/ui/shadcn/button'
 import { L3ProjectSearchControls } from './views/l3-project-search-controls'
 import { L3ProjectSearchResults } from './views/l3-project-search-results'
@@ -43,6 +39,7 @@ import {
 } from './l3-project-git-model'
 import type { L3DirectoryState, L3ProjectFileRuntime } from './l3-project-file-runtime'
 import { L3ProjectPathMenu } from './l3-project-path-menu'
+import { useL3ProjectRefresh } from './l3-use-project-refresh'
 import styles from './l3-project-file-browser.module.css'
 import {
   buildL3ProjectPathTree,
@@ -74,47 +71,7 @@ function compactPath(path: string): string {
 }
 
 function fileIcon(path: string): React.JSX.Element {
-  const name = path.split('/').at(-1)?.toLocaleLowerCase() ?? ''
-  const extension = name.includes('.') ? (name.split('.').at(-1) ?? '') : ''
-  if (['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(extension)) {
-    return <ImageIcon className="size-4 text-muted-foreground" />
-  }
-  if (extension === 'json' || extension === 'jsonl') {
-    return <BracesIcon className="size-4 text-muted-foreground" />
-  }
-  if (['md', 'mdx', 'txt'].includes(extension)) {
-    return <FileTextIcon className="size-4 text-muted-foreground" />
-  }
-  if (
-    [
-      'ts',
-      'tsx',
-      'js',
-      'jsx',
-      'mjs',
-      'cjs',
-      'py',
-      'go',
-      'rs',
-      'java',
-      'c',
-      'cpp',
-      'h',
-      'hpp',
-      'css',
-      'scss',
-      'html',
-      'xml',
-      'yaml',
-      'yml',
-      'toml',
-      'sql',
-      'sh'
-    ].includes(extension)
-  ) {
-    return <FileCode2Icon className="size-4 text-muted-foreground" />
-  }
-  return <FileIcon className="size-4 text-muted-foreground" />
+  return <L4FileIcon path={path} className="size-4 text-muted-foreground" />
 }
 
 function changedFileNameClass(change: L3GitProjectChange | null): string | undefined {
@@ -166,6 +123,7 @@ export function L3ProjectFileBrowser({
   useSyncExternalStore(gitRuntime.subscribe, gitRuntime.getRevision, gitRuntime.getRevision)
   const workspace = runtime.state
   const gitWorkspace = gitRuntime.getWorkspace(cwd)
+  const hostRef = useRef<HTMLElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const searchResultsRef = useRef<HTMLDivElement>(null)
@@ -210,10 +168,32 @@ export function L3ProjectFileBrowser({
   const changeByProjectPath = new Map(projectChanges.map((change) => [change.projectPath, change]))
   const readyRepositoryRoots = repositories.map((repository) => repository.root).filter(Boolean)
 
-  useEffect(() => {
-    void runtime.ensureRoot()
-    void gitRuntime.ensureSnapshot(cwd)
+  const refreshVisible = useCallback((): void => {
+    void gitRuntime.refreshSnapshot(cwd)
+    const current = gitRuntime.getWorkspace(cwd)
+    if (runtime.state.searchOpen || current?.changesOnly) return
+    const repositoryLayout =
+      current?.layout === 'repository' &&
+      !(current.snapshot.repositories.length === 1 && current.snapshot.repositories[0]?.root === '')
+    const roots = repositoryLayout
+      ? [...current.expandedRepositories].sort((left, right) => right.length - left.length)
+      : ['']
+    const expanded = runtime.state.expandedPaths
+    const paths = new Set(roots)
+    for (const path of expanded) {
+      const root = roots.find((candidate) => !candidate || path.startsWith(`${candidate}/`))
+      if (root === undefined) continue
+      const parts = path.slice(root ? root.length + 1 : 0).split('/')
+      if (
+        parts
+          .slice(0, -1)
+          .every((_, index) => expanded.has(joinPath(root, parts.slice(0, index + 1).join('/'))))
+      )
+        paths.add(path)
+    }
+    runtime.refreshDirectories(paths)
   }, [cwd, gitRuntime, runtime])
+  useL3ProjectRefresh(hostRef, refreshVisible)
 
   useEffect(() => {
     const scrollElement = scrollRef.current
@@ -238,10 +218,6 @@ export function L3ProjectFileBrowser({
   }, [expandedRepositoryRootsKey, gitWorkspace, runtime])
 
   const boundaries = new Set(readyRepositoryRoots)
-  const displayedDirectories = new Map<string, L3CompactDirectory>()
-  const expandedKeys = new Set(
-    [...workspace.expandedPaths].map((path) => keyL3ProjectTree('directory', path))
-  )
   const toggleDirectory = (directory: L3CompactDirectory, expanded: boolean): void => {
     const next = new Set(workspace.expandedPaths)
     for (const path of directory.paths) {
@@ -249,16 +225,11 @@ export function L3ProjectFileBrowser({
       else next.delete(path)
     }
     runtime.setExpandedPaths(next, false)
-    if (expanded && !gitWorkspace?.changesOnly)
-      void runtime.expandDirectoryChain(directory.path, boundaries)
-  }
-  const applyExpanded = (keys: Set<string>): void => {
-    const changed = [...displayedDirectories].filter(
-      ([path]) =>
-        keys.has(keyL3ProjectTree('directory', path)) !== workspace.expandedPaths.has(path)
-    )
-    for (const [path, directory] of changed)
-      toggleDirectory(directory, keys.has(keyL3ProjectTree('directory', path)))
+    if (expanded && !gitWorkspace?.changesOnly) {
+      void Promise.all(directory.paths.map((path) => runtime.ensureDirectory(path, true))).then(
+        () => runtime.expandDirectoryChain(directory.path, boundaries)
+      )
+    }
   }
 
   const openPreview = (path: string, line?: number): void => {
@@ -391,13 +362,12 @@ export function L3ProjectFileBrowser({
               false
             )
           const directory = runtime.compactDirectory(childPath, boundaries)
-          displayedDirectories.set(childPath, directory)
           return directoryMenu(
             directory,
-            <FileTreeFolder
-              path={keyL3ProjectTree('directory', childPath)}
-              name={directory.label}
-              title={directory.targetPath}
+            <L3ProjectTreeFolder
+              directory={directory}
+              expanded={workspace.expandedPaths.has(childPath)}
+              onToggle={() => toggleDirectory(directory, !workspace.expandedPaths.has(childPath))}
               data-testid={`project-folder-${childPath}`}
             >
               {renderDirectory(
@@ -405,7 +375,7 @@ export function L3ProjectFileBrowser({
                 currentRepositoryRoot,
                 respectRepositoryBoundaries
               )}
-            </FileTreeFolder>
+            </L3ProjectTreeFolder>
           )
         })}
         {moreEntries(`directory:${path}`, entries.length)}
@@ -434,17 +404,16 @@ export function L3ProjectFileBrowser({
       <>
         {directories.slice(0, limit).map((childPath) => {
           const directory = compactL3PathTreeDirectory(childPath, tree, boundaries)
-          displayedDirectories.set(childPath, directory)
           return directoryMenu(
             directory,
-            <FileTreeFolder
-              path={keyL3ProjectTree('directory', childPath)}
-              name={directory.label}
-              title={directory.targetPath}
+            <L3ProjectTreeFolder
+              directory={directory}
+              expanded={workspace.expandedPaths.has(childPath)}
+              onToggle={() => toggleDirectory(directory, !workspace.expandedPaths.has(childPath))}
               data-testid={`project-folder-${childPath}`}
             >
               {renderChangeNodes(tree, directory.targetPath)}
-            </FileTreeFolder>
+            </L3ProjectTreeFolder>
           )
         })}
         {files
@@ -462,12 +431,7 @@ export function L3ProjectFileBrowser({
     )
   }
 
-  const selectDirectoryPath = (key: string): void => {
-    if (key.startsWith('directory:')) {
-      const directory = displayedDirectories.get(key.slice('directory:'.length))
-      if (directory) toggleDirectory(directory, !workspace.expandedPaths.has(directory.path))
-      return
-    }
+  const selectFile = (key: string): void => {
     const path = key.slice('file:'.length)
     const change = changeByProjectPath.get(path)
     if (gitWorkspace?.changesOnly && change) openDiff(change)
@@ -480,7 +444,6 @@ export function L3ProjectFileBrowser({
       return (
         <FileTree
           className="rounded-none border-0 bg-transparent"
-          expanded={expandedKeys}
           selectedPath={
             workspace?.activeDiff
               ? keyL3ProjectTree(
@@ -494,8 +457,7 @@ export function L3ProjectFileBrowser({
                 ? keyL3ProjectTree('file', workspace.activePath)
                 : undefined
           }
-          onExpandedChange={applyExpanded}
-          onSelect={selectDirectoryPath}
+          onSelect={selectFile}
         >
           {projectChanges.length > 0 ? (
             renderChangeNodes(root, '')
@@ -513,12 +475,10 @@ export function L3ProjectFileBrowser({
     return (
       <FileTree
         className="rounded-none border-0 bg-transparent"
-        expanded={expandedKeys}
         selectedPath={
           workspace.activePath ? keyL3ProjectTree('file', workspace.activePath) : undefined
         }
-        onExpandedChange={applyExpanded}
-        onSelect={selectDirectoryPath}
+        onSelect={selectFile}
       >
         {renderDirectory('', null, false)}
       </FileTree>
@@ -557,7 +517,7 @@ export function L3ProjectFileBrowser({
             onClick={() => {
               if (expanded) runtime.cancelDirectoryExpansion(root)
               gitRuntime.toggleRepository(cwd, root)
-              if (!expanded) void runtime.ensureDirectory(root)
+              if (!expanded) void runtime.ensureDirectory(root, true)
             }}
           >
             <ChevronRightIcon
@@ -613,7 +573,6 @@ export function L3ProjectFileBrowser({
           gitWorkspace?.changesOnly ? (
             <FileTree
               className="rounded-none border-0 bg-transparent px-1 pb-1"
-              expanded={expandedKeys}
               selectedPath={
                 workspace?.activeDiff
                   ? keyL3ProjectTree(
@@ -625,8 +584,7 @@ export function L3ProjectFileBrowser({
                     )
                   : undefined
               }
-              onExpandedChange={applyExpanded}
-              onSelect={selectDirectoryPath}
+              onSelect={selectFile}
             >
               {count > 0 ? (
                 renderChangeNodes(changeRoot, root)
@@ -637,12 +595,10 @@ export function L3ProjectFileBrowser({
           ) : (
             <FileTree
               className="rounded-none border-0 bg-transparent px-1 pb-1"
-              expanded={expandedKeys}
               selectedPath={
                 workspace.activePath ? keyL3ProjectTree('file', workspace.activePath) : undefined
               }
-              onExpandedChange={applyExpanded}
-              onSelect={selectDirectoryPath}
+              onSelect={selectFile}
             >
               {renderDirectory(root, repository?.root ?? null, true)}
             </FileTree>
@@ -777,6 +733,7 @@ export function L3ProjectFileBrowser({
 
   return (
     <section
+      ref={hostRef}
       className="flex h-full min-h-0 flex-col bg-sidebar"
       aria-label={t('projectFiles', { name: projectName })}
       onKeyDown={(event) => {

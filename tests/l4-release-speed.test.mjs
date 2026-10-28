@@ -347,6 +347,19 @@ test('同一运行的制品名称跨重试稳定，构建数据仍按attempt隔�
       if (name === 'release-docker' && step.with.name.startsWith('docker-image-')) {
         assert.notEqual(step.with.overwrite, true, '已验证镜像不能被重跑覆盖')
         assert.equal(step.if, "steps.image.outputs.reused != 'true'", '已恢复镜像不重复上传')
+      } else if (name === 'release-docker' && step.with.name.startsWith('docker-inputs-')) {
+        assert.notEqual(step.with.overwrite, true, '固定安装输入不能被重跑覆盖')
+        for (const reused of ['true', 'false']) {
+          for (const inputs_reused of ['true', 'false']) {
+            assert.equal(
+              evaluateWorkflowCondition(step.if, {
+                steps: { image: { outputs: { reused, inputs_reused } } }
+              }),
+              reused === 'false' && inputs_reused === 'false',
+              '只有首次生成的安装输入需要上传'
+            )
+          }
+        }
       } else assert.equal(step.with.overwrite, true, `${name} 重跑上传须替换本run同源制品`)
     }
     const env = [

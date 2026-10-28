@@ -899,7 +899,7 @@ export class L4PiChatWorker {
     await session.abort()
   }
 
-  async navigateTree(entryId: string): Promise<boolean> {
+  async navigateTree(entryId: string, beforeUserMessage = false): Promise<boolean> {
     const session = await this.ensureSession()
     this.assertIdle()
     if (this.treeResumeImmediate) clearImmediate(this.treeResumeImmediate)
@@ -913,7 +913,10 @@ export class L4PiChatWorker {
         this.messageGate.pause()
         try {
           this.initialization.setStage('切换会话树')
-          const result = await session.navigateTree(entryId, { summarize: false })
+          const result =
+            beforeUserMessage && previousLeaf === entryId
+              ? await this.navigateLeafUserMessage(session, entryId)
+              : await session.navigateTree(entryId, { summarize: false })
           changed = !result.cancelled
           if (changed) await this.capabilityRuntime.apply()
         } catch (error) {
@@ -946,6 +949,36 @@ export class L4PiChatWorker {
       session.abortCompaction()
       throw error
     }
+  }
+
+  private async navigateLeafUserMessage(
+    session: AgentSession,
+    entryId: string
+  ): Promise<{ cancelled: boolean }> {
+    const entry = this.sessionManager.getEntry(entryId)!
+    // SDK 对当前 leaf 直接 no-op；重发仍需执行导航钩子并回到该用户消息之前。
+    const result = await session.extensionRunner.emit({
+      type: 'session_before_tree',
+      preparation: {
+        targetId: entryId,
+        oldLeafId: entryId,
+        commonAncestorId: entryId,
+        entriesToSummarize: [],
+        userWantsSummary: false
+      },
+      signal: this.commandLifetime.signal
+    })
+    if (result?.cancel || this.commandLifetime.signal.aborted) return { cancelled: true }
+    if (entry.parentId === null) this.sessionManager.resetLeaf()
+    else this.sessionManager.branch(entry.parentId)
+    if (result?.label) this.sessionManager.appendLabelChange(entryId, result.label)
+    session.refreshContext()
+    await session.extensionRunner.emit({
+      type: 'session_tree',
+      oldLeafId: entryId,
+      newLeafId: this.sessionManager.getLeafId()
+    })
+    return { cancelled: false }
   }
 
   private resetBranchRuntime(): void {

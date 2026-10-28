@@ -18,6 +18,10 @@ await esbuild.build({
   format: 'iife',
   outfile: resolve(output, 'l1-desktop-main.js'),
   platform: 'browser',
+  alias: {
+    react: resolve(root, 'node_modules/react'),
+    'react-dom': resolve(root, 'node_modules/react-dom')
+  },
   target: 'es2021',
   minify: true
 })

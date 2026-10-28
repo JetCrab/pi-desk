@@ -8,6 +8,7 @@ import { sha256 } from './release-github.mjs'
 import { validateRecord } from './release-record.mjs'
 import { validateChanges } from './release-notes.mjs'
 import { assertPackedManifest, readNpmArchiveManifest } from './release-npm.mjs'
+import { validateDockerInputs } from './release-docker.mjs'
 
 const execute = promisify(execFile)
 const npmFilename = (item) => `${item.name.slice(1).replace('/', '-')}-${item.version}.tgz`
@@ -57,6 +58,7 @@ export async function findReleasePlan({
   runId,
   repository,
   directory,
+  accept = () => true,
   download = (run, name, output) => downloadArtifact(run, name, output, repository)
 }) {
   const search = join(directory, 'plan-search')
@@ -79,6 +81,7 @@ export async function findReleasePlan({
       }
       if (tag && plan.record.tag !== tag) continue
       if (source && plan.record.source.head !== source) continue
+      if (!accept(plan)) continue
       return plan
     }
     return null
@@ -110,8 +113,10 @@ export async function restoreReleaseArtifacts({
     plan.npm.includes('pi-desk') && !existsSync(join(directory, 'docker/docker-image.json'))
   const pending = () =>
     pendingClients().length || pendingNpm().length || pendingNotes() || pendingDocker()
-  if (!pending()) return
+  let npmVerified = !pendingNpm().length
+  if (!pending()) return { npmVerified }
   const search = join(directory, 'artifact-search')
+  const dockerInputs = []
   try {
     for await (const run of artifactRuns(github, runId)) {
       const has = (name) =>
@@ -130,16 +135,54 @@ export async function restoreReleaseArtifacts({
         jobs.push(...result.jobs)
         if (result.jobs.length < 100) break
       }
-      const passed = (name) => jobs.some((job) => job.name === name && job.conclusion === 'success')
-      const restored = (name) =>
-        passed('prepare') &&
+      // artifact 没有 run_attempt；以实际上传窗口定位写入它的 job，不能借用旧 attempt 的成功。
+      const owner = (name, jobName) => {
+        const artifact = run.artifacts.find((item) => item.name === `${name}-${run.id}`)
+        const created = Date.parse(artifact?.created_at)
+        const writers = jobs.filter(
+          (job) =>
+            [jobName, 'prepare'].includes(job.name) &&
+            job.conclusion !== 'skipped' &&
+            Number.isInteger(job.run_attempt) &&
+            Date.parse(job.started_at) <= created &&
+            created <= Date.parse(job.completed_at)
+        )
+        return writers.length === 1 ? writers[0] : null
+      }
+      const passed = (name, attempt, after = 0) =>
+        jobs.some(
+          (job) =>
+            job.name === name &&
+            job.run_attempt === attempt &&
+            job.conclusion === 'success' &&
+            Date.parse(job.started_at) >= after
+        )
+      const restored = (writer, name) =>
+        writer?.name === 'prepare' &&
+        writer.conclusion === 'success' &&
+        jobs.some(
+          (job) =>
+            (job.name === name || job.name.startsWith(`${name} /`)) &&
+            job.run_attempt === writer.run_attempt &&
+            job.conclusion === 'skipped'
+        ) &&
         !jobs.some(
           (job) =>
-            (job.name === name || job.name.startsWith(`${name} /`)) && job.conclusion !== 'skipped'
+            job.run_attempt === writer.run_attempt &&
+            (job.name === name || job.name.startsWith(`${name} /`)) &&
+            job.conclusion !== 'skipped'
         )
+      const verified = (artifact, job, parent) => {
+        const writer = owner(artifact, job)
+        return (writer?.name === job && writer.conclusion === 'success') || restored(writer, parent)
+      }
       for (const item of pendingClients()) {
         const job = `${item.platform} / ${item.platform}`
-        if (!has(`client-${item.platform}`) || (!passed(job) && !restored(item.platform))) continue
+        if (
+          !has(`client-${item.platform}`) ||
+          !verified(`client-${item.platform}`, job, item.platform)
+        )
+          continue
         const client = join(folder, item.platform)
         await download(run.id, `client-${item.platform}-${run.id}`, client)
         const manifest = JSON.parse(await readFile(join(client, 'release.json'), 'utf8'))
@@ -155,12 +198,40 @@ export async function restoreReleaseArtifacts({
         await cp(client, clientDirectory(item.platform), { recursive: true })
         console.info(`复用成功客户端：${item.platform} ${item.version}，运行 ${run.id}`)
       }
-      const hostVerified =
-        !plan.npm.includes('pi-desk') ||
-        (passed('npm-build / installed-commands (ubuntu-latest)') &&
-          passed('npm-build / installed-commands (windows-latest)'))
-      const npmVerified = (passed('npm-build / build') && hostVerified) || restored('npm-build')
-      if (pendingNpm().length && has('npm-packages') && npmVerified) {
+      if (pendingNpm().length && has('npm-packages')) {
+        const writer = owner('npm-packages', 'npm-build / build')
+        const created = Date.parse(
+          run.artifacts.find((item) => item.name === `npm-packages-${run.id}`).created_at
+        )
+        npmVerified =
+          restored(writer, 'npm-build') ||
+          jobs.some(
+            (job) =>
+              job.name === 'npm-build / build' &&
+              job.conclusion === 'success' &&
+              writer &&
+              job.run_attempt >= writer.run_attempt &&
+              Date.parse(job.completed_at) >= created &&
+              (!plan.npm.includes('pi-desk') ||
+                (passed(
+                  'npm-build / installed-commands (ubuntu-latest)',
+                  job.run_attempt,
+                  created
+                ) &&
+                  passed(
+                    'npm-build / installed-commands (windows-latest)',
+                    job.run_attempt,
+                    created
+                  )))
+          )
+        assert.ok(
+          writer?.conclusion === 'success',
+          `npm 原包缺少对应构建证据，停止重建；保留运行 ${run.id} 的原附件并核对验收`
+        )
+        assert.ok(
+          npmVerified || plan.npm.includes('pi-desk'),
+          `npm 原包缺少对应验证证据，停止重建；需核对运行 ${run.id} 的构建结果`
+        )
         const packages = join(folder, 'npm')
         await download(run.id, `npm-packages-${run.id}`, packages)
         for (const name of plan.npm) {
@@ -168,9 +239,23 @@ export async function restoreReleaseArtifacts({
           assertPackedManifest(readNpmArchiveManifest(join(packages, npmFilename(item))), item)
         }
         await cp(packages, join(directory, 'npm'), { recursive: true })
-        console.info(`复用已验收 npm 包，运行 ${run.id}`)
+        if (!npmVerified && plan.npm.includes('pi-desk')) {
+          const smokeWriter = owner('npm-command-smoke', 'npm-build / build')
+          assert.ok(
+            has('npm-command-smoke') && smokeWriter?.id === writer.id && smokeWriter?.id != null,
+            `npm 原包已保留，但缺少同次构建的安装态附件；停止重建，需恢复运行 ${run.id} 的 npm-command-smoke 后重新验收`
+          )
+          await download(
+            run.id,
+            `npm-command-smoke-${run.id}`,
+            join(directory, 'npm-command-smoke')
+          )
+        }
+        console.info(
+          `复用 npm 原包，运行 ${run.id}；${npmVerified ? '验收证据匹配' : '需要重新验收'}`
+        )
       }
-      if (pendingNotes() && has('release-review') && (passed('notes') || restored('notes'))) {
+      if (pendingNotes() && has('release-review') && verified('release-review', 'notes', 'notes')) {
         const notes = join(folder, 'notes')
         await download(run.id, `release-review-${run.id}`, notes)
         // 旧工作流的审查附件只有证据，不能将其当作完整更新说明。
@@ -182,7 +267,7 @@ export async function restoreReleaseArtifacts({
       if (
         pendingDocker() &&
         has('docker-image') &&
-        (passed('docker-build / build') || restored('docker-build'))
+        verified('docker-image', 'docker-build / build', 'docker-build')
       ) {
         const docker = join(folder, 'docker')
         await download(run.id, `docker-image-${run.id}`, docker)
@@ -198,7 +283,34 @@ export async function restoreReleaseArtifacts({
         )
         await cp(docker, join(directory, 'docker'), { recursive: true })
       }
-      if (!pending()) return
+      if (pendingDocker()) {
+        const inputs = run.artifacts.find((item) => item.name === `docker-inputs-${run.id}`)
+        if (inputs) dockerInputs.push({ run: run.id, artifact: inputs })
+      }
+      if (!pending()) return { npmVerified }
+    }
+    // 扫描过全部同计划运行后才取安装输入，优先复用已经通过验收的镜像。
+    if (pendingDocker() && dockerInputs.length) {
+      const saved = dockerInputs.find((item) => !item.artifact.expired) ?? dockerInputs[0]
+      assert.equal(saved.artifact.expired, false, '本批镜像安装输入已过期，停止重新解析依赖')
+      const inputs = join(directory, 'docker-inputs')
+      await download(saved.run, saved.artifact.name, inputs)
+      await validateDockerInputs({ directory: inputs, source: plan.record.source.head })
+      for (const [name, file] of [
+        ['pi-desk', 'host.tgz'],
+        ['pi-desk-sdk', 'sdk.tgz']
+      ]) {
+        const item = plan.record.packages.find((entry) => entry.name === `@jetcrab/${name}`)
+        assertPackedManifest(readNpmArchiveManifest(join(inputs, 'host', file)), item)
+        const archive = join(directory, 'npm', npmFilename(item))
+        if (existsSync(archive))
+          assert.equal(
+            sha256(await readFile(archive)),
+            sha256(await readFile(join(inputs, 'host', file))),
+            '镜像安装输入与本批 npm 原包不同'
+          )
+      }
+      console.info(`复用原镜像安装输入，运行 ${saved.run}；保留固定 host/Pi 安装锁。`)
     }
     console.info(
       `缺少可复用产物：客户端=${
@@ -207,6 +319,7 @@ export async function restoreReleaseArtifacts({
           .join('、') || '无'
       }；npm=${pendingNpm().join('、') || '无'}，由本批构建补齐。`
     )
+    return { npmVerified }
   } finally {
     await rm(search, { recursive: true, force: true })
   }

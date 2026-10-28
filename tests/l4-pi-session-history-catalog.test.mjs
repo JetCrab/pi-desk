@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto'
 import Module, { syncBuiltinESMExports } from 'node:module'
 import fs from 'node:fs'
 import { readFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
@@ -45,7 +44,9 @@ Module._load = originalLoad
 async function createIsolatedAgent(context) {
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR
   const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR
-  const testRoot = await mkdtemp(join(tmpdir(), 'pi-desk-session-history-'))
+  const runRoot = join(projectRoot, 'temp/run/session-history')
+  await mkdir(runRoot, { recursive: true })
+  const testRoot = await mkdtemp(join(runRoot, 'history-cache-'))
   const agentDir = join(testRoot, 'agent')
   await mkdir(agentDir, { recursive: true })
   context.after(async () => {
@@ -53,6 +54,7 @@ async function createIsolatedAgent(context) {
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir
     if (originalSessionDir === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR
     else process.env.PI_CODING_AGENT_SESSION_DIR = originalSessionDir
+    clearTimeout(globalThis.__piDeskPiSessionHistoryCatalogState?.cleanupTimer)
     Reflect.deleteProperty(globalThis, '__piDeskPiSessionHistoryCatalogState')
     await rm(testRoot, { recursive: true, force: true })
   })
@@ -62,6 +64,7 @@ async function createIsolatedAgent(context) {
 function prepareHistoryProbe(agentDir) {
   process.env.PI_CODING_AGENT_DIR = agentDir
   process.env.PI_CODING_AGENT_SESSION_DIR = join(agentDir, 'sessions')
+  clearTimeout(globalThis.__piDeskPiSessionHistoryCatalogState?.cleanupTimer)
   Reflect.deleteProperty(globalThis, '__piDeskPiSessionHistoryCatalogState')
 }
 
@@ -386,26 +389,105 @@ test('冷启动用户消息分页只读取目标文件，后续历史列表仍�
   )
 })
 
-test('历史选择器命中缓存时结束加载，刷新请求保留筛选范围', async () => {
-  const pickerDialog = await readFile(
-    resolve(projectRoot, 'src/client/l2_biz/workbench/l2-workbench-picker-dialog.tsx'),
-    'utf8'
+test('历史搜索共用匹配规则，默认用户范围、显式助手范围且不搜索工具或思考', async (context) => {
+  const { agentDir, testRoot } = await createIsolatedAgent(context)
+  const cwd = join(testRoot, 'scope-project')
+  const path = await createSessionFile(agentDir, cwd, {
+    fileName: 'scope-target.jsonl',
+    sessionId: 'scope-target',
+    messages: [
+      { id: 'u1', role: 'user', text: '起始 ANCHOR anchor' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        text: [
+          { type: 'thinking', thinking: 'hidden-thinking' },
+          { type: 'text', text: '助手 anchor' }
+        ]
+      },
+      { id: 'tool', role: 'toolResult', text: 'hidden-tool' },
+      { id: 'u2', role: 'user', text: '最新 anchor 片段' }
+    ]
+  })
+  await writeFile(
+    path,
+    `${await readFile(path, 'utf8')}${sessionLine({
+      type: 'session_info',
+      id: 'title',
+      parentId: 'u2',
+      name: '搜索回归标题',
+      timestamp: '2026-01-01T00:00:06.000Z'
+    })}`
   )
-  assert.match(
-    pickerDialog,
-    /<L4AppDialogDescription className="mt-1 truncate" title=\{description\}>/
+  prepareHistoryProbe(agentDir)
+  const defaultResults = await listL4PiSessionHistory(cwd, '  AnChOr  ')
+  assert.equal(defaultResults.length, 1)
+  assert.deepEqual(
+    defaultResults[0].matches.map(({ scope, count, entryId }) => ({ scope, count, entryId })),
+    [{ scope: 'user', count: 2, entryId: 'u2' }]
   )
+  assert.match(defaultResults[0].matches[0].preview, /最新 anchor 片段/)
+  const assistantResults = await listL4PiSessionHistory(cwd, 'anchor', false, ['assistant'])
+  assert.deepEqual(
+    assistantResults[0].matches.map(({ scope, count, entryId }) => ({ scope, count, entryId })),
+    [{ scope: 'assistant', count: 1, entryId: 'a1' }]
+  )
+  assert.equal((await listL4PiSessionHistory(cwd, '回归标题', false, ['title'])).length, 1)
+  assert.equal((await listL4PiSessionHistory(cwd, 'scope-target', false, ['sessionId'])).length, 1)
+  for (const query of ['hidden-thinking', 'hidden-tool']) {
+    assert.deepEqual(await listL4PiSessionHistory(cwd, query, false, ['user', 'assistant']), [])
+  }
+})
 
-  const workbench = await readFile(
-    resolve(projectRoot, 'src/client/l2_biz/workbench/hooks/l2-workbench-session-history.ts'),
-    'utf8'
-  )
-  assert.match(
-    workbench,
-    /if \(cachedSessions && !forceRefresh\) \{[\s\S]*?setLoading\(false\)[\s\S]*?return\n/
-  )
-  assert.match(
-    workbench,
-    /listSessionHistory\(\n\s*\{ cwd, query: normalizedQuery, forceRefresh, searchIn: \[\.\.\.searchIn\] \}/
-  )
+test('历史缓存空闲60秒主动释放，未再访问也回收，磁盘投影可复用', async (context) => {
+  const { agentDir, testRoot } = await createIsolatedAgent(context)
+  const cwd = join(testRoot, 'idle-project')
+  await createSessionFile(agentDir, cwd, {
+    fileName: 'idle.jsonl',
+    sessionId: 'idle',
+    messages: [{ id: 'u1', role: 'user', text: '空闲回收关键词' }]
+  })
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
+  prepareHistoryProbe(agentDir)
+  await listL4PiSessionHistory(cwd, '关键词')
+  const state = globalThis.__piDeskPiSessionHistoryCatalogState
+  assert.equal(state.catalogs.size, 1)
+  context.mock.timers.tick(59_999)
+  assert.equal(state.catalogs.size, 1)
+  context.mock.timers.tick(1)
+  assert.equal(state.catalogs.size, 0, '无需再次查询就应清除缓存')
+  assert.equal(state.cleanupTimer, null, '无缓存时不保留回收定时器')
+  assert.equal(state.activeLoads.size, 0)
+  const reads = observeTranscriptReads(context)
+  assert.equal((await listL4PiSessionHistory(cwd, '关键词')).length, 1)
+  assert.equal(reads.mock.calls.length, 0, '内存释放后仍复用有效磁盘投影')
+})
+
+test('命中使用延长自身空闲期限，不让其他目录永久驻留', async (context) => {
+  const { agentDir, testRoot } = await createIsolatedAgent(context)
+  const cwdA = join(testRoot, 'renew-a')
+  const cwdB = join(testRoot, 'renew-b')
+  for (const [cwd, id] of [
+    [cwdA, 'a'],
+    [cwdB, 'b']
+  ]) {
+    await createSessionFile(agentDir, cwd, {
+      fileName: `${id}.jsonl`,
+      sessionId: id,
+      messages: [{ id: `u-${id}`, role: 'user', text: '续期关键词' }]
+    })
+  }
+  context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
+  prepareHistoryProbe(agentDir)
+  await listL4PiSessionHistory(cwdA)
+  await listL4PiSessionHistory(cwdB)
+  const state = globalThis.__piDeskPiSessionHistoryCatalogState
+  context.mock.timers.tick(30_000)
+  await listL4PiSessionHistory(cwdA, '关键词')
+  context.mock.timers.tick(30_000)
+  assert.equal(state.catalogs.has(resolve(cwdA)), true)
+  assert.equal(state.catalogs.has(resolve(cwdB)), false)
+  context.mock.timers.tick(30_000)
+  assert.equal(state.catalogs.size, 0)
+  assert.equal(state.cleanupTimer, null)
 })

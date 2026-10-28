@@ -55,7 +55,7 @@ function L4AppDialogBackdrop({
     <DialogPrimitive.Backdrop
       data-slot="app-dialog-backdrop"
       className={cn(
-        'fixed inset-0 z-[100] bg-black/35 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0',
+        'fixed inset-x-0 top-[var(--pi-desk-window-inset)] bottom-0 z-[100] bg-black/35 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0',
         className
       )}
       {...props}
@@ -82,7 +82,7 @@ function L4AppDialogContent({
         data-slot="app-dialog-content"
         finalFocus={finalFocus}
         className={cn(
-          'fixed top-1/2 left-1/2 z-[110] flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-[27.5rem] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-popover text-sm text-popover-foreground shadow-lg outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95',
+          'fixed top-[calc(50%+var(--pi-desk-window-inset)/2)] left-1/2 z-[110] flex max-h-[calc(var(--pi-desk-content-height)-2rem)] w-[calc(100%-2rem)] max-w-[27.5rem] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-popover text-sm text-popover-foreground shadow-lg outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95',
           className
         )}
         {...props}

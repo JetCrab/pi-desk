@@ -13,7 +13,7 @@ export function L1ErrorPage({
 }): React.JSX.Element {
   const { t } = useTranslation('common')
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-background p-4 text-foreground">
+    <main className="flex min-h-[var(--pi-desk-content-height)] items-center justify-center bg-background p-4 text-foreground">
       <div className="w-full max-w-md space-y-4 text-center">
         <h1 className="text-xl font-semibold">{t(notFound ? 'notFound' : 'pageError')}</h1>
         <div className="flex flex-wrap items-center justify-center gap-2">

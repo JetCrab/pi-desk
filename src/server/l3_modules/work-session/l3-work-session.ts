@@ -1,7 +1,10 @@
 import 'server-only'
 
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
-import { L4PiWorkSessionRuntime } from '@server/l4_foundation/pi/l4-pi-work-session-runtime'
+import {
+  L4PiWorkSessionRuntime,
+  type L4PiResendInput
+} from '@server/l4_foundation/pi/l4-pi-work-session-runtime'
 
 export interface WorkSessionInputImage {
   mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
@@ -10,11 +13,13 @@ export interface WorkSessionInputImage {
   height: number
 }
 
-export interface WorkSessionSendInput {
-  mode: 'auto' | 'follow_up'
-  text: string
-  images: WorkSessionInputImage[]
-}
+export type WorkSessionSendInput =
+  | {
+      mode: 'auto' | 'follow_up'
+      text: string
+      images: WorkSessionInputImage[]
+    }
+  | L4PiResendInput
 
 export interface WorkSessionModelInput {
   provider: string

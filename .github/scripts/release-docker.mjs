@@ -1,15 +1,27 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { appendFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createGitHubClient, sha256 } from './release-github.mjs'
 
 export const dockerAssets = {
   archive: 'pi-desk-docker.tar.gz',
-  record: 'docker-image.json'
+  record: 'docker-image.json',
+  inputs: 'docker-inputs.json'
 }
+const inputFiles = [
+  'host/host.tgz',
+  'host/sdk.tgz',
+  'host/package.json',
+  'host/package-lock.json',
+  'pi/package.json',
+  'pi/package-lock.json',
+  'Dockerfile',
+  '.dockerignore',
+  'prune-image.mjs'
+]
 const imageRepository = 'ghcr.io/jetcrab/pi-desk'
 const stable = /^\d+\.\d+\.\d+$/
 const digestPattern = /^sha256:[a-f0-9]{64}$/
@@ -172,16 +184,204 @@ async function verifyPublicPull(version) {
   }
 }
 
-export async function prepareDockerContext(root, archives, directory, version) {
+export async function runDockerInputCommand(tool, args, { cwd, phase, timeout }) {
+  console.info(`[docker:${phase}] 开始，时限 ${timeout / 1000} 秒`)
+  const child = spawn(tool, args, {
+    cwd,
+    detached: process.platform !== 'win32',
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  child.stdout.on('data', (chunk) => process.stdout.write(chunk))
+  let stderr = ''
+  child.stderr.on('data', (chunk) => {
+    process.stderr.write(chunk)
+    stderr = `${stderr}${chunk}`.slice(-16 * 1024)
+  })
+  const closed = new Promise((resolveClose, rejectClose) => {
+    child.once('error', rejectClose)
+    child.once('close', (code, signal) => resolveClose({ code, signal }))
+  })
+  let timer
+  let cleanupTimer
+  try {
+    const result = await Promise.race([
+      closed,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              Object.assign(new Error(`命令超过 ${timeout / 1000} 秒截止`), {
+                code: 'ETIMEDOUT'
+              })
+            ),
+          timeout
+        )
+      })
+    ])
+    assert.equal(result.code, 0, `命令退出码=${result.code}，信号=${result.signal ?? '无'}`)
+    console.info(`[docker:${phase}] 完成`)
+  } catch (cause) {
+    const error = new Error(`[docker:${phase}] ${cause.message}\n${stderr.trim()}`, { cause })
+    error.code = cause.code
+    console.error(error.message)
+    try {
+      // 成功镜像复用不加载固定源码中的进程底座；只有命令失败时才需要终止后代。
+      const { terminateManagedTree } =
+        await import('../../src/server/l4_foundation/process/l4-process-tree.js')
+      await terminateManagedTree(child)
+      await Promise.race([
+        closed.catch(() => undefined),
+        new Promise((_, reject) => {
+          cleanupTimer = setTimeout(
+            () => reject(new Error('命令进程树输出通道未在 5 秒内关闭')),
+            5000
+          )
+        })
+      ])
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        `${error.message}\n进程释放失败：${cleanupError.message}`
+      )
+    } finally {
+      child.stdout.destroy()
+      child.stderr.destroy()
+      child.unref()
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+    clearTimeout(cleanupTimer)
+  }
+}
+
+async function lockDockerInstalls(directory) {
+  assert.equal(process.platform, 'linux', '生产镜像安装锁只能在 Linux 生成')
+  // 顺序执行两套安装锁，每套最多 4 分钟，总执行上限 8 分钟，失败后不继续下一套。
+  for (const name of ['host', 'pi']) {
+    await runDockerInputCommand(
+      'npm',
+      [
+        'install',
+        '--package-lock-only',
+        '--omit=dev',
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund'
+      ],
+      { cwd: join(directory, name), phase: `lock-${name}`, timeout: 4 * 60_000 }
+    )
+  }
+}
+
+async function assertLockedRecipe(directory) {
+  const [dockerfile, ignore] = await Promise.all([
+    readFile(join(directory, 'Dockerfile'), 'utf8'),
+    readFile(join(directory, '.dockerignore'), 'utf8')
+  ])
+  assert.ok(
+    (dockerfile.match(/\bRUN\s+npm\s+ci\s+--omit=dev\b/g) ?? []).length === 2 &&
+      /COPY\s+pi\/package.json\s+pi\/package-lock.json\s+\.\//.test(dockerfile) &&
+      ['host', 'pi'].every((name) => ignore.split(/\r?\n/).includes(`!${name}/package-lock.json`)),
+    '固定源码的镜像配方不支持 host/Pi 安装锁；没有成功镜像时不能重建该旧批次。请发布包含 npm ci 与锁白名单的新版本，不替换旧版本配方。'
+  )
+}
+
+async function inputDigests(directory) {
+  return Object.fromEntries(
+    await Promise.all(
+      inputFiles.map(async (name) => [name, sha256(await readFile(join(directory, name)))])
+    )
+  )
+}
+
+export async function validateDockerInputs({ directory, source }) {
+  const record = JSON.parse(await readFile(join(directory, dockerAssets.inputs)))
+  assert.equal(record.source, source, '镜像安装输入属于不同源码批次')
+  assert.deepEqual(record.files, await inputDigests(directory), '镜像安装输入摘要不匹配')
+  return record
+}
+
+export async function restoreDockerArtifacts({
+  directory,
+  source,
+  version,
+  runId,
+  github,
+  download
+}) {
+  assert.match(runId, /^\d+$/)
+  const artifacts = []
+  for (let page = 1; ; page++) {
+    const result = await github.request(
+      `/actions/runs/${runId}/artifacts?per_page=100&page=${page}`
+    )
+    artifacts.push(...result.artifacts)
+    if (result.artifacts.length < 100) break
+  }
+  // 已验证镜像优先，历史批次即使没有安装锁也不重新安装。
+  for (const kind of ['docker-image', 'docker-inputs']) {
+    const name = `${kind}-${runId}`
+    const artifact = artifacts.find((item) => item.name === name)
+    if (!artifact) continue
+    assert.equal(artifact.expired, false, `${name} 已过期，停止重建`)
+    const target = kind === 'docker-image' ? directory : join(directory, 'context')
+    await mkdir(target, { recursive: true })
+    console.info(`正在下载同批归档：${name}`)
+    await download(name, target)
+    if (kind === 'docker-image') {
+      assert.equal(
+        await restoreDockerImage({ directory, source, version }),
+        true,
+        '已验证镜像制品缺少完整归档，停止重建'
+      )
+      return { reused: true, inputsReused: false }
+    }
+    assert.ok(existsSync(join(target, dockerAssets.inputs)), '安装输入归档不完整，停止重新解析')
+    return { reused: false, inputsReused: true }
+  }
+  console.info('本批尚无镜像或安装输入归档，将生成首次 Linux 安装锁；不复现历史依赖树。')
+  return { reused: false, inputsReused: false }
+}
+
+export async function prepareDockerContext(
+  root,
+  archives,
+  directory,
+  version,
+  { source, lock = lockDockerInstalls }
+) {
+  assert.match(source, /^[a-f0-9]{40}$/)
+  const sourceHost = JSON.parse(await readFile(join(root, 'package.json')))
+  assert.equal(sourceHost.version, version)
   const sdkVersion = JSON.parse(
     await readFile(join(root, 'plugins/pi-desk-sdk/package.json'))
   ).version
   const hostArchive = join(archives, `jetcrab-pi-desk-${version}.tgz`)
   const sdkArchive = join(archives, `jetcrab-pi-desk-sdk-${sdkVersion}.tgz`)
   assert.ok(existsSync(hostArchive), '缺少同批已验证主程序 npm 制品')
-  if (!existsSync(sdkArchive)) {
+  const recordPath = join(directory, dockerAssets.inputs)
+  const restoring = existsSync(recordPath)
+  await assertLockedRecipe(join(root, 'apps/docker'))
+  if (restoring) {
+    const record = await validateDockerInputs({ directory, source })
+    assert.equal(
+      sha256(await readFile(hostArchive)),
+      record.files['host/host.tgz'],
+      '镜像安装输入与本批主程序 npm 制品不同'
+    )
+    if (existsSync(sdkArchive)) {
+      assert.equal(
+        sha256(await readFile(sdkArchive)),
+        record.files['host/sdk.tgz'],
+        '镜像安装输入与本批 SDK npm 制品不同'
+      )
+    }
+  }
+  if (!restoring && !existsSync(sdkArchive)) {
     // SDK 未变化时只取固定正式版本，不读 latest，也不重建 SDK。
-    execFileSync(
+    await runDockerInputCommand(
       'npm',
       [
         'pack',
@@ -191,21 +391,46 @@ export async function prepareDockerContext(root, archives, directory, version) {
         archives,
         '--registry=https://registry.npmjs.org'
       ],
-      { stdio: 'inherit' }
+      { phase: 'sdk-download', timeout: 3 * 60_000 }
     )
   }
   const manifest = (archive) =>
     JSON.parse(
-      execFileSync('tar', ['-xOzf', archive, 'package/package.json'], {
+      execFileSync('tar', ['-xOzf', basename(archive), 'package/package.json'], {
+        cwd: dirname(archive),
         encoding: 'utf8',
         maxBuffer: 1024 * 1024
       })
     )
   const host = manifest(hostArchive)
-  const sdk = manifest(sdkArchive)
+  const sdk = manifest(restoring ? join(directory, 'host/sdk.tgz') : sdkArchive)
   assert.equal(host.version, version)
   assert.equal(sdk.version, sdkVersion)
   const manifests = dockerInstallManifests(host, sdk)
+  assert.equal(
+    manifests.pi.dependencies['@earendil-works/pi-coding-agent'],
+    sourceHost.devDependencies['@earendil-works/pi-coding-agent'],
+    '主程序 npm 制品的 Pi 版本与源码不同'
+  )
+  if (restoring) {
+    for (const name of ['host', 'pi']) {
+      assert.deepEqual(
+        JSON.parse(await readFile(join(directory, name, 'package.json'))),
+        manifests[name],
+        `镜像 ${name} 安装声明与本批不同`
+      )
+    }
+    await assertLockedRecipe(directory)
+    for (const name of ['Dockerfile', '.dockerignore', 'prune-image.mjs']) {
+      assert.equal(
+        sha256(await readFile(join(directory, name))),
+        sha256(await readFile(join(root, 'apps/docker', name))),
+        `归档镜像配方与固定源码不同：${name}`
+      )
+    }
+    console.info('已复用本批 host/Pi 安装锁，不重新解析依赖。')
+    return
+  }
   await mkdir(join(directory, 'host'), { recursive: true })
   await mkdir(join(directory, 'pi'), { recursive: true })
   await Promise.all([
@@ -217,6 +442,8 @@ export async function prepareDockerContext(root, archives, directory, version) {
       cp(join(root, 'apps/docker', name), join(directory, name))
     )
   ])
+  await lock(directory)
+  await writeFile(recordPath, json({ source, files: await inputDigests(directory) }))
   console.info(
     `镜像上下文已准备：主程序 ${version}，SDK ${sdkVersion}，Pi ${manifests.pi.dependencies['@earendil-works/pi-coding-agent']}`
   )
@@ -237,7 +464,8 @@ async function main() {
       root,
       resolve(process.env.NPM_ARTIFACT_DIR),
       join(directory, 'context'),
-      version
+      version,
+      { source }
     )
     return
   }
@@ -249,33 +477,24 @@ async function main() {
   if (command === 'restore') {
     const repository = process.env.GITHUB_REPOSITORY
     const runId = process.env.GITHUB_RUN_ID
-    assert.match(runId, /^\d+$/)
     const github = createGitHubClient({ repository, token: process.env.GH_TOKEN })
-    const name = `docker-image-${runId}`
-    let artifact
-    for (let page = 1; ; page++) {
-      const result = await github.request(
-        `/actions/runs/${runId}/artifacts?per_page=100&page=${page}`
-      )
-      artifact = result.artifacts.find((item) => item.name === name)
-      if (artifact || result.artifacts.length < 100) break
-    }
-    let reused = false
-    if (artifact) {
-      assert.equal(artifact.expired, false, '已验证镜像制品已过期，停止重建')
-      console.info('正在下载当前工作流已验证镜像制品。')
-      await mkdir(directory, { recursive: true })
-      execFileSync(
-        'gh',
-        ['run', 'download', runId, '--repo', repository, '--name', name, '--dir', directory],
-        { stdio: 'inherit' }
-      )
-      reused = await restoreDockerImage({ directory, source, version })
-      assert.equal(reused, true, '已验证镜像制品缺少完整归档，停止重建')
-    } else {
-      console.info('当前工作流尚无已验证镜像制品，开始首次构建。')
-    }
-    await appendFile(process.env.GITHUB_OUTPUT, `reused=${reused}\nversion=${version}\n`)
+    const { reused, inputsReused } = await restoreDockerArtifacts({
+      directory,
+      source,
+      version,
+      runId,
+      github,
+      download: (name, target) =>
+        runDockerInputCommand(
+          'gh',
+          ['run', 'download', runId, '--repo', repository, '--name', name, '--dir', target],
+          { phase: `download-${name}`, timeout: 3 * 60_000 }
+        )
+    })
+    await appendFile(
+      process.env.GITHUB_OUTPUT,
+      `reused=${reused}\ninputs_reused=${inputsReused}\nversion=${version}\n`
+    )
   } else if (command === 'stage') {
     const image = JSON.parse(docker(['image', 'inspect', `${imageRepository}:${version}`]))[0]
     await stageDockerImage({

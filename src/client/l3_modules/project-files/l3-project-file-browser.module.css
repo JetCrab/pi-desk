@@ -6,25 +6,21 @@
   padding: 0 4px;
 }
 
-.tree [data-slot='collapsible-content'] > div {
-  border-left-color: color-mix(in oklab, var(--border) 50%, transparent);
+.tree [role='treeitem']:not([aria-expanded]),
+.tree [role='treeitem'][aria-expanded] > div:first-child {
+  min-height: 24px;
+  gap: 4px;
+  border-radius: 3px;
+  padding: 0 4px;
 }
 
-@media (pointer: fine) {
-  .tree [role='treeitem']:not([aria-expanded]),
-  .tree [role='treeitem'][aria-expanded] > div:first-child {
-    min-height: 24px;
-    gap: 4px;
-    padding: 0 4px;
-  }
+.tree [role='treeitem'][aria-expanded] > div:first-child > button {
+  min-height: 24px;
+  gap: 4px;
+}
 
-  .tree [role='treeitem'][aria-expanded] > div:first-child > button {
-    min-height: 24px;
-    gap: 4px;
-  }
-
-  .tree [data-slot='collapsible-content'] > div {
-    margin-left: 8px;
-    padding-left: 3px;
-  }
+.tree [data-slot='collapsible-content'] > div {
+  margin-left: 8px;
+  border-left-color: color-mix(in oklab, var(--border) 35%, transparent);
+  padding-left: 3px;
 }

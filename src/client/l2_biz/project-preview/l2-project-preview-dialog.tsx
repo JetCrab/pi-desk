@@ -41,8 +41,8 @@ export function L2ProjectPreviewDialog({
         data-testid="project-preview-dialog"
         className={cn(
           'h-[min(94dvh,1080px)] w-[min(96dvw,1600px)] max-w-none gap-0 p-0',
-          maximized && 'h-dvh max-h-none w-dvw rounded-none',
-          'max-sm:h-dvh max-sm:max-h-none max-sm:w-dvw max-sm:rounded-none'
+          maximized && 'h-[var(--pi-desk-content-height)] max-h-none w-dvw rounded-none',
+          'max-sm:h-[var(--pi-desk-content-height)] max-sm:max-h-none max-sm:w-dvw max-sm:rounded-none'
         )}
       >
         <L4AppDialogDescription className="sr-only">
@@ -51,7 +51,6 @@ export function L2ProjectPreviewDialog({
         <L2ProjectPreview
           clientId={clientId}
           cwd={cwd}
-          refreshOnFocus
           onEscape={onClose}
           title={
             <L4AppDialogTitle className="truncate text-sm" title={cwd}>

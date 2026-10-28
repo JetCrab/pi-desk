@@ -27,6 +27,10 @@ import {
   prepareProjectPreviewBrowsing,
   verifyProjectPreviewBrowsing
 } from './fixtures/l2-project-preview-browsing.mjs'
+import {
+  prepareProjectPreviewRefresh,
+  verifyProjectPreviewRefresh
+} from './fixtures/l2-project-preview-refresh.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const task = `independent-preview-${Date.now()}-${process.pid}`
@@ -84,6 +88,7 @@ async function prepare() {
     )
   )
   await writeFile(join(plain, 'plain.txt'), '独立普通目录\n')
+  if (process.argv.includes('--refresh-only')) await prepareProjectPreviewRefresh(project)
   execFileSync('git', ['init', '--quiet', project], { windowsHide: true })
   execFileSync('git', ['-C', project, 'add', '.'], { windowsHide: true })
   execFileSync(
@@ -195,10 +200,6 @@ async function assertIndependent() {
 async function idle(label) {
   await settled()
   const before = await evaluate(page, 'window.__previewRequests.length')
-  await evaluate(
-    page,
-    `window.dispatchEvent(new Event('blur'));document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('focus'))`
-  )
   await new Promise((done) => setTimeout(done, observationMs))
   assert.equal(await evaluate(page, 'window.__previewPending'), 0)
   assert.equal(
@@ -207,7 +208,7 @@ async function idle(label) {
     `${label}闲置产生请求`
   )
   await assertIndependent()
-  await progress(`${label}：静置60秒及激活事件无自动业务请求`)
+  await progress(`${label}：静置60秒无自动业务请求`)
 }
 async function login(target = page) {
   await input('#password', password, target)
@@ -276,6 +277,21 @@ async function run() {
     ),
     false
   )
+  if (process.argv.includes('--refresh-only')) {
+    await verifyProjectPreviewRefresh({
+      page,
+      project,
+      wait,
+      click,
+      settled,
+      newPage,
+      assertIndependent,
+      progress,
+      capture
+    })
+    passed = true
+    return
+  }
   const verifyEntries = async () => {
     await verifyProjectPreviewEntries({
       page,
@@ -321,16 +337,14 @@ async function run() {
     await idle('文件预览')
     await writeFile(join(project, 'hello.ts'), 'export const greeting = "preview-refreshed"\n')
     await evaluate(page, `window.dispatchEvent(new Event('focus'))`)
-    assert.equal(
-      await evaluate(
-        page,
-        `document.querySelector('[data-testid="code-preview"]')?.textContent.includes('preview-original')`
-      ),
-      true
-    )
-    await click('[aria-label="刷新项目预览"]')
     await wait(
       `document.querySelector('[data-testid="code-preview"]')?.textContent.includes('preview-refreshed')`,
+      '聚焦刷新读取文件变化'
+    )
+    await writeFile(join(project, 'hello.ts'), 'export const greeting = "preview-manual"\n')
+    await click('[aria-label="刷新项目预览"]')
+    await wait(
+      `document.querySelector('[data-testid="code-preview"]')?.textContent.includes('preview-manual')`,
       '手动刷新读取文件变化'
     )
     assert.equal(
@@ -409,6 +423,7 @@ async function run() {
     await writeFile(join(project, 'hello.ts'), 'export const greeting = "preview-refreshed"\n')
     await progress('定向复测：HTML、图片、搜索和页面隔离；不执行前序闲置场景')
   }
+  await writeFile(join(project, 'hello.ts'), 'export const greeting = "preview-refreshed"\n')
   await click('[data-testid="project-file-demo.html"]')
   await textButton('预览')
   await wait(`Boolean(document.querySelector('iframe[srcdoc]'))`, 'HTML预览')

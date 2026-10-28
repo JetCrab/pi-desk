@@ -468,7 +468,7 @@ function TaskCenterPanel({
       <L4AppDialogContent
         aria-label={t('title')}
         showCloseButton={false}
-        className="h-[calc(100dvh-2rem)] max-w-[70rem] flex-row bg-background max-lg:h-dvh max-lg:max-h-dvh max-lg:w-dvw max-lg:max-w-none max-lg:rounded-none max-lg:border-0"
+        className="h-[calc(100dvh-2rem)] max-w-[70rem] flex-row bg-background max-lg:h-[var(--pi-desk-content-height)] max-lg:max-h-[var(--pi-desk-content-height)] max-lg:w-dvw max-lg:max-w-none max-lg:rounded-none max-lg:border-0"
       >
         <div
           className={cn(

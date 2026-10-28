@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
@@ -413,48 +414,53 @@ test('开发发布按原始制品恢复，不依赖同一次Actions重试编号'
   }
 })
 
-test('桌面四份版本和Android构建号在提交准备时自动保持一致', async (t) => {
-  const repo = await fixture(t)
-  repo.git('switch', '-c', 'dev')
-  await repo.save(
-    'apps/desktop/src-tauri/tauri.conf.json',
-    '{\n  "version": "1.0.0",\n  "bundle": { "targets": ["nsis"] }\n}\n'
-  )
-  await repo.save(
-    'apps/desktop/src-tauri/Cargo.toml',
-    '[package]\nname="pi-desk-desktop"\nversion="1.0.0"\n'
-  )
-  await repo.save(
-    'apps/desktop/src-tauri/Cargo.lock',
-    '[[package]]\nname="pi-desk-desktop"\nversion="1.0.0"\n'
-  )
-  const base = repo.commit()
-  await repo.save('apps/desktop/web/main.ts', 'export const feature=true')
-  await repo.save('apps/android/app/src/main.kt', 'fun feature() = true')
-  repo.git('add', '.')
-  await prepareCommitVersions(repo.root, { base })
-  assert.equal(
-    JSON.parse(await readFile(join(repo.root, 'apps/desktop/package.json'), 'utf8')).version,
-    '1.0.1'
-  )
-  assert.equal(
-    JSON.parse(await readFile(join(repo.root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'))
-      .version,
-    '1.0.1'
-  )
-  assert.match(
-    await readFile(join(repo.root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'),
-    /"targets": \["nsis"\]/
-  )
-  for (const file of ['Cargo.toml', 'Cargo.lock'])
-    assert.match(
-      await readFile(join(repo.root, 'apps/desktop/src-tauri', file), 'utf8'),
-      /version="1\.0\.1"/
+for (const desktopSource of [
+  'apps/desktop/web/main.ts',
+  'src/client/l4_foundation/desktop-window/l4-desktop-titlebar.tsx'
+]) {
+  test(`桌面四份版本和Android构建号在提交准备时自动保持一致：${desktopSource}`, async (t) => {
+    const repo = await fixture(t)
+    repo.git('switch', '-c', 'dev')
+    await repo.save(
+      'apps/desktop/src-tauri/tauri.conf.json',
+      '{\n  "version": "1.0.0",\n  "bundle": { "targets": ["nsis"] }\n}\n'
     )
-  const android = await readFile(join(repo.root, 'apps/android/app/build.gradle.kts'), 'utf8')
-  assert.match(android, /versionName = "1\.0\.1"/)
-  assert.match(android, /versionCode = 2/)
-})
+    await repo.save(
+      'apps/desktop/src-tauri/Cargo.toml',
+      '[package]\nname="pi-desk-desktop"\nversion="1.0.0"\n'
+    )
+    await repo.save(
+      'apps/desktop/src-tauri/Cargo.lock',
+      '[[package]]\nname="pi-desk-desktop"\nversion="1.0.0"\n'
+    )
+    const base = repo.commit()
+    await repo.save(desktopSource, 'export const feature=true')
+    await repo.save('apps/android/app/src/main.kt', 'fun feature() = true')
+    repo.git('add', '.')
+    await prepareCommitVersions(repo.root, { base })
+    assert.equal(
+      JSON.parse(await readFile(join(repo.root, 'apps/desktop/package.json'), 'utf8')).version,
+      '1.0.1'
+    )
+    assert.equal(
+      JSON.parse(await readFile(join(repo.root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'))
+        .version,
+      '1.0.1'
+    )
+    assert.match(
+      await readFile(join(repo.root, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'),
+      /"targets": \["nsis"\]/
+    )
+    for (const file of ['Cargo.toml', 'Cargo.lock'])
+      assert.match(
+        await readFile(join(repo.root, 'apps/desktop/src-tauri', file), 'utf8'),
+        /version="1\.0\.1"/
+      )
+    const android = await readFile(join(repo.root, 'apps/android/app/build.gradle.kts'), 'utf8')
+    assert.match(android, /versionName = "1\.0\.1"/)
+    assert.match(android, /versionCode = 2/)
+  })
+}
 
 test('版本校验失败不得留下部分修改清单', async (t) => {
   const repo = await fixture(t)
@@ -512,14 +518,23 @@ test('Docker运行配方属于主包版本，文档不单独升版', async (t) =
   assert.deepEqual(docs.npm, [])
 })
 
-test('客户端代码变更未升版和历史回退均被阻止', async (t) => {
-  const repo = await fixture(t)
-  const previous = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
-  await repo.save('apps/desktop/web/main.ts', 'export const changed = true')
-  assert.throws(() => createReleasePlan(repo.root, { head: repo.commit(), previous }), /版本未递增/)
-  await repo.save('apps/desktop/package.json', { version: '0.9.0' })
-  assert.throws(() => createReleasePlan(repo.root, { head: repo.commit(), previous }), /递增/)
-})
+for (const desktopSource of [
+  'apps/desktop/web/main.ts',
+  'src/client/l4_foundation/desktop-window/l4-desktop-titlebar.tsx'
+]) {
+  test(`客户端代码变更未升版和历史回退均被阻止：${desktopSource}`, async (t) => {
+    const repo = await fixture(t)
+    const previous = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
+    await repo.pkg('pi-desk', '1.0.1')
+    await repo.save(desktopSource, 'export const changed = true')
+    assert.throws(
+      () => createReleasePlan(repo.root, { head: repo.commit(), previous }),
+      /(?:windows|macos|linux) 运行内容变化但版本未递增/
+    )
+    await repo.save('apps/desktop/package.json', { version: '0.9.0' })
+    assert.throws(() => createReleasePlan(repo.root, { head: repo.commit(), previous }), /递增/)
+  })
+}
 
 test('草稿、开发版和平台Release不能推进正式变更基线', () => {
   const valid = {
@@ -645,6 +660,127 @@ test('正式准备只保存固定计划，失败重跑不预建Release或推进�
   })
   assert.equal(retry.outputs.check_base, source, '重试继续原计划的成功基线')
   assert.deepEqual(retry.plan, next.plan)
+})
+
+test('新SHA调度与未完成批次使用同版本时，在准备写入前提示resume_tag', async (t) => {
+  const repo = await fixture(t)
+  const plan = createReleasePlan(repo.root, { head: repo.head, date: 1 })
+  await repo.save('.github/workflows/release-main.yml', 'fixed scheduling')
+  const source = repo.commit()
+  for (const origin of ['draft', 'actions']) {
+    const release = draft(plan.record)
+    const github = githubFixture(origin === 'draft' ? [release] : [])
+    if (origin === 'draft')
+      await github.putAsset(release, 'plan.json', Buffer.from(JSON.stringify(plan)))
+    else {
+      const request = github.request
+      github.request = async (path, options) => {
+        if (path.startsWith('/actions/workflows/') && !path.includes('head_sha='))
+          return { workflow_runs: [{ id: 11 }] }
+        if (path.startsWith('/actions/runs/11/artifacts'))
+          return { artifacts: [{ name: 'release-plan-11', expired: false }] }
+        return request(path, options)
+      }
+    }
+    const output = join(repo.root, `temp/conflict-${origin}`)
+    await assert.rejects(
+      prepareBatch(repo.root, {
+        github,
+        source,
+        output,
+        runId: '12',
+        download: async (_run, _name, directory) => {
+          await mkdir(directory, { recursive: true })
+          await writeFile(join(directory, 'plan.json'), JSON.stringify(plan))
+        }
+      }),
+      /resume_tag=v1\.0\.0/
+    )
+    assert.equal(existsSync(join(output, 'plan.json')), false)
+    assert.ok(github.calls.every((call) => !call.method))
+  }
+})
+
+test('主包升级后新批次可沿用旧失败批次尚未公开的客户端版本', async (t) => {
+  const repo = await fixture(t)
+  const previous = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
+  await repo.pkg('pi-desk', '1.0.1')
+  await repo.save('apps/desktop/package.json', { version: '1.0.1' })
+  const oldPlan = createReleasePlan(repo.root, { head: repo.commit(), previous, date: 2 })
+  await repo.pkg('pi-desk', '1.0.2')
+  await repo.save('src/repair.ts', 'export const repaired = true\n')
+  const source = repo.commit()
+  for (const origin of ['draft', 'actions']) {
+    const release = draft(oldPlan.record)
+    const published = { ...draft(previous), draft: false, published_at: '2026-10-01T00:00:00Z' }
+    const github = githubFixture(origin === 'draft' ? [published, release] : [published])
+    github.records.set(previous.tag, previous)
+    if (origin === 'draft')
+      await github.putAsset(release, 'plan.json', Buffer.from(JSON.stringify(oldPlan)))
+    else {
+      const request = github.request
+      github.request = async (path, options) => {
+        if (path.startsWith('/actions/workflows/') && !path.includes('head_sha='))
+          return { workflow_runs: [{ id: 11 }] }
+        if (path.startsWith('/actions/runs/11/artifacts'))
+          return { artifacts: [{ name: 'release-plan-11', expired: false }] }
+        return request(path, options)
+      }
+    }
+    const output = join(repo.root, `temp/new-product-${origin}`)
+    const result = await prepareBatch(repo.root, {
+      github,
+      source,
+      output,
+      runId: '12',
+      download: async (_run, _name, directory) => {
+        await mkdir(directory, { recursive: true })
+        await writeFile(join(directory, 'plan.json'), JSON.stringify(oldPlan))
+      }
+    })
+    assert.deepEqual(result.plan.npm, ['pi-desk'])
+    assert.equal(
+      result.plan.record.packages.find((item) => item.name === '@jetcrab/pi-desk').version,
+      '1.0.2'
+    )
+    assert.deepEqual(result.plan.clients, oldPlan.clients)
+    assert.ok(result.plan.clients.some((item) => item.build && item.version === '1.0.1'))
+    assert.ok(existsSync(join(output, 'plan.json')))
+    assert.ok(github.calls.every((call) => !call.method))
+  }
+})
+
+test('已公开旧批次重跑读取原记录，不校验较新baseline或回退官网', async (t) => {
+  const repo = await fixture(t)
+  const first = completed(createReleasePlan(repo.root, { head: repo.head, date: 1 }).record)
+  await repo.pkg('pi-desk', '1.0.1')
+  const source = repo.commit()
+  const second = completed(
+    createReleasePlan(repo.root, { head: source, previous: first, date: 2 }).record
+  )
+  const github = githubFixture([
+    { ...draft(first), draft: false, published_at: '2026-10-01T00:00:00Z' },
+    { ...draft(second), draft: false, published_at: '2026-10-02T00:00:00Z' }
+  ])
+  await saveReleaseRecord(github, first)
+  await saveReleaseRecord(github, second)
+  const before = github.calls.length
+  const old = await prepareBatch(repo.root, {
+    github,
+    source: repo.head,
+    output: join(repo.root, 'temp/old')
+  })
+  assert.deepEqual(old.plan.record, first)
+  assert.equal(old.outputs.published, true)
+  assert.equal(old.outputs.deploy, false)
+  assert.equal(old.outputs.npm, '[]')
+  const latest = await prepareBatch(repo.root, {
+    github,
+    source,
+    output: join(repo.root, 'temp/latest')
+  })
+  assert.equal(latest.outputs.deploy, true)
+  assert.ok(github.calls.slice(before).every((call) => !call.method))
 })
 
 test('正式tag独立递增且不复用失败批次占用的版本', () => {
@@ -797,6 +933,20 @@ test('工作流只在末端写Release，内部发布包支持失败重试', asyn
     step.with?.name?.startsWith('release-review-')
   )
   assert.ok(notes.with.path.split('\n').some((path) => path.endsWith('/changes.json')))
+  assert.ok(
+    workflow.jobs.prepare.steps.some(
+      (step) =>
+        step.uses === 'actions/upload-artifact@v4' &&
+        step.with.name === 'npm-command-smoke-${{ github.run_id }}' &&
+        step.with.path.endsWith('/restored/npm-command-smoke/*.tgz')
+    )
+  )
+  const inputs = workflow.jobs.prepare.steps.find(
+    (step) => step.with?.name === 'docker-inputs-${{ github.run_id }}'
+  )
+  assert.ok(inputs.with.path.endsWith('/restored/docker-inputs/'))
+  assert.equal(inputs.with['include-hidden-files'], true)
+  assert.equal(inputs.with['retention-days'], 7)
 })
 
 test('无Release草稿也能从Actions固定计划续跑原源码', async (t) => {
@@ -970,6 +1120,75 @@ test('npm重试从草稿恢复原已验证tarball，不采用重新构建的不�
   const result = await prepareBatch(repo.root, { github, source: repo.head, output })
   assert.equal(result.outputs.npm_ready, true)
   assert.equal(await readFile(join(output, 'restored/npm', name), 'utf8'), 'verified package')
+})
+
+test('未通过安装态验收的原包恢复后npm_ready为false，不重新打包', async (t) => {
+  const repo = await fixture(t)
+  const plan = createReleasePlan(repo.root, { head: repo.head })
+  plan.npm = ['pi-desk']
+  plan.clients = []
+  const archives = join(repo.root, 'archives')
+  await mkdir(join(archives, 'package'), { recursive: true })
+  await writeFile(
+    join(archives, 'package/package.json'),
+    JSON.stringify({
+      name: '@jetcrab/pi-desk',
+      version: '1.0.0',
+      publishConfig: { registry: 'https://registry.npmjs.org', access: 'public' }
+    })
+  )
+  execFileSync(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-czf', 'host.tgz', 'package'], {
+    cwd: archives
+  })
+  const bytes = await readFile(join(archives, 'host.tgz'))
+  const github = githubFixture([])
+  const request = github.request
+  github.request = async (path, options) => {
+    if (path.startsWith('/actions/runs/11/artifacts'))
+      return {
+        artifacts: ['release-plan', 'npm-packages', 'npm-command-smoke'].map((name) => ({
+          name: `${name}-11`,
+          expired: false,
+          created_at: '2026-10-27T00:02:00Z'
+        }))
+      }
+    if (path.startsWith('/actions/runs/11/jobs'))
+      return {
+        jobs: [
+          {
+            id: 1,
+            name: 'npm-build / build',
+            run_attempt: 1,
+            conclusion: 'success',
+            started_at: '2026-10-27T00:01:00Z',
+            completed_at: '2026-10-27T00:03:00Z'
+          }
+        ]
+      }
+    return request(path, options)
+  }
+  const output = join(repo.root, 'temp/unverified')
+  const result = await prepareBatch(repo.root, {
+    github,
+    source: repo.head,
+    output,
+    plan,
+    runId: '11',
+    download: async (_run, name, directory) => {
+      await mkdir(directory, { recursive: true })
+      if (name.startsWith('release-plan'))
+        await writeFile(join(directory, 'plan.json'), JSON.stringify(plan))
+      else if (name.startsWith('npm-packages'))
+        await writeFile(join(directory, 'jetcrab-pi-desk-1.0.0.tgz'), bytes)
+      else {
+        await writeFile(join(directory, 'host.tgz'), bytes)
+        await writeFile(join(directory, 'sdk.tgz'), bytes)
+      }
+    }
+  })
+  assert.equal(result.outputs.npm_ready, false)
+  assert.deepEqual(await readFile(join(output, 'restored/npm/jetcrab-pi-desk-1.0.0.tgz')), bytes)
+  assert.deepEqual(await readFile(join(output, 'restored/npm-command-smoke/host.tgz')), bytes)
 })
 
 test('发布记录拒绝路径逃逸、未签名Android包和重复平台', async (t) => {

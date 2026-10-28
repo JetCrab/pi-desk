@@ -34,7 +34,7 @@ export function L2ProjectPreviewPage({
   const { t } = useTranslation('projectHistory')
   return (
     <main
-      className="flex h-dvh min-w-0 flex-col overflow-hidden bg-background text-foreground"
+      className="flex h-[var(--pi-desk-content-height)] min-w-0 flex-col overflow-hidden bg-background text-foreground"
       data-testid="project-preview-page"
     >
       {cwd ? (
@@ -42,7 +42,6 @@ export function L2ProjectPreviewPage({
           key={cwd}
           clientId={clientId}
           cwd={cwd}
-          refreshOnFocus={false}
           onUnauthorized={onUnauthorized}
           actions={
             <Button size="sm" variant="ghost" onClick={() => onSelect(null)}>

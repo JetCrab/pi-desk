@@ -114,9 +114,24 @@ jobs:
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
+          name: npm-command-smoke-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.RELEASE_ROOT }}/restored/npm-command-smoke/*.tgz
+          retention-days: 7
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
           name: release-review-${{ github.run_id }}
           overwrite: true
           path: ${{ env.RELEASE_ROOT }}/restored/notes/
+          retention-days: 7
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-inputs-${{ github.run_id }}
+          overwrite: true
+          path: ${{ env.RELEASE_ROOT }}/restored/docker-inputs/
+          include-hidden-files: true
           retention-days: 7
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
