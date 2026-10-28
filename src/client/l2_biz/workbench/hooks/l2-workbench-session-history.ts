@@ -1,153 +1,165 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
   L2PiSessionHistoryResponse,
-  L2PiSessionHistorySearchScope
+  L2PiSessionUserMessageListResponse
 } from '@common/l2_biz/pi-session/l2-pi-session-contract'
+import type {
+  L3PiSessionSearchQuery,
+  L3PiSessionSearchScope
+} from '@common/l3_modules/pi/l3-pi-session-search-contract'
 import type { L2WorkbenchBiz } from '../l2-workbench-biz'
+import { useL2WorkbenchSessionSearch } from './l2-workbench-session-search'
 
-const DEFAULT_SEARCH_IN: readonly L2PiSessionHistorySearchScope[] = ['title', 'user']
-const CACHE_CWD_LIMIT = 8
-
-type HistorySessions = L2PiSessionHistoryResponse['sessions']
-
-interface HistorySessionCache {
-  base: HistorySessions | null
-  recent: {
-    query: string
-    searchIn: readonly L2PiSessionHistorySearchScope[]
-    sessions: HistorySessions
-  } | null
-}
-
-interface SessionHistoryResult {
-  sessions: HistorySessions
+interface L2ExpandedHistoryMessages {
+  sessionId: string
+  query: string
+  messages: L2PiSessionUserMessageListResponse['messages']
+  page: L2PiSessionUserMessageListResponse['page'] | null
   loading: boolean
-  load: (
-    cwd: string,
-    query?: string,
-    searchIn?: readonly L2PiSessionHistorySearchScope[],
-    forceRefresh?: boolean
+  error: string | null
+}
+
+interface L2WorkbenchSessionHistoryResult {
+  sessions: L2PiSessionHistoryResponse['sessions']
+  loading: boolean
+  error: string | null
+  refresh: () => void
+  expandedHistory: L2ExpandedHistoryMessages | null
+  toggleUserMessages: (session: L2PiSessionHistoryResponse['sessions'][number]) => void
+  loadUserMessages: (
+    sessionId: string,
+    query: string,
+    pageIndex: number,
+    append: boolean
   ) => Promise<void>
-  cancel: () => void
-  showCached: (cwd: string) => void
 }
 
-function isDefaultSearchIn(searchIn: readonly L2PiSessionHistorySearchScope[]): boolean {
-  return (
-    searchIn.length === DEFAULT_SEARCH_IN.length &&
-    DEFAULT_SEARCH_IN.every((scope) => searchIn.includes(scope))
+export function useL2WorkbenchSessionHistory({
+  active,
+  cwd,
+  query,
+  searchIn,
+  listSessionHistory,
+  listSessionUserMessages
+}: {
+  active: boolean
+  cwd: string | null
+  query: string
+  searchIn: readonly L3PiSessionSearchScope[]
+  listSessionHistory: L2WorkbenchBiz['listSessionHistory']
+  listSessionUserMessages: L2WorkbenchBiz['listSessionUserMessages']
+}): L2WorkbenchSessionHistoryResult {
+  const { t } = useTranslation('workbenchPicker')
+  const request = useCallback(
+    (input: L3PiSessionSearchQuery, signal: AbortSignal, forceRefresh: boolean) =>
+      listSessionHistory({ ...input, cwd: cwd!, forceRefresh }, signal),
+    [cwd, listSessionHistory]
   )
-}
+  const search = useL2WorkbenchSessionSearch({
+    active: active && cwd !== null,
+    scope: cwd,
+    query,
+    searchIn,
+    request,
+    failureMessage: t('loadHistoryFailed')
+  })
+  const [expandedHistory, setExpandedHistory] = useState<L2ExpandedHistoryMessages | null>(null)
+  const messageContext = useMemo(
+    () => ({ active, cwd, query, searchIn }),
+    [active, cwd, query, searchIn]
+  )
+  const [previousMessageContext, setPreviousMessageContext] = useState(messageContext)
+  if (previousMessageContext !== messageContext) {
+    setPreviousMessageContext(messageContext)
+    setExpandedHistory(null)
+  }
+  const messageControllerRef = useRef<AbortController | null>(null)
+  const clearUserMessages = useCallback((): void => {
+    messageControllerRef.current?.abort()
+    messageControllerRef.current = null
+    setExpandedHistory(null)
+  }, [])
 
-export function useL2WorkbenchSessionHistory(
-  workbenchBiz: L2WorkbenchBiz,
-  setError: (error: string | null) => void
-): SessionHistoryResult {
-  const { t } = useTranslation('workbench')
-  const [sessions, setSessions] = useState<HistorySessions>([])
-  const [loading, setLoading] = useState(false)
-  const requestIdRef = useRef(0)
-  const abortControllerRef = useRef<AbortController | null>(null)
-  const cacheRef = useRef(new Map<string, HistorySessionCache>())
-
-  useEffect(
+  useLayoutEffect(
     () => () => {
-      requestIdRef.current += 1
-      abortControllerRef.current?.abort()
-      abortControllerRef.current = null
+      messageControllerRef.current?.abort()
+      messageControllerRef.current = null
     },
-    []
+    [active, cwd, query, searchIn]
   )
 
-  const cancel = useCallback((): void => {
-    requestIdRef.current += 1
-    abortControllerRef.current?.abort()
-    abortControllerRef.current = null
-    setLoading(false)
-  }, [])
+  const loadUserMessages = async (
+    sessionId: string,
+    messageQuery: string,
+    pageIndex: number,
+    append: boolean
+  ): Promise<void> => {
+    if (!active || !cwd) return
+    messageControllerRef.current?.abort()
+    const controller = new AbortController()
+    messageControllerRef.current = controller
+    setExpandedHistory((current) => ({
+      sessionId,
+      query: messageQuery,
+      messages: append && current?.sessionId === sessionId ? current.messages : [],
+      page: append && current?.sessionId === sessionId ? current.page : null,
+      loading: true,
+      error: null
+    }))
+    try {
+      const response = await listSessionUserMessages(
+        { cwd, sessionId, query: messageQuery, page: { index: pageIndex, size: 20 } },
+        controller.signal
+      )
+      if (controller.signal.aborted) return
+      setExpandedHistory((current) => ({
+        sessionId,
+        query: messageQuery,
+        messages:
+          append && current?.sessionId === sessionId
+            ? [...current.messages, ...response.messages]
+            : response.messages,
+        page: response.page,
+        loading: false,
+        error: null
+      }))
+    } catch (cause) {
+      if (controller.signal.aborted) return
+      setExpandedHistory((current) => ({
+        sessionId,
+        query: messageQuery,
+        messages: current?.sessionId === sessionId ? current.messages : [],
+        page: current?.sessionId === sessionId ? current.page : null,
+        loading: false,
+        error: cause instanceof Error ? cause.message : t('loadUserFailed')
+      }))
+    } finally {
+      if (messageControllerRef.current === controller) messageControllerRef.current = null
+    }
+  }
 
-  const showCached = useCallback((cwd: string): void => {
-    setSessions(cacheRef.current.get(cwd)?.base ?? [])
-  }, [])
-
-  const load = useCallback(
-    async (
-      cwd: string,
-      query = '',
-      searchIn: readonly L2PiSessionHistorySearchScope[] = DEFAULT_SEARCH_IN,
-      forceRefresh = false
-    ): Promise<void> => {
-      const requestId = ++requestIdRef.current
-      abortControllerRef.current?.abort()
-      abortControllerRef.current = null
-      const normalizedQuery = query.trim()
-      const cached = cacheRef.current.get(cwd)
-      const cachedSessions =
-        isDefaultSearchIn(searchIn) && !normalizedQuery
-          ? cached?.base
-          : cached?.recent?.query === normalizedQuery &&
-              cached.recent.searchIn.length === searchIn.length &&
-              cached.recent.searchIn.every((scope) => searchIn.includes(scope))
-            ? cached.recent.sessions
-            : null
-      if (cachedSessions && !forceRefresh) {
-        setSessions(cachedSessions)
-        setLoading(false)
-        setError(null)
-        return
-      }
-      if (cachedSessions) setSessions(cachedSessions)
-
-      const controller = new AbortController()
-      abortControllerRef.current = controller
-      setLoading(true)
-      setError(null)
-      try {
-        const response = await workbenchBiz.listSessionHistory(
-          { cwd, query: normalizedQuery, forceRefresh, searchIn: [...searchIn] },
-          controller.signal
-        )
-        if (requestIdRef.current !== requestId) return
-        const current = cacheRef.current.get(cwd) ?? { base: null, recent: null }
-        if (isDefaultSearchIn(searchIn) && !normalizedQuery) {
-          current.base = response.sessions
-        } else {
-          current.recent = {
-            query: normalizedQuery,
-            searchIn: [...searchIn],
-            sessions: response.sessions
-          }
-        }
-        cacheRef.current.delete(cwd)
-        cacheRef.current.set(cwd, current)
-        while (cacheRef.current.size > CACHE_CWD_LIMIT) {
-          const oldestCwd = cacheRef.current.keys().next().value
-          if (!oldestCwd) break
-          cacheRef.current.delete(oldestCwd)
-        }
-        setSessions(response.sessions)
-      } catch (cause) {
-        if (
-          requestIdRef.current !== requestId ||
-          (cause instanceof Error && cause.name === 'AbortError')
-        ) {
-          return
-        }
-        setError(cause instanceof Error ? cause.message : t('historyFailed'))
-      } finally {
-        if (requestIdRef.current === requestId) {
-          if (abortControllerRef.current === controller) {
-            abortControllerRef.current = null
-          }
-          setLoading(false)
-        }
-      }
-    },
-    [setError, workbenchBiz, t]
-  )
-
-  return { sessions, loading, load, cancel, showCached }
+  const toggleUserMessages = (session: L2PiSessionHistoryResponse['sessions'][number]): void => {
+    if (expandedHistory?.sessionId === session.sessionId) {
+      clearUserMessages()
+      return
+    }
+    const messageQuery = session.matches?.some((match) => match.scope === 'user') ? query : ''
+    void loadUserMessages(session.sessionId, messageQuery, 1, false)
+  }
+  const refresh = (): void => {
+    clearUserMessages()
+    search.refresh()
+  }
+  return {
+    sessions: search.data?.sessions ?? [],
+    loading: search.loading,
+    error: search.error,
+    refresh,
+    expandedHistory: active ? expandedHistory : null,
+    toggleUserMessages,
+    loadUserMessages
+  }
 }

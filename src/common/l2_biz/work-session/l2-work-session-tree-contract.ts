@@ -86,12 +86,20 @@ export const L2WorkSessionTreeEntryGetResponseSchema = z
   })
   .strict()
 
-export const L2WorkSessionBranchActionSchema = z.enum(['tree', 'fork', 'clone'])
+export const L2WorkSessionBranchActionSchema = z.enum(['tree', 'fork', 'clone', 'resend'])
 
 export const L2WorkSessionBranchRequestSchema = z.discriminatedUnion('action', [
   z
     .object({
       action: z.literal('tree'),
+      workId: L2WorkIdSchema,
+      sessionId: L2PiSessionIdSchema,
+      entryId: L2PiEntryIdSchema
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('resend'),
       workId: L2WorkIdSchema,
       sessionId: L2PiSessionIdSchema,
       entryId: L2PiEntryIdSchema

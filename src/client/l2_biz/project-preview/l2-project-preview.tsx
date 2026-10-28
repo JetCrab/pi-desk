@@ -33,7 +33,6 @@ const ignoreEscape = (): void => {}
 export function L2ProjectPreview({
   clientId,
   cwd,
-  refreshOnFocus,
   title,
   actions,
   onEscape = ignoreEscape,
@@ -41,7 +40,6 @@ export function L2ProjectPreview({
 }: {
   clientId: string
   cwd: string
-  refreshOnFocus: boolean
   title?: ReactNode
   actions?: ReactNode
   onEscape?: () => void
@@ -66,7 +64,7 @@ export function L2ProjectPreview({
     changeRowHeight,
     openGit,
     refresh
-  } = useL2ProjectPreview(clientId, cwd, refreshOnFocus, onUnauthorized)
+  } = useL2ProjectPreview(clientId, cwd, onUnauthorized)
   const { directoryOpen, gitOpen, gitMaximized } = global
   const projectName = cwd.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) ?? cwd
   const gitState = git.getWorkspace(cwd)!
@@ -88,7 +86,6 @@ export function L2ProjectPreview({
       runtime={files}
       gitRuntime={git}
       compact={width < 1100}
-      refreshOnFocus={refreshOnFocus}
       onEscape={onEscape}
       renderHeader={(actions) => (
         <L3ProjectFileTabs

@@ -1,14 +1,7 @@
 import 'server-only'
 
 import { L2WorkSessionBranchRequestSchema } from '@common/l2_biz/work-session/l2-work-session-tree-contract'
-import {
-  getL2WorkSessionManage,
-  WorkSessionBindingChangedError,
-  WorkSessionBranchBlockedError,
-  WorkSessionBranchEntryNotFoundError,
-  WorkSessionBranchInvalidError,
-  WorkSessionNotFoundError
-} from '@server/l2_biz/work-session/l2-work-session-manage'
+import { getL2WorkSessionManage } from '@server/l2_biz/work-session/l2-work-session-manage'
 import { readL4ClientId } from '@server/l4_foundation/http/l4-client-id'
 import {
   createL4ApiErrorResponse,
@@ -33,27 +26,40 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     const data = await getL2WorkSessionManage().branchWorkSession(input.data)
-    return createL4ApiSuccessResponse(data, input.data.action === 'tree' ? 200 : 201)
+    return createL4ApiSuccessResponse(
+      data,
+      input.data.action === 'tree' || input.data.action === 'resend' ? 200 : 201
+    )
   } catch (error) {
-    if (error instanceof WorkSessionNotFoundError) {
+    // 管理器由 Node 与 Next 共享，业务异常构造器并非同一实例。
+    if (error instanceof Error && error.name === 'WorkSessionNotFoundError') {
       return createL4ApiErrorResponse(404, '工作会话不存在', { key: 'errors:sessionMissing' })
     }
-    if (error instanceof WorkSessionBranchEntryNotFoundError) {
+    if (error instanceof Error && error.name === 'WorkSessionBranchEntryNotFoundError') {
       return createL4ApiErrorResponse(404, '分支节点不存在或已失效', {
         key: 'errors:branchEntryMissing'
       })
     }
-    if (error instanceof WorkSessionBranchInvalidError) {
+    if (
+      error instanceof Error &&
+      error.name === 'WorkSessionBranchInvalidError' &&
+      'kind' in error
+    ) {
       return createL4ApiErrorResponse(400, error.message, {
-        key: error.kind === 'fork-target' ? 'errors:branchForkUserOnly' : 'errors:branchCloneEmpty'
+        key:
+          error.kind === 'fork-target'
+            ? 'errors:branchForkUserOnly'
+            : error.kind === 'resend-target'
+              ? 'errors:branchResendUserOnly'
+              : 'errors:branchCloneEmpty'
       })
     }
-    if (error instanceof WorkSessionBindingChangedError) {
+    if (error instanceof Error && error.name === 'WorkSessionBindingChangedError') {
       return createL4ApiErrorResponse(409, '工作会话已切换，请重新打开会话树', {
         key: 'errors:sessionTreeChanged'
       })
     }
-    if (error instanceof WorkSessionBranchBlockedError) {
+    if (error instanceof Error && error.name === 'WorkSessionBranchBlockedError') {
       return createL4ApiErrorResponse(409, error.message)
     }
     console.error('[Pi Desk][WorkSessionBranchApi] 执行分支操作失败', {

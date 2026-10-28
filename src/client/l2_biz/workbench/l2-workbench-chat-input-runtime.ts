@@ -65,6 +65,7 @@ export interface L2WorkbenchChatInputRuntime {
   getState: (source: L2ChatSource) => L2WorkbenchChatInputState
   loadSource: (source: L2ChatSource) => Promise<void>
   setText: (source: L2ChatSource, text: string) => void
+  preserveDraftOnBranch: (source: L2ChatSource) => () => void
   dismissFeedback: (source: L2ChatSource) => void
   addFiles: (source: L2ChatSource, files: readonly File[]) => Promise<void>
   removeImage: (source: L2ChatSource, localId: string) => void
@@ -171,6 +172,7 @@ export function createL2WorkbenchChatInputRuntime(
   const persistenceFailures = new Set<string>()
   let draftWriteRevision = 0
   const loadPromises = new Map<string, Promise<void>>()
+  const preservedDraftSources = new Set<string>()
   const optimizeQueue: Array<() => Promise<void>> = []
   const messageImages = new Map<string, CachedMessageImage>()
   const imageLoads = new Map<string, Promise<CachedMessageImage>>()
@@ -412,7 +414,7 @@ export function createL2WorkbenchChatInputRuntime(
         replaceState(source, (state) => ({ ...state, loading: true, error: null }))
         try {
           const recovered = await repository.recoverOutbox(source)
-          if (disposed || !sourcesByKey.has(key)) return
+          if (disposed || !sourcesByKey.has(key) || statesBySource.get(key)?.loaded) return
           const images = hydrateImages(recovered.input.images, workbenchText('draftImage'))
           statesBySource.set(key, {
             ...ensureState(source),
@@ -447,6 +449,12 @@ export function createL2WorkbenchChatInputRuntime(
     setText(source, text): void {
       const next = replaceState(source, (state) => ({ ...state, text, notice: null, error: null }))
       enqueueDraftWrite(source, storedInput(next))
+    },
+
+    preserveDraftOnBranch(source): () => void {
+      const key = sourceKey(source)
+      preservedDraftSources.add(key)
+      return () => preservedDraftSources.delete(key)
     },
 
     async addFiles(source, files): Promise<void> {
@@ -813,6 +821,34 @@ export function createL2WorkbenchChatInputRuntime(
       )
       for (const [key, source] of [...sourcesByKey]) {
         if (valid.has(key)) continue
+        const state = statesBySource.get(key)
+        const target = preservedDraftSources.has(key)
+          ? workSessions.find(
+              (item) => item.workId === source.workId && item.sessionId === source.sessionId
+            )
+          : undefined
+        if (state && target) {
+          const nextSource = {
+            workId: target.workId,
+            sessionId: target.sessionId,
+            branchId: target.branchId
+          }
+          const images = hydrateImages(storedImages(state.images), workbenchText('draftImage'))
+          const next = ensureState(nextSource)
+          releaseAttachments(next.images)
+          statesBySource.set(sourceKey(nextSource), {
+            ...next,
+            loaded: true,
+            loading: false,
+            text: state.text,
+            images
+          })
+          enqueueDraftWrite(nextSource, { text: state.text, images: storedImages(images) })
+          for (const image of images) {
+            if (!image.optimized) enqueueOptimization(nextSource, image.localId)
+          }
+        }
+        preservedDraftSources.delete(key)
         const persistenceTail = persistenceTails.get(key) ?? Promise.resolve()
         releaseSourceMemory(source)
         void persistenceTail
@@ -839,6 +875,7 @@ export function createL2WorkbenchChatInputRuntime(
       for (const image of messageImages.values()) URL.revokeObjectURL(image.url)
       messageImages.clear()
       imageLoads.clear()
+      preservedDraftSources.clear()
       persistenceFailures.clear()
       listeners.clear()
     }

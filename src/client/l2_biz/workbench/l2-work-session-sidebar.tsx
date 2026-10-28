@@ -30,6 +30,8 @@ import {
   PlusIcon,
   RefreshCwIcon,
   Repeat2Icon,
+  SearchIcon,
+  XIcon,
   SettingsIcon,
   TerminalIcon,
   Trash2Icon
@@ -58,6 +60,13 @@ import { L4PluginIcon } from '@client/l4_foundation/plugin-host/l4-plugin-icon'
 import { L4ScrollArea } from '@client/l4_foundation/ui/l4-scroll-area'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
 import { buttonVariants } from '@client/l4_foundation/ui/shadcn/button'
+import { Input } from '@client/l4_foundation/ui/shadcn/input'
+import type { L3PiSessionSearchMatch } from '@common/l3_modules/pi/l3-pi-session-search-contract'
+import type { L2WorkSessionSearch } from './hooks/l2-work-session-search'
+import {
+  highlightL2WorkbenchSessionSearchText,
+  L2WorkbenchSessionSearchScopes
+} from './views/l2-workbench-session-search'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -110,6 +119,7 @@ export function getL2PluginSessionSidebarMode(
 
 interface L2WorkSessionSidebarProps {
   mode: L2WorkSessionSidebarMode
+  search: L2WorkSessionSearch
   mobile: boolean
   fileBrowser: ReactNode
   pluginTabContent: ReactNode
@@ -349,7 +359,10 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
   onDelete,
   onRename,
   syncing,
-  onReloadChat
+  onReloadChat,
+  searchQuery,
+  searchMatches,
+  dragDisabled
 }: {
   workSession: L2WorkSessionListItem
   mobile: boolean
@@ -365,6 +378,9 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
   onRename: (workSession: L2WorkSessionListItem) => void
   syncing: boolean
   onReloadChat: (workSession: L2WorkSessionListItem) => void
+  searchQuery: string
+  searchMatches: readonly L3PiSessionSearchMatch[]
+  dragDisabled: boolean
 }): React.JSX.Element {
   const suppressTouchClick = useRef(false)
   const lastPointer = useRef('')
@@ -377,9 +393,10 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
     transform,
     transition,
     isDragging
-  } = useSortable({ id: workSession.workId, disabled: actionsDisabled })
+  } = useSortable({ id: workSession.workId, disabled: actionsDisabled || dragDisabled })
   const toast = useL4AppToast()
   const { t } = useTranslation('workbench')
+  const { t: searchT } = useTranslation('workbenchPicker')
   const { locale, timeZone } = useL4Region()
   const statusLabel = t(workSessionStatusLabel(workSession))
   const sessionTitle = workSession.sessionTitle ?? t('newSession')
@@ -468,7 +485,7 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
           event.stopPropagation()
         }}
         onClick={(event) => event.stopPropagation()}
-        disabled={actionsDisabled}
+        disabled={actionsDisabled || dragDisabled}
         aria-label={t('dragSession', { name: sessionTitle })}
         title={`${statusLabel} · ${t('dragOrder')}`}
         className={cn(
@@ -518,7 +535,7 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
             )}
             title={sessionTitle}
           >
-            {sessionTitle}
+            {highlightL2WorkbenchSessionSearchText(sessionTitle, searchQuery)}
           </p>
           <div className={cn(styles.rowActions, 'flex shrink-0 items-center')}>
             <button
@@ -558,6 +575,25 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
             </button>
           </div>
         </div>
+        {searchMatches
+          .filter((match) => match.scope !== 'title')
+          .slice(0, 2)
+          .map((match) => (
+            <p
+              key={match.scope}
+              data-testid={`work-session-search-match-${workSession.workId}-${match.scope}`}
+              className="truncate text-xs leading-5 text-muted-foreground"
+              title={match.preview}
+            >
+              <span className="font-medium">
+                {match.scope === 'sessionId'
+                  ? 'Session ID'
+                  : searchT(match.scope === 'user' ? 'scopeUser' : 'scopeAssistant')}
+                {': '}
+              </span>
+              {highlightL2WorkbenchSessionSearchText(match.preview, searchQuery)}
+            </p>
+          ))}
       </div>
     </div>
   )
@@ -660,6 +696,7 @@ function WorkSessionGroupBoundary({ id, label }: { id: string; label: string }):
 
 function L2WorkSessionSidebarComponent({
   mode,
+  search,
   mobile,
   fileBrowser,
   pluginTabContent,
@@ -849,10 +886,22 @@ function L2WorkSessionSidebarComponent({
     () => workSessions.map((workSession) => workSession.workId),
     [workSessions]
   )
-  const sortableIds = useMemo(
-    () => getL2WorkSessionVisualSortableIds(workIds, pinnedCount),
-    [pinnedCount, workIds]
+  const searching = search.query.trim().length > 0
+  const searchMatchesByWorkId = useMemo(
+    () => new Map(search.data?.sessions.map((session) => [session.workId, session.matches]) ?? []),
+    [search.data]
   )
+  const sortableIds = useMemo(() => {
+    const ids = getL2WorkSessionVisualSortableIds(workIds, pinnedCount)
+    if (!searching) return ids
+    const ordinaryMatches = workIds.slice(pinnedCount).some((id) => searchMatchesByWorkId.has(id))
+    const pinnedMatches = workIds.slice(0, pinnedCount).some((id) => searchMatchesByWorkId.has(id))
+    return ids.filter((id) =>
+      id === L2_WORK_SESSION_PIN_BOUNDARY_ID
+        ? ordinaryMatches && pinnedMatches
+        : searchMatchesByWorkId.has(id)
+    )
+  }, [pinnedCount, workIds, searching, searchMatchesByWorkId])
   const workSessionById = useMemo(
     () => new Map(workSessions.map((workSession) => [workSession.workId, workSession])),
     [workSessions]
@@ -879,7 +928,7 @@ function L2WorkSessionSidebarComponent({
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent): void => {
-      if (ordering || !event.over || event.active.id === event.over.id) return
+      if (searching || ordering || !event.over || event.active.id === event.over.id) return
 
       const activeId = String(event.active.id)
       const arrangement = moveL2WorkSessionVisual(
@@ -890,7 +939,7 @@ function L2WorkSessionSidebarComponent({
       )
       if (arrangement) onArrangementChange(arrangement, activeId)
     },
-    [onArrangementChange, ordering, pinnedCount, workIds]
+    [onArrangementChange, ordering, pinnedCount, workIds, searching]
   )
 
   const rows = sortableIds.map((id) => {
@@ -917,6 +966,9 @@ function L2WorkSessionSidebarComponent({
         onRename={onRename}
         syncing={syncingWorkIds.includes(workSession.workId)}
         onReloadChat={onReloadChat}
+        dragDisabled={searching}
+        searchQuery={searching ? search.query : ''}
+        searchMatches={searchMatchesByWorkId.get(workSession.workId) ?? []}
       />
     )
   })
@@ -1005,12 +1057,79 @@ function L2WorkSessionSidebarComponent({
   return (
     <aside className="flex h-full w-full min-w-0 flex-col bg-sidebar text-sidebar-foreground">
       <SidebarHeader modeItems={modeItems} actionItems={actionItems} />
+      {mode === 'sessions' ? (
+        <div className="flex shrink-0 items-center gap-1 px-2 pb-1">
+          <div className="relative min-w-0 flex-1">
+            <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              data-testid="work-session-search-input"
+              value={search.query}
+              maxLength={120}
+              aria-label={t('searchWorkSessions')}
+              placeholder={t('searchWorkSessions')}
+              onChange={(event) => search.setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Escape' || event.nativeEvent.isComposing || !search.query) return
+                event.preventDefault()
+                event.stopPropagation()
+                search.setQuery('')
+              }}
+              className="h-8 pl-8 pr-8"
+            />
+            {search.query ? (
+              <button
+                data-testid="work-session-search-clear"
+                type="button"
+                aria-label={t('clearSessionSearch')}
+                title={t('clearSessionSearch')}
+                onClick={() => search.setQuery('')}
+                className="absolute right-0.5 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <XIcon className="size-4" />
+              </button>
+            ) : null}
+          </div>
+          <L2WorkbenchSessionSearchScopes
+            compact
+            value={search.searchIn}
+            onChange={search.setSearchIn}
+          />
+        </div>
+      ) : null}
       <L4ScrollArea
         data-testid="work-session-list"
         className={cn('min-h-0 flex-1', mode !== 'sessions' && 'hidden')}
         viewportClassName="p-2 data-[has-overflow-y]:pr-4"
       >
-        {workSessions.length === 0 ? (
+        {searching && (search.loading || search.error || sortableIds.length === 0) ? (
+          <div
+            data-testid="work-session-search-status"
+            role="status"
+            className="px-2 py-5 text-center text-sm leading-6 text-muted-foreground"
+          >
+            {search.loading ? (
+              <p className="flex items-center justify-center gap-2">
+                <LoaderCircleIcon className="size-4 animate-spin" />
+                {t('searchingSessions')}
+              </p>
+            ) : search.error ? (
+              <>
+                <p role="alert" className="break-words text-destructive">
+                  {search.error}
+                </p>
+                <button
+                  type="button"
+                  onClick={search.refresh}
+                  className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+                >
+                  {t('retrySessionSearch')}
+                </button>
+              </>
+            ) : (
+              <p>{t('noSessionSearchMatches')}</p>
+            )}
+          </div>
+        ) : workSessions.length === 0 ? (
           <p className="px-2 py-5 text-center text-sm leading-6 text-muted-foreground">
             {t('noSessions')}
           </p>

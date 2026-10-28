@@ -17,17 +17,14 @@ import {
   SearchIcon,
   UserIcon
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import type {
   L2PiDirectoryEntryListResponse,
   L2PiDirectoryListResponse,
-  L2PiSessionHistoryResponse,
-  L2PiSessionHistorySearchScope,
-  L2PiSessionUserMessageListRequest,
-  L2PiSessionUserMessageListResponse
+  L2PiSessionHistoryResponse
 } from '@common/l2_biz/pi-session/l2-pi-session-contract'
 import {
   L4AppDialogBody,
@@ -40,6 +37,14 @@ import {
 } from '@client/l4_foundation/ui/l4-app-dialog'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
 import { buttonVariants } from '@client/l4_foundation/ui/shadcn/button'
+import type { L2WorkbenchBiz } from './l2-workbench-biz'
+import { useL2WorkbenchSessionHistory } from './hooks/l2-workbench-session-history'
+import { L2_WORKBENCH_DEFAULT_SEARCH_IN } from './hooks/l2-workbench-session-search'
+import {
+  highlightL2WorkbenchSessionSearchText as highlightedText,
+  L2WorkbenchSessionSearchScopes
+} from './views/l2-workbench-session-search'
+import type { L3PiSessionSearchScope } from '@common/l3_modules/pi/l3-pi-session-search-contract'
 
 export type L2WorkbenchPickerMode = 'create' | 'replace' | null
 export type L2WorkbenchPickerView = 'directories' | 'history' | 'ignored' | 'browser'
@@ -58,7 +63,6 @@ interface L2WorkbenchPickerDialogProps {
   directories: L2PiDirectoryListResponse['directories']
   ignoredDirectories: L2PiDirectoryListResponse['directories']
   directoryBrowser: L2PiDirectoryEntryListResponse | null
-  historySessions: L2PiSessionHistoryResponse['sessions']
   replacementTarget: L2WorkbenchReplacementTarget | null
   unavailableSessionIds: readonly string[]
   error: string | null
@@ -68,12 +72,9 @@ interface L2WorkbenchPickerDialogProps {
   updatingIgnoreCwd: string | null
   onOpenChange: (open: boolean) => void
   onBack: () => void
-  onSearchHistory: (query: string, searchIn: readonly L2PiSessionHistorySearchScope[]) => void
-  onListSessionUserMessages: (
-    input: L2PiSessionUserMessageListRequest,
-    signal?: AbortSignal
-  ) => Promise<L2PiSessionUserMessageListResponse>
-  onRefresh: (query: string, searchIn: readonly L2PiSessionHistorySearchScope[]) => void
+  onListSessionHistory: L2WorkbenchBiz['listSessionHistory']
+  onListSessionUserMessages: L2WorkbenchBiz['listSessionUserMessages']
+  onRefresh: () => void
   onOpenIgnoredDirectories: () => void
   onOpenDirectoryBrowser: () => void
   onNavigateDirectory: (cwd: string | null) => void
@@ -110,20 +111,8 @@ function normalizeSearch(value: string): string {
   return value.trim().toLocaleLowerCase()
 }
 
-const DEFAULT_HISTORY_SEARCH_IN: readonly L2PiSessionHistorySearchScope[] = ['title', 'user']
-
-const HISTORY_SEARCH_SCOPE_OPTIONS: ReadonlyArray<{
-  value: L2PiSessionHistorySearchScope
-  label: string
-}> = [
-  { value: 'title', label: 'scopeTitle' },
-  { value: 'user', label: 'scopeUser' },
-  { value: 'assistant', label: 'scopeAssistant' },
-  { value: 'sessionId', label: 'Session ID' }
-]
-
 function historyMatchLabel(
-  scope: L2PiSessionHistorySearchScope,
+  scope: L3PiSessionSearchScope,
   count: number,
   t: TFunction<'workbenchPicker'>
 ): string {
@@ -132,7 +121,7 @@ function historyMatchLabel(
   return t(scope === 'user' ? 'scopeUserMatches' : 'scopeAssistantMatches', { count })
 }
 
-function historyMatchTone(scope: L2PiSessionHistorySearchScope): string {
+function historyMatchTone(scope: L3PiSessionSearchScope): string {
   switch (scope) {
     case 'user':
       return 'bg-muted text-foreground'
@@ -145,7 +134,7 @@ function historyMatchTone(scope: L2PiSessionHistorySearchScope): string {
   }
 }
 
-function historyMatchMarkTone(scope: L2PiSessionHistorySearchScope): string {
+function historyMatchMarkTone(scope: L3PiSessionSearchScope): string {
   switch (scope) {
     case 'user':
       return 'bg-accent text-accent-foreground'
@@ -162,7 +151,7 @@ function HistoryMatchIcon({
   scope,
   className
 }: {
-  scope: L2PiSessionHistorySearchScope
+  scope: L3PiSessionSearchScope
   className: string
 }): React.JSX.Element {
   switch (scope) {
@@ -192,40 +181,6 @@ function isAbsoluteBrowserDirectoryPath(path: string): boolean {
   return /^(?:[A-Za-z]:[\\/]|[\\/]{2}|\/)/.test(path)
 }
 
-function highlightedText(
-  text: string,
-  query: string,
-  markClassName = 'bg-primary/20 text-foreground'
-): ReactNode {
-  if (!query) return text
-  const normalizedText = text.toLocaleLowerCase()
-  const parts: ReactNode[] = []
-  let cursor = 0
-  let matchIndex = normalizedText.indexOf(query)
-  while (matchIndex >= 0) {
-    if (matchIndex > cursor) parts.push(text.slice(cursor, matchIndex))
-    const matchEnd = matchIndex + query.length
-    parts.push(
-      <mark key={`${matchIndex}-${matchEnd}`} className={`rounded-sm px-px ${markClassName}`}>
-        {text.slice(matchIndex, matchEnd)}
-      </mark>
-    )
-    cursor = matchEnd
-    matchIndex = normalizedText.indexOf(query, cursor)
-  }
-  if (cursor < text.length) parts.push(text.slice(cursor))
-  return parts.length ? parts : text
-}
-
-interface L2ExpandedHistoryMessages {
-  sessionId: string
-  query: string
-  messages: L2PiSessionUserMessageListResponse['messages']
-  page: L2PiSessionUserMessageListResponse['page'] | null
-  loading: boolean
-  error: string | null
-}
-
 export function L2WorkbenchPickerDialog({
   open,
   pickerMode,
@@ -234,17 +189,16 @@ export function L2WorkbenchPickerDialog({
   directories,
   ignoredDirectories,
   directoryBrowser,
-  historySessions,
   replacementTarget,
   unavailableSessionIds,
-  error,
-  loading,
+  error: pickerError,
+  loading: pickerLoading,
   creatingCwd,
   replacingSessionId,
   updatingIgnoreCwd,
   onOpenChange,
   onBack,
-  onSearchHistory,
+  onListSessionHistory,
   onListSessionUserMessages,
   onRefresh,
   onOpenIgnoredDirectories,
@@ -271,14 +225,35 @@ export function L2WorkbenchPickerDialog({
   )
   const pickerTime = (timestamp: number): string => timeFormatter.format(timestamp)
   const [search, setSearch] = useState('')
-  const [searchIn, setSearchIn] =
-    useState<readonly L2PiSessionHistorySearchScope[]>(DEFAULT_HISTORY_SEARCH_IN)
+  const [searchIn, setSearchIn] = useState<readonly L3PiSessionSearchScope[]>(
+    L2_WORKBENCH_DEFAULT_SEARCH_IN
+  )
   const [browserPathInput, setBrowserPathInput] = useState('')
-  const [expandedHistory, setExpandedHistory] = useState<L2ExpandedHistoryMessages | null>(null)
-  const lastRequestedHistorySearchRef = useRef('')
-  const userMessageRequestIdRef = useRef(0)
-  const userMessageAbortControllerRef = useRef<AbortController | null>(null)
+  const searchContext = JSON.stringify([open, pickerMode, pickerCwd, pickerView])
+  const [previousSearchContext, setPreviousSearchContext] = useState(searchContext)
+  if (previousSearchContext !== searchContext) {
+    setPreviousSearchContext(searchContext)
+    setSearch('')
+    setSearchIn(L2_WORKBENCH_DEFAULT_SEARCH_IN)
+    setBrowserPathInput('')
+  }
   const working = creatingCwd !== null || replacingSessionId !== null || updatingIgnoreCwd !== null
+  const history = useL2WorkbenchSessionHistory({
+    active: open && pickerView === 'history' && !working,
+    cwd: pickerCwd,
+    query: search,
+    searchIn,
+    listSessionHistory: onListSessionHistory,
+    listSessionUserMessages: onListSessionUserMessages
+  })
+  const {
+    sessions: historySessions,
+    expandedHistory,
+    toggleUserMessages,
+    loadUserMessages
+  } = history
+  const loading = pickerView === 'history' ? history.loading : pickerLoading
+  const error = pickerError ?? (pickerView === 'history' ? history.error : null)
   const unavailableSessionIdSet = useMemo(
     () => new Set(unavailableSessionIds),
     [unavailableSessionIds]
@@ -296,127 +271,6 @@ export function L2WorkbenchPickerDialog({
     if (!query) return true
     return normalizeSearch(`${directory.name} ${directory.cwd}`).includes(query)
   })
-
-  useEffect(() => {
-    setSearch('')
-    setSearchIn(DEFAULT_HISTORY_SEARCH_IN)
-    setBrowserPathInput('')
-    lastRequestedHistorySearchRef.current = ''
-  }, [open, pickerMode, pickerCwd, pickerView])
-
-  const historySearchKey = `${query}\u0000${searchIn.join('\u0000')}`
-  useEffect(() => {
-    if (
-      pickerView !== 'history' ||
-      !query ||
-      historySearchKey === lastRequestedHistorySearchRef.current
-    ) {
-      return
-    }
-    const timer = window.setTimeout(() => {
-      lastRequestedHistorySearchRef.current = historySearchKey
-      onSearchHistory(query, searchIn)
-    }, 300)
-    return () => window.clearTimeout(timer)
-  }, [historySearchKey, onSearchHistory, pickerView, query, searchIn])
-
-  useEffect(() => {
-    userMessageRequestIdRef.current += 1
-    userMessageAbortControllerRef.current?.abort()
-    userMessageAbortControllerRef.current = null
-    setExpandedHistory(null)
-  }, [open, pickerCwd, pickerView, query])
-
-  useEffect(
-    () => () => {
-      userMessageAbortControllerRef.current?.abort()
-    },
-    []
-  )
-
-  const loadUserMessages = async (
-    sessionId: string,
-    messageQuery: string,
-    pageIndex: number,
-    append: boolean
-  ): Promise<void> => {
-    if (!pickerCwd) return
-    const requestId = ++userMessageRequestIdRef.current
-    userMessageAbortControllerRef.current?.abort()
-    const controller = new AbortController()
-    userMessageAbortControllerRef.current = controller
-    setExpandedHistory((current) => ({
-      sessionId,
-      query: messageQuery,
-      messages: append && current?.sessionId === sessionId ? current.messages : [],
-      page: append && current?.sessionId === sessionId ? current.page : null,
-      loading: true,
-      error: null
-    }))
-    try {
-      const response = await onListSessionUserMessages(
-        {
-          cwd: pickerCwd,
-          sessionId,
-          query: messageQuery,
-          page: { index: pageIndex, size: 20 }
-        },
-        controller.signal
-      )
-      if (userMessageRequestIdRef.current !== requestId) return
-      setExpandedHistory((current) => ({
-        sessionId,
-        query: messageQuery,
-        messages:
-          append && current?.sessionId === sessionId
-            ? [...current.messages, ...response.messages]
-            : response.messages,
-        page: response.page,
-        loading: false,
-        error: null
-      }))
-    } catch (cause) {
-      if (
-        userMessageRequestIdRef.current !== requestId ||
-        (cause instanceof Error && cause.name === 'AbortError')
-      ) {
-        return
-      }
-      setExpandedHistory((current) => ({
-        sessionId,
-        query: messageQuery,
-        messages: current?.sessionId === sessionId ? current.messages : [],
-        page: current?.sessionId === sessionId ? current.page : null,
-        loading: false,
-        error: cause instanceof Error ? cause.message : t('loadUserFailed')
-      }))
-    } finally {
-      if (userMessageAbortControllerRef.current === controller) {
-        userMessageAbortControllerRef.current = null
-      }
-    }
-  }
-
-  const toggleSearchScope = (scope: L2PiSessionHistorySearchScope): void => {
-    setSearchIn((current) => {
-      if (current.includes(scope)) {
-        return current.length === 1 ? current : current.filter((item) => item !== scope)
-      }
-      return [...current, scope]
-    })
-  }
-
-  const toggleUserMessages = (session: L2PiSessionHistoryResponse['sessions'][number]): void => {
-    if (expandedHistory?.sessionId === session.sessionId) {
-      userMessageRequestIdRef.current += 1
-      userMessageAbortControllerRef.current?.abort()
-      userMessageAbortControllerRef.current = null
-      setExpandedHistory(null)
-      return
-    }
-    const messageQuery = session.matches?.some((match) => match.scope === 'user') ? query : ''
-    void loadUserMessages(session.sessionId, messageQuery, 1, false)
-  }
 
   const title =
     pickerView === 'ignored'
@@ -565,7 +419,9 @@ export function L2WorkbenchPickerDialog({
           <div className="relative">
             <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
+              data-testid={pickerView === 'history' ? 'workbench-history-search-input' : undefined}
               value={search}
+              maxLength={pickerView === 'history' ? 120 : undefined}
               onChange={(event) => setSearch(event.target.value)}
               placeholder={searchPlaceholder}
               aria-label={searchPlaceholder}
@@ -574,27 +430,11 @@ export function L2WorkbenchPickerDialog({
             />
           </div>
           {pickerView === 'history' ? (
-            <fieldset className="mt-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-0.5">
-              <legend className="mr-1 text-xs text-muted-foreground">{t('searchScopes')}</legend>
-              {HISTORY_SEARCH_SCOPE_OPTIONS.map((option) => {
-                const checked = searchIn.includes(option.value)
-                return (
-                  <label
-                    key={option.value}
-                    className="flex min-h-7 cursor-pointer items-center gap-2 text-sm text-muted-foreground has-[:focus-visible]:rounded-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={working || (checked && searchIn.length === 1)}
-                      onChange={() => toggleSearchScope(option.value)}
-                      className="size-4 accent-primary"
-                    />
-                    <span>{t(option.label)}</span>
-                  </label>
-                )
-              })}
-            </fieldset>
+            <L2WorkbenchSessionSearchScopes
+              value={searchIn}
+              onChange={setSearchIn}
+              disabled={working}
+            />
           ) : null}
         </div>
 
@@ -1130,7 +970,7 @@ export function L2WorkbenchPickerDialog({
               data-testid="workbench-picker-refresh"
               type="button"
               disabled={loading || working}
-              onClick={() => onRefresh(query, searchIn)}
+              onClick={pickerView === 'history' ? history.refresh : onRefresh}
               aria-label={t('refreshList')}
               title={t('refreshList')}
               className={buttonVariants({ variant: 'outline', size: 'icon' })}

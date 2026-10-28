@@ -147,11 +147,11 @@ export class L2GitWorkspaceRuntime {
     if (workspace.snapshot.status === 'ready' || workspace.snapshot.status === 'loading') {
       return Promise.resolve()
     }
-    return this.loadSnapshot(cwd, false)
+    return this.loadSnapshot(cwd)
   }
 
   refreshSnapshot(cwd: string): Promise<void> {
-    return this.loadSnapshot(cwd, true)
+    return this.loadSnapshot(cwd)
   }
 
   async refreshHeads(cwd: string): Promise<void> {
@@ -332,9 +332,9 @@ export class L2GitWorkspaceRuntime {
     this.listeners.clear()
   }
 
-  private async loadSnapshot(cwd: string, force: boolean): Promise<void> {
+  private async loadSnapshot(cwd: string): Promise<void> {
     const workspace = this.workspaceFor(cwd)
-    if (workspace.snapshotRequest && !force) return
+    if (workspace.snapshotRequest) return
     const project = this.projectRefs.get(cwd)
     if (!project) {
       workspace.snapshot = {
@@ -346,16 +346,17 @@ export class L2GitWorkspaceRuntime {
       return
     }
 
-    workspace.snapshotRequest?.controller.abort()
     const controller = new AbortController()
     const token = {}
     workspace.snapshotRequest = { controller, token }
-    workspace.snapshot = {
-      status: 'loading',
-      repositories: workspace.snapshot.repositories,
-      error: null
+    if (workspace.snapshot.status !== 'ready') {
+      workspace.snapshot = {
+        status: 'loading',
+        repositories: workspace.snapshot.repositories,
+        error: null
+      }
+      this.publish()
     }
-    this.publish()
 
     try {
       const result = await this.biz.get({ workId: project.workId, cwd }, controller.signal)

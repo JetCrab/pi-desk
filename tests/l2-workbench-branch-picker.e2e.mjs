@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { scryptSync } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -20,7 +21,10 @@ import { spawnE2eServer, stopE2eServerTree } from './l4-e2e-server-runtime.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const edgePath = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
-const testRoot = join(projectRoot, 'temp', 'pi', 'workbench-branch-picker-e2e', String(process.pid))
+const filterPreferencesOnly = process.argv.includes('--filter-preferences')
+const taskId = `branch-filter-${process.pid}`
+const testRoot = join(projectRoot, 'temp', 'pi', 'workbench-branch-picker-e2e', taskId)
+const runRoot = join(projectRoot, 'temp', 'run', 'workbench-branch-picker', taskId)
 const agentDir = join(testRoot, 'agent')
 const sourceProjectDir = join(testRoot, '分支树项目')
 const fixedProjectDir = join(testRoot, '固定参考项目')
@@ -82,6 +86,18 @@ async function createFixture() {
   await mkdir(sourceProjectDir, { recursive: true })
   await mkdir(fixedProjectDir, { recursive: true })
   await mkdir(branchRuntimeExtensionDir, { recursive: true })
+  await writeFile(join(agentDir, 'settings.json'), JSON.stringify({ packages: [], extensions: [] }))
+  await writeFile(
+    join(agentDir, 'pi-desk-settings.json'),
+    JSON.stringify({ region: { locale: 'zh-CN', timeZone: 'UTC' } })
+  )
+  await writeFile(join(agentDir, 'pi-desk/auth-session-key'), Buffer.alloc(32, 7).toString('hex'))
+  const salt = Buffer.alloc(16, 5)
+  const hash = scryptSync(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 })
+  await writeFile(
+    join(agentDir, 'pi-desk/auth.json'),
+    JSON.stringify({ passwordHash: `scrypt:${salt.toString('hex')}:${hash.toString('hex')}` })
+  )
   await writeFile(
     join(branchRuntimeExtensionDir, 'index.ts'),
     `export default function branchRuntimeFixture(pi) {
@@ -253,7 +269,7 @@ async function loginAndPrepare(client) {
 async function setPrimary(client, workId) {
   await evaluate(
     client,
-    `localStorage.setItem('pi-desk:workbench-layout', JSON.stringify({ primaryWorkId: ${JSON.stringify(workId)} }))`
+    `localStorage.setItem('pi-super:workbench-layout', JSON.stringify({ primaryWorkId: ${JSON.stringify(workId)} }))`
   )
 }
 
@@ -267,10 +283,13 @@ async function waitForWorkbench(client, workId = sourceWorkId) {
   )
 }
 
-async function openPicker(client, workId = sourceWorkId) {
+async function openPicker(client, workId = sourceWorkId, english = false) {
+  const moreLabel = english ? 'More actions' : '更多操作'
+  const actionLabel = english ? 'Switch session branch' : '切换会话分支'
+  const pickerLabel = english ? 'Session branch picker' : '会话分支选择器'
   await waitFor(
     client,
-    `document.querySelector('[data-work-id=${JSON.stringify(workId)}] [aria-label="更多操作"]') !== null`,
+    `document.querySelector('[data-work-id=${JSON.stringify(workId)}] [aria-label="${moreLabel}"]') !== null`,
     '输入框更多菜单可用',
     () => serverOutput
   )
@@ -278,7 +297,7 @@ async function openPicker(client, workId = sourceWorkId) {
     client,
     `(() => {
       const column = document.querySelector('[data-work-id=${JSON.stringify(workId)}]');
-      const button = column?.querySelector('[aria-label="更多操作"]');
+      const button = column?.querySelector('[aria-label="${moreLabel}"]');
       if (!(button instanceof HTMLElement)) return false;
       button.click();
       return true;
@@ -288,7 +307,7 @@ async function openPicker(client, workId = sourceWorkId) {
   await waitFor(
     client,
     `(() => {
-      const item = document.querySelector('[data-slot="dropdown-menu-content"] [aria-label="切换会话分支"]');
+      const item = document.querySelector('[data-slot="dropdown-menu-content"] [aria-label="${actionLabel}"]');
       return item instanceof HTMLElement && item.getAttribute('data-disabled') === null;
     })()`,
     '更多菜单中的会话分支入口可用',
@@ -297,7 +316,7 @@ async function openPicker(client, workId = sourceWorkId) {
   const opened = await evaluate(
     client,
     `(() => {
-      const item = document.querySelector('[data-slot="dropdown-menu-content"] [aria-label="切换会话分支"]');
+      const item = document.querySelector('[data-slot="dropdown-menu-content"] [aria-label="${actionLabel}"]');
       if (!(item instanceof HTMLElement)) return false;
       item.click();
       return true;
@@ -307,7 +326,7 @@ async function openPicker(client, workId = sourceWorkId) {
   await waitFor(
     client,
     `(() => {
-      const panel = document.querySelector('[data-work-id=${JSON.stringify(workId)}] [aria-label="会话分支选择器"]');
+      const panel = document.querySelector('[data-work-id=${JSON.stringify(workId)}] [aria-label="${pickerLabel}"]');
       return panel?.querySelectorAll('[role="treeitem"]').length > 0;
     })()`,
     '当前列会话树面板',
@@ -382,40 +401,26 @@ async function clearTreeSearch(client, selectedPreview) {
 }
 
 async function chooseTreeFilter(client, label) {
-  const opened = await evaluate(
-    client,
-    `(() => {
-      const trigger = document.querySelector('[aria-label="会话分支选择器"] [aria-label^="过滤会话树"]');
-      if (!(trigger instanceof HTMLElement)) return false;
-      trigger.click();
-      return true;
-    })()`
-  )
-  assert.equal(opened, true)
-  await waitFor(
-    client,
-    `document.querySelector('[data-workbench-branch-picker-popup="true"]')?.textContent?.includes(${JSON.stringify(label)}) ?? false`,
-    `打开筛选菜单：${label}`
-  )
   const selected = await evaluate(
     client,
     `(() => {
-      const popup = document.querySelector('[data-workbench-branch-picker-popup="true"]');
-      const item = [...(popup?.querySelectorAll('[data-slot="dropdown-menu-item"]') ?? [])].find((candidate) => candidate.textContent?.trim().startsWith(${JSON.stringify(label)}));
+      const group = document.querySelector('[aria-label="会话分支选择器"] [role="group"][aria-label="筛选"]');
+      const item = [...(group?.querySelectorAll('button') ?? [])].find((candidate) => candidate.textContent?.trim() === ${JSON.stringify(label)});
       if (!(item instanceof HTMLElement)) return false;
       item.click();
       return true;
     })()`
   )
-  assert.equal(selected, true)
+  assert.equal(selected, true, `未找到筛选按钮：${label}`)
   await waitFor(
     client,
     `(() => {
-      const input = document.querySelector('[aria-label="会话分支选择器"] [aria-label="搜索会话分支"]');
-      const trigger = document.querySelector('[aria-label="会话分支选择器"] [aria-label^="过滤会话树"]');
-      return document.activeElement === input && trigger?.textContent?.includes(${JSON.stringify(label)});
+      const panel = document.querySelector('[aria-label="会话分支选择器"]');
+      const input = panel?.querySelector('[aria-label="搜索会话分支"]');
+      const selected = panel?.querySelector('[role="group"] [aria-pressed="true"]');
+      return (document.activeElement === input || document.activeElement === panel) && selected?.textContent?.trim() === ${JSON.stringify(label)};
     })()`,
-    `筛选完成并恢复搜索焦点：${label}`
+    `筛选完成并恢复导航焦点：${label}`
   )
 }
 
@@ -577,8 +582,194 @@ async function primaryWorkId(client) {
   )
 }
 
+async function verifyFilterPreferences(client) {
+  await mkdir(runRoot, { recursive: true })
+  const selectedFilter = `document.querySelector('[role="group"][aria-label="筛选"] [aria-pressed="true"]')?.textContent?.trim()`
+  const storageKey = 'pi-desk:workbench-branch-filter'
+  const options = [
+    ['默认', 'default'],
+    ['无工具', 'no-tools'],
+    ['仅用户', 'user-only'],
+    ['有标签', 'labeled-only'],
+    ['全部', 'all']
+  ]
+  await openPicker(client)
+  assert.equal(await evaluate(client, selectedFilter), '默认')
+  assert.deepEqual(
+    await evaluate(
+      client,
+      `[...document.querySelectorAll('[role="group"][aria-label="筛选"] button')].map(button => button.textContent.trim())`
+    ),
+    options.map(([label]) => label)
+  )
+  for (const [label, value] of options) {
+    await chooseTreeFilter(client, label)
+    assert.equal(
+      await evaluate(client, `localStorage.getItem(${JSON.stringify(storageKey)})`),
+      value
+    )
+  }
+  await chooseTreeFilter(client, '无工具')
+  await dispatchSearchKey(client, 'Tab')
+  await waitFor(
+    client,
+    `${selectedFilter} === '仅用户' && localStorage.getItem('${storageKey}') === 'user-only'`,
+    'Tab 切换并保存筛选'
+  )
+  await dispatchSearchKey(client, 'Tab', true)
+  await waitFor(
+    client,
+    `${selectedFilter} === '无工具' && localStorage.getItem('${storageKey}') === 'no-tools'`,
+    'Shift+Tab 反向切换并保存筛选'
+  )
+  await chooseTreeFilter(client, '仅用户')
+  assert.equal(
+    await evaluate(
+      client,
+      `[...document.querySelectorAll('[role="treeitem"] button[tabindex]')].every(button => button.textContent.trim().startsWith('用户'))`
+    ),
+    true,
+    '仅用户筛选不得展示 AI 或工具消息'
+  )
+  for (const workId of [sourceWorkId, fixedWorkId]) {
+    await dispatchSearchKey(client, 'Escape')
+    await waitFor(
+      client,
+      `document.querySelector('[aria-label="会话分支选择器"]') === null`,
+      '关闭选择器'
+    )
+    await openPicker(client, workId)
+    assert.equal(await evaluate(client, selectedFilter), '仅用户', '重开及其他会话恢复筛选')
+  }
+  await navigate(client, `http://127.0.0.1:${appPort}/`)
+  await waitForWorkbench(client)
+  await openPicker(client)
+  assert.equal(await evaluate(client, selectedFilter), '仅用户', '刷新后恢复筛选')
+  console.log('[分支筛选] 首次默认、五种筛选、快捷键、重开、跨会话及刷新恢复通过')
+
+  const layouts = []
+  for (const [device, width, height, mobile] of [
+    ['desktop', 1440, 900, false],
+    ['mobile', 390, 844, true],
+    ['narrow', 320, 640, true]
+  ]) {
+    for (const theme of ['light', 'dark']) {
+      await setViewport(client, width, height, mobile)
+      await evaluate(client, `localStorage.setItem('pi-super-theme', '${theme}')`)
+      await navigate(client, `http://127.0.0.1:${appPort}/`)
+      await waitForWorkbench(client)
+      await openPicker(client)
+      assert.equal(await evaluate(client, selectedFilter), '仅用户')
+      await selectTreeNode(client, '请从这里 Fork')
+      await clearTreeSearch(client, '请从这里 Fork')
+      await waitFor(
+        client,
+        `document.querySelector('[aria-label="会话分支选择器"]')?.textContent?.includes('保留这条用户输入，并允许我继续编辑。')`,
+        '所选节点详情加载'
+      )
+      await prepareVisualCapture(client)
+      const layout = await evaluate(
+        client,
+        `(() => {
+        const panel = document.querySelector('[aria-label="会话分支选择器"]');
+        const group = panel.querySelector('[role="group"][aria-label="筛选"]');
+        const bounds = group.getBoundingClientRect();
+        const buttons = [...group.querySelectorAll('button')];
+        const selected = group.querySelector('[aria-pressed="true"]');
+        return {
+          visible: buttons.every(button => {
+            const rect = button.getBoundingClientRect();
+            return rect.left >= bounds.left && rect.right <= bounds.right && rect.top >= bounds.top && rect.bottom <= bounds.bottom;
+          }),
+          selectedMark: selected.querySelector('svg') !== null,
+          treeHeight: panel.querySelector('[role="tree"]').clientHeight,
+          dark: document.documentElement.classList.contains('dark')
+        };
+      })()`
+      )
+      assert.equal(layout.visible, true, `${device}/${theme} 筛选按钮应完整可见`)
+      assert.equal(layout.selectedMark, true)
+      assert.ok(layout.treeHeight >= 120, `${device}/${theme} 列表空间不足：${layout.treeHeight}`)
+      assert.equal(layout.dark, theme === 'dark')
+      await writeFile(join(runRoot, `${device}-${theme}.png`), await screenshot(client))
+      layouts.push({ device, theme, ...layout })
+    }
+  }
+  console.log('[分支筛选] 桌面、移动端、320px 窄屏的明暗主题布局检查通过')
+  const languageChanged = await evaluate(
+    client,
+    `(async () => {
+    const socket = new WebSocket('ws://' + location.host + '/api/ws?clientId=' + crypto.randomUUID(), 'pi-desk.v1');
+    const request = (path, body = {}) => new Promise((resolve, reject) => {
+      const requestId = crypto.randomUUID();
+      const timer = setTimeout(() => {
+        socket.removeEventListener('message', listener);
+        reject(new Error('设置请求超时：' + path));
+      }, 10000);
+      const listener = event => {
+        const message = JSON.parse(event.data);
+        if (message.head?.requestId !== requestId) return;
+        clearTimeout(timer);
+        socket.removeEventListener('message', listener);
+        resolve(message.body);
+      };
+      socket.addEventListener('message', listener);
+      socket.send(JSON.stringify({ head: { op: 'req', path, requestId }, body }));
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        socket.addEventListener('open', resolve, { once: true });
+        socket.addEventListener('error', reject, { once: true });
+      });
+      const initialized = await request('work-sessions/list');
+      if (initialized.code !== 0) return initialized;
+      return await request('app-runtime/apply', { key: 'settings', update: { region: { locale: 'en' } } });
+    } finally {
+      socket.close();
+    }
+  })()`
+  )
+  assert.equal(languageChanged.code, 0)
+  for (const [width, fontSize, name] of [
+    [320, 16, 'english-narrow'],
+    [390, 24, 'english-large-text']
+  ]) {
+    await setViewport(client, width, 844, true)
+    await navigate(client, `http://127.0.0.1:${appPort}/`)
+    await waitForWorkbench(client)
+    await evaluate(client, `document.documentElement.style.fontSize = '${fontSize}px'`)
+    await openPicker(client, sourceWorkId, true)
+    await prepareVisualCapture(client)
+    const layout = await evaluate(
+      client,
+      `(() => {
+      const group = document.querySelector('[role="group"][aria-label="Filter"]');
+      const bounds = group.getBoundingClientRect();
+      return {
+        selected: group.querySelector('[aria-pressed="true"]').textContent.trim(),
+        visible: [...group.querySelectorAll('button')].every(button => {
+          const rect = button.getBoundingClientRect();
+          return rect.left >= bounds.left && rect.right <= bounds.right && rect.top >= bounds.top && rect.bottom <= bounds.bottom;
+        })
+      };
+    })()`
+    )
+    assert.equal(layout.selected, 'User messages')
+    assert.equal(layout.visible, true, `${name} 筛选按钮应完整可见`)
+    await writeFile(join(runRoot, `${name}.png`), await screenshot(client))
+    layouts.push({ device: name, ...layout })
+  }
+  console.log('[分支筛选] 英文长标签与 150% 文字放大检查通过')
+  await writeFile(
+    join(runRoot, 'result.json'),
+    JSON.stringify({ preferences: 'passed', layouts }, null, 2)
+  )
+  console.log(`截图与结果：${runRoot}`)
+}
+
 async function main() {
   let client
+  let passed = false
   try {
     await createFixture()
     appPort = await reservePort()
@@ -616,6 +807,12 @@ async function main() {
       () => serverOutput,
       60_000
     )
+
+    if (filterPreferencesOnly) {
+      await verifyFilterPreferences(client)
+      passed = true
+      return
+    }
 
     await openPicker(client)
     await waitFor(
@@ -669,15 +866,15 @@ async function main() {
       client,
       `(() => {
         const input = document.querySelector('[aria-label="搜索会话分支"]');
-        const trigger = document.querySelector('[aria-label^="过滤会话树"]');
-        return document.activeElement === input && trigger?.textContent?.includes('仅用户');
+        const selected = document.querySelector('[role="group"][aria-label="筛选"] [aria-pressed="true"]');
+        return document.activeElement === input && selected?.textContent?.trim() === '仅用户';
       })()`,
       'Tab 切换筛选并保持搜索焦点'
     )
     await dispatchSearchKey(client, 'Tab', true)
     await waitFor(
       client,
-      `document.querySelector('[aria-label^="过滤会话树"]')?.textContent?.includes('无工具') ?? false`,
+      `document.querySelector('[role="group"][aria-label="筛选"] [aria-pressed="true"]')?.textContent?.trim() === '无工具'`,
       'Shift+Tab 反向切换筛选'
     )
     await chooseTreeFilter(client, '默认')
@@ -1014,11 +1211,20 @@ async function main() {
     console.log(JSON.stringify(output, null, 2))
     console.log(`desktop=${desktopOutput}`)
     console.log(`mobile=${mobileOutput}`)
+    passed = true
   } finally {
     client?.close()
-    await stopBrowserTree(browserProcess, cdpPort)
-    if (serverRuntime) await stopE2eServerTree(serverRuntime)
-    await rm(testRoot, { recursive: true, force: true })
+    try {
+      await stopBrowserTree(browserProcess, cdpPort)
+    } finally {
+      if (serverRuntime) await stopE2eServerTree(serverRuntime)
+    }
+    if (passed) await rm(testRoot, { recursive: true, force: true })
+    else {
+      await mkdir(runRoot, { recursive: true })
+      await writeFile(join(runRoot, 'server.log'), serverOutput)
+      console.error(`分支测试失败，现场：${testRoot}；日志：${runRoot}`)
+    }
   }
 }
 

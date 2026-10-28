@@ -73,6 +73,12 @@ import {
   type L2WorkSessionStatus
 } from '@common/l2_biz/work-session/l2-work-session-contract'
 import {
+  L2WorkSessionSearchRequestSchema,
+  L2WorkSessionSearchResponseSchema,
+  type L2WorkSessionSearchRequest,
+  type L2WorkSessionSearchResponse
+} from '@common/l2_biz/work-session/l2-work-session-search-contract'
+import {
   L2WorkSessionChangesSchema,
   L2WorkSessionsUpdateSchema,
   type L2WorkSessionChanges,
@@ -102,7 +108,8 @@ import { resolveL4PiSessionPath } from '@server/l4_foundation/pi/l4-pi-session-c
 import {
   getL4PiWorkSessionRuntime,
   L4PiSessionBranchBlockedError,
-  L4PiSessionCloneEmptyError
+  L4PiSessionCloneEmptyError,
+  L4PiSessionResendTargetError
 } from '@server/l4_foundation/pi/l4-pi-work-session-runtime'
 import {
   L4PiSessionEntryNotFoundError,
@@ -196,7 +203,7 @@ export class WorkSessionBranchBlockedError extends Error {
 
 export class WorkSessionBranchInvalidError extends Error {
   constructor(
-    readonly kind: 'fork-target' | 'clone-empty',
+    readonly kind: 'fork-target' | 'clone-empty' | 'resend-target',
     message: string
   ) {
     super(message)
@@ -247,6 +254,19 @@ export class WorkSessionManage {
     return this.runExclusive(async () => {
       await this.ensureHydrated()
       return this.createSnapshot()
+    })
+  }
+
+  searchWorkSessions(inputValue: L2WorkSessionSearchRequest): Promise<L2WorkSessionSearchResponse> {
+    const input = L2WorkSessionSearchRequestSchema.parse(inputValue)
+    return this.runExclusive(async () => {
+      await this.ensureHydrated()
+      return L2WorkSessionSearchResponseSchema.parse({
+        sessions: this.orderedWorkSessions().flatMap((workSession) => {
+          const matches = getL4PiWorkSessionRuntime(workSession.sessionId).search(input)
+          return matches.length > 0 ? [{ workId: workSession.workId, matches }] : []
+        })
+      })
     })
   }
 
@@ -681,23 +701,35 @@ export class WorkSessionManage {
       if (!source) throw new WorkSessionNotFoundError(input.workId)
       this.assertSessionBinding(source, input.sessionId)
 
-      if (input.action === 'tree') {
+      if (input.action === 'tree' || input.action === 'resend') {
         const previousItem = this.toListItem(source)
         await this.chat.pauseWorkSession(source.workId)
+        let refreshed = false
         let result: Awaited<ReturnType<WorkSession['branch']>>
         try {
-          result = await source.branch(input.entryId)
-          if (result.changed) await this.chat.refreshWorkSession(source)
-          else this.chat.resumeWorkSession(source.workId)
+          if (input.action === 'resend') {
+            await source.send({
+              mode: 'resend',
+              entryId: input.entryId,
+              onBranchChanged: async () => {
+                await this.chat.refreshWorkSession(source, false)
+                refreshed = true
+              }
+            })
+            result = { changed: true, editorText: null }
+          } else {
+            result = await source.branch(input.entryId)
+            if (result.changed) await this.chat.refreshWorkSession(source)
+          }
         } catch (error) {
-          if (source.branchId !== previousItem.branchId) {
-            await this.chat.refreshWorkSession(source)
+          if (source.branchId !== previousItem.branchId || refreshed) {
+            if (!refreshed) await this.chat.refreshWorkSession(source, false)
             const changes = this.toChanges(previousItem, this.toListItem(source))
             if (changes) this.publishUpdate({ type: 'update', workId: source.workId, changes })
-          } else {
-            this.chat.resumeWorkSession(source.workId)
           }
           this.throwBranchError(error, input.entryId)
+        } finally {
+          this.chat.resumeWorkSession(source.workId)
         }
 
         const item = this.toListItem(source)
@@ -710,6 +742,7 @@ export class WorkSessionManage {
           sessionId: source.sessionId,
           entryId: input.entryId,
           branchId: source.branchId,
+          action: input.action,
           changed: result.changed
         })
         return L2WorkSessionBranchResponseSchema.parse({
@@ -856,6 +889,9 @@ export class WorkSessionManage {
     }
     if (error instanceof L4PiSessionForkTargetError) {
       throw new WorkSessionBranchInvalidError('fork-target', '只有用户消息可以 Fork')
+    }
+    if (error instanceof L4PiSessionResendTargetError) {
+      throw new WorkSessionBranchInvalidError('resend-target', '只有用户消息可以重发')
     }
     if (error instanceof L4PiSessionCloneEmptyError) {
       throw new WorkSessionBranchInvalidError('clone-empty', '当前会话还没有可克隆的消息')

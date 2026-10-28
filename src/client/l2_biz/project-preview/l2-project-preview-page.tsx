@@ -42,7 +42,6 @@ export function L2ProjectPreviewPage({
           key={cwd}
           clientId={clientId}
           cwd={cwd}
-          refreshOnFocus={false}
           onUnauthorized={onUnauthorized}
           actions={
             <Button size="sm" variant="ghost" onClick={() => onSelect(null)}>

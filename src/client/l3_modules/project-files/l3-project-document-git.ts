@@ -4,19 +4,20 @@ import { useCallback, useEffect, useRef, useSyncExternalStore, type RefObject } 
 import type { L3ProjectFileRuntime } from './l3-project-file-runtime'
 import type { L3ProjectGitBrowser } from './l3-project-git-runtime'
 import { findL3GitFile } from './l3-project-git-model'
+import { useL3ProjectRefresh } from './l3-use-project-refresh'
 
 export function useL3ProjectDocumentGit(
   runtime: L3ProjectFileRuntime,
   git: L3ProjectGitBrowser,
   host: RefObject<HTMLDivElement | null>,
   savePosition: () => void,
-  active: boolean,
-  refreshOnFocus = true
+  active: boolean
 ): { refresh: () => void; unavailable: boolean } {
   useSyncExternalStore(git.subscribe, git.getRevision, git.getRevision)
   const snapshot = git.getWorkspace(runtime.cwd)?.snapshot
   const path = runtime.state.activePath
-  const diffActive = Boolean(runtime.state.activeDiff)
+  const diff = runtime.state.activeDiff
+  const diffActive = Boolean(diff)
   const document = path ? runtime.state.documents.get(path) : undefined
   const save = useRef(savePosition)
   useEffect(() => {
@@ -29,36 +30,19 @@ export function useL3ProjectDocumentGit(
     void git.refreshSnapshot(runtime.cwd)
   }, [diffActive, git, path, runtime])
 
-  useEffect(() => {
-    if (!refreshOnFocus || !active || !path || diffActive) return
-    const visible = (): boolean =>
-      window.document.visibilityState === 'visible' &&
-      Boolean(host.current?.getClientRects().length) &&
-      !host.current?.closest('[inert], [aria-hidden="true"]')
-    let lastRefresh = Date.now()
-    if (visible()) {
-      // 已打开的标签重新展示时重读；首次打开仍复用正在进行的正文请求。
-      if (runtime.state.documents.get(path)?.status === 'text') {
-        save.current()
-        runtime.reloadFile(path)
-      }
-      void git.refreshSnapshot(runtime.cwd)
+  const refreshVisible = useCallback((): void => {
+    if (diff) runtime.refreshDiff()
+    else if (path) {
+      save.current()
+      void runtime.ensureDocument(path, true)
     }
-    const onFocus = (): void => {
-      if (!visible() || Date.now() - lastRefresh < 1000) return
-      lastRefresh = Date.now()
-      refresh()
-    }
-    window.addEventListener('focus', onFocus)
-    window.document.addEventListener('visibilitychange', onFocus)
-    return () => {
-      window.removeEventListener('focus', onFocus)
-      window.document.removeEventListener('visibilitychange', onFocus)
-    }
-  }, [active, diffActive, git, host, path, refresh, refreshOnFocus, runtime])
+    void git.refreshSnapshot(runtime.cwd)
+  }, [diff, git, path, runtime])
+  useL3ProjectRefresh(host, refreshVisible, active)
 
   useEffect(() => {
     if (!active || !path || diffActive || document?.status !== 'text') return
+    if (snapshot?.status === 'loading') return
     const controller = new AbortController()
     const file =
       snapshot?.status === 'ready' ? findL3GitFile(runtime.cwd, path, snapshot.repositories) : null

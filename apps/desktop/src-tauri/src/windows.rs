@@ -139,11 +139,7 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
     let popup_target = value.to_string();
     let invalid = Arc::new(AtomicBool::new(false));
     let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()))
-        .title(if preview {
-            "项目预览 · Pi Desk".to_string()
-        } else {
-            format!("Pi Desk · {}", url.host_str().unwrap_or("网页"))
-        })
+        .title("Pi Desk")
         .inner_size(1280.0, 820.0)
         .min_inner_size(720.0, 480.0)
         .on_document_title_changed(move |window, title| {

@@ -116,7 +116,7 @@ import { useL2WorkSessionRename } from './hooks/l2-work-session-rename'
 import { useL2WorkbenchChatReload } from './hooks/l2-workbench-chat-reload'
 import { L2WorkSessionRenameDialog } from './views/l2-work-session-rename-dialog'
 import { useL2WorkbenchPluginHealth } from './hooks/l2-workbench-plugin-health'
-import { useL2WorkbenchSessionHistory } from './hooks/l2-workbench-session-history'
+import { useL2WorkSessionSearch } from './hooks/l2-work-session-search'
 import {
   getL2PluginSessionSidebarMode,
   L2WorkSessionSidebar,
@@ -356,13 +356,6 @@ export function L2Workbench({
   const [updatingIgnoreCwd, setUpdatingIgnoreCwd] = useState<string | null>(null)
   const [replacingWithEmptyWorkId, setReplacingWithEmptyWorkId] = useState<string | null>(null)
   const [pickerError, setPickerError] = useState<string | null>(null)
-  const {
-    sessions: historySessions,
-    loading: historyLoading,
-    load: loadSessionHistory,
-    cancel: cancelSessionHistory,
-    showCached: showCachedSessionHistory
-  } = useL2WorkbenchSessionHistory(workbenchBiz, setPickerError)
   const [error, setError] = useState<string | null>(null)
   const [connectionAttempt, setConnectionAttempt] = useState(0)
   const reloadPromiseRef = useRef<Promise<void> | null>(null)
@@ -528,13 +521,11 @@ export function L2Workbench({
   }, [activePluginSessionTab, activePluginSessionTabDescriptor, activeWorkSession, sidebarMode])
 
   const pickerLoading =
-    pickerView === 'history'
-      ? historyLoading
-      : pickerView === 'ignored'
-        ? ignoredDirectoriesLoading
-        : pickerView === 'browser'
-          ? directoryBrowserLoading
-          : directoriesLoading
+    pickerView === 'ignored'
+      ? ignoredDirectoriesLoading
+      : pickerView === 'browser'
+        ? directoryBrowserLoading
+        : directoriesLoading
   const replacementTarget = useMemo<L2WorkbenchReplacementTarget | null>(() => {
     const target = workSessions.find((workSession) => workSession.workId === replacementWorkId)
     if (!target) return null
@@ -1231,7 +1222,6 @@ export function L2Workbench({
     setIgnoredDirectoriesLoading(false)
     directoryBrowserRequestIdRef.current += 1
     setDirectoryBrowserLoading(false)
-    cancelSessionHistory()
     setPickerCwd(null)
     setDirectoryDialogOpen(true)
     void loadDirectories().then((loadedDirectories) => {
@@ -1240,7 +1230,7 @@ export function L2Workbench({
       setDirectoryBrowser(readCachedDirectoryEntries(readL4PiDirectoryEntriesCache(null)))
       void loadDirectoryEntries(null)
     })
-  }, [cancelSessionHistory, loadDirectories, loadDirectoryEntries, loading])
+  }, [loadDirectories, loadDirectoryEntries, loading])
 
   const openReplacePicker = useCallback((): void => {
     if (loading) return
@@ -1258,10 +1248,8 @@ export function L2Workbench({
     setPickerView('history')
     setReplacementWorkId(target.workId)
     setPickerCwd(target.cwd)
-    showCachedSessionHistory(target.cwd)
     setDirectoryDialogOpen(true)
-    void loadSessionHistory(target.cwd)
-  }, [activeWorkId, loadSessionHistory, loading, showCachedSessionHistory, workSessions])
+  }, [activeWorkId, loading, workSessions])
 
   const returnToDirectoryList = (): void => {
     setPickerError(null)
@@ -1269,7 +1257,6 @@ export function L2Workbench({
     setIgnoredDirectoriesLoading(false)
     directoryBrowserRequestIdRef.current += 1
     setDirectoryBrowserLoading(false)
-    cancelSessionHistory()
     const cachedDirectories = readCachedDirectoryList(readL4PiDirectoriesCache())
     if (cachedDirectories) setDirectories(cachedDirectories)
     setPickerView('directories')
@@ -1371,6 +1358,7 @@ export function L2Workbench({
     selectEntry: selectBranchEntry,
     requestAction: requestBranchAction,
     clone: cloneWorkSession,
+    resend: resendMessage,
     confirmRunning: confirmRunningBranch,
     cancelRunning: cancelRunningBranch,
     pendingWorkId: branchPendingWorkId
@@ -1497,7 +1485,6 @@ export function L2Workbench({
     }
 
     const workId = replacementWorkId
-    cancelSessionHistory()
     localBindingOperationsRef.current.add(workId)
     setReplacingSessionId(sessionId)
     setPickerError(null)
@@ -1832,6 +1819,11 @@ export function L2Workbench({
   )
 
   const sidebarOpen = mobile ? mobileDrawerOpen : desktopSidebarOpen
+  const sessionSearch = useL2WorkSessionSearch({
+    active: sidebarOpen && sidebarMode === 'sessions' && !loading,
+    workSessions,
+    searchWorkSessions: workbenchBiz.searchWorkSessions
+  })
   const validGitBranchPickerTarget =
     gitBranchPickerTarget &&
     workSessions.some(
@@ -1891,6 +1883,7 @@ export function L2Workbench({
   const sidebar = (
     <L2WorkSessionSidebar
       mode={sidebarMode}
+      search={sessionSearch}
       mobile={mobile}
       fileBrowser={fileBrowser}
       pluginTabContent={pluginTabContent}
@@ -1994,6 +1987,7 @@ export function L2Workbench({
           setChatCapabilityMode={workbenchBiz.setChatCapabilityMode}
           branchPicker={branchPicker}
           branchPendingWorkId={branchPendingWorkId}
+          onResendMessage={resendMessage}
           fileRuntime={fileRuntime}
           onOpenFileSidebar={openFileSidebar}
           onPreviewFile={previewConversationFile}
@@ -2127,7 +2121,6 @@ export function L2Workbench({
         directories={directories}
         ignoredDirectories={ignoredDirectories}
         directoryBrowser={directoryBrowser}
-        historySessions={historySessions}
         replacementTarget={pickerMode === 'create' ? null : replacementTarget}
         unavailableSessionIds={unavailableSessionIds}
         error={pickerError}
@@ -2144,25 +2137,16 @@ export function L2Workbench({
             setIgnoredDirectoriesLoading(false)
             directoryBrowserRequestIdRef.current += 1
             setDirectoryBrowserLoading(false)
-            cancelSessionHistory()
             setPickerMode(null)
             setPickerView('directories')
             setPickerError(null)
           }
         }}
         onBack={returnToDirectoryList}
-        onSearchHistory={(query, searchIn) => {
-          if (pickerView === 'history' && pickerCwd) {
-            void loadSessionHistory(pickerCwd, query, searchIn)
-          }
-        }}
-        onListSessionUserMessages={(input, signal) =>
-          workbenchBiz.listSessionUserMessages(input, signal)
-        }
-        onRefresh={(query, searchIn) => {
-          if (pickerView === 'history' && pickerCwd) {
-            void loadSessionHistory(pickerCwd, query, searchIn, true)
-          } else if (pickerView === 'ignored') void loadIgnoredDirectories(true)
+        onListSessionHistory={workbenchBiz.listSessionHistory}
+        onListSessionUserMessages={workbenchBiz.listSessionUserMessages}
+        onRefresh={() => {
+          if (pickerView === 'ignored') void loadIgnoredDirectories(true)
           else if (pickerView === 'browser') {
             void loadDirectoryEntries(directoryBrowser?.cwd ?? null)
           } else void loadDirectories(true)
@@ -2178,8 +2162,6 @@ export function L2Workbench({
             setDirectoriesLoading(false)
             setPickerView('history')
             setPickerCwd(cwd)
-            showCachedSessionHistory(cwd)
-            void loadSessionHistory(cwd)
           } else {
             void createWorkSession(cwd)
           }

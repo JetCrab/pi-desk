@@ -15,6 +15,7 @@ import {
   FolderIcon,
   Layers3Icon,
   LoaderCircleIcon,
+  RotateCcwIcon,
   SearchIcon,
   TerminalIcon,
   WrenchIcon
@@ -566,11 +567,16 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
 
 function UserMessage({
   message,
-  onAcquireImage
+  onAcquireImage,
+  onResend,
+  resendDisabled
 }: {
   message: L3ConversationDisplayMessage
   onAcquireImage: L3ConversationAcquireImage
+  onResend?: (entryId: string) => void
+  resendDisabled?: boolean
 }): React.JSX.Element {
+  const { t } = useTranslation('conversation')
   if (message.summary.type !== 'user') throw new Error('UserMessage requires a user summary')
 
   return (
@@ -595,6 +601,18 @@ function UserMessage({
       </MessageContent>
       {message.timestampMs === null ? null : (
         <MessageToolbar className="mt-0 justify-end gap-1 text-xs text-muted-foreground">
+          {message.durable && onResend ? (
+            <MessageAction
+              tooltip={t('resendMessage')}
+              label={t('resendMessage')}
+              size="icon-sm"
+              className={cn(styles.messageCopyAction, 'text-muted-foreground')}
+              disabled={resendDisabled}
+              onClick={() => onResend(message.durable!.location.entryId)}
+            >
+              <RotateCcwIcon className="size-3.5" />
+            </MessageAction>
+          ) : null}
           <MessageCopyAction text={message.summary.text} />
           <MessageTime timestampMs={message.timestampMs} />
         </MessageToolbar>
@@ -1849,6 +1867,8 @@ interface L3ConversationTurnViewProps {
   turn: L3ConversationTurn
   cwd: string
   logicalTail?: boolean
+  onResend?: (entryId: string) => void
+  resendDisabled?: boolean
   onLoadDetail: L3ConversationLoadDetail
   onAcquireImage: L3ConversationAcquireImage
   onPreviewFile?: L3ConversationPreviewFile
@@ -1910,17 +1930,28 @@ function sameTurn(left: L3ConversationTurn, right: L3ConversationTurn): boolean 
 function TurnUserMessageComponent({
   message,
   onLoadDetail,
-  onAcquireImage
+  onAcquireImage,
+  onResend,
+  resendDisabled
 }: {
   message: L3ConversationDisplayMessage
   onLoadDetail: L3ConversationLoadDetail
   onAcquireImage: L3ConversationAcquireImage
+  onResend?: (entryId: string) => void
+  resendDisabled?: boolean
 }): React.JSX.Element {
   return (
     <L3ConversationMessageView
       message={message}
       loadDetail={onLoadDetail}
-      defaultView={<UserMessage message={message} onAcquireImage={onAcquireImage} />}
+      defaultView={
+        <UserMessage
+          message={message}
+          onAcquireImage={onAcquireImage}
+          onResend={onResend}
+          resendDisabled={resendDisabled}
+        />
+      }
     />
   )
 }
@@ -1930,6 +1961,8 @@ const TurnUserMessage = memo(
   (previous, next) =>
     previous.onLoadDetail === next.onLoadDetail &&
     previous.onAcquireImage === next.onAcquireImage &&
+    previous.onResend === next.onResend &&
+    previous.resendDisabled === next.resendDisabled &&
     sameDisplayMessage(previous.message, next.message)
 )
 
@@ -1963,7 +1996,9 @@ function L3ConversationTurnViewComponent({
   logicalTail = false,
   onLoadDetail,
   onAcquireImage,
-  onPreviewFile
+  onPreviewFile,
+  onResend,
+  resendDisabled
 }: L3ConversationTurnViewProps): React.JSX.Element {
   if (turn.compaction) {
     return (
@@ -1995,6 +2030,8 @@ function L3ConversationTurnViewComponent({
           message={turn.user}
           onLoadDetail={onLoadDetail}
           onAcquireImage={onAcquireImage}
+          onResend={onResend}
+          resendDisabled={resendDisabled}
         />
       ) : null}
       <L3ConversationImageContext.Provider value={onAcquireImage}>
@@ -2020,6 +2057,8 @@ export const L3ConversationTurnView = memo(
   (previous, next) =>
     previous.cwd === next.cwd &&
     previous.logicalTail === next.logicalTail &&
+    previous.onResend === next.onResend &&
+    previous.resendDisabled === next.resendDisabled &&
     previous.onAcquireImage === next.onAcquireImage &&
     previous.onLoadDetail === next.onLoadDetail &&
     previous.onPreviewFile === next.onPreviewFile &&

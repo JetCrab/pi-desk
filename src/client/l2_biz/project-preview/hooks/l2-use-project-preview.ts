@@ -45,7 +45,6 @@ interface PreviewState extends Pick<L2ProjectPreviewOwner, 'files' | 'git' | 'hi
 export function useL2ProjectPreview(
   clientId: string,
   cwd: string,
-  refreshOnFocus: boolean,
   onUnauthorized?: () => void
 ): PreviewState {
   const toast = useL4AppToast()
@@ -63,7 +62,7 @@ export function useL2ProjectPreview(
       (text) => toast.show({ level: 'info', title: text }),
       saved,
       initialGlobal,
-      { lazyHistory: !refreshOnFocus, onUnauthorized }
+      { lazyHistory: true, onUnauthorized }
     )
   )
   const { files, git, history } = owner
@@ -154,18 +153,6 @@ export function useL2ProjectPreview(
       })
     }
   }, [cwd, files, git, owner])
-
-  useEffect(() => {
-    if (!refreshOnFocus) return
-    let lastFocus = Date.now()
-    const focus = (): void => {
-      if (Date.now() - lastFocus < 5000) return
-      lastFocus = Date.now()
-      void git.refreshSnapshot(cwd)
-    }
-    window.addEventListener('focus', focus)
-    return () => window.removeEventListener('focus', focus)
-  }, [cwd, git, refreshOnFocus])
 
   useEffect(() => {
     if (!container) return

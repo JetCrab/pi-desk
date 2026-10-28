@@ -1,12 +1,6 @@
 'use client'
 
-import {
-  ChevronDownIcon,
-  ChevronRightIcon,
-  LoaderCircleIcon,
-  SearchIcon,
-  XIcon
-} from 'lucide-react'
+import { CheckIcon, ChevronRightIcon, LoaderCircleIcon, SearchIcon, XIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { motion, useIsPresent, useReducedMotion } from 'motion/react'
 import {
@@ -27,12 +21,6 @@ import type {
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import { Button, buttonVariants } from '@client/l4_foundation/ui/shadcn/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from '@client/l4_foundation/ui/shadcn/dropdown-menu'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
 import {
   buildL2WorkbenchBranchTreeRows,
@@ -40,6 +28,11 @@ import {
   type L2WorkbenchBranchTreeFilter
 } from './l2-workbench-branch-tree'
 import type { L2WorkbenchBranchIntent } from './hooks/l2-workbench-branch-picker'
+import {
+  L2_WORKBENCH_BRANCH_FILTER_OPTIONS as FILTER_OPTIONS,
+  loadL2WorkbenchBranchFilter,
+  saveL2WorkbenchBranchFilter
+} from './l2-workbench-branch-filter-preferences'
 
 export interface L2WorkbenchBranchPickerModel {
   workId: string
@@ -80,17 +73,6 @@ interface KindAppearance {
 
 const EMPTY_TREE_NODES: readonly L2WorkSessionTreeNode[] = []
 const OVERSCAN_ROWS = 8
-
-const FILTER_OPTIONS: ReadonlyArray<{
-  value: L2WorkbenchBranchTreeFilter
-  label: string
-}> = [
-  { value: 'default', label: 'filterDefault' },
-  { value: 'no-tools', label: 'filterNoTools' },
-  { value: 'user-only', label: 'filterUserOnly' },
-  { value: 'labeled-only', label: 'filterLabeled' },
-  { value: 'all', label: 'filterAll' }
-]
 
 const KIND_APPEARANCE: Record<L2WorkSessionTreeNodeKind, KindAppearance> = {
   user: {
@@ -171,6 +153,8 @@ function intentLabel(intent: L2WorkbenchBranchIntent): string {
   switch (intent.action) {
     case 'tree':
       return 'treeIntent'
+    case 'resend':
+      return 'resendIntent'
     case 'fork':
       return 'forkIntent'
     case 'clone':
@@ -309,8 +293,7 @@ export function L2WorkbenchBranchPicker({
     [locale, timeZone]
   )
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<L2WorkbenchBranchTreeFilter>('default')
-  const [filterOpen, setFilterOpen] = useState(false)
+  const [filter, setFilter] = useState(loadL2WorkbenchBranchFilter)
   const [foldedEntryIds, setFoldedEntryIds] = useState<Set<string>>(() => new Set())
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
@@ -348,9 +331,6 @@ export function L2WorkbenchBranchPicker({
   const renderEndIndex = Math.min(rows.length, Math.max(endIndex, startIndex + OVERSCAN_ROWS))
   const visibleRows = rows.slice(startIndex, renderEndIndex)
   const selectedDetail = model.detail?.entryId === effectiveSelectedEntryId ? model.detail : null
-  const filterLabel = t(
-    FILTER_OPTIONS.find((option) => option.value === filter)?.label ?? 'filterDefault'
-  )
   const confirmation = model.runningConfirmation
   const treeId = `work-session-branch-tree-${model.workId}`
   const selectedRowId = effectiveSelectedEntryId
@@ -395,12 +375,6 @@ export function L2WorkbenchBranchPicker({
       const target = event.target
       if (!(target instanceof Node)) return
       if (panelRef.current?.contains(target)) return
-      if (
-        target instanceof Element &&
-        target.closest('[data-workbench-branch-picker-popup="true"]')
-      ) {
-        return
-      }
       requestClose(false)
     }
     document.addEventListener('pointerdown', handlePointerDown, true)
@@ -471,6 +445,7 @@ export function L2WorkbenchBranchPicker({
   const applyFilter = useCallback(
     (nextFilter: L2WorkbenchBranchTreeFilter): void => {
       setFilter(nextFilter)
+      saveL2WorkbenchBranchFilter(nextFilter)
       setFoldedEntryIds(new Set())
       scrollListTo(0)
       queueMicrotask(focusPickerInput)
@@ -693,42 +668,6 @@ export function L2WorkbenchBranchPicker({
                   onKeyDown={handleSearchKeyDown}
                 />
               </div>
-              <DropdownMenu
-                open={filterOpen}
-                onOpenChange={setFilterOpen}
-                onOpenChangeComplete={(open) => {
-                  if (!open) queueMicrotask(focusPickerInput)
-                }}
-              >
-                <DropdownMenuTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={t('branchFilter', { filter: filterLabel })}
-                      className={buttonVariants({ variant: 'outline' })}
-                    />
-                  }
-                >
-                  {filterLabel}
-                  <ChevronDownIcon className="size-3.5" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  data-workbench-branch-picker-popup="true"
-                  align="end"
-                  side="bottom"
-                  className="w-32"
-                  finalFocus={() => (mobile ? panelRef.current : searchRef.current)}
-                >
-                  {FILTER_OPTIONS.map((option) => (
-                    <DropdownMenuItem key={option.value} onClick={() => applyFilter(option.value)}>
-                      <span className="min-w-0 flex-1">{t(option.label)}</span>
-                      {filter === option.value ? (
-                        <span className="text-xs text-primary">●</span>
-                      ) : null}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
             </div>
           ) : null}
         </header>
@@ -811,6 +750,30 @@ export function L2WorkbenchBranchPicker({
                   {t('selectEntry')}
                 </div>
               )}
+            </div>
+
+            <div
+              role="group"
+              aria-label={t('branchFilters')}
+              className="flex shrink-0 flex-wrap items-center gap-1 border-b bg-muted/25 px-2 py-2"
+            >
+              <span className="px-1 text-sm font-medium text-muted-foreground">
+                {t('branchFilters')}
+              </span>
+              {FILTER_OPTIONS.map((option) => (
+                <Button
+                  key={option.value}
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-pressed={filter === option.value}
+                  className="aria-pressed:bg-primary aria-pressed:text-primary-foreground aria-pressed:hover:bg-[color-mix(in_oklab,var(--primary),var(--primary-foreground)_8%)]"
+                  onClick={() => applyFilter(option.value)}
+                >
+                  {filter === option.value ? <CheckIcon className="size-3.5" /> : null}
+                  {t(option.label)}
+                </Button>
+              ))}
             </div>
 
             {model.pending && !model.runningConfirmation ? (

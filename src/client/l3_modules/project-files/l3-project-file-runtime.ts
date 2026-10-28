@@ -50,7 +50,13 @@ export type L3FileDocument =
       previewScrollTop: number
       comparison?: L3FileComparison
     }
-  | { status: 'image'; mimeType: L4ProjectFileImageMimeType; size: number; objectUrl: string }
+  | {
+      status: 'image'
+      mimeType: L4ProjectFileImageMimeType
+      size: number
+      objectUrl: string
+      blob: Blob
+    }
   | { status: 'error'; error: string }
 export interface L3FileSearch extends L4ProjectSearchInput, L4ProjectFileSearch {
   status: 'idle' | 'loading' | 'ready' | 'error'
@@ -155,6 +161,13 @@ function normalizePath(cwd: string, path: string): string {
     ? normalized.toLowerCase().startsWith(prefix.toLowerCase())
     : normalized.startsWith(prefix)
   return inside ? normalized.slice(prefix.length) : normalized
+}
+
+async function sameImage(left: Blob, right: Blob): Promise<boolean> {
+  if (left.type !== right.type || left.size !== right.size) return false
+  const [before, after] = await Promise.all([left.arrayBuffer(), right.arrayBuffer()])
+  const bytes = new Uint8Array(after)
+  return new Uint8Array(before).every((value, index) => value === bytes[index])
 }
 
 // 单个目录阅读实例；会话身份、窗口和聊天布局由调用方拥有。
@@ -286,9 +299,9 @@ export class L3ProjectFileRuntime {
   ensureRoot(): Promise<void> {
     return this.ensureDirectory('')
   }
-  ensureDirectory(path: string): Promise<void> {
-    if (this.disposed || this.state.directories.get(path)?.status === 'ready')
-      return Promise.resolve()
+  ensureDirectory(path: string, refresh = false): Promise<void> {
+    const current = this.state.directories.get(path)
+    if (this.disposed || (!refresh && current?.status === 'ready')) return Promise.resolve()
     const existing = this.directoryRequests.get(path)
     if (existing) return existing.promise
     const controller = new AbortController()
@@ -307,9 +320,14 @@ export class L3ProjectFileRuntime {
       this.publish()
     })
     this.directoryRequests.set(path, { controller, promise })
-    this.state.directories.set(path, { status: 'loading' })
-    this.publish()
+    if (current?.status !== 'ready') {
+      this.state.directories.set(path, { status: 'loading' })
+      this.publish()
+    }
     return promise
+  }
+  refreshDirectories(paths: Iterable<string>): void {
+    for (const path of new Set(paths)) void this.ensureDirectory(path, true)
   }
   setExpandedPaths(paths: Set<string>, load = true): void {
     const closed = [...this.state.expandedPaths].filter((path) => !paths.has(path))
@@ -319,7 +337,7 @@ export class L3ProjectFileRuntime {
         this.compactRequests.delete(path)
     }
     this.publish()
-    if (load) for (const path of paths) void this.ensureDirectory(path)
+    if (load) for (const path of paths) void this.ensureDirectory(path, true)
   }
   cancelDirectoryExpansion(root = ''): void {
     for (const path of this.compactRequests.keys()) {
@@ -553,20 +571,25 @@ export class L3ProjectFileRuntime {
     if (!refresh && current && ['loading', 'text', 'image'].includes(current.status)) return
     const request = new AbortController()
     this.documentRequests.set(path, request)
-    // 搜索定位刷新正文时保留已挂载的代码视图，内容未变时不重建编辑器。
-    if (current?.status !== 'text') this.state.documents.set(path, { status: 'loading' })
-    this.publish()
+    // 自动重读保留已挂载的视图，文本或图片未变时不重建阅读实例。
+    if (current?.status !== 'text' && current?.status !== 'image') {
+      this.state.documents.set(path, { status: 'loading' })
+      this.publish()
+    }
     try {
       const result = await this.reader.get(path, this.options.imagePreviewMode(), request.signal)
+      if (this.documentRequests.get(path) !== request) return
+      const blob = result.kind === 'image' ? createL4Base64ImageBlob(result) : null
+      const unchanged =
+        (current?.status === 'text' &&
+          result.kind === 'text' &&
+          current.content === result.content &&
+          current.size === result.size) ||
+        (current?.status === 'image' && blob !== null && (await sameImage(current.blob, blob)))
       if (this.documentRequests.get(path) !== request) return
       this.documentRequests.delete(path)
       this.closeMissing.delete(path)
       this.restoredTabs.delete(path)
-      const unchanged =
-        current?.status === 'text' &&
-        result.kind === 'text' &&
-        current.content === result.content &&
-        current.size === result.size
       if (!unchanged)
         this.state.documents.set(
           path,
@@ -598,11 +621,12 @@ export class L3ProjectFileRuntime {
                 status: 'image',
                 mimeType: result.mimeType,
                 size: result.size,
-                objectUrl: URL.createObjectURL(createL4Base64ImageBlob(result))
+                objectUrl: URL.createObjectURL(blob!),
+                blob: blob!
               }
         )
       if (this.state.activePath === path && result.kind !== 'text') this.navigation = null
-      this.releaseDocument(current)
+      if (!unchanged) this.releaseDocument(current)
     } catch (cause) {
       if (this.documentRequests.get(path) !== request) return
       this.documentRequests.delete(path)
@@ -741,6 +765,10 @@ export class L3ProjectFileRuntime {
     this.publish()
     void this.ensureDiff(diff)
   }
+  refreshDiff(): void {
+    const diff = this.state.activeDiff
+    if (diff && !diff.comparison) void this.ensureDiff(diff, true)
+  }
   saveDiffState(expected: L3FileDiff, state: L4CodeDiffState | null): void {
     // 卸载回调仍属于原标签；尚未创建编辑器时的空状态不能抹掉已有位置。
     if (this.disposed || !this.state.diffs.includes(expected) || !state) return
@@ -805,13 +833,16 @@ export class L3ProjectFileRuntime {
     this.restoredPreviewScrollTops.clear()
     this.listeners.clear()
   }
-  private async ensureDiff(diff: L3FileDiff): Promise<void> {
+  private async ensureDiff(diff: L3FileDiff, refresh = false): Promise<void> {
     const key = getL3FileDiffKey(diff)
-    if (this.disposed || diff.status !== 'unloaded' || this.diffRequests.has(key)) return
+    if (this.disposed || (!refresh && diff.status !== 'unloaded') || this.diffRequests.has(key))
+      return
     const request = new AbortController()
     this.diffRequests.set(key, request)
-    Object.assign(diff, { status: 'loading' })
-    this.publish()
+    if (diff.status !== 'text' && diff.status !== 'metadata') {
+      Object.assign(diff, { status: 'loading' })
+      this.publish()
+    }
     try {
       const result = await this.reader.diff(
         diff.repositoryRoot,

@@ -51,7 +51,6 @@ export function L2ProjectPreviewDialog({
         <L2ProjectPreview
           clientId={clientId}
           cwd={cwd}
-          refreshOnFocus
           onEscape={onClose}
           title={
             <L4AppDialogTitle className="truncate text-sm" title={cwd}>

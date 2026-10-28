@@ -54,7 +54,6 @@ export function L3ProjectDocumentView({
   gitRuntime,
   compact,
   visible = true,
-  refreshOnFocus = true,
   onEscape,
   onSwitchPane,
   renderHeader
@@ -64,7 +63,6 @@ export function L3ProjectDocumentView({
   gitRuntime: L3ProjectGitBrowser
   compact: boolean
   visible?: boolean
-  refreshOnFocus?: boolean
   onEscape: () => void
   onSwitchPane?: () => void
   renderHeader?: (actions: ReactNode) => ReactNode
@@ -112,8 +110,7 @@ export function L3ProjectDocumentView({
     gitRuntime,
     hostRef,
     savePosition,
-    visible,
-    refreshOnFocus
+    visible
   )
   const comparison = document?.status === 'text' ? document.comparison : undefined
   const [computed, setComputed] = useState<{
