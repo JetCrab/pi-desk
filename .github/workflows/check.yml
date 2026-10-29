@@ -83,7 +83,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.22.2
+          # Node 24 修复了中文 stdout 与测试结果帧混读时的长度解析错误（nodejs/node#64706）。
+          node-version: 24.22.2
       - uses: pnpm/action-setup@v4
         if: needs.changes.outputs.automation == 'true'
         with:
