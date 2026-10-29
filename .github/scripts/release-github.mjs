@@ -42,8 +42,23 @@ export function createGitHubClient({ repository, token, fetchImpl = fetch }) {
       return null
     }
     if (!response.ok) {
-      await response.body?.cancel()
-      throw new Error(`GitHub ${method} ${path} 请求失败：HTTP ${response.status}`)
+      const detail = await response.text().catch((error) => `响应正文读取失败：${error.message}`)
+      const context = [
+        detail.replaceAll(token, '[redacted]').slice(0, 2048),
+        ...[
+          'x-github-request-id',
+          'x-ratelimit-remaining',
+          'x-ratelimit-reset',
+          'retry-after',
+          'x-accepted-github-permissions'
+        ].flatMap((name) => {
+          const value = response.headers.get(name)
+          return value ? [`${name}: ${value.replaceAll(token, '[redacted]')}`] : []
+        })
+      ]
+        .filter(Boolean)
+        .join('\n')
+      throw new Error(`GitHub ${method} ${path} 请求失败：HTTP ${response.status}\n${context}`)
     }
     if (response.status === 204) return null
     try {
