@@ -54,7 +54,7 @@ export function L2WorkbenchModelContextDialog({
 }: L2WorkbenchModelContextDialogProps): React.JSX.Element {
   const { t, i18n } = useTranslation('workbench')
   const [copied, setCopied] = useState(false)
-  const [view, setView] = useState<L2WorkbenchContextTab>('tools')
+  const [view, setView] = useState<L2WorkbenchContextTab>('system')
   const toast = useL4AppToast()
   const { context, tools, commands } = useL2WorkbenchModelContext({
     source,
@@ -62,7 +62,9 @@ export function L2WorkbenchModelContextDialog({
     tab: view,
     runtime,
     getContext,
-    listCommands
+    listCommands,
+    nativeBiz,
+    nativeState: nativeUi.state
   })
   const data = view === 'system' ? context : view === 'tools' ? tools : commands
   const question = nativeUi.state.snapshot.requests[0]?.id
@@ -101,8 +103,8 @@ export function L2WorkbenchModelContextDialog({
             value={view}
             onChange={setView}
             options={[
-              { value: 'tools', label: t('tools') },
               { value: 'system', label: t('systemPrompt') },
+              { value: 'tools', label: t('tools') },
               { value: 'mcp', label: t('mcpSession', { defaultValue: '会话 MCP' }) }
             ]}
           />
@@ -172,13 +174,10 @@ export function L2WorkbenchModelContextDialog({
                 )}
                 state={nativeUi.state}
                 disabled={commandsDisabled}
-                onExecute={(args, login) => {
+                onExecute={(args) => {
                   void nativeBiz.executeCommand(source, 'mcp', args)
-                  if (login) {
-                    nativeUi.setCollapsed(false)
-                    onOpenChange(false)
-                  }
                 }}
+                onRetryConnection={nativeUi.refresh}
               />
             ) : null}
           </div>

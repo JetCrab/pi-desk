@@ -18,6 +18,7 @@ import {
 import { clearL4PiPluginCodeCache, loadL4PiDeskPluginEntry } from './l4-pi-plugin-module-loader'
 import { reportL4PiPluginNativeDiagnostic } from './l4-pi-plugin-native-diagnostic'
 import { createL4PiPluginDisabledFilter } from './l4-pi-plugin-disabled'
+import { withL4PiMcpLogoutConfirmation } from './l4-pi-mcp-command'
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0]
 type Resource = Awaited<ReturnType<DefaultPackageManager['resolve']>>['extensions'][number]
@@ -35,8 +36,16 @@ const BUILTIN_EXTENSIONS = [
   { name: 'tool-search', create: createToolSearchExtension },
   {
     name: 'mcp',
-    // RPC 登录已通过 notify 提供授权链接，由网页打开而非服务端启动浏览器。
-    create: () => createMcpExtension({ openUrl: () => undefined })
+    create: (): ExtensionFactory => (pi) =>
+      // RPC 登录通过 notify 提供授权链接，由网页打开而非服务端启动浏览器。
+      createMcpExtension({ openUrl: () => undefined })({
+        ...pi,
+        registerCommand: (name, command) =>
+          pi.registerCommand(
+            name,
+            name === 'mcp' ? withL4PiMcpLogoutConfirmation(command) : command
+          )
+      })
   }
 ] as const
 

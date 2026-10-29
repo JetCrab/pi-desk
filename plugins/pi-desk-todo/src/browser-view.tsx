@@ -18,15 +18,15 @@ import type { TodoBrowserController, TodoBrowserState } from './browser-runtime.
 
 const STYLES = `
 .pi-desk-todo{min-width:0;position:relative;padding-inline:.5rem}
-.pi-desk-todo-row{display:flex;min-width:0;align-items:center;gap:.125rem;padding:.125rem .375rem;border-radius:.5rem;background:var(--pi-desk-plugin-muted,var(--muted));transition:background-color 150ms ease-out}
+.pi-desk-todo-row{position:relative;min-width:0;padding:.125rem .375rem;border-radius:.5rem;background:var(--pi-desk-plugin-muted,var(--muted));transition:background-color 150ms ease-out}
 .pi-desk-todo-row:hover,.pi-desk-todo-row:focus-within,.pi-desk-todo-row:has([aria-expanded="true"]){background:var(--accent)}
-.pi-desk-todo-summary{flex:1;min-width:0;justify-content:flex-start;gap:.375rem;padding-inline:.25rem;text-align:left;color:inherit}
+.pi-desk-todo-summary{width:100%;min-width:0;justify-content:flex-start;gap:.375rem;padding-inline:.25rem 2.125rem;text-align:left;color:inherit}
 .pi-desk-todo .pi-desk-todo-row .pi-desk-todo-summary{background:transparent}
 .pi-desk-todo-summary-copy{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}
 .pi-desk-todo-count,.pi-desk-todo-blocked{flex:none;font-size:.75rem;font-weight:400;font-variant-numeric:tabular-nums;white-space:nowrap}
 .pi-desk-todo-count{color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground))}
 .pi-desk-todo-blocked{color:var(--status-warning,var(--foreground))}
-.pi-desk-todo-dismiss{flex:none;min-width:1.75rem;padding-inline:.25rem}
+.pi-desk-todo-dismiss{position:absolute;top:50%;right:.375rem;min-width:1.75rem;padding-inline:.25rem;transform:translateY(-50%)}
 .pi-desk-todo-segments{display:flex;height:.1875rem;gap:.1875rem;margin:.125rem .375rem .25rem;overflow:hidden;border-radius:.125rem}
 .pi-desk-todo-segment{flex:1;min-width:0;background:var(--pi-desk-plugin-border,var(--border));border-radius:.125rem}
 .pi-desk-todo-segment[data-status="1"]{background:var(--foreground)}
@@ -37,25 +37,24 @@ const STYLES = `
 .pi-desk-todo-icon[data-status="0"]{color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground))}
 .pi-desk-todo-icon[data-status="2"]{color:var(--status-success,var(--foreground))}
 .pi-desk-todo-icon[data-status="3"]{color:var(--status-warning,var(--foreground))}
-.pi-desk-todo-popup{width:min(26rem,max(17rem,var(--anchor-width)));overflow:hidden}
+.pi-desk-todo-popup{width:min(40rem,calc(var(--anchor-width) + .75rem));overflow:hidden}
 .pi-desk-todo-panel{display:flex;min-width:0;min-height:0;flex:1;flex-direction:column}
-.pi-desk-todo-heading{padding:.75rem .375rem .5rem;overflow-wrap:anywhere}
-.pi-desk-todo-heading h3{margin:0;font:inherit;font-weight:600}
-.pi-desk-todo-meta{display:flex;flex-wrap:wrap;gap:.25rem .75rem;margin-top:.375rem;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground));font-size:.75rem}
+.pi-desk-todo-heading{display:flex;flex:none;flex-wrap:wrap;align-items:baseline;gap:.25rem .75rem;padding:.75rem 1rem .625rem;border-bottom:1px solid var(--pi-desk-plugin-border,var(--border))}
+.pi-desk-todo-heading h3{flex:1 1 12rem;min-width:0;margin:0;font:inherit;font-weight:600;overflow-wrap:anywhere}
+.pi-desk-todo-meta{display:flex;flex:none;gap:.75rem;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground));font-size:.75rem;font-variant-numeric:tabular-nums;white-space:nowrap}
 .pi-desk-todo-scroll{min-height:0;flex:1}
-.pi-desk-todo-scroll-content{padding:0 .5rem .5rem;overscroll-behavior:contain}
+.pi-desk-todo-scroll-content{padding:.375rem .5rem .5rem;overscroll-behavior:contain}
 .pi-desk-todo-list{list-style:none;margin:0;padding:0}
-.pi-desk-todo-title{min-width:0;flex:1;overflow-wrap:anywhere}
-.pi-desk-todo-leaf{display:flex;align-items:flex-start;gap:.5rem;min-width:0;padding:.5rem;border-radius:.375rem}
-.pi-desk-todo-leaf>.pi-desk-todo-icon{margin-top:.125rem}
-.pi-desk-todo-leaf[data-status="1"]{background:var(--pi-desk-plugin-muted,var(--muted))}
-.pi-desk-todo-leaf[data-status="2"] .pi-desk-todo-title{color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground))}
-.pi-desk-todo-leaf[data-status="3"]{background:color-mix(in srgb,var(--status-warning,var(--foreground)) 8%,transparent)}
+.pi-desk-todo-leaf{position:relative;display:flex;align-items:flex-start;gap:.625rem;min-width:0;padding:.5rem}
+.pi-desk-todo-leaf>.pi-desk-todo-icon{height:1.5em}
 .pi-desk-todo-leaf-copy{flex:1;min-width:0}
-.pi-desk-todo-leaf-top{display:flex;align-items:baseline;justify-content:space-between;gap:.25rem .5rem;flex-wrap:wrap}
-.pi-desk-todo-status{flex:none;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground));font-size:.75rem}
-.pi-desk-todo-note{margin:.25rem 0 0;font-size:.8125rem;overflow-wrap:anywhere;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground))}
-.pi-desk-todo-leaf[data-status="3"] .pi-desk-todo-note,.pi-desk-todo-leaf[data-status="3"] .pi-desk-todo-status{color:var(--status-warning,var(--foreground))}
+.pi-desk-todo-title{display:block;overflow-wrap:anywhere}
+.pi-desk-todo-leaf[data-status="1"] .pi-desk-todo-title{font-weight:600}
+.pi-desk-todo-leaf[data-status="2"] .pi-desk-todo-title{color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground))}
+.pi-desk-todo-note{margin:.125rem 0 0;font-size:.8125rem;overflow-wrap:anywhere;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground))}
+.pi-desk-todo-leaf[data-status="3"] .pi-desk-todo-note{color:var(--status-warning,var(--foreground))}
+.pi-desk-todo-flag{margin-inline-end:.5em;font-weight:600}
+.pi-desk-todo-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .pi-desk-todo-error{display:flex;align-items:center;gap:.5rem;justify-content:space-between;padding:.375rem .5rem;color:var(--pi-desk-plugin-destructive,var(--destructive));font-size:.8125rem;overflow-wrap:anywhere}
 @media(prefers-reduced-motion:reduce){.pi-desk-todo-row{transition:none}}
 `
@@ -121,15 +120,23 @@ function StatusIcon({ status }: { status: 0 | 1 | 2 | 3 }): React.JSX.Element {
 }
 
 function Task({ item, labels }: { item: TodoItem; labels: Labels }): React.JSX.Element {
+  const blocked = item.status === 3
   return (
     <li className="pi-desk-todo-leaf" data-todo-id={item.id} data-status={item.status}>
       <StatusIcon status={item.status} />
       <div className="pi-desk-todo-leaf-copy">
-        <div className="pi-desk-todo-leaf-top">
-          <span className="pi-desk-todo-title">{item.title}</span>
-          <span className="pi-desk-todo-status">{labels.statuses[item.status]}</span>
-        </div>
-        {item.note ? <p className="pi-desk-todo-note">{item.note}</p> : null}
+        <span className="pi-desk-todo-title">
+          {item.title}
+          {blocked ? null : (
+            <span className="pi-desk-todo-sr"> {labels.statuses[item.status]}</span>
+          )}
+        </span>
+        {blocked || item.note ? (
+          <p className="pi-desk-todo-note">
+            {blocked ? <span className="pi-desk-todo-flag">{labels.statuses[3]}</span> : null}
+            {item.note}
+          </p>
+        ) : null}
       </div>
     </li>
   )
@@ -222,7 +229,7 @@ function TodoProgress({
         <PluginPopover
           open={open}
           side="top"
-          align="start"
+          align="center"
           className="pi-desk-todo-popup"
           onOpenChange={(nextOpen, details) => {
             if (details.reason === 'trigger-press') {
@@ -264,22 +271,22 @@ function TodoProgress({
             }}
             onPointerLeave={leave}
           >
+            <header className="pi-desk-todo-heading">
+              <h3>{todo.title}</h3>
+              <div className="pi-desk-todo-meta">
+                {blocked ? (
+                  <span className="pi-desk-todo-blocked">{labels.blocked(blocked)}</span>
+                ) : null}
+                <span>
+                  {counts.completed}/{counts.total} {labels.done}
+                </span>
+              </div>
+            </header>
             <PluginScroll
               className="pi-desk-todo-scroll"
               viewportClassName="pi-desk-todo-scroll-content"
               aria-label={todo.title}
             >
-              <header className="pi-desk-todo-heading">
-                <h3>{todo.title}</h3>
-                <div className="pi-desk-todo-meta">
-                  <span>
-                    {labels.tasks} {counts.completed}/{counts.total} {labels.done}
-                  </span>
-                  {blocked ? (
-                    <span className="pi-desk-todo-blocked">{labels.blocked(blocked)}</span>
-                  ) : null}
-                </div>
-              </header>
               <ul className="pi-desk-todo-list">
                 {todo.items.map((item) => (
                   <Task key={item.id} item={item} labels={labels} />

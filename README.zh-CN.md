@@ -20,16 +20,30 @@ Pi 负责代理运行，Pi Desk 提供围绕它的工作界面。核心保持轻
 - **任务与结果集中呈现。** 通过相应插件，在任务中心跟踪后台命令和子代理，并预览交付物。
 - **按自己的需要扩展。** 使用 Pi Desk 插件和公共 SDK 添加工具、面板、应用及自定义消息视图。
 
-## 界面演示
+## 界面预览
 
-<p>
-  <a href="./docs/doc_asset/client-overview.webp">
-    <img src="./docs/doc_asset/client-overview.webp" alt="文件预览" width="300" />
-  </a>
-  <a href="./docs/doc_asset/multi-window.webp">
-    <img src="./docs/doc_asset/multi-window.webp" alt="多窗口会话" width="300" />
-  </a>
-</p>
+以下展示 Pi Desk 的常用界面；具体外观随版本与主题变化，点击截图可查看大图。
+
+<table>
+  <tr>
+    <th width="50%">文件预览</th>
+    <th width="50%">多会话并排</th>
+  </tr>
+  <tr>
+    <td>
+      <a href="./docs/doc_asset/client-overview.webp">
+        <img src="./docs/doc_asset/client-overview.webp" alt="文件预览" width="100%" />
+      </a>
+    </td>
+    <td>
+      <a href="./docs/doc_asset/multi-window.webp">
+        <img src="./docs/doc_asset/multi-window.webp" alt="多会话并排" width="100%" />
+      </a>
+    </td>
+  </tr>
+</table>
+
+<!-- 后续截图追加位置：每组两张，复制上方表格并替换图名、图片路径和链接；可继续追加多组。 -->
 
 在 [pidesk.dev](https://pidesk.dev) 查看产品演示，在[使用文档](https://pidesk.dev/docs/)中了解具体操作。
 

@@ -6,7 +6,6 @@ import {
   L2ChatSourceBindingError
 } from '@server/l2_biz/work-session/l2-work-session-chat-runtime'
 import { getL2WorkSessionManage } from '@server/l2_biz/work-session/l2-work-session-manage'
-import { L4PiModelContextBusyError } from '@server/l4_foundation/pi/l4-pi-chat-worker'
 import {
   createL4ApiErrorResponse,
   createL4ApiSuccessResponse
@@ -40,9 +39,6 @@ export async function POST(request: Request): Promise<Response> {
       return createL4ApiErrorResponse(409, '工作会话正在替换或切换分支', {
         key: 'errors:chatSourceBusy'
       })
-    }
-    if (error instanceof L4PiModelContextBusyError) {
-      return createL4ApiErrorResponse(409, error.message, { key: 'errors:chatContextBusy' })
     }
 
     console.error('[Pi Desk][ChatModelContextApi] 读取系统上下文失败', {

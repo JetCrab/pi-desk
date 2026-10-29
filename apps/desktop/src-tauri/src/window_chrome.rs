@@ -1,7 +1,12 @@
+#[cfg(windows)]
 use crate::{logging, runtime::ShellState};
+#[cfg(windows)]
 use serde::{Deserialize, Serialize};
-use tauri::{Manager, WebviewWindow};
+#[cfg(windows)]
+use tauri::Manager;
+use tauri::WebviewWindow;
 
+#[cfg(windows)]
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum Action {
@@ -14,6 +19,7 @@ enum Action {
     Close,
 }
 
+#[cfg(windows)]
 impl Action {
     fn name(self) -> &'static str {
         match self {
@@ -28,68 +34,110 @@ impl Action {
     }
 }
 
+#[cfg(windows)]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Request {
+    action: Action,
+}
+
+#[cfg(windows)]
 #[derive(Serialize)]
 struct WindowState {
     maximized: bool,
 }
 
-fn allows_window(label: &str) -> bool {
-    label == "control" || label.starts_with("browser-")
-}
-
-pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
-    let builder =
-        tauri::plugin::Builder::new("window-chrome").invoke_handler(tauri::generate_handler![
-            #![plugin(window_chrome)]
-            bridge
-        ]);
+pub fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     #[cfg(windows)]
-    let builder = builder.js_init_script(include_str!("window-chrome.js"));
-    builder.build()
+    let builder = builder.register_asynchronous_uri_scheme_protocol(
+        "pi-desk-window",
+        |context, request, responder| {
+            let app = context.app_handle().clone();
+            let label = context.webview_label().to_string();
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(handle(&app, &label, request));
+            });
+        },
+    );
+    builder
 }
 
-#[tauri::command]
-async fn bridge(window: WebviewWindow, action: Action) -> Result<WindowState, String> {
-    if !matches!(action, Action::State) {
-        let state = window.app_handle().state::<ShellState>();
-        logging::write(
-            &state.log_path,
-            "window-chrome-start",
-            &format!("label={} action={}", window.label(), action.name()),
-        );
-    }
-    let result = if !allows_window(window.label()) {
-        Err("此窗口不支持标题栏操作".to_string())
-    } else {
-        #[cfg(windows)]
-        {
-            perform(&window, action).map_err(|error| error.to_string())
-        }
-        #[cfg(not(windows))]
-        {
-            Err("标题栏操作仅支持 Windows".to_string())
-        }
+#[cfg(windows)]
+fn handle(
+    app: &tauri::AppHandle,
+    label: &str,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    let expected = crate::windows::window_origin(app, label);
+    let origin = request
+        .headers()
+        .get("Origin")
+        .and_then(|value| value.to_str().ok())
+        .filter(|source| {
+            expected
+                .as_ref()
+                .is_some_and(|expected| same_origin(source, expected))
+        });
+    let (Some(window), Some(origin)) = (app.get_webview_window(label), origin) else {
+        return response(403, None, serde_json::json!("窗口来源不受信任"));
     };
-    if let Err(error) = &result {
-        let state = window.app_handle().state::<ShellState>();
-        logging::write(
-            &state.log_path,
-            "window-chrome-failed",
-            &format!(
-                "label={} action={} error={error}",
-                window.label(),
-                action.name()
-            ),
-        );
-    } else if !matches!(action, Action::State) {
-        let state = window.app_handle().state::<ShellState>();
-        logging::write(
-            &state.log_path,
-            "window-chrome-end",
-            &format!("label={} action={}", window.label(), action.name()),
-        );
+    if request.uri().path() != "/" {
+        return response(400, Some(origin), serde_json::json!("窗口操作地址无效"));
     }
-    result
+    if request.method() == tauri::http::Method::OPTIONS {
+        return response(204, Some(origin), serde_json::Value::Null);
+    }
+    if request.method() != tauri::http::Method::POST {
+        return response(400, Some(origin), serde_json::json!("窗口操作仅支持 POST"));
+    }
+    let Ok(Request { action }) = serde_json::from_slice::<Request>(request.body()) else {
+        return response(400, Some(origin), serde_json::json!("窗口操作参数无效"));
+    };
+    match perform(&window, action) {
+        Ok(state) => response(200, Some(origin), serde_json::json!(state)),
+        Err(error) => {
+            failed(&window, action.name(), &error);
+            response(500, Some(origin), serde_json::json!(error.to_string()))
+        }
+    }
+}
+
+#[cfg(windows)]
+fn response(
+    status: u16,
+    origin: Option<&str>,
+    body: serde_json::Value,
+) -> tauri::http::Response<Vec<u8>> {
+    let mut response = tauri::http::Response::builder()
+        .status(status)
+        .header("Content-Type", "application/json");
+    if let Some(origin) = origin {
+        response = response.header("Access-Control-Allow-Origin", origin);
+    }
+    let body = if status == 204 {
+        response = response
+            .header("Access-Control-Allow-Methods", "POST")
+            .header("Access-Control-Allow-Headers", "Content-Type");
+        Vec::new()
+    } else {
+        serde_json::to_vec(&body).expect("无法序列化窗口操作响应")
+    };
+    response.body(body).expect("无法构建窗口操作响应")
+}
+
+#[cfg(windows)]
+fn same_origin(source: &str, expected: &url::Origin) -> bool {
+    url::Url::parse(source).is_ok_and(|url| &url.origin() == expected)
+}
+
+#[cfg(windows)]
+fn failed(window: &WebviewWindow, action: &str, error: &dyn std::fmt::Display) {
+    let state = window.app_handle().state::<ShellState>();
+    logging::write(
+        &state.log_path,
+        "window-chrome-failed",
+        &format!("label={} action={action} error={error}", window.label()),
+    );
 }
 
 #[cfg(windows)]
@@ -144,13 +192,13 @@ pub fn restore(window: &WebviewWindow, reason: &str) {
     let _ = (window, reason);
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
-    use super::{allows_window, Action};
-    use serde_json::{json, Value};
+    use super::{response, same_origin, Request};
+    use serde_json::json;
 
     #[test]
-    fn bridge_only_accepts_supported_actions() {
+    fn requests_only_accept_supported_actions_without_other_targets() {
         for action in [
             "attach",
             "detach",
@@ -160,83 +208,60 @@ mod tests {
             "toggle-maximize",
             "close",
         ] {
-            let parsed: Action = serde_json::from_value(json!(action)).unwrap();
-            assert_eq!(parsed.name(), action);
+            assert!(serde_json::from_value::<Request>(json!({"action":action})).is_ok());
         }
-        for action in [json!("maximize"), json!("destroy"), json!(""), json!(null)] {
-            assert!(serde_json::from_value::<Action>(action).is_err());
-        }
-    }
-
-    #[test]
-    fn bridge_rejects_unrelated_windows() {
-        assert!(allows_window("control"));
-        assert!(allows_window("browser-1"));
-        assert!(allows_window("browser-preview-2"));
-        assert!(!allows_window("main"));
-        assert!(!allows_window("control-1"));
-        assert!(!allows_window("other-browser-1"));
-    }
-
-    #[test]
-    fn remote_pages_only_receive_the_current_window_bridge() {
-        let capability: Value =
-            serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();
-        assert_eq!(capability["windows"], json!(["browser-*"]));
-        assert_eq!(capability["local"], false);
-        assert_eq!(
-            capability["remote"]["urls"],
-            json!(["http://*:*", "https://*:*"])
-        );
-        assert_eq!(
-            capability["permissions"],
-            json!(["window-chrome:allow-bridge"])
-        );
-    }
-
-    #[test]
-    fn remote_bridge_covers_http_ports_but_not_local_resources() {
-        let capability: Value =
-            serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();
-        let patterns: Vec<tauri::utils::acl::RemoteUrlPattern> = capability["remote"]["urls"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap().parse().unwrap())
-            .collect();
-        for url in [
-            "http://127.0.0.1:30333/",
-            "http://localhost:54321/login",
-            "https://example.com/",
-            "https://example.com:8443/project-preview?cwd=sample",
+        for value in [
+            json!({"action":"destroy"}),
+            json!({"action":"close","label":"control"}),
+            json!({"action":"state","origin":"http://trusted.test"}),
+            json!({}),
         ] {
-            assert!(
-                patterns
-                    .iter()
-                    .any(|pattern| pattern.test(&url.parse().unwrap())),
-                "{url}"
-            );
-        }
-        for url in ["file:///test.html", "tauri://localhost/"] {
-            assert!(
-                !patterns
-                    .iter()
-                    .any(|pattern| pattern.test(&url.parse().unwrap())),
-                "{url}"
-            );
+            assert!(serde_json::from_value::<Request>(value).is_err());
         }
     }
 
     #[test]
-    fn control_capability_remains_local() {
-        let capability: Value =
-            serde_json::from_str(include_str!("../capabilities/control.json")).unwrap();
-        assert_eq!(capability["windows"], json!(["control"]));
-        assert!(capability.get("remote").is_none());
-        assert_ne!(capability["local"], false);
+    fn origins_match_scheme_host_and_port_not_page_path() {
+        let origin = url::Url::parse("https://example.test:8443/")
+            .unwrap()
+            .origin();
+        assert!(same_origin(
+            "https://example.test:8443/project-preview?cwd=test",
+            &origin
+        ));
+        for source in [
+            "https://example.test/",
+            "http://example.test:8443/",
+            "https://other.test:8443/",
+            "null",
+            "invalid",
+        ] {
+            assert!(!same_origin(source, &origin));
+        }
+    }
+
+    #[test]
+    fn protocol_responses_only_allow_the_verified_origin() {
+        let denied = response(403, None, json!("窗口来源不受信任"));
+        assert!(!denied.headers().contains_key("Access-Control-Allow-Origin"));
+        let preflight = response(204, Some("http://127.0.0.1:30333"), serde_json::Value::Null);
         assert_eq!(
-            capability["permissions"],
-            json!(["core:default", "window-chrome:allow-bridge"])
+            preflight.headers()["Access-Control-Allow-Origin"],
+            "http://127.0.0.1:30333"
         );
+        assert_eq!(preflight.headers()["Access-Control-Allow-Methods"], "POST");
+        assert_eq!(
+            preflight.headers()["Access-Control-Allow-Headers"],
+            "Content-Type"
+        );
+        assert!(preflight.body().is_empty());
+    }
+
+    #[test]
+    fn browser_windows_have_no_tauri_command_or_remote_permissions() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();
+        assert_eq!(capability["permissions"], json!([]));
+        assert!(capability.get("remote").is_none());
     }
 }

@@ -1,0 +1,9 @@
+LIBRARY PiDeskUI
+EXPORTS
+    Init
+    Ready
+    ReadOptions
+    Progress
+    Finish
+    Gate
+    Destroy

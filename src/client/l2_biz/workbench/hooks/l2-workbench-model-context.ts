@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { L2ChatSource } from '@common/l2_biz/chat/l2-chat-contract'
 import type { L2ChatModelContextGetResponse } from '@common/l2_biz/chat/l2-chat-context-contract'
 import type {
@@ -9,6 +9,7 @@ import type {
 } from '@common/l3_modules/plugin-host/l3-plugin-native-pi-contract'
 import type { L2WorkbenchBiz } from '../l2-workbench-biz'
 import type { L2WorkbenchChatInputRuntime } from '../l2-workbench-chat-input-runtime'
+import type { L2NativeUiBiz, L2NativeUiState } from '../native-ui/l2-native-ui-biz'
 
 export type L2WorkbenchContextTab = 'tools' | 'system' | 'mcp'
 
@@ -58,18 +59,49 @@ export function useL2WorkbenchModelContext(input: {
   runtime: L2WorkbenchChatInputRuntime
   getContext: L2WorkbenchBiz['getChatModelContext']
   listCommands: L2WorkbenchBiz['listPiCommands']
+  nativeBiz: L2NativeUiBiz
+  nativeState: L2NativeUiState
 }): {
   context: PanelData<L2ChatModelContextGetResponse>
   tools: PanelData<L3PiNativeToolsListResponse>
   commands: PanelData<L3PiNativeCommandsListResponse>
 } {
-  const { source, runtime, getContext, listCommands, open, tab } = input
+  const { source, runtime, getContext, listCommands, open, tab, nativeBiz, nativeState } = input
   const loadContext = useCallback(() => getContext({ source }), [getContext, source])
   const loadTools = useCallback(() => runtime.listTools(source), [runtime, source])
   const loadCommands = useCallback(() => listCommands({ source }), [listCommands, source])
-  return {
-    context: usePanelData(open && tab === 'system', loadContext),
-    tools: usePanelData(open && tab === 'tools', loadTools),
-    commands: usePanelData(open && tab === 'mcp', loadCommands)
-  }
+  const context = usePanelData(open && tab === 'system', loadContext)
+  const tools = usePanelData(open && tab === 'tools', loadTools)
+  const commands = usePanelData(open && tab === 'mcp', loadCommands)
+  const queriedMcp = useRef(false)
+  useEffect(() => {
+    if (!open || tab !== 'mcp') {
+      queriedMcp.current = false
+      return
+    }
+    if (
+      queriedMcp.current ||
+      commands.loading ||
+      !commands.value?.commands.some(
+        (command) => command.name === 'mcp' && command.source === 'extension'
+      ) ||
+      !nativeState.ready ||
+      nativeState.commandPending ||
+      nativeState.snapshot.requests.length > 0
+    )
+      return
+    queriedMcp.current = true
+    void nativeBiz.executeCommand(source, 'mcp', '')
+  }, [
+    open,
+    tab,
+    commands.loading,
+    commands.value,
+    nativeState.ready,
+    nativeState.commandPending,
+    nativeState.snapshot.requests.length,
+    nativeBiz,
+    source
+  ])
+  return { context, tools, commands }
 }

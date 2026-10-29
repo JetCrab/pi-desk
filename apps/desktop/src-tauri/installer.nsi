@@ -33,10 +33,6 @@ ManifestDPIAwareness PerMonitorV2
 !include "Win\COM.nsh"
 !include "Win\Propkey.nsh"
 
-{{#if installer_hooks}}
-!include "{{installer_hooks}}"
-{{/if}}
-
 !define WEBVIEW2APPGUID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
 !define MANUFACTURER "{{manufacturer}}"
@@ -72,6 +68,12 @@ ManifestDPIAwareness PerMonitorV2
 !define ESTIMATEDSIZE "{{estimated_size}}"
 !define STARTMENUFOLDER "{{start_menu_folder}}"
 
+{{#if installer_hooks}}
+!include "{{installer_hooks}}"
+{{/if}}
+
+Var DesktopShortcut
+Var NativeUI
 Var PassiveMode
 Var UpdateMode
 Var NoShortcutMode
@@ -165,10 +167,8 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 !define MUI_LANGDLL_REGISTRY_KEY "${MANUPRODUCTKEY}"
 !define MUI_LANGDLL_REGISTRY_VALUENAME "Installer Language"
 
-; Installer pages, must be ordered as they appear
-; 1. Welcome Page
-!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
-!insertmacro MUI_PAGE_WELCOME
+; 交互页面由原生界面提供，安装执行仍由 NSIS 管理。
+Page custom NativeReady NativeReadyLeave
 
 ; 2. License Page (if defined)
 !if "${LICENSE}" != ""
@@ -184,14 +184,12 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 
 ; Pi Desk always overwrites the existing installation after a graceful exit.
 
-; 5. Choose install directory page
-!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
-!insertmacro MUI_PAGE_DIRECTORY
+; 安装位置由 NativeReady 收集。
 
 ; 6. Start menu shortcut page
 Var AppStartMenuFolder
 !if "${STARTMENUFOLDER}" != ""
-  !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE Skip
   !define MUI_STARTMENUPAGE_DEFAULTFOLDER "${STARTMENUFOLDER}"
 !else
   !define MUI_PAGE_CUSTOMFUNCTION_PRE Skip
@@ -199,22 +197,83 @@ Var AppStartMenuFolder
 !insertmacro MUI_PAGE_STARTMENU Application $AppStartMenuFolder
 
 ; 7. Installation page
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW NativeProgress
 !insertmacro MUI_PAGE_INSTFILES
 
 ; 8. Finish page
-;
-; Don't auto jump to finish page after installation page,
-; because the installation page has useful info that can be used debug any issues with the installer.
-!define MUI_FINISHPAGE_NOAUTOCLOSE
-; Use show readme button in the finish page as a button create a desktop shortcut
-!define MUI_FINISHPAGE_SHOWREADME
-!define MUI_FINISHPAGE_SHOWREADME_TEXT "$(createDesktop)"
-!define MUI_FINISHPAGE_SHOWREADME_FUNCTION CreateOrUpdateDesktopShortcut
-; Show run app after installation.
-!define MUI_FINISHPAGE_RUN
-!define MUI_FINISHPAGE_RUN_FUNCTION RunMainBinary
-!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
-!insertmacro MUI_PAGE_FINISH
+Page custom NativeFinish
+
+Function NativeReady
+  Call SkipIfPassive
+  PiDeskUI::Ready "$INSTDIR" "$NoShortcutMode"
+FunctionEnd
+
+Function NativeReadyLeave
+  PiDeskUI::ReadOptions
+  Pop $INSTDIR
+  Pop $DesktopShortcut
+  ${If} $INSTDIR == ""
+    MessageBox MB_OK|MB_ICONEXCLAMATION "请选择有效的安装位置。"
+    Abort
+  ${EndIf}
+FunctionEnd
+
+Function NativeProgress
+  ${If} $NativeUI = 1
+    PiDeskUI::Progress
+  ${EndIf}
+FunctionEnd
+
+Function NativeFinish
+  Call SkipIfPassive
+  PiDeskUI::Finish
+  Pop $0
+  ${If} $0 = 1
+    Call RunMainBinary
+  ${EndIf}
+FunctionEnd
+
+!define MUI_CUSTOMFUNCTION_GUIINIT NativeGuiInit
+Function NativeGuiInit
+  ${If} $PassiveMode <> 1
+    PiDeskUI::Init
+    Pop $0
+    ${If} $0 != "ok"
+      MessageBox MB_OK|MB_ICONSTOP "无法初始化安装界面。"
+      SetErrorLevel 1
+      Quit
+    ${EndIf}
+    StrCpy $NativeUI 1
+  ${EndIf}
+FunctionEnd
+
+Function .onGUIEnd
+  ${If} $NativeUI = 1
+    PiDeskUI::Destroy
+  ${EndIf}
+FunctionEnd
+
+Function CheckCancellation
+  ${If} $NativeUI = 1
+    PiDeskUI::Gate "check"
+    Pop $0
+    ${If} $0 = 1
+      SetErrorLevel 1
+      Abort "安装已取消。"
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+
+Function BeginFileReplacement
+  ${If} $NativeUI = 1
+    PiDeskUI::Gate "commit"
+    Pop $0
+    ${If} $0 = 1
+      SetErrorLevel 1
+      Abort "安装已取消。"
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
 
 Function RunMainBinary
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
@@ -275,6 +334,9 @@ FunctionEnd
 {{/each}}
 
 Function .onInit
+  SetAutoClose true
+  StrCpy $DesktopShortcut 1
+  StrCpy $AppStartMenuFolder "${STARTMENUFOLDER}"
   ${GetOptions} $CMDLINE "/P" $PassiveMode
   ${IfNot} ${Errors}
     StrCpy $PassiveMode 1
@@ -325,6 +387,7 @@ FunctionEnd
 
 
 Section EarlyChecks
+  Call CheckCancellation
   !if "${ALLOWDOWNGRADES}" == "false"
     ReadRegStr $R0 SHCTX "${UNINSTKEY}" "DisplayVersion"
     ${If} $R0 != ""
@@ -340,6 +403,7 @@ SectionEnd
 
 Function PrepareForOverwrite
   retry_exit:
+    Call CheckCancellation
     nsis_tauri_utils::FindProcessCurrentUser "${MAINBINARYNAME}.exe"
     Pop $R0
     ${If} $R0 = 1
@@ -357,6 +421,7 @@ Function PrepareForOverwrite
     StrCpy $R9 0
 
   wait_for_exit:
+    Call CheckCancellation
     nsis_tauri_utils::FindProcessCurrentUser "${MAINBINARYNAME}.exe"
     Pop $R0
     ${If} $R0 = 1
@@ -379,6 +444,7 @@ Function PrepareForOverwrite
 FunctionEnd
 
 Section WebView2
+  Call CheckCancellation
   ; Check if Webview2 is already installed and skip this section
   ${If} ${RunningX64}
     ReadRegStr $4 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\${WEBVIEW2APPGUID}" "pv"
@@ -428,9 +494,11 @@ Section WebView2
       Goto webview2_done
 
       install_webview2:
+        Call CheckCancellation
         DetailPrint "$(installingWebview2)"
         ; $6 holds the path to the webview2 installer
         ExecWait "$6 ${WEBVIEW2INSTALLERARGS} /install" $1
+        Call CheckCancellation
         ${If} $1 = 0
           DetailPrint "$(webview2InstallSuccess)"
         ${Else}
@@ -444,6 +512,7 @@ Section WebView2
       ${VersionCompare} "${MINIMUMWEBVIEW2VERSION}" "$4" $R0
       ${If} $R0 = 1
         update_webview:
+          Call CheckCancellation
           DetailPrint "$(installingWebview2)"
           ${If} ${RunningX64}
             ReadRegStr $R1 HKLM "SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate" "path"
@@ -457,6 +526,7 @@ Section WebView2
             ; Chromium updater docs: https://source.chromium.org/chromium/chromium/src/+/main:docs/updater/user_manual.md
             ; Modified from "HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft EdgeWebView\ModifyPath"
             ExecWait `"$R1" /install appguid=${WEBVIEW2APPGUID}&needsadmin=true` $1
+            Call CheckCancellation
             ${If} $1 = 0
               DetailPrint "$(webview2InstallSuccess)"
             ${Else}
@@ -472,6 +542,7 @@ SectionEnd
 
 Section Install
   Call PrepareForOverwrite
+  Call BeginFileReplacement
   ClearErrors
   SetOutPath $INSTDIR
   IfErrors install_failed
@@ -566,10 +637,10 @@ Section Install
     Call CreateOrUpdateStartMenuShortcut
   !insertmacro MUI_STARTMENU_WRITE_END
 
-  ; Create desktop shortcut for silent and passive installers
-  ; because finish page will be skipped
+  ; 交互安装遵循准备页选择；静默和被动安装保留原默认行为。
   ${If} $PassiveMode = 1
   ${OrIf} ${Silent}
+  ${OrIf} $DesktopShortcut = 1
     Call CreateOrUpdateDesktopShortcut
   ${EndIf}
 

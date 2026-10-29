@@ -37,7 +37,7 @@ export function L2NativeUiNotices({
   const { t } = useTranslation('workbench')
   return (
     <section
-      aria-label={t('nativeCommandOutput', { defaultValue: '会话命令输出' })}
+      aria-label={t('nativeCommandOutput', { defaultValue: '会话通知' })}
       className="space-y-3"
     >
       {notices.length ? (
@@ -51,7 +51,7 @@ export function L2NativeUiNotices({
         ))
       ) : (
         <p className="py-6 text-sm text-muted-foreground">
-          {t('nativeCommandOutputEmpty', { defaultValue: '暂无会话命令输出' })}
+          {t('nativeCommandOutputEmpty', { defaultValue: '暂无会话通知' })}
         </p>
       )}
     </section>

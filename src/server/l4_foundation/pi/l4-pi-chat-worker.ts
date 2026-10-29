@@ -127,13 +127,6 @@ export class L4PiDirectBashRunningError extends Error {
   }
 }
 
-export class L4PiModelContextBusyError extends Error {
-  constructor() {
-    super('当前会话正在运行，暂时无法查看系统上下文')
-    this.name = 'L4PiModelContextBusyError'
-  }
-}
-
 export interface L4PiChatContextUsage {
   tokens: number | null
   contextWindow: number
@@ -803,19 +796,7 @@ export class L4PiChatWorker {
   }
 
   async readModelContext(): Promise<L4PiModelContext> {
-    if (
-      this.startingAcceptedInput ||
-      this.acceptedInputs.length > 0 ||
-      this.activeValidation ||
-      this.pendingPrompt ||
-      this.activeCompactionTempId ||
-      this.observedRunPromises.size > 0
-    ) {
-      throw new L4PiModelContextBusyError()
-    }
-
     const session = await this.ensureSession()
-    if (!session.isIdle || session.isBashRunning) throw new L4PiModelContextBusyError()
 
     const activeToolNames = new Set(session.getActiveToolNames())
     const tools = session

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Pi Desk",
-  "version": "1.1.20",
+  "version": "1.1.22",
   "identifier": "com.jetcrab.desktop",
   "build": {
     "beforeDevCommand": "pnpm run build:web",
@@ -28,6 +28,7 @@
     "windows": {
       "nsis": {
         "template": "installer.nsi",
+        "installerHooks": "installer-ui/hooks.nsh",
         "installMode": "currentUser",
         "displayLanguageSelector": false,
         "startMenuFolder": "Pi Desk"

@@ -38,8 +38,7 @@ fn main() {
     if let Some(code) = desktop_tunnel_cli::run_if_requested() {
         std::process::exit(code);
     }
-    let app = tauri::Builder::default()
-        .plugin(window_chrome::init())
+    let app = window_chrome::register(tauri::Builder::default())
         .plugin(tauri_plugin_single_instance::init(|app, arguments, _| {
             if arguments
                 .iter()

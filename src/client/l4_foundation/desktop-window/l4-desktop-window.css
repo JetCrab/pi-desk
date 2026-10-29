@@ -40,10 +40,6 @@
   white-space: nowrap;
 }
 
-.pi-desk-titlebar[data-focused='false'] .pi-desk-titlebar-title {
-  color: var(--muted-foreground);
-}
-
 .pi-desk-titlebar-controls {
   display: flex;
   align-self: stretch;

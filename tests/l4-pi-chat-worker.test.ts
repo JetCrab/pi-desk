@@ -1122,7 +1122,7 @@ test('interrupt 和 dispose 清除压缩期间暂存输入，不会在恢复时�
   }
 })
 
-test('读取会话配置不执行上下文转换且只返回当前启用工具', async () => {
+test('读取会话配置在空闲、Agent 和 Bash 运行时不执行上下文转换且只返回当前启用工具', async () => {
   const [{ SessionManager }, { L4PiChatWorker }] = await loadWorkerModules()
   const manager = SessionManager.inMemory('C:/project')
   const sourceMessages = [
@@ -1164,6 +1164,7 @@ test('读取会话配置不执行上下文转换且只返回当前启用工具',
     isIdle: true,
     isBashRunning: false,
     systemPrompt: '系统提示词',
+    extensionRunner: { emit: async (): Promise<void> => undefined },
     sessionManager: {
       buildSessionContext: () => ({ messages: sourceMessages })
     },
@@ -1209,18 +1210,25 @@ test('读取会话配置不执行上下文转换且只返回当前启用工具',
   Reflect.set(worker, 'session', session)
 
   try {
-    assert.deepEqual(await worker.readModelContext(), {
-      systemPrompt: '系统提示词',
-      tools: [
-        {
-          name: 'read',
-          description: '读取文件',
-          parameters: { type: 'object', properties: { path: { type: 'string' } } }
-        }
-      ]
-    })
-    assert.equal(transformCalls, 0)
-    assert.equal(convertCalls, 0)
+    for (const state of [
+      { isIdle: true, isBashRunning: false },
+      { isIdle: false, isBashRunning: false },
+      { isIdle: true, isBashRunning: true }
+    ]) {
+      Object.assign(session, state)
+      assert.deepEqual(await worker.readModelContext(), {
+        systemPrompt: '系统提示词',
+        tools: [
+          {
+            name: 'read',
+            description: '读取文件',
+            parameters: { type: 'object', properties: { path: { type: 'string' } } }
+          }
+        ]
+      })
+      assert.equal(transformCalls, 0)
+      assert.equal(convertCalls, 0)
+    }
   } finally {
     await worker.dispose()
   }
