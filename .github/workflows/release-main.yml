@@ -390,12 +390,13 @@ jobs:
           path: ${{ env.RELEASE_ROOT }}/release
       - name: 末端创建 Release、上传完整安装包并公开版本
         env:
-          GH_TOKEN: ${{ github.token }}
+          # 历史固定源码涉及 workflow 变更时，GitHub 需要默认令牌不提供的 workflows:write。
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN }}
         run: node .github/scripts/release-main.mjs publish
       - name: 清理本次未公开草稿，保留原制品供重试
         if: failure() || cancelled()
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN }}
         run: node .github/scripts/release-main.mjs cleanup
 
   website-build:

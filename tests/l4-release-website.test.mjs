@@ -229,6 +229,17 @@ test('主发布把模型和部署凭据分开，不开放PR特权入口', async 
       'production'
     )
   }
+  const releaseSteps = main.jobs.publish.steps.filter(
+    (step) => step.env?.GH_TOKEN === '${{ secrets.RELEASE_GITHUB_TOKEN }}'
+  )
+  assert.deepEqual(
+    releaseSteps.map((step) => step.run),
+    [
+      'node .github/scripts/release-main.mjs publish',
+      'node .github/scripts/release-main.mjs cleanup'
+    ]
+  )
+  assert.equal((JSON.stringify(main).match(/RELEASE_GITHUB_TOKEN/g) ?? []).length, 2)
   const modelStep = main.jobs.notes.steps.find((step) => step.env?.RELEASE_MODEL_API_KEY)
   assert.ok(modelStep)
   for (const key of Object.keys(modelStep.env))
@@ -249,7 +260,7 @@ test('主发布把模型和部署凭据分开，不开放PR特权入口', async 
     assert.equal(checkout.with['persist-credentials'], false)
     assert.ok(job.steps.some((step) => commands.some((command) => command.test(step.run ?? ''))))
   }
-  assert.doesNotMatch(JSON.stringify(dev), /WEBSITE_SSH|RELEASE_MODEL_API_KEY/)
+  assert.doesNotMatch(JSON.stringify(dev), /WEBSITE_SSH|RELEASE_MODEL_API_KEY|RELEASE_GITHUB_TOKEN/)
   for (const job of Object.values(dev.jobs)) {
     assert.notEqual(job.with?.upload_server, true)
     assert.notEqual(job.with?.distribute, true)
