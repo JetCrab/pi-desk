@@ -31,7 +31,6 @@ export function L4DesktopTitlebar(): React.JSX.Element {
   const [state, setState] = useState<L4DesktopWindowState | null>(null)
   const [title, setTitle] = useState('Pi Desk')
   const [locale, setLocale] = useState<'zh-CN' | 'en'>('zh-CN')
-  const [focused, setFocused] = useState(true)
 
   useEffect(() => {
     const desktop = getL4DesktopWindow()
@@ -50,25 +49,21 @@ export function L4DesktopTitlebar(): React.JSX.Element {
         void desktop
           .invoke('state')
           .then((next) => {
-            if (!disposed) setState((current) => (current ? next : null))
+            if (!disposed) {
+              setState((current) =>
+                current && current.maximized !== next.maximized ? next : current
+              )
+            }
           })
           .catch((error: unknown) => {
             console.error('[desktop-window] 读取窗口状态失败', error)
           })
       })
     }
-    const onFocus = (): void => {
-      setFocused(true)
-    }
-    const onBlur = (): void => {
-      setFocused(false)
-    }
     const observer = new MutationObserver(readTitle)
     observer.observe(document.head, { childList: true, subtree: true, characterData: true })
     observer.observe(root, { attributes: true, attributeFilter: ['lang'] })
     window.addEventListener('resize', refreshState)
-    window.addEventListener('focus', onFocus)
-    window.addEventListener('blur', onBlur)
 
     // 按钮已挂载并绑定事件后才关闭系统装饰；旧页面不会调用此能力。
     void desktop
@@ -76,7 +71,6 @@ export function L4DesktopTitlebar(): React.JSX.Element {
       .then((next) => {
         if (disposed) return
         readTitle()
-        setFocused(document.hasFocus())
         root.dataset.piDeskWindow = ''
         setState(next)
       })
@@ -90,8 +84,6 @@ export function L4DesktopTitlebar(): React.JSX.Element {
       observer.disconnect()
       cancelAnimationFrame(frame)
       window.removeEventListener('resize', refreshState)
-      window.removeEventListener('focus', onFocus)
-      window.removeEventListener('blur', onBlur)
       delete root.dataset.piDeskWindow
       void desktop.invoke('detach').catch((error: unknown) => {
         console.error('[desktop-window] 恢复系统标题栏失败', error)
@@ -104,7 +96,9 @@ export function L4DesktopTitlebar(): React.JSX.Element {
     if (!desktop) return
     try {
       const next = await desktop.invoke(action)
-      if (adapter.current === desktop) setState(next)
+      if (adapter.current === desktop) {
+        setState((current) => (current?.maximized === next.maximized ? current : next))
+      }
     } catch (error) {
       console.error(`[desktop-window] 窗口操作失败 action=${action}`, error)
       try {
@@ -129,7 +123,6 @@ export function L4DesktopTitlebar(): React.JSX.Element {
     <header
       className="pi-desk-titlebar"
       data-testid="desktop-titlebar"
-      data-focused={focused}
       hidden={!state}
       aria-label={text.window}
       onMouseDown={onDrag}

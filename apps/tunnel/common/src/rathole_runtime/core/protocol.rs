@@ -1,7 +1,7 @@
 // Derived from rathole (Apache-2.0), reduced to Noise TCP/Yamux protocol V2.
 use anyhow::{Context, Result, bail};
-use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 pub const HASH_WIDTH_IN_BYTES: usize = 32;
@@ -58,23 +58,17 @@ struct PacketLength {
     data: usize,
 }
 
-lazy_static! {
-    static ref PACKET_LENGTH: PacketLength = {
-        let digest = digest(b"pi-desk");
-        PacketLength {
-            hello: bincode::serialized_size(&Hello::ControlChannelHello(
-                CURRENT_PROTO_VERSION,
-                digest,
-            ))
+static PACKET_LENGTH: LazyLock<PacketLength> = LazyLock::new(|| {
+    let digest = digest(b"pi-desk");
+    PacketLength {
+        hello: bincode::serialized_size(&Hello::ControlChannelHello(CURRENT_PROTO_VERSION, digest))
             .unwrap() as usize,
-            auth: bincode::serialized_size(&Auth(digest)).unwrap() as usize,
-            ack: bincode::serialized_size(&Ack::Ok).unwrap() as usize,
-            control: bincode::serialized_size(&ControlChannelCmd::CreateDataChannel).unwrap()
-                as usize,
-            data: bincode::serialized_size(&DataChannelCmd::StartForwardTcp).unwrap() as usize,
-        }
-    };
-}
+        auth: bincode::serialized_size(&Auth(digest)).unwrap() as usize,
+        ack: bincode::serialized_size(&Ack::Ok).unwrap() as usize,
+        control: bincode::serialized_size(&ControlChannelCmd::CreateDataChannel).unwrap() as usize,
+        data: bincode::serialized_size(&DataChannelCmd::StartForwardTcp).unwrap() as usize,
+    }
+});
 
 pub async fn read_hello<T: AsyncRead + AsyncWrite + Unpin>(connection: &mut T) -> Result<Hello> {
     let hello: Hello = read_exact_bincode(connection, PACKET_LENGTH.hello).await?;

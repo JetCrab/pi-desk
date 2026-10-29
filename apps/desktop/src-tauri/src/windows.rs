@@ -29,12 +29,28 @@ impl WindowRegistry {
     }
 }
 
+#[cfg(windows)]
+pub(crate) fn window_origin(app: &AppHandle, label: &str) -> Option<url::Origin> {
+    if label == "control" {
+        // Windows 默认将 bundled 页面映射到 http://tauri.localhost。
+        return Some(
+            Url::parse("http://tauri.localhost")
+                .expect("Tauri 内置页面地址无效")
+                .origin(),
+        );
+    }
+    let state = app.state::<ShellState>();
+    let labels = state.windows.labels.lock().ok()?;
+    let window = labels.values().find(|window| window.label == label)?;
+    Url::parse(&window.target).ok().map(|url| url.origin())
+}
+
 pub fn open_control(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("control") {
         return show(&window);
     }
     let navigate_app = app.clone();
-    let window = WebviewWindowBuilder::new(app, "control", WebviewUrl::App("index.html".into()))
+    let builder = WebviewWindowBuilder::new(app, "control", WebviewUrl::App("index.html".into()))
         .title("Pi Desk")
         .inner_size(960.0, 720.0)
         .min_inner_size(720.0, 560.0)
@@ -54,7 +70,10 @@ pub fn open_control(app: &AppHandle) -> Result<(), String> {
                 "control-page-load",
                 &format!("event={:?} url={}", payload.event(), payload.url()),
             );
-        })
+        });
+    #[cfg(windows)]
+    let builder = builder.initialization_script(include_str!("window-chrome.js"));
+    let window = builder
         .build()
         .map_err(|error| format!("打开控制中心失败：{error}"))?;
     #[cfg(windows)]
@@ -230,6 +249,8 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
                 ),
             );
         });
+    #[cfg(windows)]
+    let builder = builder.initialization_script(include_str!("window-chrome.js"));
     #[cfg(not(target_os = "macos"))]
     let builder = builder.data_directory(registry.data_directory.clone());
     let window = builder

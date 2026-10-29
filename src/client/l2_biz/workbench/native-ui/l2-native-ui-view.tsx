@@ -236,6 +236,8 @@ export function L2NativeUiQuestions({
   const { t } = useTranslation('workbench')
   const { state } = model
   const request = state.snapshot.requests[0]
+  const signingIn =
+    state.commandPending === '/mcp login' || state.commandPending?.startsWith('/mcp login ')
   return (
     <>
       {state.error || (!state.ready && request) ? (
@@ -286,14 +288,15 @@ export function L2NativeUiQuestions({
       ) : null}
       {state.notices.length > 0 ? (
         <Collapsible
-          defaultOpen={Boolean(request || state.commandPending?.startsWith('/mcp login '))}
+          key={request ? `notices:${request.id}` : signingIn ? 'mcp-login' : 'notices'}
+          defaultOpen={Boolean(request || signingIn)}
           className="mb-2 rounded-lg border px-3 py-2"
           data-testid="native-ui-output"
         >
           <div className="flex items-center gap-2">
             <CollapsibleTrigger className="group flex min-h-7 min-w-0 flex-1 cursor-pointer items-center gap-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <ChevronDownIcon className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-180 motion-reduce:transition-none" />
-              {t('nativeCommandOutput', { defaultValue: '会话命令输出' })}
+              {t('nativeCommandOutput', { defaultValue: '会话通知' })}
             </CollapsibleTrigger>
             <Button
               type="button"

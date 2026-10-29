@@ -20,16 +20,30 @@ Pi powers the agent. Pi Desk provides the interface, with a lightweight core and
 - **Tasks and results in view.** Follow background commands and subagents in the task center, and preview deliverables with the corresponding plugins.
 - **Extend it your way.** Add tools, panels, applications, and custom message views through Pi Desk plugins and the public SDK.
 
-## Interface demo
+## Interface preview
 
-<p>
-  <a href="./docs/doc_asset/client-overview.webp">
-    <img src="./docs/doc_asset/client-overview.webp" alt="File preview" width="300" />
-  </a>
-  <a href="./docs/doc_asset/multi-window.webp">
-    <img src="./docs/doc_asset/multi-window.webp" alt="Side-by-side conversations" width="300" />
-  </a>
-</p>
+Explore common Pi Desk views below; appearance varies by version and theme, and you can click any screenshot to view it full size.
+
+<table>
+  <tr>
+    <th width="50%">File preview</th>
+    <th width="50%">Side-by-side conversations</th>
+  </tr>
+  <tr>
+    <td>
+      <a href="./docs/doc_asset/client-overview.webp">
+        <img src="./docs/doc_asset/client-overview.webp" alt="File preview" width="100%" />
+      </a>
+    </td>
+    <td>
+      <a href="./docs/doc_asset/multi-window.webp">
+        <img src="./docs/doc_asset/multi-window.webp" alt="Side-by-side conversations" width="100%" />
+      </a>
+    </td>
+  </tr>
+</table>
+
+<!-- Add more screenshots here: copy the table above for each pair, replacing titles, image paths, and links. Repeat for additional groups. -->
 
 Visit [pidesk.dev](https://pidesk.dev) for product demos and [the documentation](https://pidesk.dev/docs/) for usage guides.
 

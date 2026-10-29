@@ -29,6 +29,7 @@ import {
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const executable = resolve(process.argv[2] ?? '')
+const protocolOnly = process.argv.includes('--protocol-only')
 const identifier = 'com.jetcrab.desktop.window-chrome-test'
 assert.equal(process.platform, 'win32')
 assert.ok(process.argv[2], '传入独立 identifier 的桌面 exe')
@@ -49,8 +50,16 @@ await writeFile(join(project, 'README.md'), '# 桌面窗口预览\n\n窗口标�
 const debugPort = await reservePort()
 const sourcePort = await reservePort()
 const sourceUrl = `http://127.0.0.1:${sourcePort}/`
-const fixture = createServer((_request, response) => {
+const fixture = createServer((request, response) => {
   response.setHeader('Content-Type', 'text/html; charset=utf-8')
+  if (request.url === '/frame') {
+    response.end(`<!doctype html><script>
+      fetch('http://pi-desk-window.localhost/', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'minimize'})})
+        .then(response=>response.status,()=> 'rejected')
+        .then(result=>parent.postMessage({frameReady:true,bridge:Boolean(window.__PI_DESK_WINDOW__),result},'*'));
+    </script>`)
+    return
+  }
   response.end(
     '<!doctype html><html lang="zh-CN"><title>兼容页面</title><h1>未接入标题栏的页面</h1></html>'
   )
@@ -98,6 +107,9 @@ async function connect(target) {
   socket.on('message', (data) => {
     const message = JSON.parse(data.toString())
     if (message.method === 'Runtime.exceptionThrown') errors.push(message.params.exceptionDetails)
+    if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') {
+      errors.push(message.params.args.map((value) => value.value ?? value.description))
+    }
     const request = pending.get(message.id)
     if (!request) return
     pending.delete(message.id)
@@ -204,7 +216,7 @@ public class ChromeWindowTest {
       Rect r; GetWindowRect(h,out r);
       Console.WriteLine(SendMessage(h,0x84,IntPtr.Zero,new IntPtr(((r.bottom-2)<<16)|((r.right-2)&0xffff))).ToInt64());
     }
-    if(action == "drag" || action == "snap") {
+    if(action == "click" || action == "drag" || action == "snap") {
       SetForegroundWindow(h);
       if(GetForegroundWindow()!=h) throw new Exception("无法聚焦测试窗口");
       if(action == "snap") {
@@ -214,7 +226,7 @@ public class ChromeWindowTest {
         Rect r; GetWindowRect(h,out r); SetCursorPos(r.left+x,r.top+y);
         mouse_event(2,0,0,0,UIntPtr.Zero);
         // 鼠标输入需要分帧送达 WebView 和原生拖动循环。
-        Thread.Sleep(100); SetCursorPos(r.left+x+80,r.top+y+60);
+        Thread.Sleep(100); if(action == "drag") SetCursorPos(r.left+x+80,r.top+y+60);
         Thread.Sleep(100); mouse_event(4,0,0,0,UIntPtr.Zero);
       }
     }
@@ -330,11 +342,40 @@ try {
     control,
     `(() => {const r=document.querySelector('[data-testid="desktop-titlebar"]').getBoundingClientRect();return {x:Math.round(r.width/2),y:Math.round(r.height/2)}})()`
   )
-  await native('drag', controlHandle, dragPoint.x, dragPoint.y)
-  await until(async () => {
-    const s = await state(controlHandle)
-    return s.x !== beforeDrag.x && s.y !== beforeDrag.y
-  }, '标题栏拖动')
+  await evaluate(
+    control,
+    `(() => {
+    const title=document.querySelector('[data-testid="desktop-titlebar"] span');
+    window.titleColors=[];
+    window.titleColorFrame=0;
+    const capture=()=>{window.titleColors.push(getComputedStyle(title).color);window.titleColorFrame=requestAnimationFrame(capture)};
+    capture();
+  })()`
+  )
+  if (!protocolOnly) {
+    await native('click', controlHandle, dragPoint.x, dragPoint.y)
+    await native('drag', controlHandle, dragPoint.x, dragPoint.y)
+  } else {
+    for (const type of ['blur', 'focus']) {
+      await evaluate(
+        control,
+        `new Promise(resolve=>{window.dispatchEvent(new Event('${type}'));requestAnimationFrame(()=>requestAnimationFrame(resolve))})`
+      )
+    }
+  }
+  const titleColors = await evaluate(
+    control,
+    `(() => {cancelAnimationFrame(window.titleColorFrame);return window.titleColors})()`
+  )
+  assert.ok(titleColors.length > 0, '需采集标题颜色')
+  assert.equal(new Set(titleColors).size, 1, '标题文字颜色保持不变')
+  if (!protocolOnly) {
+    assert.ok(titleColors.length > 1, '点击和拖动需采集多帧标题颜色')
+    await until(async () => {
+      const s = await state(controlHandle)
+      return s.x !== beforeDrag.x && s.y !== beforeDrag.y
+    }, '标题栏拖动')
+  }
   assert.equal((await native('hit-test', controlHandle))[0], 17, '右下角提供系统缩放命中区')
   await control.send('Input.dispatchMouseEvent', {
     type: 'mousePressed',
@@ -350,13 +391,19 @@ try {
   })
   await until(async () => (await state(controlHandle)).maximized, '双击最大化')
   await native('restore', controlHandle)
-  await native('snap', controlHandle)
-  await until(async () => {
-    const s = await state(controlHandle)
-    return s.width !== beforeDrag.width && s.height !== beforeDrag.height
-  }, 'Win+Left贴边')
-  await native('restore', controlHandle)
-  record('标题栏拖动、双击、边缘缩放命中区和系统贴边')
+  if (!protocolOnly) {
+    await native('snap', controlHandle)
+    await until(async () => {
+      const s = await state(controlHandle)
+      return s.width !== beforeDrag.width && s.height !== beforeDrag.height
+    }, 'Win+Left贴边')
+    await native('restore', controlHandle)
+  }
+  record(
+    protocolOnly
+      ? 'CDP双击、原生边缘命中区与模拟focus/blur颜色；未覆盖真实鼠标拖动和系统贴边'
+      : '标题栏拖动、双击、边缘缩放命中区和系统贴边'
+  )
 
   let known = new Set((await native()).map((item) => item.handle))
   const open = async (url, preview = false) => {
@@ -390,15 +437,35 @@ try {
     return Promise.all([
       call('get_control_state'),
       call('plugin:window|close',{label:'control'}),
-      call('plugin:window-chrome|bridge',{action:'destroy'})
+      window.__PI_DESK_WINDOW__.invoke('destroy')
     ].map(p=>p.then(()=>false,()=>true)))
   })()`
   )
   assert.deepEqual(rejected, [true, true, true])
-  await invoke(legacy.page, 'plugin:window-chrome|bridge', { action: 'minimize', label: 'control' })
-  assert.equal((await state(legacy.handle)).minimized, true)
+  const invalidTargetStatus = await evaluate(
+    legacy.page,
+    `fetch('http://pi-desk-window.localhost/', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'minimize',label:'control'})}).then(response=>response.status)`
+  )
+  assert.equal(invalidTargetStatus, 400, '拒绝指定其他窗口目标的请求')
+  await bridge(legacy.page, 'state')
+  assert.equal((await state(legacy.handle)).minimized, false, '附加其他窗口目标的消息必须拒绝')
+  assert.equal((await state(controlHandle)).minimized, false)
+  await bridge(legacy.page, 'minimize')
+  await until(async () => (await state(legacy.handle)).minimized, '网页仅可最小化当前窗口')
   assert.equal((await state(controlHandle)).minimized, false)
   await native('restore', legacy.handle)
+  const frameResult = await evaluate(
+    control,
+    `new Promise(resolve => {
+    const listener=event=>{if(event.origin!==${JSON.stringify(legacyUrl.slice(0, -1))} || !event.data?.frameReady)return;window.removeEventListener('message',listener);resolve(event.data)};
+    window.addEventListener('message',listener);
+    const frame=document.createElement('iframe');frame.src=${JSON.stringify(`${legacyUrl}frame`)};frame.hidden=true;document.body.append(frame);
+  })`
+  )
+  assert.equal(frameResult.bridge, false, '子框架不注入桌面窗口能力')
+  assert.equal(frameResult.result, 'rejected', '跨源子框架请求被来源校验拒绝')
+  await bridge(control, 'state')
+  assert.equal((await state(controlHandle)).minimized, false, '跨源子框架不能操作宿主窗口')
   await bridge(legacy.page, 'attach')
   assert.equal((await state(legacy.handle)).decorated, false)
   await legacy.page.send('Page.navigate', { url: `${legacyUrl}other` })
@@ -604,10 +671,23 @@ try {
   assert.deepEqual(preview.page.errors, [])
   passed = true
 } catch (error) {
+  const diagnostics = await Promise.all(
+    pages.map(async (page) => ({
+      errors: page.errors,
+      state: await evaluate(
+        page,
+        `({url:location.href,chrome:Boolean(window.chrome?.webview),bridge:Boolean(window.__PI_DESK_WINDOW__),top:window===window.top,body:document.body?.innerText.slice(0,1500)})`
+      ).catch((cause) => String(cause))
+    }))
+  )
+  await writeFile(join(root, 'page-diagnostics.json'), JSON.stringify(diagnostics, null, 2))
   console.error(`窗口验收失败，现场：${root}`)
   throw error
 } finally {
-  await writeFile(join(root, 'results.json'), JSON.stringify({ passed, results }, null, 2))
+  await writeFile(
+    join(root, 'results.json'),
+    JSON.stringify({ passed, scope: protocolOnly ? 'protocol-only' : 'full', results }, null, 2)
+  )
   await writeFile(join(root, 'process.log'), output)
   for (const page of pages) page.close()
   const cleanupErrors = []
@@ -643,4 +723,4 @@ try {
   if (cleanupErrors.length) throw new AggregateError(cleanupErrors, '测试进程清理失败')
   if (passed) await rm(agentRoot, { recursive: true, force: true })
 }
-console.info(`窗口验收通过，进程与端口已释放：${root}`)
+console.info(`窗口${protocolOnly ? '非原生输入范围' : '完整'}验收通过，进程与端口已释放：${root}`)

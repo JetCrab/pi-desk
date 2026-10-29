@@ -33,7 +33,12 @@ const todo = {
   items: [
     { id: 'prepare', title: '梳理接口与依赖', status: 2 },
     { id: 'client', title: '客户端迁移', status: 2 },
-    { id: 'backend', title: '后台迁移', status: 1 },
+    {
+      id: 'backend',
+      title: '后台迁移',
+      status: 1,
+      note: '4452139 源码与前端资源已冻结，独立 release 构建中，完成后对比依赖树与制品体积'
+    },
     { id: 'sales', title: '销售端迁移', status: 3, note: '等待确认旧接口兼容范围' },
     { id: 'verify', title: '验证与交付', status: 0 }
   ]
@@ -374,6 +379,12 @@ async function bounds(client) {
     }
     if(widget){const r=widget.getBoundingClientRect();if(r.left<0||r.right>innerWidth+1)errors.push('摘要越界');if(input&&r.bottom>input.getBoundingClientRect().top)errors.push('摘要挡住输入框')}
     if(panel){const r=panel.getBoundingClientRect();if(r.left<0||r.right>innerWidth+1||r.top<0)errors.push('浮层越界');if(input&&r.bottom>input.getBoundingClientRect().top)errors.push('浮层挡住输入框')}
+    if(panel&&row){
+      const p=panel.getBoundingClientRect(),r=row.getBoundingClientRect();
+      const max=parseFloat(getComputedStyle(document.documentElement).fontSize)*40;
+      if(Math.abs(p.left+p.right-r.left-r.right)>2)errors.push('浮层未与摘要居中');
+      if(Math.abs(p.width-Math.min(max,r.width))>3)errors.push('浮层宽度未跟随摘要或超过40rem');
+    }
     if(close){const r=close.getBoundingClientRect();if(!close.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)))errors.push('关闭按钮被遮挡')}
     return errors
   })()`)

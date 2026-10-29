@@ -36,9 +36,5 @@ fn main() {
             file.display()
         );
     }
-    tauri_build::try_build(tauri_build::Attributes::new().plugin(
-        "window-chrome",
-        tauri_build::InlinedPlugin::new().commands(&["bridge"]),
-    ))
-    .expect("无法生成桌面构建资源")
+    tauri_build::build()
 }

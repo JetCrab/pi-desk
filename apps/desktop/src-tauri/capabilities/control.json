@@ -3,5 +3,5 @@
   "identifier": "control-capability",
   "description": "The bundled control center can invoke desktop commands.",
   "windows": ["control"],
-  "permissions": ["core:default", "window-chrome:allow-bridge"]
+  "permissions": ["core:default"]
 }
