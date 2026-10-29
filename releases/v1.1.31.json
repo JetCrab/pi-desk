@@ -1,0 +1,112 @@
+{
+  "tag": "v1.1.31",
+  "date": 1793209702005,
+  "source": {
+    "base": "24ac07483a1d11694e029f7f352438147ee2af4d",
+    "head": "63651b10980c75f5f5f33304ca84e2a300a163e7"
+  },
+  "packages": [
+    {
+      "name": "@jetcrab/pi-desk-sdk",
+      "version": "1.1.10"
+    },
+    {
+      "name": "@jetcrab/pi-desk",
+      "version": "1.1.31"
+    },
+    {
+      "name": "@jetcrab/pi-desk-bg-run",
+      "version": "1.1.10"
+    },
+    {
+      "name": "@jetcrab/pi-desk-ctx",
+      "version": "1.1.11"
+    },
+    {
+      "name": "@jetcrab/pi-desk-deliverables",
+      "version": "1.1.12"
+    },
+    {
+      "name": "@jetcrab/pi-desk-quota-viewer",
+      "version": "1.1.12"
+    },
+    {
+      "name": "@jetcrab/pi-desk-remote-debug",
+      "version": "1.1.11"
+    },
+    {
+      "name": "@jetcrab/pi-desk-subagent",
+      "version": "1.1.11"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tibo-monitor",
+      "version": "1.1.11"
+    },
+    {
+      "name": "@jetcrab/pi-desk-todo",
+      "version": "1.0.6"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tool-reason",
+      "version": "1.1.1"
+    },
+    {
+      "name": "@jetcrab/pi-desk-usage",
+      "version": "1.1.12"
+    },
+    {
+      "name": "@jetcrab/pi-desk-workspace",
+      "version": "1.1.8"
+    }
+  ],
+  "clients": [
+    {
+      "platform": "windows",
+      "version": "1.1.20",
+      "file": "PiDesk-Windows-x86-Setup.exe",
+      "sha256": "70c2611aea0b71d750239432bb84091c92eefec6c220aa967e9a74461aa7e89e"
+    },
+    {
+      "platform": "macos",
+      "version": "1.1.20",
+      "file": "PiDesk-macOS-universal.dmg",
+      "sha256": "6d224f7d28d9f0efbbe4ffa4b66f8b51ecbf045243e9ff62c8fe9261948c19a5"
+    },
+    {
+      "platform": "linux",
+      "version": "1.1.20",
+      "file": "PiDesk-Linux-x86_64.AppImage",
+      "sha256": "7260d568e72831dba83730316921653c0c4376e2eebda121b7f4734c9e2ffd41"
+    },
+    {
+      "platform": "android",
+      "version": "1.1.0",
+      "file": "PiDesk-Android.apk",
+      "sha256": "298cb6eef6229dbe7d39666f3cc74104ef0f88177ce90bd3361e76aa5d199972"
+    }
+  ],
+  "changes": {
+    "added": [],
+    "breaking": [
+      "Todo updates now require a flat task list rather than nested stages. Existing two-level session snapshots are flattened for display."
+    ],
+    "features": [
+      "Search work sessions by title, user messages, assistant messages, or session ID, with matching text previews.",
+      "Expand sessions in the session picker to browse user messages and matching results.",
+      "Resend a user message on a new branch while preserving the current input draft.",
+      "Windows desktop windows now provide custom title bars with drag, minimize, maximize, and close controls. Pages without title-bar integration retain native window decorations."
+    ],
+    "changed": [
+      "Branch pickers now remember the selected filter and display branch icons.",
+      "Project files and Git status refresh when visible previews open or the window regains focus, with fewer duplicate requests.",
+      "Improved file-tree presentation and file-type icons.",
+      "Todo progress updates now appear directly in the summary and task list instead of opening a temporary update notice.",
+      "Standardized desktop window titles; project-preview titles now show the project name and directory path."
+    ],
+    "fixed": [
+      "Empty or loading custom session-header content no longer reserves unnecessary space.",
+      "Made Windows process cleanup safer by verifying process identity and ancestry before termination, and handling processes that exit naturally during cleanup."
+    ],
+    "removed": []
+  }
+}
