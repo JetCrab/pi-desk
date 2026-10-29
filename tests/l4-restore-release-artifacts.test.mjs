@@ -272,6 +272,44 @@ test('同一原附件跨attempt仍使用对应旧成功证据，不要求latest�
   )
 })
 
+test('仅重跑失败任务复制成功记录时，按原执行恢复原包和客户端', async (t) => {
+  for (const prepared of [false, true]) {
+    await t.test(prepared ? '准备阶段转存制品' : '原构建制品', async (context) => {
+      const f = await fixture(context)
+      if (prepared) {
+        f.jobs.splice(
+          0,
+          f.jobs.length,
+          job('prepare', 1),
+          { ...job('windows', 2), conclusion: 'skipped' },
+          { ...job('npm-build', 3), conclusion: 'skipped' }
+        )
+      }
+      f.jobs.push(...f.jobs.map((item) => ({ ...item, id: item.id + 100, run_attempt: 2 })))
+      const result = await restoreReleaseArtifacts(f.input)
+      assert.equal(result.npmVerified, true)
+      assert.deepEqual(
+        await readFile(npmPath(f)),
+        await readFile(join(f.source, 'npm-packages-11/jetcrab-pi-desk-1.1.5.tgz'))
+      )
+      assert.deepEqual(
+        await readFile(join(f.root, 'clients/client-windows-12/installer.exe')),
+        f.client
+      )
+    })
+  }
+})
+
+test('执行时间或结果不同的重叠记录仍不能冒充同一制品写入者', async (t) => {
+  for (const different of [{ started_at: timestamp(0) }, { conclusion: 'failure' }]) {
+    const f = await fixture(t)
+    const original = f.jobs.find((item) => item.name === 'npm-build / build')
+    f.jobs.push({ ...original, id: 12, run_attempt: 2, ...different })
+    await assert.rejects(restoreReleaseArtifacts(f.input), /缺少对应构建证据/)
+    assert.equal(existsSync(npmPath(f)), false)
+  }
+})
+
 test('原附件可由后续attempt重新验收通过，不因原attempt失败而重建', async (t) => {
   const f = await fixture(t)
   f.jobs.find(

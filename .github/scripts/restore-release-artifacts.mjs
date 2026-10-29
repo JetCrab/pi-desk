@@ -147,7 +147,18 @@ export async function restoreReleaseArtifacts({
             Date.parse(job.started_at) <= created &&
             created <= Date.parse(job.completed_at)
         )
-        return writers.length === 1 ? writers[0] : null
+        // 仅重跑失败任务时，GitHub 会用新 ID/attempt 复制未重跑任务的原执行时间。
+        writers.sort((left, right) => left.run_attempt - right.run_attempt)
+        const first = writers[0]
+        return writers.every(
+          (job) =>
+            job.name === first.name &&
+            job.started_at === first.started_at &&
+            job.completed_at === first.completed_at &&
+            job.conclusion === first.conclusion
+        )
+          ? first
+          : null
       }
       const passed = (name, attempt, after = 0) =>
         jobs.some(
