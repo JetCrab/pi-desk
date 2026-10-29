@@ -1,15 +1,15 @@
 {
-  "checks": "445213934379ec879bc6f937ed9520030751e9e9",
+  "checks": "a2a94442fd50702469b749ff67b2d43e9dcfb8c4",
   "units": {
     "windows": {
-      "version": "1.1.20",
-      "source": "f5247222798625130b4cd6975d6fffae1ddec00b",
-      "runId": "40739102401"
+      "version": "1.1.22",
+      "source": "a2a94442fd50702469b749ff67b2d43e9dcfb8c4",
+      "runId": "40912615586"
     },
     "macos": {
-      "version": "1.1.20",
-      "source": "f5247222798625130b4cd6975d6fffae1ddec00b",
-      "runId": "40739102401"
+      "version": "1.1.22",
+      "source": "a2a94442fd50702469b749ff67b2d43e9dcfb8c4",
+      "runId": "40912615586"
     },
     "android": {
       "version": "1.1.0",
@@ -22,14 +22,14 @@
       "runId": "37920264833"
     },
     "tunnel": {
-      "version": "1.1.0",
-      "source": "d6f09cab0436943c550e749c2fc5c1bb3764a0db",
-      "runId": "37920264833"
+      "version": "1.1.1",
+      "source": "a2a94442fd50702469b749ff67b2d43e9dcfb8c4",
+      "runId": "40912615586"
     },
     "pi-desk": {
-      "version": "1.1.31",
-      "source": "f5247222798625130b4cd6975d6fffae1ddec00b",
-      "runId": "40739102401"
+      "version": "1.1.32",
+      "source": "a2a94442fd50702469b749ff67b2d43e9dcfb8c4",
+      "runId": "40912615586"
     },
     "pi-desk-bg-run": {
       "version": "1.1.9",
@@ -82,9 +82,9 @@
       "runId": "40432685481"
     },
     "linux": {
-      "version": "1.1.20",
-      "source": "f5247222798625130b4cd6975d6fffae1ddec00b",
-      "runId": "40739102401"
+      "version": "1.1.22",
+      "source": "a2a94442fd50702469b749ff67b2d43e9dcfb8c4",
+      "runId": "40912615586"
     },
     "pi-desk-workspace": {
       "version": "1.1.7",
@@ -92,9 +92,9 @@
       "runId": "40432685481"
     },
     "pi-desk-todo": {
-      "version": "1.0.6",
-      "source": "f5247222798625130b4cd6975d6fffae1ddec00b",
-      "runId": "40739102401"
+      "version": "1.0.7",
+      "source": "a2a94442fd50702469b749ff67b2d43e9dcfb8c4",
+      "runId": "40912615586"
     }
   }
 }
