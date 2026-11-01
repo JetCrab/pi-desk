@@ -7,6 +7,7 @@ import {
   numberValue,
   objectValue,
   stringValue,
+  singleAccount,
   timestampMs,
   unknown,
   unlimited
@@ -156,7 +157,7 @@ export const openRouterAdapter: QuotaAdapter = {
   validateConfig(input) {
     return configSchema.parse(input)
   },
-  async load({ config, signal, fetch }) {
+  async load({ config, signal, fetch, now }) {
     const parsed = configSchema.parse(config)
     const tasks: Array<Promise<QuotaResource>> = []
     if (parsed.managementKey) tasks.push(loadCredits(fetch, parsed.managementKey, signal))
@@ -180,7 +181,7 @@ export const openRouterAdapter: QuotaAdapter = {
       throw new Error(message)
     }
     return {
-      resources,
+      accounts: singleAccount('openrouter', resources, now),
       warning: errors.length > 0 ? errors.join('；') : null,
       retryAt
     }

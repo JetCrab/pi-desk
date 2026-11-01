@@ -74,10 +74,10 @@ export function QuotaFilters({
           <PluginSelect
             className="quota-channel-select"
             label={t('渠道')}
-            value={adapter}
-            options={options}
+            value={adapter || 'all'}
+            options={options.map((option) => ({ ...option, value: option.value || 'all' }))}
             disabled={disabled}
-            onValueChange={(value) => onAdapter(value ?? '')}
+            onValueChange={(value) => onAdapter(value === 'all' ? '' : (value ?? ''))}
           />
         </>
       ) : null}

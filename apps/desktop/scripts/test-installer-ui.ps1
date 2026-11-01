@@ -177,11 +177,30 @@ try {
     Assert ((Get-ItemProperty $settings.uninstallKey).DisplayVersion -eq '1.0.0') '安装版本实际登记'
     Assert ((Test-Path (Join-Path $settings.desktop "$($settings.product).lnk")) -eq $shortcut) '桌面快捷方式遵循选择'
     Assert (Test-Path (Join-Path $settings.menu "$($settings.product)/$($settings.product).lnk")) '开始菜单快捷方式存在'
-    if($shortcut) {
-      Click $hwnd 104
+    $pending = Join-Path $actual 'finish-pending.txt'
+    Remove-Item -LiteralPath $pending -ErrorAction SilentlyContinue
+    $action = if ($shortcut) { '打开应用' } else { '关闭' }
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    Click $hwnd $(if ($shortcut) { 104 } else { 105 })
+    Wait-Until { -not [InstallerUI]::IsWindowVisible($hwnd) } "$action 后安装器立即隐藏" 250
+    $hiddenAfter = $clock.ElapsedMilliseconds
+    Wait-Until { Test-Path -LiteralPath $pending } '进入延迟收尾阶段'
+    Assert (-not $process.HasExited) '延迟收尾期间安装器进程仍在运行'
+    Assert (-not (Test-Path (Join-Path $actual 'opened.txt'))) '窗口隐藏时尚未启动应用'
+    while (-not $process.HasExited) {
+      if ([InstallerUI]::IsWindowVisible($hwnd)) {
+        throw "$action 后安装器窗口再次可见"
+      }
+      if ($clock.ElapsedMilliseconds -gt 10000) {
+        throw '完成收尾未在限定时间退出'
+      }
+      Start-Sleep -Milliseconds 10
+    }
+    Assert ($clock.ElapsedMilliseconds -ge 2000) '完整覆盖2秒延迟收尾'
+    Assert ($hiddenAfter -le 250) "$action 后 ${hiddenAfter}ms 隐藏，收尾期间始终不可见"
+    if ($shortcut) {
       Wait-Until { Test-Path (Join-Path $actual 'opened.txt') } '打开应用执行fixture'
     } else {
-      Click $hwnd 105
       Assert (-not (Test-Path (Join-Path $actual 'opened.txt'))) '关闭不启动应用'
     }
     Assert ($process.WaitForExit(5000)) '完成后安装器退出'
@@ -193,14 +212,22 @@ try {
   Assert ($passive.WaitForExit(15000)) '被动安装自动结束'
   Assert ($passive.ExitCode -eq 0) '被动安装成功'
 } catch {
+  $failureRecord = $_
+  Write-Output "首个异常：$($failureRecord.Exception.Message)"
   foreach($process in $owned) {
     if(-not $process.HasExited) {
-      $process.Refresh()
-      Write-Output ([InstallerUI]::Windows($process.Id))
-      if($process.MainWindowHandle -ne [IntPtr]::Zero) { Capture $process.MainWindowHandle "failure-$($process.Id)" }
+      try {
+        $process.Refresh()
+        Write-Output ([InstallerUI]::Windows($process.Id))
+        if($process.MainWindowHandle -ne [IntPtr]::Zero) {
+          Capture $process.MainWindowHandle "failure-$($process.Id)"
+        }
+      } catch {
+        Write-Warning "采集退出中的窗口失败：$($_.Exception.Message)"
+      }
     }
   }
-  throw
+  throw $failureRecord
 } finally {
   foreach($process in $owned) {
     if(-not $process.HasExited) {

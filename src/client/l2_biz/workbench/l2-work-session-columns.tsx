@@ -850,6 +850,7 @@ export function L2WorkSessionColumns({
             key={`${columnItems[position - 1]!.key}-${item.key}-resize-handle`}
             withHandle={!separatorDisabled}
             disabled={separatorDisabled}
+            disableDoubleClick
             aria-label={t('resizeColumns', { left: position, right: position + 1 })}
             className="w-0 cursor-col-resize bg-transparent aria-disabled:cursor-default"
           />,

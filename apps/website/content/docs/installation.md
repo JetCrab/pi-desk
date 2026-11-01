@@ -24,8 +24,8 @@ Compose 配置、数据目录和升级方法见 [Docker 部署与使用](/docs/d
 2. 打开终端（Windows 使用 PowerShell），逐行执行：
 
 ```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest --registry=https://registry.npmjs.org
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest --registry=https://mirrors.cloud.tencent.com/npm # 中国用户可改用这个加速下载
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent --registry=https://registry.npmjs.org
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent --registry=https://mirrors.cloud.tencent.com/npm # 中国用户可改用这个加速下载
 npm install -g @jetcrab/pi-desk --registry=https://registry.npmjs.org
 npm install -g @jetcrab/pi-desk --registry=https://mirrors.cloud.tencent.com/npm # 中国用户可改用这个加速下载
 pi-desk
@@ -42,8 +42,8 @@ pi-desk
 不想全局安装 Pi Desk 时，可以用 npx 运行。**仍需先安装可用的全局 Pi**，安装命令见[通过 Node.js 安装](#通过-nodejs-安装)。
 
 ```bash
-npx --registry=https://registry.npmjs.org @jetcrab/pi-desk@latest
-npx --registry=https://mirrors.cloud.tencent.com/npm @jetcrab/pi-desk@latest # 中国用户可改用这个加速下载
+npx --registry=https://registry.npmjs.org @jetcrab/pi-desk
+npx --registry=https://mirrors.cloud.tencent.com/npm @jetcrab/pi-desk # 中国用户可改用这个加速下载
 ```
 
 首次提示下载 Pi Desk 时确认即可；这不会替你安装 Pi。浏览器访问地址和停止方式与上面的命令行安装相同。
@@ -59,8 +59,8 @@ Pi、Pi Desk 和插件分别更新。更新前先结束正在运行的任务，�
 本文通过 npm 安装的 Pi，以及桌面端安装的全局 Pi，可在同一个 Node/npm 环境中执行以下命令更新到最新正式版。
 
 ```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest --registry=https://registry.npmjs.org
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest --registry=https://mirrors.cloud.tencent.com/npm # 中国用户可改用这个加速下载
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent --registry=https://registry.npmjs.org
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent --registry=https://mirrors.cloud.tencent.com/npm # 中国用户可改用这个加速下载
 pi --version
 ```
 
@@ -73,8 +73,8 @@ Pi Desk 不按 Pi 版本号限制启动，而是检查实际加载和所需 SDK 
 通过 npm 全局安装的 Pi Desk，执行以下任一命令，再运行 `pi-desk`：
 
 ```bash
-npm install -g @jetcrab/pi-desk@latest --registry=https://registry.npmjs.org
-npm install -g @jetcrab/pi-desk@latest --registry=https://mirrors.cloud.tencent.com/npm # 中国用户可改用这个加速下载
+npm install -g @jetcrab/pi-desk --registry=https://registry.npmjs.org
+npm install -g @jetcrab/pi-desk --registry=https://mirrors.cloud.tencent.com/npm # 中国用户可改用这个加速下载
 ```
 
-使用 npx 时，重新执行上面的带 `@latest` 的启动命令。桌面端托管的 Pi Desk 使用控制中心的更新入口。更新 Pi Desk 不会自动更新 Pi；插件更新见[更新与加载](/docs/plugins/#更新与加载)。
+使用 npx 启动时可能复用本地已有版本；需要更新时，按上面的 npm 命令全局安装 Pi Desk，再运行 `pi-desk`。桌面端托管的 Pi Desk 使用控制中心的更新入口。更新 Pi Desk 不会自动更新 Pi；插件更新见[更新与加载](/docs/plugins/#更新与加载)。

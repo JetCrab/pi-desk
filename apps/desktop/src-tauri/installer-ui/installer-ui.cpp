@@ -646,6 +646,10 @@ LRESULT CALLBACK HostProcedure(HWND handle, UINT message, WPARAM wParam,
     HWND page = window;
     const LRESULT result = DefSubclassProc(handle, message, wParam, lParam);
     if (result == 0 && window == page) {
+      if (stage == Stage::Complete) {
+        // 应用启动调用可能阻塞，先隐藏宿主，避免页面销毁后露出空白窗口。
+        ShowWindow(handle, SW_HIDE);
+      }
       ClosePage();
     }
     return result;

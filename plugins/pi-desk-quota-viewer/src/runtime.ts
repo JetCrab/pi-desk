@@ -8,6 +8,7 @@ import { errorMessage, normalizedLineText } from './adapters/resources.js'
 import type { QuotaAdapter } from './adapters/types.js'
 import { QuotaDisplaySettingsSchema } from './l2-quota-display-schema.js'
 import type {
+  QuotaAccount,
   QuotaResource,
   QuotaSettingsSnapshot,
   QuotaSnapshot,
@@ -119,11 +120,27 @@ function validateResources(resources: readonly QuotaResource[]): void {
         throw new Error(`Adapter 返回了无效数值：${resource.key}`)
       }
     }
+    const times =
+      resource.kind === 'balance'
+        ? [resource.expiresAt]
+        : [resource.window.durationSeconds, resource.window.resetAt]
+    if (times.some((value) => value !== null && !Number.isFinite(value))) {
+      throw new Error(`Adapter 返回了无效时间：${resource.key}`)
+    }
   }
 }
 
-function cloneResources(resources: readonly QuotaResource[]): QuotaResource[] {
-  return structuredClone(resources) as QuotaResource[]
+function validateAccounts(accounts: readonly QuotaAccount[]): void {
+  const keys = new Set<string>()
+  for (const account of accounts) {
+    if (!account.key.trim()) throw new Error('Adapter 返回了空 account key')
+    if (keys.has(account.key)) throw new Error(`Adapter 返回了重复 account key：${account.key}`)
+    keys.add(account.key)
+    if (account.observedAt !== null && !Number.isFinite(account.observedAt)) {
+      throw new Error(`Adapter 返回了无效观测时间：${account.key}`)
+    }
+    validateResources(account.resources)
+  }
 }
 
 function sameSourceConfig(left: StoredSource, right: StoredSource): boolean {
@@ -253,8 +270,7 @@ export class QuotaViewerRuntime {
       display: {
         resetTimeFormat: parsed.display?.resetTimeFormat ?? this.config.display.resetTimeFormat,
         hiddenItemKeys: normalizeHiddenItems(
-          parsed.display?.hiddenItemKeys ?? this.config.display.hiddenItemKeys,
-          this.registry
+          parsed.display?.hiddenItemKeys ?? this.config.display.hiddenItemKeys
         )
       }
     })
@@ -378,7 +394,7 @@ export class QuotaViewerRuntime {
           observedAt: null,
           staleAt: null,
           error: null,
-          resources: []
+          accounts: []
         }
       })
       refreshSourceIds.push(source.sourceId)
@@ -436,17 +452,25 @@ export class QuotaViewerRuntime {
         fetch: this.fetchImpl,
         now: startedAt
       })
-      validateResources(result.resources)
+      validateAccounts(result.accounts)
       if (!this.isCurrent(state, generation)) return
       const observedAt = Date.now()
-      state.snapshot.resources = cloneResources(result.resources)
+      const previous = new Map(state.snapshot.accounts.map((account) => [account.key, account]))
+      state.snapshot.accounts = structuredClone(result.accounts).map((account) => {
+        const old = previous.get(account.key)
+        if (account.error && old && old.type === account.type) {
+          account.resources = structuredClone(old.resources)
+          account.observedAt = old.observedAt
+        }
+        return account
+      })
       state.snapshot.observedAt = observedAt
       state.snapshot.staleAt = observedAt + state.adapter.cacheTtlMs
       state.snapshot.error = result.warning
       state.blockedUntil = result.retryAt ?? 0
       const stage = result.warning ? 'warning' : 'success'
       this.logger.info(
-        `[quota-viewer] source=${state.source.sourceId} adapter=${state.source.adapter} stage=${stage} elapsedMs=${observedAt - startedAt} resources=${result.resources.length}`
+        `[quota-viewer] source=${state.source.sourceId} adapter=${state.source.adapter} stage=${stage} elapsedMs=${observedAt - startedAt} accounts=${result.accounts.length}`
       )
     } catch (error) {
       if (!this.isCurrent(state, generation)) return
@@ -460,7 +484,7 @@ export class QuotaViewerRuntime {
         }
       }
       this.logger.warn(
-        `[quota-viewer] source=${state.source.sourceId} adapter=${state.source.adapter} stage=error elapsedMs=${Date.now() - startedAt} resources=${state.snapshot.resources.length}`
+        `[quota-viewer] source=${state.source.sourceId} adapter=${state.source.adapter} stage=error elapsedMs=${Date.now() - startedAt} accounts=${state.snapshot.accounts.length}`
       )
     } finally {
       clearTimeout(timeout)

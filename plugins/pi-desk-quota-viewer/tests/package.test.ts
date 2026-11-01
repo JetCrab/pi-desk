@@ -9,7 +9,10 @@ import type {
 } from '@jetcrab/pi-desk-sdk/browser'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const browserRoot = join(packageRoot, 'dist', 'browser')
+const artifactRoot = process.env.QUOTA_PLUGIN_ARTIFACT
+  ? resolve(process.env.QUOTA_PLUGIN_ARTIFACT)
+  : packageRoot
+const browserRoot = join(artifactRoot, 'dist', 'browser')
 
 async function browserSources(): Promise<string[]> {
   const paths = await readdir(browserRoot, { recursive: true })

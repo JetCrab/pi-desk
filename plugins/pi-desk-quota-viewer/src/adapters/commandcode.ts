@@ -8,6 +8,7 @@ import {
   objectValue,
   optionalObject,
   stringValue,
+  singleAccount,
   timestampMs,
   unknown
 } from './resources.js'
@@ -301,7 +302,7 @@ export const commandCodeAdapter: QuotaAdapter = {
       .map((error) => retryAt(error, now))
       .filter((value): value is number => value !== null)
     return {
-      resources: parsedCredits.resources,
+      accounts: singleAccount('commandcode', parsedCredits.resources, now),
       warning: messages.length > 0 ? messages.join('；') : null,
       retryAt: blockedUntil.length > 0 ? Math.max(...blockedUntil) : null
     }

@@ -7,4 +7,3 @@ export type SiteRelease = {
 }
 
 export const startCommand = 'pi-desk'
-export const nodeRequirement = 'Node.js ≥ 22.19.0'

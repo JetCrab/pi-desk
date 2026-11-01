@@ -7,6 +7,7 @@ import {
   objectValue,
   resourceKey,
   stringValue,
+  singleAccount,
   timestampMs
 } from './resources.js'
 import type { QuotaAdapter } from './types.js'
@@ -68,7 +69,7 @@ export const zhipuCodingPlanAdapter: QuotaAdapter = {
   validateConfig(input) {
     return configSchema.parse(input)
   },
-  async load({ config, signal, fetch }) {
+  async load({ config, signal, fetch, now }) {
     const parsed = configSchema.parse(config)
     const origin = parsed.endpoint === 'bigmodel' ? 'https://open.bigmodel.cn' : 'https://api.z.ai'
     const authorization = parsed.endpoint === 'bigmodel' ? parsed.apiKey : `Bearer ${parsed.apiKey}`
@@ -120,6 +121,6 @@ export const zhipuCodingPlanAdapter: QuotaAdapter = {
       })
     }
     if (resources.length === 0) throw new Error('智谱响应中没有可识别的 Token 额度')
-    return { resources, warning: null }
+    return { accounts: singleAccount('zhipu-coding-plan', resources, now), warning: null }
   }
 }

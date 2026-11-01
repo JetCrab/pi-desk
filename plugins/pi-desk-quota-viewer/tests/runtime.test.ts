@@ -5,7 +5,8 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import type { PluginJsonObject } from '@jetcrab/pi-desk-sdk/entry'
 import { PluginMethodError } from '@jetcrab/pi-desk-sdk/session'
-import type { QuotaAdapter } from '../src/adapters/types.js'
+import type { QuotaAdapter, QuotaAdapterLoadResult } from '../src/adapters/types.js'
+import { account, balance } from './fixtures.js'
 import { defaultQuotaViewerConfigPath, QuotaViewerRuntime } from '../src/runtime.js'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -52,20 +53,10 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-function balanceResult(value: number) {
+function balanceResult(value: number): QuotaAdapterLoadResult {
   return {
     warning: null,
-    resources: [
-      {
-        key: 'balance',
-        kind: 'balance' as const,
-        label: '余额',
-        scope: {},
-        unit: { kind: 'custom' as const, label: '余额' },
-        available: { state: 'known' as const, value },
-        expiresAt: null
-      }
-    ]
+    accounts: [account([balance('balance', value)], { type: 'fixture' })]
   }
 }
 
@@ -100,22 +91,7 @@ function createAdapter(input?: {
       }
       return { endpoint, token }
     },
-    load:
-      input?.load ??
-      (async () => ({
-        warning: null,
-        resources: [
-          {
-            key: 'balance',
-            kind: 'balance',
-            label: '余额',
-            scope: {},
-            unit: { kind: 'custom', label: '余额' },
-            available: { state: 'known', value: 0 },
-            expiresAt: null
-          }
-        ]
-      }))
+    load: input?.load ?? (async () => balanceResult(0))
   }
 }
 
@@ -245,20 +221,7 @@ test('settings-save 独立保存显示项和时间格式时保留来源、资源
       createAdapter({
         load: async () => {
           loadCalls += 1
-          return {
-            warning: null,
-            resources: [
-              {
-                key: 'balance',
-                kind: 'balance',
-                label: '余额',
-                scope: {},
-                unit: { kind: 'custom', label: '余额' },
-                available: { state: 'known', value: 12 },
-                expiresAt: null
-              }
-            ]
-          }
+          return balanceResult(12)
         }
       })
     ],
@@ -283,12 +246,12 @@ test('settings-save 独立保存显示项和时间格式时保留来源、资源
   await waitFor(() => runtime.snapshot().sources[0]?.refreshing === false)
   const callsBeforeHiddenSave = loadCalls
 
-  const hiddenKey = 'fixture:["balance","余额",""]'
+  const hiddenKey = 'fixture:["balance","余额","",""]'
   await runtime.saveSettings(jsonObject({ display: { resetTimeFormat: 'absolute' } }))
   const saved = await runtime.saveSettings(jsonObject({ display: { hiddenItemKeys: [hiddenKey] } }))
   assert.deepEqual(saved.display, { resetTimeFormat: 'absolute', hiddenItemKeys: [hiddenKey] })
   assert.equal(loadCalls, callsBeforeHiddenSave)
-  const resource = runtime.snapshot().sources[0]?.resources[0]
+  const resource = runtime.snapshot().sources[0]?.accounts[0]?.resources[0]
   assert.deepEqual(resource?.key, 'balance')
   assert.deepEqual(resource?.kind === 'balance' ? resource.available : null, {
     state: 'known',
@@ -314,7 +277,7 @@ test('settings-save 独立保存显示项和时间格式时保留来源、资源
   await rm(root, { recursive: true, force: true })
 })
 
-test('渠道隐藏项去重，保留无账号渠道规则并裁剪未知渠道', async () => {
+test('类型隐藏项去重，保留当前未返回的额度类型规则', async () => {
   const root = testRoot('hidden-normalize')
   const runtime = new QuotaViewerRuntime(plugin([]), {
     adapters: [createAdapter()],
@@ -344,13 +307,14 @@ test('渠道隐藏项去重，保留无账号渠道规则并裁剪未知渠道',
   const disabledId = initial.sources[1]?.sourceId
   assert.ok(enabledId)
   assert.ok(disabledId)
-  const hiddenKey = 'fixture:["balance","余额",""]'
+  const hiddenKey = 'fixture:["balance","余额","",""]'
+  const futureKey = 'missing:["balance","余额","",""]'
   const normalized = await runtime.saveSettings(
     jsonObject({
-      display: { hiddenItemKeys: [hiddenKey, hiddenKey, 'missing:["balance","余额",""]'] }
+      display: { hiddenItemKeys: [hiddenKey, hiddenKey, futureKey] }
     })
   )
-  assert.deepEqual(normalized.display.hiddenItemKeys, [hiddenKey])
+  assert.deepEqual(normalized.display.hiddenItemKeys, [hiddenKey, futureKey])
 
   const afterDelete = await runtime.saveSettings(
     jsonObject({
@@ -365,7 +329,7 @@ test('渠道隐藏项去重，保留无账号渠道规则并裁剪未知渠道',
       ]
     })
   )
-  assert.deepEqual(afterDelete.display.hiddenItemKeys, [hiddenKey])
+  assert.deepEqual(afterDelete.display.hiddenItemKeys, [hiddenKey, futureKey])
   await runtime.dispose()
   await rm(root, { recursive: true, force: true })
 })
@@ -488,20 +452,7 @@ test('每来源缓存去重，刷新失败保留最后成功数据', async () =>
     load: async () => {
       calls += 1
       if (fail) throw new Error('fixture refresh failed')
-      return {
-        warning: null,
-        resources: [
-          {
-            key: 'balance',
-            kind: 'balance',
-            label: '余额',
-            scope: {},
-            unit: { kind: 'custom', label: '余额' },
-            available: { state: 'known', value: calls },
-            expiresAt: null
-          }
-        ]
-      }
+      return balanceResult(calls)
     }
   })
   const pushes: PluginJsonObject[] = []
@@ -533,9 +484,10 @@ test('每来源缓存去重，刷新失败保留最后成功数据', async () =>
   assert.equal(calls, 2)
   const state = runtime.snapshot().sources[0]
   assert.match(state?.error ?? '', /fixture refresh failed/)
-  assert.equal(state?.resources[0]?.kind, 'balance')
-  if (state?.resources[0]?.kind === 'balance') {
-    assert.deepEqual(state.resources[0].available, { state: 'known', value: 1 })
+  const cached = state?.accounts[0]?.resources[0]
+  assert.equal(cached?.kind, 'balance')
+  if (cached?.kind === 'balance') {
+    assert.deepEqual(cached.available, { state: 'known', value: 1 })
   }
   assert.ok(pushes.length >= 4)
   await runtime.dispose()
@@ -579,7 +531,7 @@ test('改名保留来源资源、有效期和在途请求', async () => {
     assert.ok(sourceId)
     await waitFor(() => runtime.snapshot().sources[0]?.refreshing === false)
     const before = runtime.snapshot().sources[0]
-    const beforeResource = before?.resources[0]
+    const beforeResource = before?.accounts[0]?.resources[0]
     assert.equal(
       beforeResource?.kind === 'balance' && beforeResource.available.state === 'known'
         ? beforeResource.available.value
@@ -610,16 +562,17 @@ test('改名保留来源资源、有效期和在途请求', async () => {
     assert.equal(renamed?.refreshing, true)
     assert.equal(renamed?.observedAt, before?.observedAt)
     assert.equal(renamed?.staleAt, before?.staleAt)
-    assert.deepEqual(renamed?.resources, before?.resources)
+    assert.deepEqual(renamed?.accounts, before?.accounts)
 
     pending.resolve(balanceResult(20))
     await waitFor(() => {
       const state = runtime.snapshot().sources[0]
+      const resource = state?.accounts[0]?.resources[0]
       return (
         state?.refreshing === false &&
-        state.resources[0]?.kind === 'balance' &&
-        state.resources[0].available.state === 'known' &&
-        state.resources[0].available.value === 20
+        resource?.kind === 'balance' &&
+        resource.available.state === 'known' &&
+        resource.available.value === 20
       )
     })
     assert.equal(runtime.snapshot().sources[0]?.name, '新名称')
@@ -734,12 +687,13 @@ test('变更、新增和禁用只影响对应来源且旧 generation 不回写',
       const sources = runtime.snapshot().sources
       const changed = sources.find((source) => source.sourceId === firstId)
       const added = sources.find((source) => source.sourceId === newId)
+      const resource = changed?.accounts[0]?.resources[0]
       return (
         oldSignal?.aborted === true &&
         changed?.refreshing === false &&
-        changed?.resources[0]?.kind === 'balance' &&
-        changed.resources[0].available.state === 'known' &&
-        changed.resources[0].available.value === 11 &&
+        resource?.kind === 'balance' &&
+        resource.available.state === 'known' &&
+        resource.available.value === 11 &&
         added?.refreshing === false
       )
     })
@@ -758,7 +712,7 @@ test('变更、新增和禁用只影响对应来源且旧 generation 不回写',
     assert.equal(pushes.length, pushCountAfterNewGeneration)
     const afterOldResult = runtime.snapshot().sources
     const changedSource = afterOldResult.find((source) => source.sourceId === firstId)
-    const changedResource = changedSource?.resources[0]
+    const changedResource = changedSource?.accounts[0]?.resources[0]
     assert.equal(
       changedResource?.kind === 'balance' && changedResource.available.state === 'known'
         ? changedResource.available.value
@@ -808,12 +762,12 @@ test('变更、新增和禁用只影响对应来源且旧 generation 不回写',
       'new-source'
     ])
     assert.deepEqual(
-      afterDisable.find((source) => source.sourceId === secondId)?.resources,
-      secondBeforeDisable?.resources
+      afterDisable.find((source) => source.sourceId === secondId)?.accounts,
+      secondBeforeDisable?.accounts
     )
     assert.deepEqual(
-      afterDisable.find((source) => source.sourceId === newId)?.resources,
-      newBeforeDisable?.resources
+      afterDisable.find((source) => source.sourceId === newId)?.accounts,
+      newBeforeDisable?.accounts
     )
   } finally {
     oldRequest.resolve(balanceResult(999))
@@ -830,19 +784,9 @@ test('来源配置变更保留最小刷新间隔与 retryAt 限流窗', async ()
     load: async () => {
       calls += 1
       return {
+        ...balanceResult(10),
         warning: '一个子请求被限流',
-        retryAt: Date.now() + 60_000,
-        resources: [
-          {
-            key: 'balance',
-            kind: 'balance',
-            label: '余额',
-            scope: {},
-            unit: { kind: 'custom', label: '余额' },
-            available: { state: 'known', value: 10 },
-            expiresAt: null
-          }
-        ]
+        retryAt: Date.now() + 60_000
       }
     }
   })
@@ -934,6 +878,68 @@ test(
     }
   }
 )
+
+test('部分账号失败保留旧资源与旧快照时间，不影响其他账号', async () => {
+  const root = testRoot('account-partial-failure')
+  let fail = false
+  const runtime = new QuotaViewerRuntime(plugin([]), {
+    adapters: [
+      createAdapter({
+        load: async () => ({
+          warning: fail ? '部分账号失败' : null,
+          accounts: [
+            account(fail ? [] : [balance('balance', 10)], {
+              key: 'first',
+              type: 'fixture',
+              observedAt: fail ? null : 1_800_000_000_000,
+              error: fail ? 'HTTP 401' : null
+            }),
+            account([balance('balance', fail ? 30 : 20)], {
+              key: 'second',
+              type: 'fixture',
+              observedAt: fail ? 1_800_000_100_000 : 1_800_000_000_000
+            })
+          ]
+        })
+      })
+    ],
+    configPath: join(root, 'config.json'),
+    logger
+  })
+  try {
+    await runtime.saveSettings(
+      jsonObject({
+        sources: [
+          {
+            adapter: 'fixture',
+            name: '混合账号',
+            enabled: true,
+            values: { endpoint: 'endpoint', token: 'token' }
+          }
+        ]
+      })
+    )
+    await waitFor(() => runtime.snapshot().sources[0]?.refreshing === false)
+    fail = true
+    await runtime.query(true)
+    await waitFor(() => runtime.snapshot().sources[0]?.refreshing === false)
+    const [first, second] = runtime.snapshot().sources[0].accounts
+    assert.equal(first.error, 'HTTP 401')
+    assert.equal(first.observedAt, 1_800_000_000_000)
+    assert.deepEqual(first.resources[0]?.kind === 'balance' ? first.resources[0].available : null, {
+      state: 'known',
+      value: 10
+    })
+    assert.equal(second.observedAt, 1_800_000_100_000)
+    assert.deepEqual(
+      second.resources[0]?.kind === 'balance' ? second.resources[0].available : null,
+      { state: 'known', value: 30 }
+    )
+  } finally {
+    await runtime.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
 test('dispose 取消活动请求并等待任务释放', async () => {
   const root = testRoot('dispose')

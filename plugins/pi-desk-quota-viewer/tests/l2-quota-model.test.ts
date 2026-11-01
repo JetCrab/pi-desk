@@ -1,291 +1,297 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  formatCountdown,
+  detailResources,
+  formatCompactCountdown,
   formatTimestamp,
   formatValue,
   groupChannels,
-  resourceVisibilityKey,
   quotaRecords,
   quotaPrimaryValue,
-  recordIndex,
-  resourceLabel,
+  recordLabel,
+  resourceVisibilityKey,
   summaryResources,
   summarySlots
 } from '../src/l2-quota-model.js'
-import type { QuotaResource, QuotaSourceSnapshot } from '../src/protocol.js'
+import { account, balance, quota, source } from './fixtures.js'
 
-const sourceIds = {
-  openrouterA: '11111111-1111-4111-8111-111111111111',
-  openrouterB: '22222222-2222-4222-8222-222222222222',
-  cpa: '33333333-3333-4333-8333-333333333333',
-  empty: '44444444-4444-4444-8444-444444444444'
-} as const
+const secondId = '22222222-2222-4222-8222-222222222222'
 
-function balance(key: string, label: string, account?: string): QuotaResource {
-  return {
-    key,
-    kind: 'balance',
-    label,
-    scope: account ? { account } : {},
-    unit: { kind: 'currency', code: 'USD' },
-    available: { state: 'known', value: 0 },
-    expiresAt: null
-  }
-}
-
-function quota(key: string, label: string, account?: string): QuotaResource {
-  return {
-    key,
-    kind: 'quota',
-    label,
-    scope: account ? { account } : {},
-    unit: { kind: 'percentage' },
-    values: {
-      limit: { state: 'known', value: 100 },
-      used: { state: 'known', value: 0 },
-      remaining: { state: 'known', value: 0 }
-    },
-    window: { kind: 'rolling', durationSeconds: 3600, resetAt: null }
-  }
-}
-
-function source(
-  sourceId: string,
-  adapter: string,
-  name: string,
-  resources: QuotaResource[]
-): QuotaSourceSnapshot {
-  return {
-    sourceId,
-    adapter,
-    adapterLabel: adapter,
-    name,
-    dataSource: 'official_api',
-    refreshing: false,
-    observedAt: null,
-    staleAt: null,
-    error: null,
-    resources
-  }
-}
-
-test('渠道按首次出现顺序分组，source 顺序和账号排序稳定', () => {
-  const sources = [
-    source(sourceIds.openrouterA, 'openrouter', '第二来源', [balance('a', 'A', 'z@example.com')]),
-    source(sourceIds.cpa, 'cpa-codex', 'CPA', [
-      balance('x/codex/primary', 'Codex', 'same@example.com')
-    ]),
-    source(sourceIds.openrouterB, 'openrouter', '第一来源', [balance('b', 'B', 'a@example.com')])
-  ]
-
-  assert.deepEqual(
-    groupChannels(sources).map((channel) => channel.map((item) => item.name)),
-    [['第二来源', '第一来源'], ['CPA']]
-  )
-  assert.deepEqual(
-    quotaRecords(sources).map((record) => [record.source.name, record.account]),
-    [
-      ['第二来源', 'z@example.com'],
-      ['第一来源', 'a@example.com'],
-      ['CPA', 'same@example.com']
-    ]
-  )
-})
-
-test('CPA 使用资源 key 第一段作为账号身份，不按邮箱或 source 合并', () => {
-  for (const [adapter, feature] of [
-    ['cpa-codex', 'codex'],
-    ['cpa-devin', 'devin']
-  ]) {
-    const records = quotaRecords([
-      source(sourceIds.cpa, adapter, 'CPA', [
-        balance(`auth-a/${feature}/primary`, '主功能', 'same@example.com'),
-        balance(`auth-a/${feature}/secondary`, '备用功能', 'same@example.com'),
-        balance(`auth-b/${feature}/primary`, '主功能', 'same@example.com')
-      ]),
-      source(sourceIds.openrouterA, adapter, '另一个 CPA', [
-        balance(`auth-a/${feature}/primary`, '主功能', 'same@example.com')
-      ])
-    ])
-
-    assert.equal(records.length, 3)
-    assert.deepEqual(
-      records.map((record) => record.resources.length),
-      [2, 1, 1]
-    )
-    assert.deepEqual(
-      records.map((record) => record.source.name),
-      ['CPA', 'CPA', '另一个 CPA']
-    )
-    assert.deepEqual(records.map(recordIndex), ['auth-a', 'auth-b', 'auth-a'])
-  }
-})
-
-test('CPA Devin 摘要按日周排列，隐藏日额度不移动周额度位置', () => {
-  const weekly = quota('auth-a/devin/secondary', '周额度', 'same@example.com')
-  const daily = quota('auth-a/devin/primary', '日额度', 'same@example.com')
-  const devin = source(sourceIds.cpa, 'cpa-devin', 'CPA', [weekly, daily])
-  const records = quotaRecords([devin])
-  assert.equal(records.length, 1)
-  assert.deepEqual(
-    summarySlots(records[0]).map((resource) => resource?.key ?? null),
-    [daily.key, weekly.key]
-  )
-  assert.equal(resourceLabel(daily, 'en'), 'Daily quota')
-  const hidden = quotaRecords([devin], new Set([resourceVisibilityKey('cpa-devin', daily)]))
-  assert.deepEqual(
-    summarySlots(hidden[0]).map((resource) => resource?.key ?? null),
-    [null, weekly.key]
-  )
-})
-
-test('没有账号的来源按来源展示，resource key fallback 不丢数据', () => {
-  const resources = [balance('custom-balance', '自定义余额'), quota('custom-quota', '自定义额度')]
-  const records = quotaRecords([source(sourceIds.empty, 'openrouter', '无账号来源', resources)])
-
-  assert.equal(records.length, 1)
-  assert.equal(records[0]?.account, null)
-  assert.deepEqual(
-    records[0]?.resources.map((resource) => resource.key),
-    ['custom-balance', 'custom-quota']
-  )
-})
-
-test('摘要遵循渠道优先级且最多三项，不跨周期求和', () => {
+test('同类型跨渠道使用相同摘要布局，身份不按同名或邮箱合并', () => {
   const resources = [
-    balance('other', '其他'),
-    balance('account-credits', 'Credits'),
-    quota('api-key-quota', 'Key'),
-    quota('weekly-quota', '周'),
-    quota('monthly-quota', '月')
+    quota('codex/secondary'),
+    quota('codex/primary', '5 小时额度', 18000),
+    balance('reset-credits', 0, '剩余重置次数')
   ]
-  const openrouter = summaryResources({
-    key: 'openrouter',
-    source: source(sourceIds.openrouterA, 'openrouter', 'OpenRouter', resources),
-    account: null,
-    resources
-  })
-  assert.deepEqual(
-    openrouter.map((resource) => resource.key),
-    ['account-credits', 'api-key-quota']
-  )
-
-  const cpaResources = [
-    balance('auth/codex/primary', 'Codex'),
-    balance('auth/other/primary', 'Other')
-  ]
-  const cpa = summaryResources({
-    key: 'cpa',
-    source: source(sourceIds.cpa, 'cpa-codex', 'CPA', cpaResources),
-    account: null,
-    resources: cpaResources
-  })
-  assert.deepEqual(
-    cpa.map((resource) => resource.key),
-    ['auth/codex/primary', 'auth/other/primary']
-  )
-})
-
-test('已知渠道摘要槽位固定，缺项由fallback补位但不移动核心列', () => {
-  const resources = [
-    quota('api-key-quota', 'Key'),
-    balance('other', '其他'),
-    quota('monthly-quota', '月')
-  ]
-  const slots = summarySlots({
-    key: 'openrouter',
-    source: source(sourceIds.openrouterA, 'openrouter', 'OpenRouter', resources),
-    account: null,
-    resources
-  })
-  assert.deepEqual(
-    slots.map((resource) => resource?.key ?? null),
-    ['other', 'api-key-quota']
-  )
-
-  const cpaResources = [
-    balance('auth/codex/secondary', '备用'),
-    balance('auth/other/primary', '其他')
-  ]
-  const cpaSlots = summarySlots({
-    key: 'cpa',
-    source: source(sourceIds.cpa, 'cpa-codex', 'CPA', cpaResources),
-    account: null,
-    resources: cpaResources
-  })
-  assert.deepEqual(
-    cpaSlots.map((resource) => resource?.key ?? null),
-    ['auth/other/primary', 'auth/codex/secondary']
-  )
-})
-
-test('CPA 重置次数归属原账号，不占用周期额度摘要且支持隐藏', () => {
-  const cpa = source(sourceIds.cpa, 'cpa-codex', 'CPA', [
-    quota('auth-a/codex/primary', '周额度', 'one@example.com'),
-    balance('auth-a/reset-credits/primary', '剩余重置次数', 'one@example.com'),
-    quota('auth-b/codex/primary', '周额度', 'two@example.com'),
-    balance('auth-b/reset-credits/primary', '剩余重置次数', 'two@example.com')
+  const records = quotaRecords([
+    source('cpa', [account(resources), account(resources, { key: 'other' })]),
+    source('another-channel', [account(structuredClone(resources))], { sourceId: secondId })
   ])
-  const records = quotaRecords([cpa])
-  assert.equal(records.length, 2)
-  assert.deepEqual(
-    records.map((record) => record.resources.length),
-    [2, 2]
-  )
-  assert.deepEqual(
-    records.map((record) => summarySlots(record).map((resource) => resource?.key ?? null)),
-    [
-      ['auth-a/codex/primary', null],
-      ['auth-b/codex/primary', null]
-    ]
-  )
+  assert.equal(records.length, 3)
+  assert.equal(new Set(records.map((r) => r.key)).size, 3)
+  for (const record of records) {
+    assert.deepEqual(
+      summarySlots(record).map((r) => r?.key ?? null),
+      ['codex/primary', 'codex/secondary']
+    )
+    assert.deepEqual(detailResources(record), [])
+  }
+})
 
-  const hidden = quotaRecords(
-    [cpa],
-    new Set([resourceVisibilityKey('cpa-codex', cpa.resources[1])])
+test('按渠道首次出现分组，来源顺序及账号名排序稳定', () => {
+  const sources = [
+    source('other', [
+      account([balance('balance')], { key: 'z', type: 'other', name: 'z@example.com' }),
+      account([balance('balance')], { key: 'a', type: 'other', name: 'a@example.com' })
+    ]),
+    source('cpa', [account([quota('codex/primary')])], { sourceId: secondId }),
+    source('other', [account([balance('balance')], { type: 'other', name: null })], {
+      sourceId: '33333333-3333-4333-8333-333333333333',
+      name: '无账号名来源'
+    })
+  ]
+  assert.deepEqual(
+    groupChannels(sources).map((items) => items.map((item) => item.name)),
+    [['other', '无账号名来源'], ['cpa']]
+  )
+  assert.deepEqual(quotaRecords(sources).map(recordLabel), [
+    'a@example.com',
+    'z@example.com',
+    '无账号名来源',
+    'sample@example.com'
+  ])
+})
+
+test('Codex 详情只包含额外额度，不重复主周期和主行重置次数', () => {
+  const primary = quota('codex/primary', '5 小时额度', 18000)
+  const secondary = quota('codex/secondary')
+  const review = quota('code-review/primary')
+  review.scope.feature = 'Code Review'
+  const [record] = quotaRecords([
+    source('cpa', [
+      account([primary, secondary, review, balance('reset-credits', 2, '剩余重置次数')])
+    ])
+  ])
+  assert.deepEqual(
+    summaryResources(record).map((r) => r.key),
+    ['codex/primary', 'codex/secondary']
   )
   assert.deepEqual(
-    hidden.map((record) => record.resources.map((resource) => resource.key)),
-    [['auth-a/codex/primary'], ['auth-b/codex/primary']]
+    detailResources(record).map((r) => r.key),
+    ['code-review/primary']
   )
 })
 
-test('渠道级显示规则覆盖多个来源、新账号和不同窗口，不影响其他渠道或功能', () => {
-  const hiddenWeekly = quota('old/codex/primary', '周额度', 'old@example.com')
-  const newWeekly = quota('new/codex/secondary', '周额度', 'new@example.com')
-  const reviewWeekly = quota('new/review/secondary', '周额度', 'new@example.com')
-  reviewWeekly.scope.feature = 'Code Review'
-  const hidden = new Set([resourceVisibilityKey('cpa-codex', hiddenWeekly)])
+test('Devin 日周固定顺序，按类型隐藏跨渠道生效且不影响其他类型', () => {
+  const daily = quota('daily', '日额度', 86400)
+  const weekly = quota('weekly')
+  const hidden = new Set([resourceVisibilityKey('devin', daily)])
   const records = quotaRecords(
     [
-      source(sourceIds.cpa, 'cpa-codex', '旧来源', [hiddenWeekly]),
-      source(sourceIds.openrouterA, 'cpa-codex', '新来源', [newWeekly, reviewWeekly]),
-      source(sourceIds.openrouterB, 'opencode-go', '另一渠道', [quota('weekly-quota', '周额度')])
+      source('cpa', [
+        account([weekly, daily], { type: 'devin' }),
+        account([quota('codex/primary', '日额度', 86400)], { key: 'codex' })
+      ]),
+      source('another-channel', [account([weekly, daily], { type: 'devin' })], {
+        sourceId: secondId
+      })
     ],
     hidden
   )
+  assert.equal(records.length, 3)
+  for (const record of records.filter((r) => r.account?.type === 'devin')) {
+    assert.deepEqual(
+      record.resources.map((r) => r.key),
+      ['weekly']
+    )
+    assert.deepEqual(
+      summarySlots(record).map((r) => r?.key ?? null),
+      [null, 'weekly']
+    )
+  }
+  assert.ok(records.some((r) => r.resources.some((resource) => resource.key === 'codex/primary')))
+})
+
+test('CommandCode 核心额度完整则无额外资源，购买余额才增加详情', () => {
+  const core = [
+    quota('five-hour-quota', '5 小时额度', 18000),
+    quota('weekly-quota'),
+    balance('monthly-credits', 30, '月度 Credits 余额')
+  ]
+  const [record] = quotaRecords([
+    source('commandcode', [
+      account(
+        [
+          ...core,
+          balance('purchased-credits', 0, '购买 Credits 余额'),
+          balance('free-credits', 0, '赠送 Credits 余额')
+        ],
+        { type: 'commandcode' }
+      )
+    ])
+  ])
+  assert.equal(summaryResources(record).length, 3)
+  assert.deepEqual(detailResources(record), [])
+  const [withExtra] = quotaRecords([
+    source('other-channel', [
+      account([...core, balance('purchased-credits', 12, '购买 Credits 余额')], {
+        type: 'commandcode'
+      })
+    ])
+  ])
   assert.deepEqual(
-    records.map((record) => record.resources.map((resource) => resource.key)),
-    [['new/review/secondary'], ['weekly-quota']]
+    detailResources(withExtra).map((r) => r.key),
+    ['purchased-credits']
   )
 })
 
-test('倒计时按天小时和小时分钟分解，不将不足一天进位为整天', () => {
-  const now = 1_700_000_000_000
-  assert.equal(formatCountdown(now + 77 * 3600_000, now, 'zh-CN'), '3 天 5 小时后重置')
+test('Google 明确分组全部保留周期，不合计不同窗口或不同组', () => {
+  const resources = [
+    quota('bucket/gemini-weekly'),
+    quota('bucket/gemini-5h', '5 小时额度', 18000),
+    quota('bucket/3p-weekly'),
+    quota('bucket/3p-5h', '5 小时额度', 18000),
+    quota('bucket/argon-weekly')
+  ]
+  resources.forEach((r, i) => {
+    r.scope.feature = i < 2 ? 'Gemini' : i < 4 ? 'Claude / GPT' : 'Argon'
+  })
+  const [record] = quotaRecords([
+    source('antigravity-manager', [account(resources, { type: 'antigravity' })])
+  ])
+  assert.equal(summaryResources(record).length, 5)
+  assert.deepEqual(detailResources(record), [])
+  assert.equal(new Set(summaryResources(record).map((r) => r.key)).size, 5)
+})
+
+test('Google 两组额度各占一列，同周期同行，独立单窗口放最后', () => {
+  const resources = [
+    quota('bucket/gemini-weekly'),
+    quota('bucket/gemini-5h', '5 小时额度', 18000),
+    quota('bucket/third-weekly'),
+    quota('bucket/third-5h', '5 小时额度', 18000),
+    quota('bucket/argon-weekly')
+  ]
+  resources.forEach((r, i) => {
+    r.scope.feature = i < 2 ? 'Gemini Models' : i < 4 ? 'Claude and GPT models' : 'Gemini Argon'
+  })
+  const [record] = quotaRecords([
+    source('manager', [account([...resources].reverse(), { type: 'antigravity' })])
+  ])
+  assert.deepEqual(
+    summaryResources(record).map((r) => r.key),
+    [
+      'bucket/gemini-5h',
+      'bucket/third-5h',
+      'bucket/gemini-weekly',
+      'bucket/third-weekly',
+      'bucket/argon-weekly'
+    ]
+  )
+})
+
+test('逐模型额度只展开未展示项，不丢任何模型', () => {
+  const resources = Array.from({ length: 8 }, (_, i) => {
+    const resource = quota(`model/model-${i}`, `model-${i}`)
+    resource.scope.model = `model-${i}`
+    return resource
+  })
+  const [record] = quotaRecords([
+    source('antigravity-manager', [account(resources, { type: 'antigravity' })])
+  ])
+  const main = summaryResources(record).map((r) => r.key)
+  const details = detailResources(record).map((r) => r.key)
+  assert.ok(main.length > 0 && details.length > 0)
   assert.equal(
-    formatCountdown(now + 71 * 3600_000 + 59 * 60_000, now, 'zh-CN'),
-    '2 天 23 小时后重置'
+    main.some((key) => details.includes(key)),
+    false
   )
-  assert.equal(formatCountdown(now + 3600_000 + 5 * 60_000, now, 'zh-CN'), '1 小时 5 分钟后重置')
-  assert.equal(formatCountdown(now + 10_000, now, 'zh-CN'), '1 分钟内重置')
-  assert.equal(formatCountdown(now, now, 'en'), 'Reset expected')
-  assert.equal(formatCountdown(now + 77 * 3600_000, now, 'en'), 'Resets in 3d 5h')
-  assert.equal(formatCountdown(null, now, 'zh-CN'), null)
+  assert.deepEqual(new Set([...main, ...details]), new Set(resources.map((r) => r.key)))
 })
 
-test('具体时间使用传入的语言和时区，保留半小时及跨日时差', () => {
+test('空额度、查询失败与暂停账号保留，正常账号全部隐藏不制造空记录', () => {
+  const resource = quota('codex/primary')
+  const records = quotaRecords(
+    [
+      source('cpa', [
+        account([], { key: 'empty' }),
+        account([], { key: 'failed', error: 'HTTP 401' }),
+        account([resource], { key: 'paused', status: 'paused' }),
+        account([resource], { key: 'hidden' })
+      ])
+    ],
+    new Set([resourceVisibilityKey('codex', resource)])
+  )
+  assert.deepEqual(
+    new Set(records.map((r) => r.account?.key)),
+    new Set(['empty', 'failed', 'paused'])
+  )
+})
+
+test('Google 主项不随服务端返回顺序变化，分组内按周期排序', () => {
+  const models = ['model-z', 'model-a', 'model-c', 'model-b'].map((name) => {
+    const resource = quota(`model/${name}`, '模型额度')
+    resource.scope.model = name
+    return resource
+  })
+  const records = quotaRecords([
+    source('first', [account(models, { type: 'antigravity' })]),
+    source('second', [account([...models].reverse(), { type: 'antigravity' })], {
+      sourceId: secondId
+    })
+  ])
+  assert.deepEqual(
+    summaryResources(records[0]).map((r) => r.key),
+    ['model/model-a', 'model/model-b', 'model/model-c']
+  )
+  assert.deepEqual(summaryResources(records[1]), summaryResources(records[0]))
+  const weekly = quota('bucket/week')
+  const short = quota('bucket/short', '5 小时额度', 18000)
+  weekly.scope.feature = short.scope.feature = 'Google group'
+  const [grouped] = quotaRecords([
+    source('manager', [account([weekly, short], { type: 'antigravity' })])
+  ])
+  assert.deepEqual(
+    summaryResources(grouped).map((r) => r.key),
+    ['bucket/short', 'bucket/week']
+  )
+})
+
+test('未知百分比不使用分母100伪装为主额度', () => {
+  const resource = quota('weekly')
+  assert.ok(resource.kind === 'quota')
+  resource.values.remaining = { state: 'unknown' }
+  resource.values.used = { state: 'unknown' }
+  assert.deepEqual(quotaPrimaryValue(resource).value, { state: 'unknown' })
+})
+
+test('Codex 有天数始终保留小时，不改变不足一天或其他类型', () => {
+  const now = 1_800_000_000_000
+  for (const [duration, expected] of [
+    [72 * 3600_000, '3d0h'],
+    [72 * 3600_000 + 45 * 60_000, '3d0h'],
+    [71 * 3600_000, '2d23h'],
+    [24 * 3600_000, '1d0h'],
+    [5 * 3600_000 + 20 * 60_000, '5h20m'],
+    [40 * 60_000, '40m'],
+    [10_000, '<1m']
+  ] as const) {
+    assert.equal(formatCompactCountdown(now + duration, now, 'zh-CN', 'codex'), expected)
+  }
+  assert.equal(formatCompactCountdown(now + 72 * 3600_000, now, 'zh-CN', 'devin'), '3d')
+  assert.equal(formatCompactCountdown(now + 72 * 3600_000, now, 'en', 'codex'), '3d0h')
+  assert.equal(formatCompactCountdown(now, now, 'zh-CN', 'codex'), '待重置')
+  assert.equal(formatCompactCountdown(null, now, 'zh-CN', 'codex'), null)
+})
+
+test('倒计时、时区与数值状态保持既有语义', () => {
+  const now = 1_700_000_000_000
+  assert.equal(formatCompactCountdown(now + 77 * 3600_000, now, 'zh-CN'), '3d5h')
+  assert.equal(formatCompactCountdown(now + 71 * 3600_000 + 59 * 60_000, now, 'zh-CN'), '2d23h')
+  assert.equal(formatCompactCountdown(now + 3600_000 + 5 * 60_000, now, 'zh-CN'), '1h5m')
+  assert.equal(formatCompactCountdown(now + 10_000, now, 'zh-CN'), '<1m')
+  assert.equal(formatCompactCountdown(now, now, 'en'), 'Due')
+  assert.equal(formatCompactCountdown(null, now, 'zh-CN'), null)
   const timestamp = Date.UTC(2026, 9, 4, 0, 19)
   assert.equal(
     formatTimestamp(timestamp, { locale: 'zh-CN', timeZone: 'Asia/Shanghai' }),
@@ -300,12 +306,11 @@ test('具体时间使用传入的语言和时区，保留半小时及跨日时�
     '10/03 14:19'
   )
   assert.equal(formatTimestamp(null, { locale: 'en', timeZone: 'UTC' }), '—')
-})
-
-test('额度主值和状态文案保留 known 0、unknown、unlimited 语义', () => {
-  const zero = quota('zero', '零额度') as Extract<QuotaResource, { kind: 'quota' }>
+  const zero = quota('zero')
+  assert.ok(zero.kind === 'quota')
+  zero.values.remaining = { state: 'known', value: 0 }
   assert.equal(quotaPrimaryValue(zero).label, '剩余')
-  assert.equal(formatValue({ state: 'known', value: 0 }, { kind: 'percentage' }), '0%')
+  assert.equal(formatValue(zero.values.remaining, zero.unit), '0%')
   assert.equal(formatValue({ state: 'unknown' }, { kind: 'currency', code: 'USD' }), '未知')
   assert.equal(formatValue({ state: 'unlimited' }, { kind: 'currency', code: 'USD' }), '无限')
 })

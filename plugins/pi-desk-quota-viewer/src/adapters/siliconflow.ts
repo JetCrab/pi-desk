@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { QuotaResource } from '../protocol.js'
 import { requestJson } from './http.js'
-import { known, numberValue, objectValue } from './resources.js'
+import { known, numberValue, objectValue, singleAccount } from './resources.js'
 import type { QuotaAdapter } from './types.js'
 
 const configSchema = z
@@ -44,7 +44,7 @@ export const siliconFlowAdapter: QuotaAdapter = {
   validateConfig(input) {
     return configSchema.parse(input)
   },
-  async load({ config, signal, fetch }) {
+  async load({ config, signal, fetch, now }) {
     const parsed = configSchema.parse(config)
     const origin =
       parsed.region === 'cn' ? 'https://api.siliconflow.cn' : 'https://api.siliconflow.com'
@@ -79,6 +79,6 @@ export const siliconFlowAdapter: QuotaAdapter = {
           ]
     })
     if (resources.length === 0) throw new Error('SiliconFlow 响应缺少余额字段')
-    return { resources, warning: null }
+    return { accounts: singleAccount('siliconflow', resources, now), warning: null }
   }
 }

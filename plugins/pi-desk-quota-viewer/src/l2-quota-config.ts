@@ -8,6 +8,7 @@ import { z } from 'zod'
 import { errorMessage } from './adapters/resources.js'
 import type { QuotaAdapter } from './adapters/types.js'
 import { QuotaDisplaySettingsSchema } from './l2-quota-display-schema.js'
+import { migrateQuotaVisibilityKey } from './l2-quota-display-key.js'
 
 const MAX_CONFIG_BYTES = 256 * 1024
 export const MAX_SOURCES = 50
@@ -44,11 +45,15 @@ export function defaultQuotaViewerConfigPath(): string {
   return path
 }
 
-export function normalizeHiddenItems(
-  keys: readonly string[],
-  registry: ReadonlyMap<string, QuotaAdapter>
-): string[] {
-  return [...new Set(keys)].filter((key) => registry.has(key.slice(0, key.indexOf(':'))))
+export function normalizeHiddenItems(keys: readonly string[]): string[] {
+  return [
+    ...new Set(
+      keys.flatMap((key) => {
+        const migrated = migrateQuotaVisibilityKey(key)
+        return migrated ? [migrated] : []
+      })
+    )
+  ]
 }
 
 export async function readStoredConfig(
@@ -78,21 +83,43 @@ export async function readStoredConfig(
   }
   const parsed = storedConfigSchema.parse(raw)
   const seen = new Set<string>()
-  const sources = parsed.sources.map((source) => {
+  const legacyConnections = new Map<string, StoredSource>()
+  const sources: StoredSource[] = []
+  for (const source of parsed.sources) {
     if (seen.has(source.sourceId)) throw new Error(`额度来源 sourceId 重复：${source.sourceId}`)
     seen.add(source.sourceId)
-    const adapter = registry.get(source.adapter)
-    if (!adapter) throw new Error(`额度 Adapter 不存在：${source.adapter}`)
-    return {
+    const legacyCpa = source.adapter === 'cpa-codex' || source.adapter === 'cpa-devin'
+    const adapterName = legacyCpa ? 'cpa' : source.adapter
+    const adapter = registry.get(adapterName)
+    if (!adapter) throw new Error(`额度 Adapter 不存在：${adapterName}`)
+    const normalized: StoredSource = {
       ...source,
+      adapter: adapterName,
+      name:
+        legacyCpa && ['Codex（通过 CPA）', 'Devin（通过 CPA）'].includes(source.name)
+          ? 'CPA'
+          : source.name,
       config: adapter.validateConfig(source.config)
     }
-  })
+    if (legacyCpa) {
+      const connection = JSON.stringify([
+        normalized.config.managementUrl,
+        normalized.config.managementKey
+      ])
+      const previous = legacyConnections.get(connection)
+      if (previous) {
+        previous.enabled ||= normalized.enabled
+        continue
+      }
+      legacyConnections.set(connection, normalized)
+    }
+    sources.push(normalized)
+  }
   return {
     sources,
     display: {
       ...parsed.display,
-      hiddenItemKeys: normalizeHiddenItems(parsed.display.hiddenItemKeys, registry)
+      hiddenItemKeys: normalizeHiddenItems(parsed.display.hiddenItemKeys)
     }
   }
 }

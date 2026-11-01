@@ -1,7 +1,14 @@
 import { z } from 'zod'
 import type { QuotaResource } from '../protocol.js'
 import { QuotaHttpError, requestJson } from './http.js'
-import { known, numberValue, objectValue, optionalObject, timestampMs } from './resources.js'
+import {
+  known,
+  numberValue,
+  objectValue,
+  optionalObject,
+  singleAccount,
+  timestampMs
+} from './resources.js'
 import type { QuotaAdapter } from './types.js'
 
 const USAGE_URL = 'https://opencode.ai/zen/go/v1/usage'
@@ -54,7 +61,7 @@ export const openCodeGoAdapter: QuotaAdapter = {
   validateConfig(input) {
     return configSchema.parse(input)
   },
-  async load({ config, signal, fetch }) {
+  async load({ config, signal, fetch, now }) {
     const parsed = configSchema.parse(config)
     let payload: unknown
     try {
@@ -113,7 +120,7 @@ export const openCodeGoAdapter: QuotaAdapter = {
 
     if (resources.length === 0) throw new Error('OpenCode Go 响应中没有可识别额度')
     return {
-      resources,
+      accounts: singleAccount('opencode-go', resources, now),
       warning: limited.length > 0 ? `${limited.join('、')}已达上限` : null
     }
   }

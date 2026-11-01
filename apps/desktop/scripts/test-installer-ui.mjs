@@ -116,6 +116,13 @@ script = script
     `Section Install\n  StrCpy $R7 0\n  fixture_wait:\n    Call CheckCancellation\n    Sleep 100\n    IntOp $R7 $R7 + 1\n    IntCmp $R7 30 fixture_ready fixture_wait fixture_ready\n  fixture_ready:\n`
   )
   .replace('Call BeginFileReplacement\n', 'Call BeginFileReplacement\n  Sleep 800\n')
+// 延迟NSIS完成收尾，验证窗口先消失；生产启动逻辑不增加等待。
+const finishReturn = '  PiDeskUI::Finish\n  Pop $0\n'
+assert.ok(script.includes(finishReturn), '测试必须覆盖完成页返回到启动应用之间的等待')
+script = script.replace(
+  finishReturn,
+  `${finishReturn}  FileOpen $R9 "$INSTDIR\\finish-pending.txt" w\n  FileWrite $R9 "waiting"\n  FileClose $R9\n  Sleep 2000\n`
+)
 const fixtureScript = join(build, 'installer.nsi')
 await writeFile(fixtureScript, script)
 await run(makensis, ['/V2', '/NOCD', fixtureScript])

@@ -1,4 +1,26 @@
-import type { QuotaValue } from '../protocol.js'
+import type { QuotaAccount, QuotaResource, QuotaValue } from '../protocol.js'
+
+export function singleAccount(
+  type: string,
+  resources: QuotaResource[],
+  observedAt: number
+): QuotaAccount[] {
+  return [
+    {
+      key: 'account',
+      type,
+      name: resources.find((resource) => resource.scope.account)?.scope.account ?? null,
+      plan: resources.find((resource) => resource.scope.plan)?.scope.plan ?? null,
+      status: 'active',
+      error: null,
+      observedAt,
+      resources: resources.map((resource) => {
+        const { account: _account, plan: _plan, ...scope } = resource.scope
+        return { ...resource, scope }
+      })
+    }
+  ]
+}
 
 export function known(value: number): QuotaValue {
   return { state: 'known', value }

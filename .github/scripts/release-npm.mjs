@@ -700,16 +700,22 @@ export async function publish(entries, output) {
         console.info(`发布：${entry.manifest.name}@${entry.manifest.version}`)
         await upload(entry, output, env)
       }
-      const checks = await Promise.allSettled([
-        waitForNpmTags(
-          entry.manifest.name,
-          entry.manifest.version,
-          npmTagFor(process.env.GITHUB_REF, entry.manifest.version)
-        ),
-        waitForRegistryPackage(entry.manifest.name, entry.manifest.version)
-      ])
-      const failure = checks.find((check) => check.status === 'rejected')
-      if (failure) throw failure.reason
+      if (process.env.GITHUB_REF === 'refs/heads/main') {
+        console.info(
+          `继续正式发布：${entry.manifest.name}@${entry.manifest.version}；npm 上架和 latest 标签可能延迟，不等待同步。`
+        )
+      } else {
+        const checks = await Promise.allSettled([
+          waitForNpmTags(
+            entry.manifest.name,
+            entry.manifest.version,
+            npmTagFor(process.env.GITHUB_REF, entry.manifest.version)
+          ),
+          waitForRegistryPackage(entry.manifest.name, entry.manifest.version)
+        ])
+        const failure = checks.find((check) => check.status === 'rejected')
+        if (failure) throw failure.reason
+      }
       published.push(entry.manifest.name.slice('@jetcrab/'.length))
     })
   } finally {

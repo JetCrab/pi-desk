@@ -1,20 +1,26 @@
 'use client'
 
+import { Tooltip } from '@base-ui/react/tooltip'
 import { Check, Copy } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useId, useRef, useState, type ReactElement } from 'react'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 
 export function CopyCommandButton({
   label,
   command,
   variant = 'ghost',
-  iconOnly = false
+  iconOnly = false,
+  description,
+  className
 }: {
   label: string
   command: string
   variant?: 'default' | 'secondary' | 'ghost'
   iconOnly?: boolean
+  description?: string
+  className?: string
 }): ReactElement {
+  const descriptionId = useId()
   const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(
@@ -36,17 +42,39 @@ export function CopyCommandButton({
     }
   }
 
+  const button = (
+    <Button
+      variant={variant}
+      size={iconOnly ? 'icon' : 'default'}
+      className={className}
+      aria-label={label}
+      onClick={() => void copy()}
+    >
+      {status === 'copied' ? <Check /> : <Copy />}
+      {!iconOnly && label}
+    </Button>
+  )
+
   return (
     <div>
-      <Button
-        variant={variant}
-        size={iconOnly ? 'icon' : 'default'}
-        aria-label={label}
-        onClick={() => void copy()}
-      >
-        {status === 'copied' ? <Check /> : <Copy />}
-        {!iconOnly && label}
-      </Button>
+      {description ? (
+        <Tooltip.Root>
+          <Tooltip.Trigger delay={180} aria-describedby={descriptionId} render={button} />
+          <Tooltip.Portal>
+            <Tooltip.Positioner side="top" sideOffset={8} className="z-50">
+              <Tooltip.Popup
+                id={descriptionId}
+                role="tooltip"
+                className="max-w-64 rounded-lg border border-border bg-popover px-3 py-2 text-sm leading-relaxed text-popover-foreground shadow-md"
+              >
+                {description}
+              </Tooltip.Popup>
+            </Tooltip.Positioner>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+      ) : (
+        button
+      )}
       <span
         className={status === 'failed' ? 'mt-1 block text-xs text-destructive' : 'sr-only'}
         role="status"

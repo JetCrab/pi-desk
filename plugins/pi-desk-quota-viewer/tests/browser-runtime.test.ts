@@ -7,7 +7,7 @@ import {
   replaceQuotaSnapshot
 } from '../src/browser-runtime.js'
 
-test('Browser Runtime 重设旧账号偏好，解析渠道显示项和时间格式', () => {
+test('Browser Runtime 重设旧账号偏好，迁移类型显示项并保留时间格式', () => {
   resetQuotaBrowserRuntime()
   assert.deepEqual(
     parseQuotaSnapshot({ error: null, sources: [], hiddenResourceKeys: ['old-account'] }),
@@ -22,7 +22,10 @@ test('Browser Runtime 重设旧账号偏好，解析渠道显示项和时间格�
     hiddenItemKeys: ['cpa-codex:["quota","周额度",""]']
   }
   const snapshot = parseQuotaSnapshot({ error: null, sources: [], display })
-  assert.deepEqual(snapshot.display, display)
+  assert.deepEqual(snapshot.display, {
+    resetTimeFormat: 'absolute',
+    hiddenItemKeys: ['codex:["quota","周额度","",""]']
+  })
   replaceQuotaSnapshot(snapshot)
   assert.deepEqual(readQuotaSnapshot(), snapshot)
   resetQuotaBrowserRuntime()
