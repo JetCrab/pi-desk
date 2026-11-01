@@ -272,7 +272,7 @@ export function L2ProjectHistoryView(props: Props): React.JSX.Element {
             ) : null}
           </div>
         </ResizablePanel>
-        <ResizableHandle />
+        <ResizableHandle disableDoubleClick />
         <ResizablePanel
           id="project-detail"
           defaultSize={`${100 - props.panelSizes.changes}%`}
@@ -491,7 +491,7 @@ export function L2ProjectHistoryView(props: Props): React.JSX.Element {
           <ResizablePanel id="project-log" defaultSize={`${props.panelSizes.log}%`} minSize="30%">
             {log}
           </ResizablePanel>
-          <ResizableHandle />
+          <ResizableHandle disableDoubleClick />
           <ResizablePanel
             id="project-files"
             defaultSize={`${100 - props.panelSizes.log}%`}

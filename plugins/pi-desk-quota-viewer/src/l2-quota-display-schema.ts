@@ -1,21 +1,25 @@
 import { z } from 'zod'
 import { MAX_HIDDEN_ITEMS } from './protocol.js'
+import { migrateQuotaVisibilityKey } from './l2-quota-display-key.js'
 
-const itemIdentitySchema = z.tuple([z.enum(['balance', 'quota']), z.string().min(1), z.string()])
+const itemIdentitySchema = z.tuple([
+  z.enum(['balance', 'quota']),
+  z.string().min(1),
+  z.string(),
+  z.string()
+])
 const hiddenItemKeySchema = z
   .string()
   .trim()
   .min(1)
   .max(500)
   .refine((value) => {
-    const separator = value.indexOf(':')
-    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.slice(0, separator))) return false
-    try {
-      return itemIdentitySchema.safeParse(JSON.parse(value.slice(separator + 1))).success
-    } catch {
-      return false
-    }
+    const migrated = migrateQuotaVisibilityKey(value)
+    if (!migrated) return false
+    return itemIdentitySchema.safeParse(JSON.parse(migrated.slice(migrated.indexOf(':') + 1)))
+      .success
   }, '显示项标识格式无效')
+  .transform((value) => migrateQuotaVisibilityKey(value) ?? value)
 
 export const QuotaDisplaySettingsSchema = z
   .object({

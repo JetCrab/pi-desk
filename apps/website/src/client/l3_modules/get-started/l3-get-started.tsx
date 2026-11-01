@@ -10,11 +10,7 @@ import {
   PopoverTitle,
   PopoverTrigger
 } from '@client/l4_foundation/ui/shadcn/popover'
-import {
-  nodeRequirement,
-  startCommand,
-  type SiteRelease
-} from '@common/l3_modules/site/l3-site-release'
+import { startCommand, type SiteRelease } from '@common/l3_modules/site/l3-site-release'
 import { Command } from '@client/l4_foundation/ui/l4-command'
 import { CliInstall } from './l3-cli-install'
 
@@ -34,7 +30,7 @@ export function GetStarted({
   return (
     <Tabs.Root
       defaultValue="download"
-      className="w-full max-w-[480px] min-w-0"
+      className="w-full max-w-[600px] min-w-0"
       aria-label="安装与下载"
     >
       <Tabs.List activateOnFocus className="mb-4 flex justify-center gap-2" aria-label="安装方式">
@@ -151,7 +147,6 @@ export function GetStarted({
             </p>
           )}
           <Command label="启动" command={startCommand} />
-          <p className="text-center text-xs text-muted-foreground">{nodeRequirement}</p>
         </Tabs.Panel>
       </div>
     </Tabs.Root>

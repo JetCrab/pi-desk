@@ -53,6 +53,20 @@ export interface QuotaLimitResource extends QuotaResourceBase {
 
 export type QuotaResource = QuotaBalanceResource | QuotaLimitResource
 
+export interface QuotaAccount {
+  /** Stable within one configured source; independent of the display name. */
+  key: string
+  /** Quota product, independent of the channel used to retrieve it. */
+  type: string
+  name: string | null
+  plan: string | null
+  status: 'active' | 'disabled' | 'paused' | 'blocked'
+  error: string | null
+  /** Time of the quota snapshot, not the time a cached snapshot was retrieved. */
+  observedAt: number | null
+  resources: QuotaResource[]
+}
+
 export interface QuotaSourceSnapshot {
   sourceId: string
   adapter: string
@@ -63,7 +77,7 @@ export interface QuotaSourceSnapshot {
   observedAt: number | null
   staleAt: number | null
   error: string | null
-  resources: QuotaResource[]
+  accounts: QuotaAccount[]
 }
 
 export interface QuotaSnapshot {

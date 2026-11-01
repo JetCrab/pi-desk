@@ -215,7 +215,7 @@ export function L2ProjectPreview({
           {fileTree}
         </ResizablePanel>
       ) : null}
-      {directoryOpen ? <ResizableHandle /> : null}
+      {directoryOpen ? <ResizableHandle disableDoubleClick /> : null}
       <ResizablePanel id="project-code" minSize="40%">
         {code}
       </ResizablePanel>
@@ -323,7 +323,7 @@ export function L2ProjectPreview({
           >
             {upper}
           </ResizablePanel>
-          {gitOpen ? <ResizableHandle /> : null}
+          {gitOpen ? <ResizableHandle disableDoubleClick /> : null}
           {gitOpen ? (
             <ResizablePanel id="project-git" defaultSize={`${global.gitSize}%`} minSize="300px">
               {gitView}

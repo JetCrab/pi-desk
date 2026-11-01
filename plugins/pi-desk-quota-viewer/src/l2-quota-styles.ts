@@ -48,36 +48,38 @@ export const QUOTA_STYLES = `
 .quota-record { min-width: 0; border-bottom: 1px solid var(--border); }
 .quota-record-summary {
   display: grid;
-  grid-template-columns: minmax(11rem, 1fr) minmax(0, 2fr) auto;
-  gap: .75rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 1rem;
   align-items: center;
   min-height: 3.5rem;
   padding: .5rem .75rem;
 }
-.quota-record-identity, .quota-editor-title, .quota-detail-identity {
-  display: grid;
-  min-width: 0;
-  gap: .25rem;
-}
-.quota-record-label { display: flex; min-width: 0; align-items: baseline; gap: .5rem; }
-.quota-plan { flex: none; }
-.quota-record-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.quota-record-state { display: flex; flex-wrap: wrap; gap: .5rem; }
-.quota-record-state:empty { display: none; }
-.quota-metrics { display: grid; min-width: 0; gap: .75rem; align-items: start; }
-.quota-metric { display: grid; min-width: 0; gap: .25rem; text-align: right; overflow-wrap: anywhere; }
-.quota-metric-reading { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: baseline; gap: 0 .5rem; }
-.quota-metric-value { margin-left: auto; font-size: .875rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.5; }
-.quota-progress { height: 4px; border-radius: 999px; overflow: hidden; background: var(--muted); }
+.quota-record-identity, .quota-editor-title { display: grid; min-width: 0; gap: .25rem; }
+.quota-record-name { min-width: 0; overflow-wrap: anywhere; font-size: .875rem; font-weight: 500; line-height: 1.5; }
+.quota-record-tags { display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: .25rem; }
+.quota-tag { padding: 0 .375rem; border-radius: 4px; background: var(--muted); color: var(--muted-foreground); font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere; }
+.quota-record-tags .quota-detail-toggle { min-height: 1.75rem; padding: 0 .375rem; font-size: .75rem; }
+.quota-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; align-items: start; gap: .25rem .5rem; }
+.quota-metrics > .quota-metric:last-child:nth-child(odd), .quota-metrics-empty { grid-column: 1 / -1; }
+.quota-metric { position: relative; min-width: 0; min-height: 1.5rem; padding: .125rem .375rem .25rem; border-radius: 4px; background: var(--muted); overflow-wrap: anywhere; }
+.quota-metric-reading { display: flex; min-width: 0; align-items: baseline; gap: .375rem; font-size: .75rem; line-height: 1.5; }
+.quota-metric-label { flex: 1; min-width: 0; }
+.quota-metric-reset { flex: none; color: var(--muted-foreground); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.quota-metric-value { flex: none; font-size: .75rem; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.quota-progress { position: absolute; inset: auto .375rem 0; height: 2px; overflow: hidden; border-radius: 999px; background: var(--border); }
 .quota-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--primary); transition: width 150ms ease-out; }
 .quota-metric[data-quota-tone="warning"] .quota-progress > span { background: var(--status-warning, var(--foreground)); }
 .quota-metric[data-quota-tone="error"] .quota-progress > span { background: var(--destructive); }
-.quota-record-detail { display: grid; gap: .75rem; padding: .75rem; background: var(--muted); }
-.quota-detail-identity, .quota-error-text, .quota-full-name { overflow-wrap: anywhere; }
-.quota-resource-detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: .75rem; border-top: 1px solid var(--border); padding-top: .75rem; }
-.quota-detail-resource-name, .quota-detail-values { display: grid; min-width: 0; gap: .25rem; overflow-wrap: anywhere; }
-.quota-detail-resource-name strong { font-weight: 500; }
-.quota-detail-values { text-align: right; font-variant-numeric: tabular-nums; }
+.quota-record-detail { display: grid; gap: .375rem; padding: .5rem .75rem .75rem; background: var(--muted); font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere; }
+.quota-detail-metadata { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin: 0; }
+.quota-detail-metadata > div { display: flex; min-width: 0; gap: .375rem; }
+.quota-detail-metadata dt { flex: none; color: var(--muted-foreground); }
+.quota-detail-metadata dd { min-width: 0; margin: 0; font-variant-numeric: tabular-nums; }
+.quota-detail-error { width: 100%; }
+.quota-resource-detail, .quota-resource-supplement { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: .5rem; padding-top: .375rem; border-top: 1px solid var(--border); }
+.quota-resource-detail > div, .quota-resource-supplement > div { display: flex; flex-wrap: wrap; min-width: 0; gap: .25rem .75rem; font-variant-numeric: tabular-nums; }
+.quota-resource-detail strong { font-weight: 500; }
+.quota-error-text { overflow-wrap: anywhere; }
 .quota-pagination { flex: none; justify-content: space-between; flex-wrap: wrap; padding-top: .5rem; border-top: 1px solid var(--border); }
 .quota-empty-actions { justify-content: center; margin-top: .75rem; }
 .quota-source-notices { padding: .5rem .75rem; border-bottom: 1px solid var(--border); }
@@ -140,14 +142,10 @@ export const QUOTA_STYLES = `
 @container quota-panel (max-width: 44rem) {
   .quota-filters .quota-channel-tabs { display: none; }
   .quota-filters .quota-channel-select { display: block; }
-  .quota-record-summary { grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; }
-  .quota-record-identity { grid-column: 1; grid-row: 1; }
-  .quota-detail-toggle { grid-column: 2; grid-row: 1; }
-  .quota-metrics { grid-column: 1 / -1; }
-  .quota-metric { text-align: left; }
-  .quota-metric-reading { justify-content: flex-start; }
-  .quota-resource-detail { grid-template-columns: minmax(0, 1fr); }
-  .quota-detail-values { text-align: left; }
+  .quota-record-summary { grid-template-columns: minmax(0, 1fr); gap: .375rem; }
+  .quota-record-identity { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; }
+  .quota-record-tags { margin-left: auto; }
+  .quota-resource-detail, .quota-resource-supplement { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
   .quota-visibility-options, .quota-visibility-filters { grid-template-columns: minmax(0, 1fr); }
 }
 @container quota-settings (max-width: 51.999rem) {

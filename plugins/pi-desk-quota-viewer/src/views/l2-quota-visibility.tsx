@@ -13,7 +13,7 @@ import { useQuotaVisibility } from '../hooks/l2-quota-visibility.js'
 import { quotaText, readQuotaRegion } from '../l2-quota-locale.js'
 import {
   displayItems,
-  groupChannels,
+  groupQuotaTypes,
   isWeeklyResource,
   matchesSearch,
   resourceLabel
@@ -35,12 +35,12 @@ export function QuotaVisibilityDialog({
   const locale = readQuotaRegion(host).locale
   const t = (text: string): string => quotaText(locale, text)
   const items = useMemo(() => displayItems(snapshot.sources), [snapshot.sources])
-  const [adapter, setAdapter] = useState('')
+  const [type, setType] = useState('')
   const [query, setQuery] = useState('')
   const visible = items.filter(
     (item) =>
-      (!adapter || item.adapter === adapter) &&
-      matchesSearch(query, t(item.adapterLabel), resourceLabel(item.resource, locale))
+      (!type || item.type === type) &&
+      matchesSearch(query, t(item.typeLabel), resourceLabel(item.resource, locale))
   )
 
   return (
@@ -79,21 +79,21 @@ export function QuotaVisibilityDialog({
       <div className="quota-visibility">
         <div className="quota-visibility-filters">
           <PluginSelect
-            label={t('渠道')}
-            value={adapter || 'all'}
+            label={t('额度类型')}
+            value={type || 'all'}
             disabled={model.saving}
             options={[
-              { value: 'all', label: t('全部渠道') },
-              ...groupChannels(items).map(([item]) => ({
-                value: item.adapter,
-                label: t(item.adapterLabel)
+              { value: 'all', label: t('全部类型') },
+              ...groupQuotaTypes(items).map(([item]) => ({
+                value: item.type,
+                label: t(item.typeLabel)
               }))
             ]}
-            onValueChange={(value) => setAdapter(value === 'all' ? '' : (value ?? ''))}
+            onValueChange={(value) => setType(value === 'all' ? '' : (value ?? ''))}
           />
           <PluginInput
-            aria-label={t('搜索渠道或显示内容')}
-            placeholder={t('搜索渠道或显示内容')}
+            aria-label={t('搜索类型或显示内容')}
+            placeholder={t('搜索类型或显示内容')}
             value={query}
             disabled={model.saving}
             onChange={(event) => setQuery(event.target.value)}
@@ -109,17 +109,17 @@ export function QuotaVisibilityDialog({
             {t(items.length === 0 ? '暂无可选择的额度' : '没有匹配的显示内容')}
           </PluginEmptyState>
         ) : (
-          groupChannels(visible).map((channel) => {
-            const first = channel[0]
-            const all = items.filter((item) => item.adapter === first.adapter)
+          groupQuotaTypes(visible).map((group) => {
+            const first = group[0]
+            const all = items.filter((item) => item.type === first.type)
             const keys = all.map((item) => item.key)
             const weekly = all
               .filter((item) => isWeeklyResource(item.resource))
               .map((item) => item.key)
             return (
-              <section className="quota-visibility-channel" key={first.adapter}>
+              <section className="quota-visibility-channel" key={first.type}>
                 <div className="quota-visibility-heading">
-                  <h3 className="quota-section-title">{t(first.adapterLabel)}</h3>
+                  <h3 className="quota-section-title">{t(first.typeLabel)}</h3>
                   {weekly.length > 0 && weekly.length < keys.length ? (
                     <PluginButton
                       size="sm"
@@ -132,7 +132,7 @@ export function QuotaVisibilityDialog({
                   ) : null}
                 </div>
                 <div className="quota-visibility-options">
-                  {channel.map((item) => (
+                  {group.map((item) => (
                     <label className="quota-selection" key={item.key}>
                       <PluginCheckbox
                         checked={!model.hidden.has(item.key)}

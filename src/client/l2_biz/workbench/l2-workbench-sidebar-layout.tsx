@@ -103,6 +103,7 @@ export function L2WorkbenchSidebarLayout({
         aria-label={t('resizeSessionList')}
         aria-hidden={!open || undefined}
         disabled={!open}
+        disableDoubleClick
         className={cn('cursor-col-resize', !open && 'w-0 pointer-events-none opacity-0')}
       />
       <ResizablePanel

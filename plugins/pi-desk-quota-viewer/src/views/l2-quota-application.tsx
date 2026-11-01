@@ -39,7 +39,8 @@ export function QuotaApplication({
   const refreshing = snapshot.sources.some((source) => source.refreshing)
   const failures = snapshot.sources.filter((source) => source.error)
   const resourceCount = snapshot.sources.reduce(
-    (count, source) => count + source.resources.length,
+    (count, source) =>
+      count + source.accounts.reduce((total, account) => total + account.resources.length, 0),
     0
   )
   const hiddenCount = displayItems(snapshot.sources).filter((item) => hidden.has(item.key)).length

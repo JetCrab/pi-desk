@@ -1,26 +1,40 @@
 import type {
-  QuotaDataSource,
+  QuotaAccount,
+  QuotaBalanceResource,
   QuotaLimitResource,
   QuotaResource,
+  QuotaScope,
   QuotaSourceSnapshot,
   QuotaUnit,
   QuotaValue
 } from './protocol.js'
 import { quotaText, type QuotaLocale, type QuotaRegion } from './l2-quota-locale.js'
+import { quotaVisibilityKey } from './l2-quota-display-key.js'
 
 export const QUOTA_PAGE_SIZE = 10
 
 export interface QuotaRecord {
   key: string
   source: QuotaSourceSnapshot
-  account: string | null
+  account: QuotaAccount | null
   resources: QuotaResource[]
 }
 
 const accountOrder = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })
-const CPA_FEATURES: Readonly<Record<string, string>> = {
-  'cpa-codex': 'codex',
-  'cpa-devin': 'devin'
+const TYPE_LABELS: Readonly<Record<string, string>> = {
+  codex: 'Codex',
+  devin: 'Devin',
+  antigravity: 'Antigravity',
+  openrouter: 'OpenRouter',
+  moonshot: 'Moonshot / Kimi API',
+  siliconflow: 'SiliconFlow',
+  'opencode-go': 'OpenCode Go',
+  commandcode: 'CommandCode',
+  'zhipu-coding-plan': '智谱 Coding Plan'
+}
+
+export function quotaTypeLabel(type: string): string {
+  return TYPE_LABELS[type] ?? type
 }
 
 export function groupChannels<T extends { adapter: string }>(items: readonly T[]): T[][] {
@@ -33,41 +47,46 @@ export function groupChannels<T extends { adapter: string }>(items: readonly T[]
   return [...channels.values()]
 }
 
-export function resourceVisibilityKey(adapter: string, resource: QuotaResource): string {
-  return `${adapter}:${JSON.stringify([resource.kind, resource.label, resource.scope.feature ?? ''])}`
+export function groupQuotaTypes<T extends { type: string }>(items: readonly T[]): T[][] {
+  const groups = new Map<string, T[]>()
+  for (const item of items) {
+    const group = groups.get(item.type)
+    if (group) group.push(item)
+    else groups.set(item.type, [item])
+  }
+  return [...groups.values()]
+}
+
+export function resourceVisibilityKey(type: string, resource: QuotaResource): string {
+  return quotaVisibilityKey(type, resource)
 }
 
 export function displayItems(sources: readonly QuotaSourceSnapshot[]): Array<{
   key: string
-  adapter: string
-  adapterLabel: string
+  type: string
+  typeLabel: string
   resource: QuotaResource
 }> {
   const items = new Map<
     string,
-    { key: string; adapter: string; adapterLabel: string; resource: QuotaResource }
+    { key: string; type: string; typeLabel: string; resource: QuotaResource }
   >()
   for (const source of sources) {
-    for (const resource of source.resources) {
-      const key = resourceVisibilityKey(source.adapter, resource)
-      if (!items.has(key))
-        items.set(key, {
-          key,
-          adapter: source.adapter,
-          adapterLabel: source.adapterLabel,
-          resource
-        })
+    for (const account of source.accounts) {
+      for (const resource of account.resources) {
+        const key = quotaVisibilityKey(account.type, resource)
+        if (!items.has(key)) {
+          items.set(key, {
+            key,
+            type: account.type,
+            typeLabel: quotaTypeLabel(account.type),
+            resource
+          })
+        }
+      }
     }
   }
   return [...items.values()]
-}
-
-function cpaAccountKey(resource: QuotaResource): string | null {
-  // CPA Adapter 的资源键是三个已编码片段；账号显示名可能重复，不能作为身份。
-  const parts = resource.key.split('/')
-  return parts.length === 3 && parts[0] && ['primary', 'secondary'].includes(parts[2])
-    ? parts[0]
-    : null
 }
 
 export function quotaRecords(
@@ -76,23 +95,31 @@ export function quotaRecords(
 ): QuotaRecord[] {
   return groupChannels(sources).flatMap((channel) =>
     channel.flatMap((source) => {
-      const groups = new Map<string, QuotaRecord>()
-      for (const resource of source.resources) {
-        if (hiddenKeys.has(resourceVisibilityKey(source.adapter, resource))) continue
-        const account = resource.scope.account?.trim() || null
-        const identity = CPA_FEATURES[source.adapter]
-          ? `cpa:${cpaAccountKey(resource) ?? resource.key}`
-          : (account ?? 'source')
-        const key = JSON.stringify([source.sourceId, identity])
-        const current = groups.get(key)
-        if (current) current.resources.push(resource)
-        else groups.set(key, { key, source, account, resources: [resource] })
+      const records: QuotaRecord[] = []
+      for (const account of source.accounts) {
+        const resources = account.resources.filter(
+          (resource) => !hiddenKeys.has(quotaVisibilityKey(account.type, resource))
+        )
+        // 主动隐藏正常账号的全部额度时，保留隐藏语义；异常账号仍需可见。
+        if (
+          account.resources.length > 0 &&
+          resources.length === 0 &&
+          account.status === 'active' &&
+          !account.error
+        ) {
+          continue
+        }
+        records.push({
+          key: JSON.stringify([source.sourceId, account.key]),
+          source,
+          account,
+          resources
+        })
       }
-      // 没有返回资源的来源仍占一条状态记录；主动隐藏全部资源则不生成假账号。
-      if (source.resources.length === 0) {
+      if (source.accounts.length === 0) {
         return [{ key: JSON.stringify([source.sourceId]), source, account: null, resources: [] }]
       }
-      return [...groups.values()].sort(
+      return records.sort(
         (left, right) =>
           accountOrder.compare(recordLabel(left), recordLabel(right)) ||
           accountOrder.compare(left.key, right.key)
@@ -102,17 +129,15 @@ export function quotaRecords(
 }
 
 export function recordLabel(record: QuotaRecord): string {
-  return record.account ?? record.source.name
+  return record.account?.name ?? record.source.name
 }
 
 export function recordIndex(record: QuotaRecord): string | null {
-  if (!CPA_FEATURES[record.source.adapter] || !record.resources[0]) return null
-  const key = cpaAccountKey(record.resources[0])
-  return key === null ? null : decodeURIComponent(key)
+  return record.account?.key ?? null
 }
 
 export function recordPlan(record: QuotaRecord): string | null {
-  return record.resources.find((resource) => resource.scope.plan)?.scope.plan ?? null
+  return record.account?.plan ?? null
 }
 
 export function matchesSearch(query: string, ...values: Array<string | null>): boolean {
@@ -128,11 +153,20 @@ export function filterRecords(
   return records.filter(
     (record) =>
       (!adapter || record.source.adapter === adapter) &&
-      matchesSearch(query, record.account, record.source.name, record.source.adapterLabel)
+      matchesSearch(
+        query,
+        recordLabel(record),
+        record.account?.key ?? null,
+        record.account ? quotaTypeLabel(record.account.type) : null,
+        record.source.name,
+        record.source.adapterLabel
+      )
   )
 }
 
 const SUMMARY_KEYS: Record<string, readonly string[]> = {
+  codex: ['codex/primary', 'codex/secondary'],
+  devin: ['daily', 'weekly'],
   openrouter: ['account-credits', 'api-key-quota'],
   moonshot: ['available-balance'],
   siliconflow: ['total-balance'],
@@ -141,49 +175,82 @@ const SUMMARY_KEYS: Record<string, readonly string[]> = {
 }
 
 export function summaryResources(record: QuotaRecord): QuotaResource[] {
-  const resources = record.resources.filter(
-    (resource) =>
-      record.source.adapter !== 'cpa-codex' || resource.key.split('/')[1] !== 'reset-credits'
-  )
-  const keys = SUMMARY_KEYS[record.source.adapter]
-  let preferred: QuotaResource[]
-  let count: number
-  if (keys) {
-    preferred = keys.flatMap((key) => resources.filter((resource) => resource.key === key))
-    count = keys.length
-  } else if (CPA_FEATURES[record.source.adapter]) {
-    preferred = resources.filter(
-      (resource) => resource.key.split('/')[1] === CPA_FEATURES[record.source.adapter]
-    )
-    count = 2
-  } else {
-    preferred = resources.filter(
-      (resource) => resource.kind === 'quota' && resource.window.durationSeconds !== null
-    )
-    count = 3
+  const type = record.account?.type ?? ''
+  const resources = record.resources
+  if (type === 'antigravity') {
+    const groups = resources.filter((resource) => resource.key.startsWith('bucket/'))
+    if (groups.length > 0) {
+      const byGroup = new Map<string, QuotaResource[]>()
+      for (const resource of groups) {
+        const name = resource.scope.feature ?? ''
+        const values = byGroup.get(name) ?? []
+        values.push(resource)
+        byGroup.set(name, values)
+      }
+      const preferred = ['Gemini Models', 'Claude and GPT models', 'Claude / GPT']
+      const columns = [...byGroup]
+        .sort(([left, a], [right, b]) => {
+          const rank = (name: string): number => {
+            const index = preferred.indexOf(name)
+            return index < 0 ? preferred.length : index
+          }
+          return (
+            b.length - a.length || rank(left) - rank(right) || accountOrder.compare(left, right)
+          )
+        })
+        .map(([, values]) =>
+          values.sort((left, right) => {
+            const leftWindow = left.kind === 'quota' ? left.window.durationSeconds : null
+            const rightWindow = right.kind === 'quota' ? right.window.durationSeconds : null
+            return (
+              (leftWindow ?? Infinity) - (rightWindow ?? Infinity) ||
+              accountOrder.compare(left.key, right.key)
+            )
+          })
+        )
+      const ordered: QuotaResource[] = []
+      for (let index = 0; index < columns.length; index += 2) {
+        const left = columns[index]
+        const right = columns[index + 1] ?? []
+        for (let row = 0; row < Math.max(left.length, right.length); row += 1) {
+          if (left[row]) ordered.push(left[row])
+          if (right[row]) ordered.push(right[row])
+        }
+      }
+      return ordered
+    }
+    return [...resources]
+      .sort((left, right) =>
+        accountOrder.compare(left.scope.model ?? left.label, right.scope.model ?? right.label)
+      )
+      .slice(0, 3)
   }
-  const preferredKeys = new Set(preferred.map((resource) => resource.key))
-  return [...preferred, ...resources.filter((resource) => !preferredKeys.has(resource.key))].slice(
-    0,
-    Math.min(3, count)
+  const keys = SUMMARY_KEYS[type]
+  if (keys) {
+    const preferred = keys.flatMap((key) => resources.filter((resource) => resource.key === key))
+    // 代码审查等独立额度留在详情，不填入主周期的空位。
+    if (type === 'codex' || type === 'devin') return preferred
+    const assigned = new Set(preferred.map((resource) => resource.key))
+    return [...preferred, ...resources.filter((resource) => !assigned.has(resource.key))].slice(
+      0,
+      keys.length
+    )
+  }
+  const preferred = resources.filter(
+    (resource) => resource.kind === 'quota' && resource.window.durationSeconds !== null
   )
+  const assigned = new Set(preferred.map((resource) => resource.key))
+  return [...preferred, ...resources.filter((resource) => !assigned.has(resource.key))].slice(0, 3)
 }
 
 export function summarySlots(record: QuotaRecord): Array<QuotaResource | null> {
   const summary = summaryResources(record)
-  const keys = SUMMARY_KEYS[record.source.adapter]
+  const type = record.account?.type ?? ''
+  const keys = SUMMARY_KEYS[type]
   let slots: Array<QuotaResource | null>
   if (keys) {
     slots = keys.map((key) => summary.find((resource) => resource.key === key) ?? null)
-  } else if (CPA_FEATURES[record.source.adapter]) {
-    slots = ['primary', 'secondary'].map(
-      (position) =>
-        summary.find((resource) => {
-          const parts = resource.key.split('/')
-          return parts[1] === CPA_FEATURES[record.source.adapter] && parts[2] === position
-        }) ?? null
-    )
-  } else if (record.source.adapter === 'zhipu-coding-plan') {
+  } else if (type === 'zhipu-coding-plan') {
     slots = [
       summary.find(
         (resource) =>
@@ -197,16 +264,171 @@ export function summarySlots(record: QuotaRecord): Array<QuotaResource | null> {
   } else {
     return summary
   }
-  // 保留核心列的位置，缺项可由其他可见资源补位，但不把已存在的核心项挪到另一列。
+  // 保留核心列的位置，缺项可由其他可见资源补位。
   const assigned = new Set(slots.flatMap((resource) => (resource ? [resource.key] : [])))
   const fallback = summary.filter((resource) => !assigned.has(resource.key))
   return slots.map((resource) => resource ?? fallback.shift() ?? null)
 }
 
-export function resourceLabel(resource: QuotaResource, locale: QuotaLocale = 'zh-CN'): string {
+export function recordResetCredits(record: QuotaRecord): QuotaBalanceResource | null {
+  if (record.account?.type !== 'codex') return null
+  return (
+    record.resources.find(
+      (resource): resource is QuotaBalanceResource =>
+        resource.key === 'reset-credits' && resource.kind === 'balance'
+    ) ?? null
+  )
+}
+
+export function detailResources(record: QuotaRecord): QuotaResource[] {
+  const shown = new Set(summaryResources(record).map((resource) => resource.key))
+  const resetCredits = recordResetCredits(record)
+  if (resetCredits) shown.add(resetCredits.key)
+  return record.resources.filter((resource) => {
+    if (shown.has(resource.key)) return false
+    return !(
+      record.account?.type === 'commandcode' &&
+      ['purchased-credits', 'free-credits'].includes(resource.key) &&
+      resource.kind === 'balance' &&
+      resource.available.state === 'known' &&
+      resource.available.value === 0 &&
+      resource.expiresAt === null
+    )
+  })
+}
+
+export interface QuotaSupplementaryDetail {
+  resource: QuotaResource
+  scope: QuotaScope
+  expiresAt: number | null
+}
+
+function supplementaryScope(resource: QuotaResource): QuotaScope {
+  return Object.fromEntries(
+    Object.entries(resource.scope).filter(
+      ([key, value]) =>
+        ['organization', 'project', 'region', 'key', 'description'].includes(key) && value.trim()
+    )
+  )
+}
+
+export function supplementaryDetails(record: QuotaRecord): QuotaSupplementaryDetail[] {
+  const shown = new Set<string>()
+  return summaryResources(record).flatMap((resource) => {
+    const group = resource.scope.feature ?? resource.scope.model ?? ''
+    const scope = Object.fromEntries(
+      Object.entries(supplementaryScope(resource)).filter(([key, value]) => {
+        const identity = JSON.stringify([group, key, value])
+        if (shown.has(identity)) return false
+        shown.add(identity)
+        return true
+      })
+    )
+    const expiresAt = resource.kind === 'balance' ? resource.expiresAt : null
+    return expiresAt !== null || Object.keys(scope).length > 0
+      ? [{ resource, scope, expiresAt }]
+      : []
+  })
+}
+
+export interface QuotaRecordDetails {
+  resources: QuotaResource[]
+  supplements: QuotaSupplementaryDetail[]
+  source: string
+  type: string | null
+  observedAt: number | null
+  errors: string[]
+  hasDetails: boolean
+}
+
+export function recordDetails(record: QuotaRecord): QuotaRecordDetails {
+  const resources = detailResources(record)
+  const supplements = supplementaryDetails(record)
+  const { source, account } = record
+  const observedAt = account ? account.observedAt : source.observedAt
+  const errors = [
+    ...new Set([account?.error, source.error].filter((error): error is string => Boolean(error)))
+  ]
+  const customSource =
+    source.name !== source.adapterLabel &&
+    source.name !== recordLabel(record) &&
+    source.name !== (account ? quotaTypeLabel(account.type) : null)
+  return {
+    resources,
+    supplements,
+    source: source.name,
+    type: account ? quotaTypeLabel(account.type) : null,
+    observedAt,
+    errors,
+    hasDetails:
+      resources.length > 0 ||
+      supplements.length > 0 ||
+      observedAt !== null ||
+      errors.length > 0 ||
+      customSource
+  }
+}
+
+export function shortResourceLabel(resource: QuotaResource, locale: QuotaLocale = 'zh-CN'): string {
+  const model = resource.scope.model?.trim()
+  if (model) return model
+  const shortLabels: Readonly<Record<string, string>> = {
+    '5 小时额度': '5h',
+    日额度: quotaText(locale, '日', 'Daily'),
+    周额度: quotaText(locale, '周', 'Weekly'),
+    月额度: quotaText(locale, '月', 'Monthly'),
+    '月度 Credits': quotaText(locale, '月余额', 'Monthly'),
+    '月度 Credits 余额': quotaText(locale, '月余额', 'Monthly'),
+    可用余额: quotaText(locale, '余额', 'Balance'),
+    '可用 Credits': 'Credits',
+    'API Key 额度': 'API Key',
+    主额度: quotaText(locale, '主', 'Primary'),
+    次额度: quotaText(locale, '次', 'Secondary')
+  }
+  let label = shortLabels[resource.label]
+  if (!label && resource.kind === 'quota') {
+    const seconds = resource.window.durationSeconds
+    if (seconds === 86_400) label = quotaText(locale, '日', 'Daily')
+    else if (isWeeklyResource(resource)) label = quotaText(locale, '周', 'Weekly')
+    else if (seconds !== null && seconds > 0 && seconds < 86_400) label = `${seconds / 3600}h`
+    else if (seconds !== null && seconds >= 28 * 86_400 && seconds <= 31 * 86_400)
+      label = quotaText(locale, '月', 'Monthly')
+  }
+  label ??= quotaText(locale, resource.label)
   const feature = resource.scope.feature?.trim()
-  const label = quotaText(locale, resource.label)
-  return feature ? `${feature} · ${label}` : label
+  const group =
+    feature === 'Gemini Models'
+      ? 'Gemini'
+      : feature === 'Claude and GPT models'
+        ? 'Claude/GPT'
+        : feature
+  return group ? `${group} ${label}` : label
+}
+
+export function formatCompactCountdown(
+  value: number | null,
+  now: number,
+  locale: QuotaLocale = 'zh-CN',
+  quotaType?: string
+): string | null {
+  if (value === null) return null
+  const difference = value - now
+  if (difference <= 0) return quotaText(locale, '待重置', 'Due')
+  const minutes = Math.floor(difference / 60_000)
+  if (minutes === 0) return '<1m'
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+  if (days > 0) return `${days}d${hours % 24 || quotaType === 'codex' ? `${hours % 24}h` : ''}`
+  return `${hours ? `${hours}h` : ''}${minutes % 60 ? `${minutes % 60}m` : ''}`
+}
+
+export function resourceLabel(resource: QuotaResource, locale: QuotaLocale = 'zh-CN'): string {
+  const names = [
+    resource.scope.feature?.trim(),
+    resource.scope.model?.trim(),
+    quotaText(locale, resource.label)
+  ]
+  return [...new Set(names.filter((value): value is string => Boolean(value)))].join(' · ')
 }
 
 export function isWeeklyResource(resource: QuotaResource): boolean {
@@ -225,32 +447,6 @@ export function formatTimestamp(value: number | null, region: QuotaRegion): stri
     minute: '2-digit',
     hour12: false
   }).format(value)
-}
-
-export function formatCountdown(
-  value: number | null,
-  now: number,
-  locale: QuotaLocale
-): string | null {
-  if (value === null) return null
-  const difference = value - now
-  if (difference <= 0) return quotaText(locale, '预计已重置', 'Reset expected')
-  const minutes = Math.floor(difference / 60_000)
-  if (minutes === 0) return quotaText(locale, '1 分钟内重置', 'Resets in less than 1m')
-  const hours = Math.floor(minutes / 60)
-  const days = Math.floor(hours / 24)
-  const parts =
-    days > 0
-      ? [
-          quotaText(locale, `${days} 天`, `${days}d`),
-          hours % 24 ? quotaText(locale, `${hours % 24} 小时`, `${hours % 24}h`) : ''
-        ]
-      : [
-          hours ? quotaText(locale, `${hours} 小时`, `${hours}h`) : '',
-          minutes % 60 ? quotaText(locale, `${minutes % 60} 分钟`, `${minutes % 60}m`) : ''
-        ]
-  const duration = parts.filter(Boolean).join(' ')
-  return quotaText(locale, `${duration}后重置`, `Resets in ${duration}`)
 }
 
 function formatNumber(value: number, locale: QuotaLocale): string {
@@ -283,10 +479,6 @@ export function formatValue(
   return `${formatNumber(value.value, locale)} ${quotaText(locale, unit.label)}`
 }
 
-export function formatRatio(value: number, locale: QuotaLocale = 'zh-CN'): string {
-  return new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 2 }).format(value)
-}
-
 export function quotaPrimaryValue(resource: QuotaLimitResource): {
   label: string
   value: QuotaValue
@@ -296,7 +488,12 @@ export function quotaPrimaryValue(resource: QuotaLimitResource): {
     return { label: '剩余', value: remaining }
   }
   if (used.state === 'known' || used.state === 'unlimited') return { label: '已用', value: used }
-  if (limit.state === 'known' || limit.state === 'unlimited') return { label: '总额', value: limit }
+  if (
+    resource.unit.kind !== 'percentage' &&
+    (limit.state === 'known' || limit.state === 'unlimited')
+  ) {
+    return { label: '总额', value: limit }
+  }
   return { label: '额度', value: remaining }
 }
 
@@ -311,46 +508,6 @@ export function quotaTone(ratio: number | null): 'neutral' | 'warning' | 'error'
   return ratio >= 0.2 ? 'warning' : 'error'
 }
 
-export function dataSourceLabel(source: QuotaDataSource): string {
-  const labels: Record<QuotaDataSource, string> = {
-    official_api: '官方 API',
-    official_product: '官方产品',
-    internal_api: '内部 API',
-    local_estimate: '本地估算'
-  }
-  return labels[source]
-}
-
-export function windowLabel(resource: QuotaLimitResource, locale: QuotaLocale = 'zh-CN'): string {
-  const { kind, durationSeconds } = resource.window
-  if (kind === 'concurrent') return quotaText(locale, '并发额度')
-  if (kind === 'billing') return quotaText(locale, '账期额度')
-  if (durationSeconds === null) {
-    return quotaText(
-      locale,
-      kind === 'rolling' ? '滚动窗口' : kind === 'fixed' ? '固定窗口' : '窗口未知'
-    )
-  }
-  const hours = durationSeconds / 3600
-  const duration =
-    hours < 24
-      ? quotaText(
-          locale,
-          `${formatNumber(hours, locale)} 小时`,
-          `${formatNumber(hours, locale)} hours`
-        )
-      : quotaText(
-          locale,
-          `${formatNumber(hours / 24, locale)} 天`,
-          `${formatNumber(hours / 24, locale)} days`
-        )
-  return quotaText(
-    locale,
-    `${duration}${kind === 'rolling' ? '滚动窗口' : '窗口'}`,
-    `${duration} ${kind === 'rolling' ? 'rolling window' : 'window'}`
-  )
-}
-
 export function scopeText(resource: QuotaResource, locale: QuotaLocale = 'zh-CN'): string | null {
   const labels: Record<string, string> = {
     organization: '组织',
@@ -358,7 +515,8 @@ export function scopeText(resource: QuotaResource, locale: QuotaLocale = 'zh-CN'
     model: '模型',
     feature: '功能',
     region: '区域',
-    key: '密钥'
+    key: '密钥',
+    description: '说明'
   }
   const parts = Object.entries(resource.scope).flatMap(([key, value]) =>
     ['account', 'plan'].includes(key) || !value.trim()

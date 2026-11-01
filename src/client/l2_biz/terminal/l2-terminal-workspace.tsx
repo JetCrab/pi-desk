@@ -112,6 +112,7 @@ export function L2TerminalWorkspace({
         </ResizablePanel>
         <ResizableHandle
           disabled={mobile || !expanded || maximized}
+          disableDoubleClick
           aria-label={t('terminalResize')}
           aria-hidden={!expanded || maximized || mobile || undefined}
           className={cn(

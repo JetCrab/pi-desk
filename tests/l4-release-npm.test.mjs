@@ -165,17 +165,36 @@ test('部分发布后新运行只接纳完全相同的原包，不覆盖已有�
   }
 })
 
-for (const scenario of ['accepted', 'retry', 'conflict', 'permission', 'unavailable']) {
-  test(`npm上传恢复：${scenario}`, { timeout: 30_000 }, async (t) => {
+for (const { channel, scenario } of [
+  ...['accepted', 'retry', 'conflict', 'permission', 'unavailable'].map((scenario) => ({
+    channel: 'dev',
+    scenario
+  })),
+  ...[
+    'pending',
+    'existing',
+    'existing-conflict',
+    'accepted',
+    'retry',
+    'conflict',
+    'permission',
+    'unavailable'
+  ].map((scenario) => ({ channel: 'main', scenario }))
+]) {
+  test(`npm上传恢复：${channel}/${scenario}`, { timeout: 30_000 }, async (t) => {
     const root = await fixture(t)
     const source = join(root, 'upload/package')
     const output = join(root, 'archives')
     await mkdir(source, { recursive: true })
     await mkdir(output)
-    const manifest = { name: '@jetcrab/pi-desk-usage', version: '1.2.3-dev', publishConfig }
+    const manifest = {
+      name: '@jetcrab/pi-desk-usage',
+      version: channel === 'main' ? '1.2.3' : '1.2.3-dev',
+      publishConfig
+    }
     await writeFile(join(source, 'package.json'), JSON.stringify(manifest))
     await writeFile(join(source, 'LICENSE'), 'fixture')
-    const archive = join(output, 'jetcrab-pi-desk-usage-1.2.3-dev.tgz')
+    const archive = join(output, `jetcrab-pi-desk-usage-${manifest.version}.tgz`)
     execFileSync(
       process.platform === 'win32' ? 'tar.exe' : 'tar',
       ['-czf', relative(join(root, 'upload'), archive).replaceAll('\\', '/'), 'package'],
@@ -185,8 +204,9 @@ for (const scenario of ['accepted', 'retry', 'conflict', 'permission', 'unavaila
       .update(await readFile(archive))
       .digest('base64')}`
     let uploads = 0
-    let accepted = false
+    let accepted = scenario === 'existing' || scenario === 'existing-conflict'
     let readsAfterFailure = 0
+    let registryRequests = 0
     const spawn = childProcess.spawn
     const replacement = t.mock.method(childProcess, 'spawn', (command, args, options) => {
       if (!(command === 'npm' || (command === 'cmd.exe' && args.at(-1).startsWith('npm ')))) {
@@ -197,9 +217,11 @@ for (const scenario of ['accepted', 'retry', 'conflict', 'permission', 'unavaila
       child.stderr = new PassThrough()
       queueMicrotask(() => {
         uploads += 1
-        if (scenario === 'retry' && uploads === 2) {
-          assert.ok(readsAfterFailure > 0, '重传前必须先核对远端是否已接受')
-          accepted = true
+        if (scenario === 'pending' || (scenario === 'retry' && uploads === 2)) {
+          if (scenario === 'retry') {
+            assert.ok(readsAfterFailure > 0, '重传前必须先核对远端是否已接受')
+            accepted = true
+          }
           child.emit('close', 0, null)
           return
         }
@@ -215,17 +237,26 @@ for (const scenario of ['accepted', 'retry', 'conflict', 'permission', 'unavaila
       syncBuiltinESMExports()
     })
     t.mock.method(globalThis, 'fetch', async (_url, options) => {
+      registryRequests += 1
+      if (channel === 'main' && scenario === 'pending') {
+        assert.equal(uploads, 0, '正式上传成功后不再等待 Registry 上架或标签同步')
+      }
       if (options.method === 'HEAD') return new Response(null, { status: 200 })
       if (uploads) readsAfterFailure += 1
       return packageResponse(
         manifest.name,
-        { latest: '1.2.2', ...(accepted ? { dev: manifest.version } : {}) },
+        {
+          latest: '1.2.2',
+          ...(accepted ? { [channel === 'main' ? 'latest' : 'dev']: manifest.version } : {})
+        },
         accepted
           ? {
               [manifest.version]: {
                 version: manifest.version,
                 dist: {
-                  integrity: scenario === 'conflict' ? 'sha512-different' : integrity,
+                  integrity: ['conflict', 'existing-conflict'].includes(scenario)
+                    ? 'sha512-different'
+                    : integrity,
                   tarball: 'https://registry.npmjs.org/fixture.tgz'
                 }
               }
@@ -234,7 +265,7 @@ for (const scenario of ['accepted', 'retry', 'conflict', 'permission', 'unavaila
       )
     })
     const environment = {
-      GITHUB_REF: 'refs/heads/dev',
+      GITHUB_REF: `refs/heads/${channel}`,
       GITHUB_REPOSITORY: 'JetCrab/pi-desk',
       RUNNER_TEMP: root
     }
@@ -249,9 +280,9 @@ for (const scenario of ['accepted', 'retry', 'conflict', 'permission', 'unavaila
       }
     })
     const publishing = publish([{ directory: source, manifest }], output)
-    if (scenario === 'conflict') {
+    if (scenario === 'conflict' || scenario === 'existing-conflict') {
       await assert.rejects(publishing, /不同内容|摘要|完整性/)
-      assert.equal(uploads, 1)
+      assert.equal(uploads, scenario === 'existing-conflict' ? 0 : 1)
     } else if (scenario === 'permission') {
       await assert.rejects(publishing, /E403|退出码=1/)
       assert.equal(uploads, 1)
@@ -260,11 +291,14 @@ for (const scenario of ['accepted', 'retry', 'conflict', 'permission', 'unavaila
       assert.equal(uploads, 3, '持续临时故障最多上传三次')
     } else {
       await publishing
-      assert.equal(uploads, scenario === 'accepted' ? 1 : 2)
+      assert.equal(uploads, scenario === 'existing' ? 0 : scenario === 'retry' ? 2 : 1)
+    }
+    if (scenario === 'pending' || scenario === 'existing') {
+      assert.equal(registryRequests, 1, '正式包完成上传或原包核验后不再查询 Registry')
     }
     assert.deepEqual(
       JSON.parse(await readFile(join(output, 'published.json'), 'utf8')),
-      scenario === 'accepted' || scenario === 'retry' ? ['pi-desk-usage'] : []
+      ['accepted', 'retry', 'pending', 'existing'].includes(scenario) ? ['pi-desk-usage'] : []
     )
   })
 }
@@ -428,7 +462,7 @@ test('npm开发标签延迟同步时等待同一已上传版本而不是重复�
   assert.equal(reads, 2)
 })
 
-test('正式版本必须等待 latest 实际指向新版本，不能仅凭上传成功', async (context) => {
+test('标签轮询仅在目标标签指向指定版本后完成', async (context) => {
   context.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 })
   let reads = 0
   context.mock.method(globalThis, 'fetch', async () =>

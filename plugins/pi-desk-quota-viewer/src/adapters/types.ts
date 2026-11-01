@@ -1,4 +1,4 @@
-import type { QuotaAdapterDescriptor, QuotaResource } from '../protocol.js'
+import type { QuotaAccount, QuotaAdapterDescriptor } from '../protocol.js'
 
 export interface QuotaAdapterLoadContext {
   config: Record<string, string>
@@ -8,7 +8,7 @@ export interface QuotaAdapterLoadContext {
 }
 
 export interface QuotaAdapterLoadResult {
-  resources: QuotaResource[]
+  accounts: QuotaAccount[]
   warning: string | null
   /** Internal source cooldown; never enters the Browser snapshot. */
   retryAt?: number | null

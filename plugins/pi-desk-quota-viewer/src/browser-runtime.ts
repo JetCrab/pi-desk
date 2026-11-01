@@ -6,6 +6,8 @@ import {
   type QuotaSourceSnapshot
 } from './protocol.js'
 
+import { migrateQuotaVisibilityKey } from './l2-quota-display-key.js'
+
 const EMPTY_SNAPSHOT: QuotaSnapshot = {
   error: null,
   sources: [],
@@ -24,6 +26,8 @@ export function parseQuotaDisplay(value: unknown): QuotaDisplaySettings {
     hiddenItemKeys: Array.isArray(display.hiddenItemKeys)
       ? display.hiddenItemKeys
           .filter((item): item is string => typeof item === 'string')
+          .map(migrateQuotaVisibilityKey)
+          .filter((item): item is string => item !== null)
           .slice(0, MAX_HIDDEN_ITEMS)
       : []
   }
@@ -33,7 +37,10 @@ export function parseQuotaSnapshot(value: PluginJsonObject): QuotaSnapshot {
   return {
     error: typeof value.error === 'string' ? value.error : null,
     sources: Array.isArray(value.sources)
-      ? (JSON.parse(JSON.stringify(value.sources)) as QuotaSourceSnapshot[])
+      ? (JSON.parse(JSON.stringify(value.sources)) as QuotaSourceSnapshot[]).map((source) => ({
+          ...source,
+          accounts: Array.isArray(source.accounts) ? source.accounts : []
+        }))
       : [],
     display: parseQuotaDisplay(value.display)
   }

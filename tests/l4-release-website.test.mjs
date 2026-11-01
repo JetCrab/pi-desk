@@ -57,7 +57,7 @@ async function prepareSite(root) {
   )
 }
 
-test('官网复用同一记录并同步实际安装版本与下载链接', async (t) => {
+test('官网复用同一记录并同步不指定版本的安装命令与下载链接', async (t) => {
   const root = await directory(t)
   await prepareSite(root)
   const input = {
@@ -75,7 +75,7 @@ test('官网复用同一记录并同步实际安装版本与下载链接', async
     `https://github.com/fixture/project/releases/download/${record.tag}/PiDesk-Windows-x86-Setup.exe`
   )
   assert.ok(site.downloads.android.endsWith('/PiDesk-Android.apk'))
-  assert.equal(site.installCommand, 'npm install -g @jetcrab/pi-desk@1.2.0')
+  assert.equal(site.installCommand, 'npm install -g @jetcrab/pi-desk')
   assert.equal(site.siteUrl, 'https://example.test')
   assert.equal(site.license.name, 'Apache-2.0')
   assert.deepEqual(await syncRelease(input), result)
@@ -129,7 +129,7 @@ test('官网统一生成 Linux 与已有 macOS 下载，不向历史记录虚构
   assert.equal(historical.downloads.macos, undefined)
 })
 
-test('官网无主包更新时也移除旧安装命令中的下载源', async (t) => {
+test('官网无主包更新时也移除旧安装命令中的版本与下载源', async (t) => {
   const root = await directory(t)
   await prepareSite(root)
   const configPath = join(root, 'site-release.json')
@@ -145,8 +145,20 @@ test('官网无主包更新时也移除旧安装命令中的下载源', async (t
   })
   assert.equal(
     JSON.parse(await readFile(configPath, 'utf8')).installCommand,
-    'npm install -g @jetcrab/pi-desk@1.1.0'
+    'npm install -g @jetcrab/pi-desk'
   )
+})
+
+test('官网无主包更新时保留未启用的安装命令', async (t) => {
+  const root = await directory(t)
+  await prepareSite(root)
+  const { siteReleasePath } = await syncRelease({
+    websiteRoot: root,
+    record: { ...record, packages: [] },
+    repository: 'fixture/project',
+    markdown: '## fixture\n'
+  })
+  assert.equal(JSON.parse(await readFile(siteReleasePath, 'utf8')).installCommand, null)
 })
 
 test('官网拒绝路径逃逸与未固定的主包开发版本', async (t) => {
