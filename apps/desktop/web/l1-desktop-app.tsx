@@ -5,6 +5,7 @@ import { SettingsPage } from './l2-settings-page'
 import { AccessPage } from './l2-access-page'
 import { useDesktopAction } from './hooks/l2-use-desktop-action'
 import { runDesktopAction } from './l2-desktop-biz'
+import { DesktopConfirmProvider, useDesktopConfirm } from './l4-desktop-confirm'
 
 type Route =
   | { mode: 'control' }
@@ -32,22 +33,57 @@ function routeFromHash(hash: string): Route {
 }
 
 export function DesktopApp(): React.JSX.Element {
+  return (
+    <DesktopConfirmProvider>
+      <DesktopRoutes />
+    </DesktopConfirmProvider>
+  )
+}
+
+function DesktopRoutes(): React.JSX.Element {
+  const confirm = useDesktopConfirm()
   const [route, setRoute] = useState<Route>(() => routeFromHash(location.hash))
   const dirty = useRef(false)
   const acceptedHash = useRef(location.hash)
+  const navigationPending = useRef(false)
   const { state, readError, refreshing, refresh } = useControlState()
   const launch = useDesktopAction(refresh)
 
+  const navigate = useCallback(
+    (hash: string): void => {
+      if (hash === acceptedHash.current || navigationPending.current) return
+      navigationPending.current = true
+      void (async (): Promise<void> => {
+        try {
+          if (
+            dirty.current &&
+            !(await confirm({
+              title: '离开当前页面？',
+              description: '未保存的更改将丢失，确定离开吗？',
+              confirmLabel: '放弃更改并离开',
+              danger: true
+            }))
+          )
+            return
+          dirty.current = false
+          acceptedHash.current = hash
+          location.hash = hash
+          setRoute(routeFromHash(hash))
+        } finally {
+          navigationPending.current = false
+        }
+      })()
+    },
+    [confirm]
+  )
+
   useEffect(() => {
     const onHashChange = (): void => {
-      if (location.hash === acceptedHash.current) return
-      if (dirty.current && !window.confirm('未保存的更改将丢失，确定离开吗？')) {
-        location.hash = acceptedHash.current || '#/'
-        return
-      }
-      dirty.current = false
-      acceptedHash.current = location.hash
-      setRoute(routeFromHash(location.hash))
+      const nextHash = location.hash
+      if (nextHash === acceptedHash.current) return
+      // 异步确认期间保持原页面和地址，取消不会丢弃表单草稿。
+      history.replaceState(null, '', acceptedHash.current || '#/')
+      navigate(nextHash)
     }
     const onBeforeUnload = (event: BeforeUnloadEvent): void => {
       if (!dirty.current) return
@@ -60,16 +96,7 @@ export function DesktopApp(): React.JSX.Element {
       window.removeEventListener('hashchange', onHashChange)
       window.removeEventListener('beforeunload', onBeforeUnload)
     }
-  }, [])
-
-  const navigate = useCallback((hash: string): void => {
-    if (hash === location.hash) return
-    if (dirty.current && !window.confirm('未保存的更改将丢失，确定离开吗？')) return
-    dirty.current = false
-    acceptedHash.current = hash
-    location.hash = hash
-    setRoute(routeFromHash(hash))
-  }, [])
+  }, [navigate])
 
   const onSaved = (openUrl?: string): void => {
     dirty.current = false

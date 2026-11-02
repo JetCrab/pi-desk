@@ -10,6 +10,7 @@ import { EnvironmentView } from './views/l2-environment-view'
 import { PiUpdateView } from './views/l2-pi-update-view'
 import { AddressEditor } from './views/l2-address-editor'
 import { StartupPreferenceDialog } from './views/l2-startup-preference'
+import { useDesktopConfirm } from './l4-desktop-confirm'
 
 type PageProps = {
   state: ControlState | null
@@ -55,6 +56,7 @@ function TargetRow({
   setupPanel?: ReactNode
   editor?: ReactNode
 }): React.JSX.Element {
+  const confirm = useDesktopConfirm()
   const action = useDesktopAction(refresh)
   const packageAction = useDesktopAction(refresh)
   const checkAction = useDesktopAction(refresh)
@@ -119,20 +121,36 @@ function TargetRow({
       setCopyHint('当前无法自动复制，请选中问题详情中的文字复制。')
     }
   }
-  const stop = (): void => {
+  const stop = async (): Promise<void> => {
     if (
-      window.confirm('停止后，这台电脑上运行的聊天和任务将中断，其他设备也会断开连接。确定停止吗？')
+      await confirm({
+        title: '停止服务？',
+        description: '停止后，这台电脑上运行的聊天和任务将中断，其他设备也会断开连接。确定停止吗？',
+        confirmLabel: '停止服务',
+        danger: true
+      })
     )
       run('stop')
   }
-  const restart = (): void => {
-    if (window.confirm('重新启动会中断当前运行的任务。确定继续吗？')) run('restart')
-  }
-  const remove = (): void => {
+  const restart = async (): Promise<void> => {
     if (
-      window.confirm(
-        `移除这个地址？\n${url}\n${server ? '同时停止此地址的本机服务。' : ''}不会删除聊天记录。`
-      )
+      await confirm({
+        title: '重新启动服务？',
+        description: '重新启动会中断当前运行的任务。确定继续吗？',
+        confirmLabel: '重新启动',
+        danger: true
+      })
+    )
+      run('restart')
+  }
+  const remove = async (): Promise<void> => {
+    if (
+      await confirm({
+        title: '移除这个地址？',
+        description: `${url}\n${server ? '同时停止此地址的本机服务。' : ''}不会删除聊天记录。`,
+        confirmLabel: '移除地址',
+        danger: true
+      })
     )
       run('delete')
   }
@@ -215,7 +233,7 @@ function TargetRow({
               title={`删除地址 ${url}`}
               aria-label={`删除地址 ${url}`}
               disabled={locked}
-              onClick={remove}
+              onClick={() => void remove()}
             >
               <DesktopIcon name="trash" />
             </button>
@@ -251,7 +269,11 @@ function TargetRow({
             <DesktopIcon name="globe" />
             浏览器打开
           </button>
-          <button type="button" disabled={locked || server.status !== 'running'} onClick={restart}>
+          <button
+            type="button"
+            disabled={locked || server.status !== 'running'}
+            onClick={() => void restart()}
+          >
             <DesktopIcon name="refresh" />
             重启
           </button>
@@ -265,7 +287,7 @@ function TargetRow({
               server.update?.status === 'switching' ||
               !['running', 'starting'].includes(server.status)
             }
-            onClick={stop}
+            onClick={() => void stop()}
           >
             <DesktopIcon name="stop" />
             停止
@@ -436,6 +458,7 @@ export function ControlPage({
   navigate,
   onDirty
 }: PageProps): React.JSX.Element {
+  const confirm = useDesktopConfirm()
   const [editingUrl, setEditingUrl] = useState<string | null | undefined>(undefined)
   const [choosingAccess, setChoosingAccess] = useState(false)
   const accessDialog = useRef<HTMLDialogElement>(null)
@@ -454,8 +477,17 @@ export function ControlPage({
     if (local.length === 1) navigate(`#/access?url=${encodeURIComponent(local[0].url)}`)
     else if (local.length > 1) setChoosingAccess(true)
   }
-  const editAddress = (url: string | null): void => {
-    if (editingUrl !== undefined && !window.confirm('放弃当前地址的编辑？')) return
+  const editAddress = async (url: string | null): Promise<void> => {
+    if (
+      editingUrl !== undefined &&
+      !(await confirm({
+        title: '放弃当前地址的编辑？',
+        description: '当前地址中未保存的更改将丢失。',
+        confirmLabel: '放弃编辑',
+        danger: true
+      }))
+    )
+      return
     onDirty(false)
     setEditingUrl(url)
   }
@@ -591,7 +623,7 @@ export function ControlPage({
                         ? setup.onAction(target, { kind: 'options', open: false })
                         : setup.showOptions(url)
                     }
-                    onEdit={editAddress}
+                    onEdit={(url) => void editAddress(url)}
                     checking={state.environment.status === 'checking'}
                     environmentBusy={state.environment.status === 'installing'}
                     piChecking={piUpdate.checking}
@@ -632,7 +664,7 @@ export function ControlPage({
             <section className="remote-targets" aria-label="连接另一台电脑">
               <div className="section-heading">
                 <h2 className="section-title">连接另一台电脑</h2>
-                <button type="button" className="quiet" onClick={() => editAddress(null)}>
+                <button type="button" className="quiet" onClick={() => void editAddress(null)}>
                   <DesktopIcon name="plus" />
                   {remote.length ? '添加连接' : '连接其他电脑'}
                 </button>
@@ -645,7 +677,7 @@ export function ControlPage({
                   refresh={refresh}
                   navigate={navigate}
                   onSetup={setup.showOptions}
-                  onEdit={editAddress}
+                  onEdit={(url) => void editAddress(url)}
                   editor={editingUrl === target.url ? editor : undefined}
                 />
               ))}
@@ -659,7 +691,11 @@ export function ControlPage({
               </span>
               <h1>连接你的 Pi Desk</h1>
               <p className="muted">添加电脑或服务器上的地址，即可开始使用。</p>
-              <button className="primary forward" type="button" onClick={() => editAddress(null)}>
+              <button
+                className="primary forward"
+                type="button"
+                onClick={() => void editAddress(null)}
+              >
                 连接其他电脑
                 <DesktopIcon name="arrow" />
               </button>

@@ -94,16 +94,16 @@ class MemoryStorage {
 
 function installBrowser(languages: readonly string[]): {
   storage: MemoryStorage
-  setConfirmResponse: (confirmed: boolean) => void
   getReloadCount: () => number
   dispatchStorage: (key: string | null) => void
   restore: () => void
 } {
   const storage = new MemoryStorage()
-  let confirmed = false
   let reloadCount = 0
   const windowTarget = Object.assign(new EventTarget(), {
-    confirm: () => confirmed,
+    confirm: () => {
+      throw new Error('不应调用 WebView 原生确认框')
+    },
     location: {
       reload: () => {
         reloadCount += 1
@@ -131,9 +131,6 @@ function installBrowser(languages: readonly string[]): {
 
   return {
     storage,
-    setConfirmResponse: (value) => {
-      confirmed = value
-    },
     getReloadCount: () => reloadCount,
     dispatchStorage: (key) => {
       const event = new Event('storage')
@@ -247,11 +244,45 @@ test('共享地区只采用服务端快照，保存成功后按既有确认流�
   } as unknown as L4AppSocketClient
   try {
     assert.equal(readL4Region()?.timeZone, 'UTC')
-    assert.equal(await changeL3RegionLanguage('en', 'confirm', appSocket, () => true), 'cancelled')
-    browser.setConfirmResponse(true)
-    assert.equal(await changeL3RegionLanguage('en', 'confirm', appSocket, () => false), 'blocked')
+    assert.equal(
+      await changeL3RegionLanguage(
+        'en',
+        async () => false,
+        appSocket,
+        () => true
+      ),
+      'cancelled'
+    )
+    assert.equal(
+      await changeL3RegionLanguage(
+        'en',
+        async () => true,
+        appSocket,
+        () => false
+      ),
+      'blocked'
+    )
     assert.equal(requests.length, 0)
-    assert.equal(await changeL3RegionLanguage('en', 'confirm', appSocket, () => true), 'changed')
+    let acceptReload: ((confirmed: boolean) => void) | undefined
+    let leaveChecks = 0
+    const change = changeL3RegionLanguage(
+      'en',
+      () =>
+        new Promise((resolve) => {
+          acceptReload = resolve
+        }),
+      appSocket,
+      () => {
+        leaveChecks += 1
+        return true
+      }
+    )
+    assert.equal(requests.length, 0)
+    assert.equal(leaveChecks, 0)
+    assert.equal(browser.getReloadCount(), 0)
+    acceptReload?.(true)
+    assert.equal(await change, 'changed')
+    assert.equal(leaveChecks, 1)
     assert.equal(browser.getReloadCount(), 1)
     assert.equal(readL4Region()?.locale, 'zh-CN')
     assert.equal(readL4Region()?.pendingLocale, 'en')
@@ -278,6 +309,8 @@ test('共享设置保存失败不产生本地权威覆盖', async () => {
     }
   } as unknown as L4AppSocketClient
   try {
+    assert.equal(await changeL3RegionLanguage('zh-CN', async () => true, appSocket), 'save-failed')
+    assert.equal(browser.getReloadCount(), 0)
     assert.equal(await changeL3RegionTimeZone('America/New_York', appSocket), false)
     assert.equal(readL4Region()?.timeZone, 'UTC')
     browser.dispatchStorage(null)

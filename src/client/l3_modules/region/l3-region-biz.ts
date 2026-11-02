@@ -7,14 +7,14 @@ import { readL4Region } from '@client/l4_foundation/locale/l4-region-store'
 
 export async function changeL3RegionLanguage(
   locale: L4Locale,
-  confirmation: string,
+  confirmReload: () => Promise<boolean>,
   appSocket: L4AppSocketClient,
   canLeave?: () => boolean | Promise<boolean>
 ): Promise<'changed' | 'cancelled' | 'blocked' | 'save-failed'> {
   const current = readL4Region()
   if (!current) return 'cancelled'
   const reload = locale !== current.locale
-  if (reload && !window.confirm(confirmation)) return 'cancelled'
+  if (reload && !(await confirmReload())) return 'cancelled'
   if (reload && canLeave && !(await canLeave())) return 'blocked'
   try {
     await appSocket.request(L3AppRuntimeSocketContracts.apply, {

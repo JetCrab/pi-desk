@@ -887,6 +887,10 @@ progress:indeterminate::-webkit-progress-bar {
 .desktop-dialog > p {
   margin-top: 12px;
 }
+.desktop-confirm > p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .dialog-actions {
   display: flex;
   flex-wrap: wrap;

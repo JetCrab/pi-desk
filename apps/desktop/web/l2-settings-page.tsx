@@ -4,6 +4,7 @@ import { type ControlState, type ReleaseChannel, type UpdatePolicy } from './l4-
 import { DesktopHeader, DesktopIcon } from './l4-desktop-ui'
 import { ConfigurationPreferences } from './views/l2-startup-preference'
 import { DownloadSourceSettings } from './views/l2-download-source-settings'
+import { useDesktopConfirm } from './l4-desktop-confirm'
 
 const updatePolicies = [
   { value: 'none', label: '无' },
@@ -164,23 +165,35 @@ function TargetSettingsForm({
   useEffect(() => {
     onSavingChange(saving)
   }, [saving, onSavingChange])
+  const confirm = useDesktopConfirm()
   const [advanced, setAdvanced] = useState(initialAdvanced)
-  const selectUpdatePolicy = (
+  const selectUpdatePolicy = async (
     field: 'startupUpdate' | 'periodicUpdate',
     value: UpdatePolicy
-  ): void => {
+  ): Promise<void> => {
     if (!draft || draft[field] === value) return
     if (
       field === 'periodicUpdate' &&
       value === 'update' &&
-      !window.confirm('定时自动更新会重启服务，导致运行中的任务被打断。请谨慎开启。确定继续吗？')
+      !(await confirm({
+        title: '开启定时自动更新？',
+        description: '定时自动更新会重启服务，导致运行中的任务被打断。请谨慎开启。确定继续吗？',
+        confirmLabel: '开启自动更新'
+      }))
     )
       return
     patch({ [field]: value })
   }
-  const selectChannel = (value: ReleaseChannel): void => {
+  const selectChannel = async (value: ReleaseChannel): Promise<void> => {
     if (!draft || draft.channel === value) return
-    if (value === 'dev' && !window.confirm('开发版可能不稳定，不建议日常使用。确定选择开发版吗？'))
+    if (
+      value === 'dev' &&
+      !(await confirm({
+        title: '选择开发版？',
+        description: '开发版可能不稳定，不建议日常使用。确定选择开发版吗？',
+        confirmLabel: '选择开发版'
+      }))
+    )
       return
     patch({ channel: value })
   }
@@ -238,7 +251,7 @@ function TargetSettingsForm({
                             style={radioStyle}
                             checked={draft[group.field] === option.value}
                             disabled={disabled}
-                            onChange={() => selectUpdatePolicy(group.field, option.value)}
+                            onChange={() => void selectUpdatePolicy(group.field, option.value)}
                           />
                           {option.value === 'none'
                             ? option.label
@@ -260,7 +273,7 @@ function TargetSettingsForm({
                           style={radioStyle}
                           checked={draft.channel === option.value}
                           disabled={disabled}
-                          onChange={() => selectChannel(option.value)}
+                          onChange={() => void selectChannel(option.value)}
                         />
                         {option.label}
                       </label>

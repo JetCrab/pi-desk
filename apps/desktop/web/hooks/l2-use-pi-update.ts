@@ -3,6 +3,7 @@ import { copyDesktopText, runDesktopAction } from '../l2-desktop-biz'
 import type { ControlState } from '../l4-desktop-ipc'
 import type { PiUpdateViewProps } from '../views/l2-pi-update-view'
 import { useDesktopAction } from './l2-use-desktop-action'
+import { useDesktopConfirm } from '../l4-desktop-confirm'
 
 export function usePiUpdate(
   state: ControlState | null,
@@ -12,6 +13,7 @@ export function usePiUpdate(
   updating: boolean
   view: Omit<PiUpdateViewProps, 'environment'>
 } {
+  const confirm = useDesktopConfirm()
   const check = useDesktopAction(refresh)
   const update = useDesktopAction(refresh)
   const cancellation = useDesktopAction(refresh)
@@ -39,7 +41,7 @@ export function usePiUpdate(
     clearFeedback()
     void check.run(() => runDesktopAction('check-pi-update'))
   }
-  const onUpdate = (): void => {
+  const onUpdate = async (): Promise<void> => {
     if (!state) return
     clearFeedback()
     const local = state.targets.filter((target) => target.server)
@@ -52,9 +54,12 @@ export function usePiUpdate(
       ? running.map((target) => `• ${target.url}`).join('\n')
       : '当前没有运行中的本机服务。'
     if (
-      !window.confirm(
-        `更新 Pi${state.environment.piUpdate.version ? ` 至 ${state.environment.piUpdate.version}` : ''}？\n\n将暂停全部桌面托管的本机服务：\n${affected}\n\n正在执行的聊天和任务会中断，不会自动续跑。更新或取消后须通过校验，才恢复原先运行的服务；原已停止的服务不会启动。\n\nPi 是全局安装，Windows 上其他终端使用的 Pi 也会受影响，请自行结束桌面未托管的 Pi 进程。\n\n无需退出桌面程序，也不会自动更新 Pi Desk 服务包。`
-      )
+      !(await confirm({
+        title: `更新 Pi${state.environment.piUpdate.version ? ` 至 ${state.environment.piUpdate.version}` : ''}？`,
+        description: `将暂停全部桌面托管的本机服务：\n${affected}\n\n正在执行的聊天和任务会中断，不会自动续跑。更新或取消后须通过校验，才恢复原先运行的服务；原已停止的服务不会启动。\n\nPi 是全局安装，其他终端使用的 Pi 也会受影响，请自行结束桌面未托管的 Pi 进程。\n\n无需退出桌面程序，也不会自动更新 Pi Desk 服务包。`,
+        confirmLabel: '更新 Pi',
+        danger: true
+      }))
     )
       return
     void update.run(() => runDesktopAction('update-pi'))
@@ -82,7 +87,7 @@ export function usePiUpdate(
       copied,
       copyHint,
       onCheck,
-      onUpdate,
+      onUpdate: () => void onUpdate(),
       onCancel,
       onCopy
     }

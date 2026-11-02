@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { L4Locale } from '@common/l4_foundation/locale/l4-locale'
 import { useL4AppSocket } from '@client/l4_foundation/realtime/app-socket/l4-app-socket'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import { L4SearchSelect } from '@client/l4_foundation/ui/l4-search-select'
+import { useL4ConfirmDialog } from '@client/l4_foundation/ui/l4-confirm-dialog'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import {
   Select,
@@ -28,6 +29,9 @@ export function L2RegionSettings({
   const { t } = useTranslation('settings')
   const region = useL4Region()
   const { appSocket } = useL4AppSocket()
+  const { confirm, dialog } = useL4ConfirmDialog()
+  const [changingLanguage, setChangingLanguage] = useState(false)
+  const languagePending = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [sampleTime, setSampleTime] = useState(() => new Date())
   useEffect(() => {
@@ -42,15 +46,29 @@ export function L2RegionSettings({
   )
 
   const chooseLanguage = async (value: L4Locale): Promise<void> => {
+    if (languagePending.current) return
+    languagePending.current = true
+    setChangingLanguage(true)
     setError(null)
-    const result = await changeL3RegionLanguage(
-      value,
-      t('common:reloadConfirm'),
-      appSocket,
-      canLeave
-    )
-    if (result === 'save-failed') setError(t('common:localeError'))
-    if (result === 'blocked') setError(t('common:reloadBlocked'))
+    try {
+      const result = await changeL3RegionLanguage(
+        value,
+        () =>
+          confirm({
+            title: t('language'),
+            description: t('common:reloadConfirm'),
+            confirmLabel: t('common:reload'),
+            confirmVariant: 'default'
+          }),
+        appSocket,
+        canLeave
+      )
+      if (result === 'save-failed') setError(t('common:localeError'))
+      if (result === 'blocked') setError(t('common:reloadBlocked'))
+    } finally {
+      languagePending.current = false
+      setChangingLanguage(false)
+    }
   }
 
   const chooseTimeZone = async (value: string): Promise<void> => {
@@ -59,6 +77,7 @@ export function L2RegionSettings({
 
   return (
     <section className="@container min-w-0 space-y-6" aria-labelledby="region-settings-title">
+      {dialog}
       <h2 id="region-settings-title" className="text-xl font-semibold">
         {t('region')}
       </h2>
@@ -69,6 +88,7 @@ export function L2RegionSettings({
           </label>
           <Select
             value={region.localePreference}
+            disabled={changingLanguage}
             onValueChange={(value) => {
               if (value === 'zh-CN' || value === 'en') void chooseLanguage(value)
             }}
@@ -93,6 +113,7 @@ export function L2RegionSettings({
                 type="button"
                 size="sm"
                 variant="outline"
+                disabled={changingLanguage}
                 onClick={() => void chooseLanguage(region.localePreference)}
               >
                 {t('reloadLanguage')}
