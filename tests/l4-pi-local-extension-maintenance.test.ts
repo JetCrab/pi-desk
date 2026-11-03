@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { access, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { homedir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import test from 'node:test'
 import { createJiti } from 'jiti'
@@ -11,10 +10,17 @@ test('本地裸扩展卸载只移除来源入口和精确声明', async (t) => {
   const root = resolve('temp/pi/l4-pi-local-extension-maintenance', `remove-${randomUUID()}`)
   const agentDir = join(root, 'agent')
   const cwd = join(root, 'project')
+  const home = join(root, 'home')
   const saved = new Map<string, string | undefined>()
   let succeeded = false
-  await Promise.all([mkdir(agentDir, { recursive: true }), mkdir(cwd, { recursive: true })])
+  await Promise.all([
+    mkdir(agentDir, { recursive: true }),
+    mkdir(cwd, { recursive: true }),
+    mkdir(home, { recursive: true })
+  ])
   for (const [key, value] of Object.entries({
+    HOME: home,
+    USERPROFILE: home,
     PI_CODING_AGENT_DIR: agentDir,
     PI_CODING_AGENT_SESSION_DIR: join(agentDir, 'sessions')
   })) {
@@ -145,13 +151,13 @@ test('本地裸扩展卸载只移除来源入口和精确声明', async (t) => {
 
     await run('外部目录精确声明按agentDir和~/解析，仅移除目标与内部声明', async () => {
       const input = await fixture('external-directory')
-      const external = join(root, 'external-source')
+      const external = join(home, 'external-source')
       const other = `${external}-other.ts`
       await mkdir(external, { recursive: true })
       const entry = join(external, 'index.ts')
       await writeFile(entry, 'keep external')
       await writeFile(other, 'keep other')
-      const homeReference = `~/${relative(homedir(), entry).replaceAll('\\', '/')}`
+      const homeReference = '~/external-source/index.ts'
       const projectSettings = join(cwd, '.pi', 'settings.json')
       const projectText = JSON.stringify({ extensions: [external], theme: 'light' })
       await mkdir(dirname(projectSettings), { recursive: true })
