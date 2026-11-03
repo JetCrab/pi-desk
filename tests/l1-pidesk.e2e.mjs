@@ -6,7 +6,7 @@ import { createPiDeskCommandFixture } from './l4-pidesk-command-smoke.mjs'
 import { reservePort, waitForHttp } from './l4-browser-cdp-runtime.mjs'
 import { spawnE2eServer, stopE2eServerTree } from './l4-e2e-server-runtime.mjs'
 
-test('真实宿主工具入口完成关键命令、失败恢复和浏览器模块挂载', { timeout: 360_000 }, async () => {
+test('真实宿主完成插件安装、加载、调用、浏览器挂载和卸载', { timeout: 360_000 }, async () => {
   const projectRoot = resolve(import.meta.dirname, '..')
   const id = `command-lifecycle-${randomUUID()}`
   const root = join(projectRoot, 'temp/run/pidesk-e2e', id)

@@ -298,7 +298,7 @@ test('隧道并行构建后复用已验证镜像，推送仍等待正式汇合',
   assert.ok(tunnel.jobs.publish.steps.some((step) => /\bdocker\s+load\b/.test(step.run ?? '')))
 })
 
-test('正式批次去重源码命令验收，但保留同批安装态两平台与Windows核心回归', async () => {
+test('正式批次保留双平台源码回归与同批安装态，仅去重开发态最小命令链', async () => {
   const main = await readWorkflow('release-main')
   const checks = await readWorkflow('check')
   const npm = await readWorkflow('release-npm')
@@ -312,22 +312,25 @@ test('正式批次去重源码命令验收，但保留同批安装态两平台�
   const dev = await readWorkflow('release-dev')
   assert.equal(dev.jobs.checks.with.base_sha, '${{ needs.plan.outputs.check_base }}')
   assert.equal(dev.jobs.checks.with.built_packages, '${{ needs.plan.outputs.packages }}')
-  const needs = { changes: { outputs: { pidesk: 'true' } } }
-  for (const built_packages of ['[]', '["pi-desk"]']) {
-    assert.equal(
-      evaluateWorkflowCondition(checks.jobs.pidesk.if, { needs, inputs: { built_packages } }),
-      built_packages === '[]'
-    )
-  }
-  for (const os of ['ubuntu-latest', 'windows-latest'])
-    assert.ok(npm.jobs['installed-commands'].strategy.matrix.os.includes(os))
-  const windows = npm.jobs['installed-commands'].steps.find((step) =>
-    /\bpnpm\s+test:pidesk\b/.test(step.run ?? '')
+  const smoke = checks.jobs.pidesk.steps.find((step) =>
+    step.run?.includes('tests/l1-pidesk.e2e.mjs')
   )
-  assert.ok(windows)
-  for (const os of ['Windows', 'Linux']) {
-    assert.equal(evaluateWorkflowCondition(windows.if, { runner: { os } }), os === 'Windows')
+  for (const pidesk of ['true', 'false']) {
+    for (const built_packages of ['[]', '["pi-desk"]']) {
+      const context = { needs: { changes: { outputs: { pidesk } } }, inputs: { built_packages } }
+      assert.equal(evaluateWorkflowCondition(checks.jobs.pidesk.if, context), pidesk === 'true')
+      assert.equal(evaluateWorkflowCondition(smoke.if ?? 'true', context), built_packages === '[]')
+    }
   }
+  for (const os of ['ubuntu-latest', 'windows-latest']) {
+    assert.ok(checks.jobs.pidesk.strategy.matrix.os.includes(os))
+    assert.ok(npm.jobs['installed-commands'].strategy.matrix.os.includes(os))
+  }
+  assert.ok(
+    npm.jobs['installed-commands'].steps.every(
+      (step) => !/test:pidesk|restore-sdk\.mjs/.test(step.run ?? '')
+    )
+  )
 })
 
 test('同一运行的制品名称跨重试稳定，构建数据仍按attempt隔离', async () => {
