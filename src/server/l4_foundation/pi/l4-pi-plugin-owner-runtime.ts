@@ -437,7 +437,10 @@ export class L4PiPluginOwnerRuntime {
 
     this.changingSources.add(source)
     try {
-      if (owner) void this.releaseOwner(owner)
+      if (owner) {
+        const released = this.releaseOwner(owner)
+        if (installedPath === null) await released
+      }
       if (this.disposed) throw new Error('Global plugin runtime has been disposed')
       clearL4PiPluginCodeCache()
       this.packageDiagnostics.delete(source)

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useAccess } from './hooks/l2-use-access'
 import type { TargetSnapshot } from './l4-desktop-ipc'
 import { DesktopHeader, DesktopIcon } from './l4-desktop-ui'
+import { useDesktopConfirm } from './l4-desktop-confirm'
 
 export function AccessPage({
   url,
@@ -16,6 +17,7 @@ export function AccessPage({
   onDirty: (dirty: boolean) => void
   onBack: () => void
 }): React.JSX.Element {
+  const confirm = useDesktopConfirm()
   const access = useAccess(url, refresh, onDirty)
   const [editing, setEditing] = useState(!target?.tunnel)
   const tunnel = target?.tunnel
@@ -43,7 +45,14 @@ export function AccessPage({
             : '尚未配置中转服务'
   const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
-    if (listening && !window.confirm('修改配置会重新连接，其他设备的访问将暂时中断。确定继续吗？'))
+    if (
+      listening &&
+      !(await confirm({
+        title: '重新连接远程访问？',
+        description: '修改配置会重新连接，其他设备的访问将暂时中断。确定继续吗？',
+        confirmLabel: '保存并重新连接'
+      }))
+    )
       return
     if (await access.save()) setEditing(false)
   }

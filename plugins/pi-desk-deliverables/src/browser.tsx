@@ -21,7 +21,12 @@ import {
   PluginScroll,
   PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
-import { parseDeliverableBatch, subscribeDeliverablePush } from './browser-runtime.js'
+import {
+  deliverableLoadError,
+  parseDeliverableBatch,
+  subscribeDeliverablePush,
+  type DeliverableLoadError
+} from './browser-runtime.js'
 import type { DeliverableBatch, DeliverableItem, DeliverableListResult } from './contract.js'
 
 const STYLES = `
@@ -32,6 +37,7 @@ const STYLES = `
 .deliverables-batch{display:grid;gap:.25rem;border-bottom:1px solid var(--border);padding-bottom:.5rem}.deliverables-batch:last-child{border-bottom:0}.deliverables-item{display:grid;width:100%;min-height:3.5rem;grid-template-columns:1.5rem minmax(0,1fr);align-items:center;gap:.5rem;border:0;border-radius:.5rem;background:transparent;padding:.5rem;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .deliverables-item:hover{background:var(--pi-desk-plugin-muted,var(--muted))}.deliverables-item:focus-visible{outline:2px solid var(--pi-desk-plugin-ring,var(--ring));outline-offset:1px}.deliverables-icon{display:grid;width:1.5rem;height:1.5rem;place-items:center;border-radius:.42rem;background:var(--pi-desk-plugin-muted,var(--muted));color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground))}.deliverables-icon svg{width:1rem;height:1rem}.deliverables-icon-image,.deliverables-icon-html{background:color-mix(in srgb,var(--pi-desk-plugin-primary,var(--primary)) 14%,transparent);color:var(--pi-desk-plugin-primary,var(--primary))}.deliverables-copy{display:grid;min-width:0;gap:.08rem}.deliverables-name,.deliverables-path{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.deliverables-name{font-size:.875rem;font-weight:500}
 .deliverables-more{justify-self:center}
+.deliverables-notice{display:grid;gap:.75rem;overflow-wrap:anywhere}.deliverables-notice-title{font-weight:600;color:var(--pi-desk-plugin-foreground,var(--foreground))}.deliverables-notice p{margin:0}
 
 `
 
@@ -188,19 +194,24 @@ function DeliverablesView({
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<DeliverableLoadError | null>(null)
+  const [reloading, setReloading] = useState(false)
+  const [reloadError, setReloadError] = useState<string | null>(null)
+  const reloadInFlight = useRef(false)
   const requestEpoch = useRef(0)
   const pendingPushes = useRef<DeliverableBatch[]>([])
   const loadingSnapshot = useRef(true)
   const suppressTouchClickRef = useRef(false)
 
   const loadSnapshot = useCallback(async (): Promise<void> => {
+    if (reloadInFlight.current) return
     const epoch = ++requestEpoch.current
     loadingSnapshot.current = true
     pendingPushes.current = []
     setLoadingMore(false)
     setLoading(true)
     setError(null)
+    setReloadError(null)
     try {
       const result = parseListResult(
         await host.piDesk.invokeSession(target.source, 'list', { limit: 20 })
@@ -212,7 +223,7 @@ function DeliverablesView({
       setHasMore(result.hasMore)
     } catch (cause) {
       if (!signal.aborted && epoch === requestEpoch.current) {
-        setError(cause instanceof Error ? cause.message : String(cause))
+        setError(deliverableLoadError(cause))
       }
     } finally {
       if (!signal.aborted && epoch === requestEpoch.current) {
@@ -223,6 +234,29 @@ function DeliverablesView({
     }
   }, [host, signal, target.source])
 
+  const reloadSession = async (): Promise<void> => {
+    const reload = host.pi.reload
+    if (!reload || reloadInFlight.current || loadingSnapshot.current || signal.aborted) return
+    const epoch = requestEpoch.current
+    reloadInFlight.current = true
+    setReloading(true)
+    setReloadError(null)
+    try {
+      await reload(target.source.workId)
+      if (signal.aborted || epoch !== requestEpoch.current) return
+      reloadInFlight.current = false
+      setReloading(false)
+      await loadSnapshot()
+    } catch (cause) {
+      if (!signal.aborted && epoch === requestEpoch.current) {
+        setReloadError(cause instanceof Error ? cause.message : String(cause))
+      }
+    } finally {
+      reloadInFlight.current = false
+      if (!signal.aborted && epoch === requestEpoch.current) setReloading(false)
+    }
+  }
+
   useEffect(() => {
     target.setHeaderActions?.([
       {
@@ -232,11 +266,11 @@ function DeliverablesView({
           content:
             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11a9 9 0 0 1 15.4-6.4L21 7M21 3v4h-4M21 13a9 9 0 0 1-15.4 6.4L3 17M7 17H3v4"/></svg>'
         },
-        busy: loading,
+        busy: loading || reloading,
         onSelect: loadSnapshot
       }
     ])
-  }, [loadSnapshot, loading, target])
+  }, [loadSnapshot, loading, reloading, target])
 
   useEffect(() => {
     let active = true
@@ -330,8 +364,7 @@ function DeliverablesView({
         setHasMore(result.hasMore)
       })
       .catch((cause: unknown) => {
-        if (!signal.aborted && epoch === requestEpoch.current)
-          setError(cause instanceof Error ? cause.message : String(cause))
+        if (!signal.aborted && epoch === requestEpoch.current) setError(deliverableLoadError(cause))
       })
       .finally(() => {
         if (!signal.aborted && epoch === requestEpoch.current) setLoadingMore(false)
@@ -369,11 +402,53 @@ function DeliverablesView({
         viewportClassName="deliverables-body-viewport"
         aria-label="交付物列表"
       >
-        {error ? <PluginAlert tone="error">{error}</PluginAlert> : null}
+        {error ? (
+          <PluginAlert
+            tone={error.kind === 'session-unavailable' ? 'info' : 'error'}
+            className="deliverables-notice"
+          >
+            <strong className="deliverables-notice-title">
+              {error.kind === 'session-unavailable' ? error.message : '读取交付物失败'}
+            </strong>
+            {error.kind === 'session-unavailable' ? (
+              <>
+                <p>
+                  {host.pi.reload
+                    ? '如果刚安装或更新插件，请在会话空闲后重载 Pi 配置，让当前会话加载插件。'
+                    : '如果刚安装或更新插件，请在会话空闲后，打开输入框的「更多 → 重载 Pi 配置」，再回来刷新交付物。'}
+                </p>
+                <p>重载会保留聊天历史和当前分支，仅刷新页面不会加载会话插件。</p>
+              </>
+            ) : (
+              <p>{error.message}</p>
+            )}
+            <PluginActionRow>
+              {error.kind === 'session-unavailable' && host.pi.reload ? (
+                <PluginButton
+                  variant="primary"
+                  disabled={loading || reloading}
+                  onClick={() => void reloadSession()}
+                >
+                  {reloading ? '正在重载…' : '重载 Pi 配置'}
+                </PluginButton>
+              ) : null}
+              <PluginButton
+                variant="secondary"
+                disabled={loading || reloading}
+                onClick={() => void loadSnapshot()}
+              >
+                {error.kind === 'session-unavailable' ? '重新检查' : '重试'}
+              </PluginButton>
+            </PluginActionRow>
+          </PluginAlert>
+        ) : null}
+        {reloadError ? <PluginAlert tone="error">重载失败：{reloadError}</PluginAlert> : null}
         {loading && deliveries.length === 0 ? (
           <PluginEmptyState>正在读取交付物…</PluginEmptyState>
         ) : deliveries.length === 0 ? (
-          <PluginEmptyState>当前会话还没有交付物</PluginEmptyState>
+          error ? null : (
+            <PluginEmptyState>当前会话还没有交付物</PluginEmptyState>
+          )
         ) : (
           deliveries.map((delivery) => (
             <div className="deliverables-batch" key={delivery.entryId}>
@@ -448,7 +523,7 @@ function DeliverablesView({
             </div>
           ))
         )}
-        {hasMore ? (
+        {hasMore && !error ? (
           <PluginButton
             className="deliverables-more"
             variant="secondary"

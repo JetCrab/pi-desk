@@ -10,6 +10,9 @@ mod environment_download;
 mod environment_install;
 #[path = "l4-environment-installer.rs"]
 mod environment_installer;
+#[cfg(any(target_os = "macos", test))]
+#[path = "l4-environment-macos.rs"]
+mod environment_macos;
 #[path = "l4-environment-pi.rs"]
 mod environment_pi;
 #[path = "l4-environment-source.rs"]

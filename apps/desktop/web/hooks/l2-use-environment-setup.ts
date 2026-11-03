@@ -32,9 +32,7 @@ export function useEnvironmentSetup(
   const [copyHint, setCopyHint] = useState('')
   const action = useDesktopAction(refresh)
   const cancellation = useDesktopAction(refresh)
-  const { downloadSource, loading, loadError } = useDownloadSource(
-    Boolean(optionsUrl || state?.targets.some((target) => target.server?.needsSetup))
-  )
+  const { downloadSource, loading, loadError } = useDownloadSource(Boolean(optionsUrl))
   let installCommand = ''
   let commandError = ''
   if (downloadSource && !loading && !loadError) {

@@ -137,7 +137,10 @@ pub(crate) fn install_node(
     cancelled: &dyn Fn() -> bool,
     log: &Path,
 ) -> Result<PathBuf, String> {
-    state.set_component_step(Component::Node, "正在安装 Node.js，请允许 Windows 授权");
+    state.set_component_step(
+        Component::Node,
+        "正在安装 Node.js。若 Windows 询问，请确认本次安装。",
+    );
     let install_log = state.root.join("node-install.log");
     let system = environment::windows_system_directory();
     let code = environment_installer::run(
@@ -153,7 +156,12 @@ pub(crate) fn install_node(
         true,
         log,
         cancelled,
-        &|| state.set_component_step(Component::Node, "正在等待 Node.js 安装结束"),
+        &|| {
+            state.set_component_step(
+                Component::Node,
+                "正在等待 Node.js 安装结束，随后停止本次准备。",
+            )
+        },
     )?;
     match code {
         0 => {}
@@ -337,34 +345,7 @@ pub(crate) fn prepare(
     }
     #[cfg(target_os = "macos")]
     if needs_pi && state.component_path(Component::Bash).is_none() {
-        state.set_component_step(Component::Bash, "正在请求安装 Command Line Tools");
-        let output = crate::process::run_program(
-            Path::new("/usr/bin/xcode-select"),
-            &["--install"],
-            None,
-            Duration::from_secs(15),
-            log,
-            cancelled,
-            &state.child_environment(),
-        )?;
-        logging::write(
-            log,
-            "environment-command-line-tools",
-            &format!(
-                "exit={} stdout={} stderr={}",
-                output.status,
-                crate::process::decode_output(&output.stdout).trim(),
-                crate::process::decode_output(&output.stderr).trim(),
-            ),
-        );
-        return Err(if output.status.success() {
-            "已请求系统安装 Command Line Tools；请在系统对话框中完成安装，然后点击重新检测或重试安装".into()
-        } else {
-            format!(
-                "无法自动确认 Git 和 Bash；请安装 Command Line Tools 或选择已有环境后重新检测：{}",
-                packages::command_failure(&output)
-            )
-        });
+        crate::environment_macos::prepare_system_tools(state, cancelled, log)?;
     }
     let work = staging(state)?;
     state.set_phase("installing", "正在准备应用运行环境", None);
@@ -618,7 +599,10 @@ fn install_bash(
     cancelled: &dyn Fn() -> bool,
     log: &Path,
 ) -> Result<(), String> {
-    state.set_component_step(Component::Bash, "正在安装 Git，请允许 Windows 授权");
+    state.set_component_step(
+        Component::Bash,
+        "正在安装 Git。若 Windows 询问，请确认本次安装。",
+    );
     let install_log = state.root.join("git-install.log");
     let code = environment_installer::run(
         installer,
@@ -633,7 +617,12 @@ fn install_bash(
         true,
         log,
         cancelled,
-        &|| state.set_component_step(Component::Bash, "正在等待 Git 安装结束"),
+        &|| {
+            state.set_component_step(
+                Component::Bash,
+                "正在等待 Git 安装结束，随后停止本次准备。",
+            )
+        },
     )?;
     if code != 0 {
         return Err(format!(

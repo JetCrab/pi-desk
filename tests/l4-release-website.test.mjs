@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { readWorkflow } from './fixtures/l4-workflow-test-runtime.mjs'
+import { renderReleaseNotes } from '../.github/scripts/release-notes.mjs'
 import { syncRelease } from '../apps/website/scripts/sync-release.mjs'
 import { deploymentConfig, websiteDeployScript } from '../.github/scripts/deploy-website.mjs'
 import { normalizeStaticSegments, verifyWebsite } from '../.github/scripts/build-website.mjs'
@@ -112,9 +113,12 @@ test('官网统一生成 Linux 与已有 macOS 下载，不向历史记录虚构
     websiteRoot: root,
     record: next,
     repository: 'fixture/project',
-    markdown: '## v1.1.1\n'
+    markdown: `## ${next.tag}\n\n${renderReleaseNotes(next, { repository: 'fixture/project' })}`
   }
   const result = await syncRelease(input)
+  const markdown = await readFile(result.changelogPath, 'utf8')
+  assert.match(markdown, /The macOS build is not notarized\./)
+  assert.doesNotMatch(markdown, /experimental|verified|tested/i)
   const site = JSON.parse(await readFile(result.siteReleasePath, 'utf8'))
   assert.equal(
     site.downloads.linux,

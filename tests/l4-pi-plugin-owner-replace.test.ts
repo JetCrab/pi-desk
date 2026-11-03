@@ -100,6 +100,39 @@ test('卸载仅撤销目标Owner，重复卸载不重复调用清理', async (co
   assert.deepEqual(state.releases, ['owner-a'])
 })
 
+test('卸载等待异步清理收尾，等待期间不影响其他Owner', async (context) => {
+  const { runtime, candidate, state } = await fixture(context)
+  let release!: () => void
+  let started!: () => void
+  const cleaning = new Promise<void>((done) => {
+    started = done
+  })
+  Reflect.set(state, 'cleanup', () => {
+    started()
+    return new Promise<void>((done) => {
+      release = done
+    })
+  })
+  await runtime.replaceSource(
+    'source-a',
+    await candidate('owner-a', 'return async () => { await state.cleanup() }')
+  )
+  let completed = false
+  const removing = runtime.replaceSource('source-a', null).then(() => {
+    completed = true
+  })
+  await cleaning
+  try {
+    assert.equal(completed, false)
+    await assert.rejects(runtime.invoke('owner-a', 'get', {}), L4PiPluginMethodNotFoundError)
+    assert.deepEqual(await runtime.invoke('owner-b', 'get', {}), { version: 1 })
+  } finally {
+    release()
+    await removing
+  }
+  assert.equal(completed, true)
+})
+
 test('新版setup失败只停用目标来源，修复后可重新加载', async (context) => {
   const { runtime, candidate } = await fixture(context)
   await assert.rejects(

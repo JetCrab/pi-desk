@@ -74,7 +74,13 @@ export function renderReleaseNotes(record, { repository }) {
     }
   }
   if (record.clients.some((client) => client.platform === 'macos')) {
-    lines.push('### Notes', '', 'The macOS build is experimental and not notarized.', '')
+    lines.push(
+      '### Notes',
+      '',
+      'The macOS build is not notarized.',
+      'Open the DMG and double-click Pi Desk Installer to install. If macOS blocks the installer or the installed app, review it in System Settings → Privacy & Security → Open Anyway.',
+      ''
+    )
   }
   return lines.join('\n')
 }

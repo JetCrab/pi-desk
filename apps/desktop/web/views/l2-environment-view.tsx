@@ -2,12 +2,13 @@ import type { EnvironmentComponent, EnvironmentSnapshot, TargetSnapshot } from '
 import { DesktopError, DesktopIcon } from '../l4-desktop-ui'
 
 const isWindows = /Windows/u.test(navigator.userAgent)
+const isMac = /Macintosh|Mac OS X/u.test(navigator.userAgent)
 const componentLabels = {
   node: 'Node.js',
   pi: 'Pi',
   bash: isWindows ? 'Git Bash' : 'Git 和 Bash'
 } as const
-const componentOrder = ['node', 'bash', 'pi'] as const
+const componentOrder = isMac ? (['bash', 'node', 'pi'] as const) : (['node', 'bash', 'pi'] as const)
 
 export type EnvironmentViewAction =
   | { kind: 'prepare' | 'check' | 'cancel' | 'open' | 'copy-error' | 'copy-command' }
@@ -51,17 +52,15 @@ function SetupStep({
         <strong>{label}</strong>
       </div>
       <p className="step-state">{detail}</p>
-      <div className="step-progress">
-        {active && !download ? (
-          <progress aria-label={`${label}安装进度`} />
-        ) : (
-          <progress
-            aria-label={`${label}下载进度`}
-            max={100}
-            value={ready ? 100 : download ? percent : 0}
-          />
-        )}
-      </div>
+      {active && (
+        <div className="step-progress">
+          {download ? (
+            <progress aria-label={`${label}下载进度`} max={100} value={percent} />
+          ) : (
+            <progress aria-label={`${label}安装进度`} />
+          )}
+        </div>
+      )}
       {download && (
         <p className="step-bytes">
           <span>
@@ -122,24 +121,18 @@ export function EnvironmentView({
   const components = componentOrder.flatMap((name) =>
     environment.components.filter((item) => item.name === name)
   )
-  const nodeNeedsSetup = components.some(
-    (component) => component.name === 'node' && (component.status !== 'ready' || component.detail)
-  )
   const update = target.server?.update
   const packageReady = update?.status === 'installed' || Boolean(target.server?.version)
   const packageActive = working && ['checking', 'installing'].includes(update?.status ?? '')
-  const packageDetail =
-    update?.status === 'checking'
-      ? '正在查询版本'
-      : update?.status === 'installing'
-        ? `正在下载安装${update.version ? ` ${update.version}` : ''}`
-        : update?.status === 'failed'
-          ? '安装失败'
-          : packageReady
-            ? '已安装'
-            : working
-              ? '等待 Node.js 就绪'
-              : '待安装'
+  const packageDetail = packageActive
+    ? '进行中'
+    : update?.status === 'failed'
+      ? '需要检查'
+      : packageReady
+        ? '已就绪'
+        : working
+          ? '等待准备'
+          : '待准备'
   const downloadSettings = (
     <button
       type="button"
@@ -157,69 +150,23 @@ export function EnvironmentView({
       {!optionsOnly && (
         <>
           <div className="setup-caption" role="status">
-            <h3>
+            <h3>{checking ? '正在检查所需组件' : working ? '正在准备 Pi Desk' : '准备 Pi Desk'}</h3>
+            <p className="muted setup-description">
               {checking
-                ? '正在检查所需组件'
+                ? '正在确认这台电脑需要哪些组件。'
                 : working
-                  ? '正在准备 Pi Desk'
+                  ? environment.step || '组件就绪后会自动打开 Pi Desk。'
                   : failure
-                    ? '准备未完成'
-                    : '首次使用准备'}
-            </h3>
-            {working && <span className="muted">完成后自动打开</span>}
-          </div>
-          <div className="setup-footer">
-            {!working && downloadSettings}
-            <div className="actions setup-actions">
-              {working ? (
-                <button
-                  type="button"
-                  className="quiet"
-                  disabled={cancelling || launching}
-                  onClick={() => onAction({ kind: 'cancel' })}
-                >
-                  {cancelling ? '正在取消…' : '取消安装'}
-                </button>
-              ) : (
-                <>
-                  {!canOpen && nodeNeedsSetup && (
-                    <button
-                      type="button"
-                      disabled={locked}
-                      onClick={() =>
-                        onAction({ kind: 'select', component: 'node', archive: false })
-                      }
-                    >
-                      <DesktopIcon name="folder" />
-                      选择已有 Node.js 目录
-                    </button>
-                  )}
-                  <button
-                    className="primary forward"
-                    type="button"
-                    disabled={locked}
-                    onClick={() => onAction({ kind: canOpen ? 'open' : 'prepare' })}
-                  >
-                    {checking
-                      ? '请稍候…'
-                      : canOpen
-                        ? '打开 Pi Desk'
-                        : failure
-                          ? '重试安装'
-                          : '安装并打开'}
-                    {!checking && <DesktopIcon name="arrow" />}
-                  </button>
-                </>
-              )}
-            </div>
+                    ? '可重试当前准备，已完成的组件会保留。'
+                    : '将准备所需组件，完成后自动打开。已有的可用组件会直接复用。'}
+            </p>
           </div>
         </>
       )}
       {failure && (
         <DesktopError
-          title="安装未完成"
+          title="暂时无法继续"
           detail={failure}
-          expanded
           onCopy={() => onAction({ kind: 'copy-error' })}
           copied={copied === 'error'}
         />
@@ -233,16 +180,27 @@ export function EnvironmentView({
               return (
                 <SetupStep
                   key={component.name}
-                  label={componentLabels[component.name]}
+                  label={
+                    isMac && component.name === 'bash'
+                      ? '系统工具'
+                      : componentLabels[component.name]
+                  }
                   ready={ready}
                   active={active}
-                  failed={component.status === 'invalid'}
+                  failed={Boolean(failure) && component.status === 'invalid'}
                   download={active ? component.download : null}
                   detail={
                     ready
-                      ? '已安装'
-                      : component.detail ||
-                        (checking ? '正在检测' : working ? '等待安装' : '待安装')
+                      ? '已就绪'
+                      : active
+                        ? '进行中'
+                        : failure && component.status === 'invalid'
+                          ? '需要检查'
+                          : checking
+                            ? '检测中'
+                            : working
+                              ? '等待准备'
+                              : '待准备'
                   }
                 />
               )
@@ -255,17 +213,36 @@ export function EnvironmentView({
               failed={update?.status === 'failed'}
             />
           </ol>
-          {working && components.every((item) => item.status === 'ready') && !packageActive && (
-            <p className="setup-status" role="status">
-              <DesktopIcon name="loader" spinning />
-              {target.server?.status === 'running'
-                ? '正在打开 Pi Desk…'
-                : '正在校验并启动 Pi Desk…'}
-            </p>
-          )}
+          <div className="setup-footer">
+            {working ? (
+              <>
+                <span className="muted">
+                  {cancelling ? '已完成的组件会保留' : '完成后自动打开'}
+                </span>
+                <button
+                  type="button"
+                  className="quiet"
+                  disabled={cancelling || launching}
+                  onClick={() => onAction({ kind: 'cancel' })}
+                >
+                  {cancelling ? '正在取消…' : '取消准备'}
+                </button>
+              </>
+            ) : (
+              <button
+                className="primary forward"
+                type="button"
+                disabled={locked}
+                onClick={() => onAction({ kind: canOpen ? 'open' : 'prepare' })}
+              >
+                {checking ? '请稍候…' : canOpen ? '打开 Pi Desk' : failure ? '重试' : '安装并打开'}
+                {!checking && <DesktopIcon name="arrow" />}
+              </button>
+            )}
+          </div>
         </>
       )}
-      {!working && (
+      {!working && !checking && (
         <details
           className="disclosure install-options"
           open={optionsOpen}
@@ -279,7 +256,7 @@ export function EnvironmentView({
             安装选项
           </summary>
           <div className="details-body">
-            {optionsOnly && downloadSettings}
+            {downloadSettings}
             <div className="components">
               {components.map((component) => (
                 <details className="component" name="environment-component" key={component.name}>

@@ -9,7 +9,11 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import { L4PiPluginOwnerRuntime, type L4PiPluginPackageSource } from './l4-pi-plugin-owner-runtime'
 import { isL4PiDeskSafeMode } from './l4-pi-desk-mode'
-import { discoverL4PiPluginSources, type L4PiPluginSourceSnapshot } from './l4-pi-plugin-sources'
+import {
+  discoverL4PiPluginSources,
+  type L4PiPluginSource,
+  type L4PiPluginSourceSnapshot
+} from './l4-pi-plugin-sources'
 import { L4PiPluginSourceChanges, type L4PiPluginSourceChange } from './l4-pi-plugin-source-changes'
 import { clearL4PiPluginCodeCache } from './l4-pi-plugin-module-loader'
 
@@ -42,6 +46,10 @@ export class L4PiGlobalPluginRuntime extends L4PiPluginOwnerRuntime {
     }, getL4HostSettingsStore())
     this.sourceChanges = changes
     this.discover = discover
+  }
+
+  readAppliedSources(): L4PiPluginSource[] {
+    return this.sourceChanges.readAppliedSources()
   }
 
   async scanSourceChanges(sources?: readonly string[]): Promise<L4PiPluginSourceChange[]> {

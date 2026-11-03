@@ -87,16 +87,16 @@ pi-desk
 
 Web 服务负责运行 Pi 会话，浏览器、桌面和手机客户端连接同一个服务。
 
-| 应用            | 源码                               | 用途                               |
-| --------------- | ---------------------------------- | ---------------------------------- |
-| Web 服务        | [`src/`](./src) 与 [`bin/`](./bin) | 浏览器客户端与 Pi 集成             |
-| Windows         | [`apps/desktop/`](./apps/desktop)  | Tauri 桌面壳                       |
-| macOS（实验性） | [`apps/desktop/`](./apps/desktop)  | Tauri 桌面壳                       |
-| Android         | [`apps/android/`](./apps/android)  | 连接 Pi Desk 的原生 Android 客户端 |
-| iOS（实验性）   | [`apps/ios/`](./apps/ios)          | SwiftUI / WKWebView 客户端         |
-| 隧道            | [`apps/tunnel/`](./apps/tunnel)    | Rust TCP 隧道服务与客户端          |
+| 应用          | 源码                               | 用途                               |
+| ------------- | ---------------------------------- | ---------------------------------- |
+| Web 服务      | [`src/`](./src) 与 [`bin/`](./bin) | 浏览器客户端与 Pi 集成             |
+| Windows       | [`apps/desktop/`](./apps/desktop)  | Tauri 桌面壳                       |
+| macOS         | [`apps/desktop/`](./apps/desktop)  | Tauri 桌面壳                       |
+| Android       | [`apps/android/`](./apps/android)  | 连接 Pi Desk 的原生 Android 客户端 |
+| iOS（实验性） | [`apps/ios/`](./apps/ios)          | SwiftUI / WKWebView 客户端         |
+| 隧道          | [`apps/tunnel/`](./apps/tunnel)    | Rust TCP 隧道服务与客户端          |
 
-> macOS 和 iOS 客户端目前为实验性支持，尚未纳入稳定版本。作者没有 Mac 和 iOS 设备，未进行实机验证，可能无法正常使用。
+> iOS 客户端目前为实验性支持，尚未纳入稳定版本。作者没有 iOS 设备，未进行实机验证，可能无法正常使用。
 
 ## 插件与 SDK
 

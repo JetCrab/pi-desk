@@ -254,6 +254,7 @@ test('多个缺失包不封锁逐项修复、卸载或其他插件的正式应�
     const previous = globalState[runtimeKey]
     const replaced: string[] = []
     globalState[runtimeKey] = {
+      readAppliedSources: () => [],
       withSourceIdle: async (_source: string, operation: () => Promise<void>): Promise<void> =>
         operation(),
       replaceSource: async (source: string): Promise<void> => {

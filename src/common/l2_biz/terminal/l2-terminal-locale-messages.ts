@@ -13,7 +13,7 @@ export const L2_TERMINAL_LOCALE_MESSAGES = {
     terminalCloseTab: 'Close {{title}}',
     terminalRemove: 'Remove exited terminal',
     terminalExited: 'Exited',
-    terminalExitCode: 'Exit {{code}}',
+    terminalExitCode: 'Exit code {{code}}',
     terminalOpening: 'Opening terminal…',
     terminalReconnecting: 'Reconnecting…',
     terminalSyncing: 'Restoring terminal…',

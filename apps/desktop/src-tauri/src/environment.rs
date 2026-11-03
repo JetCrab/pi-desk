@@ -1235,10 +1235,7 @@ impl EnvironmentState {
                 &environment,
             )?;
             if !tools.status.success() {
-                return Err(
-                    "Git 需要 Command Line Tools；点击安装并打开可请求系统安装，安装完成后重新检测"
-                        .into(),
-                );
+                return Err("需要安装 macOS 命令行开发者工具，以使用 Git".into());
             }
         }
         let output = process::run_program(

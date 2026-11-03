@@ -119,11 +119,16 @@ jobs:
       - name: 前端类型检查
         working-directory: apps/desktop
         run: pnpm run typecheck:web
-      - name: 构建通用 macOS DMG
+      - name: 隔离验证 macOS 原生安装器
+        working-directory: apps/desktop
+        run: pnpm run test:installer:mac
+      - name: 构建通用 macOS 离线安装器
         working-directory: apps/desktop
         run: |
-          build_args=(exec tauri build --target universal-apple-darwin --bundles dmg --config "$CARGO_TARGET_DIR/tauri-ci.json")
+          build_args=(exec tauri build --target universal-apple-darwin --bundles app --config "$CARGO_TARGET_DIR/tauri-ci.json")
           pnpm "${build_args[@]}"
+          release="$CARGO_TARGET_DIR/universal-apple-darwin/$BUILD_PROFILE"
+          node scripts/build-macos-installer.mjs "$release/bundle/macos/Pi Desk.app" "$release/bundle/installer-macos"
       - run: node .github/scripts/rust-cache.mjs save
       - name: 检查两种架构与签名结构并归档
         env:
@@ -131,22 +136,29 @@ jobs:
         run: |
           set -euo pipefail
           release="$CARGO_TARGET_DIR/universal-apple-darwin/$BUILD_PROFILE"
-          dmgs=("$release/bundle/dmg/"*.dmg)
+          dmgs=("$release/bundle/installer-macos/"*.dmg)
           test "${#dmgs[@]}" = 1
           test -s "${dmgs[0]}"
-          # 仅构建 DMG 时 Tauri 会移除中间 app，直接校验最终安装介质。
           mountpoint="$RUNNER_TEMP/pi-desk-dmg-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          mkdir -p "$mountpoint"
+          payload_root="$RUNNER_TEMP/pi-desk-payload-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$mountpoint" "$payload_root"
           hdiutil attach "${dmgs[0]}" -readonly -nobrowse -mountpoint "$mountpoint"
-          trap 'status=$?; trap - EXIT; hdiutil detach "$mountpoint" > /dev/null || status=1; exit "$status"' EXIT
-          app="$mountpoint/Pi Desk.app"
-          test -f "$app/Contents/Info.plist"
+          trap 'status=$?; trap - EXIT; hdiutil detach "$mountpoint" > /dev/null || status=1; rm -rf "$payload_root"; exit "$status"' EXIT
+          installer="$mountpoint/Pi Desk Installer.app"
+          codesign --verify --deep --strict "$installer"
+          lipo "$installer/Contents/MacOS/PiDeskInstaller" -verify_arch arm64 x86_64
+          archive="$installer/Contents/Resources/PiDesk.zip"
+          expected=$(/usr/libexec/PlistBuddy -c 'Print :PayloadSHA256' "$installer/Contents/Info.plist")
+          test "$(shasum -a 256 "$archive" | awk '{print $1}')" = "$expected"
+          ditto -x -k "$archive" "$payload_root"
+          app="$payload_root/Pi Desk.app"
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
-          test -s "$app/Contents/MacOS/$executable"
           lipo "$app/Contents/MacOS/$executable" -verify_arch arm64 x86_64
           codesign --verify --deep --strict "$app"
           version=$(node -p 'require("./apps/desktop/package.json").version')
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
+          for bundle in "$app" "$installer"; do
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$bundle/Contents/Info.plist")" = "$version"
+          done
           suffix=adhoc
           pack_args=(macos "${dmgs[0]}" "$CLIENT_OUTPUT")
           if [[ "$SIGNED" == true ]]; then
@@ -159,7 +171,7 @@ jobs:
             echo '## macOS 构建结果'
             echo "- 版本：$version；架构：Apple Silicon + Intel"
             echo "- 签名类型：$suffix，未进行 Apple 公证。"
-            echo '- 已检查安装包和程序结构，未进行界面/功能验收。'
+            echo '- DMG 内为原生离线安装器，双击安装器安装主应用；首次打开可能需要在隐私与安全性中选择“仍要打开”。'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: 清理临时签名
         if: always()
