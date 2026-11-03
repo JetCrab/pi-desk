@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { basename, dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -22,6 +22,7 @@ import {
 
 const execute = promisify(execFile)
 const packageName = 'pidesk-command-fixture'
+const pluginVersion = '1.0.0'
 
 function text(content) {
   return typeof content === 'string'
@@ -38,15 +39,6 @@ async function waitFor(check, label, diagnostics = () => '', timeout = 60_000) {
   throw Object.assign(new Error(`等待超时：${label}\n${diagnostics()}`), { code: 'ETIMEDOUT' })
 }
 
-function extension(version) {
-  return `export default function (pi) {
-    pi.registerTool({ name: 'pidesk_command_fixture', label: 'Fixture', description: 'fixture-${version}',
-      parameters: { type: 'object', properties: {} },
-      async execute() { return { content: [{ type: 'text', text: '${version}' }] } }
-    })
-  }\n`
-}
-
 function respond(response, call) {
   const base = {
     id: randomUUID(),
@@ -61,7 +53,7 @@ function respond(response, call) {
             index: 0,
             id: call.id,
             type: 'function',
-            function: { name: 'pidesk', arguments: JSON.stringify({ args: call.args }) }
+            function: { name: call.tool, arguments: JSON.stringify(call.parameters) }
           }
         ]
       }
@@ -81,8 +73,8 @@ function respond(response, call) {
 }
 
 export async function createPiDeskCommandFixture(root, agentDir) {
-  const archives = new Map()
-  const versions = {}
+  let archive
+  let metadata
   let activeCall
   let providerError
   const server = createServer((request, response) => {
@@ -125,15 +117,12 @@ export async function createPiDeskCommandFixture(root, agentDir) {
       })
       return
     }
-    const archive = archives.get(path)
-    if (archive) {
+    if (path === `/${packageName}/-/${pluginVersion}.tgz`) {
       response.writeHead(200, { 'Content-Type': 'application/octet-stream' })
       response.end(archive)
     } else if (path === `/${packageName}`) {
       response.writeHead(200, { 'Content-Type': 'application/json' })
-      response.end(
-        JSON.stringify({ name: packageName, 'dist-tags': { latest: '2.0.0' }, versions })
-      )
+      response.end(JSON.stringify(metadata))
     } else {
       response.writeHead(404, { 'Content-Type': 'application/json' })
       response.end(JSON.stringify({ error: '测试包或版本不存在' }))
@@ -146,54 +135,62 @@ export async function createPiDeskCommandFixture(root, agentDir) {
   const fixturePort = server.address().port
   const registry = `http://127.0.0.1:${fixturePort}`
   try {
-    for (const version of ['1.0.0', '2.0.0', '3.0.0']) {
-      const directory = join(root, 'packages', version, 'package')
-      await mkdir(join(directory, 'browser/chunks'), { recursive: true })
-      const manifest = {
-        name: packageName,
-        version,
-        type: 'module',
-        pi: { extensions: ['./index.mjs'] },
-        piDesk: { entry: './pi-desk.mjs' }
-      }
-      await writeFile(join(directory, 'package.json'), JSON.stringify(manifest))
-      await writeFile(join(directory, 'index.mjs'), extension(version))
-      await writeFile(
-        join(directory, 'pi-desk.mjs'),
-        version === '3.0.0'
-          ? `export default { name: '${packageName}', setup() { throw new Error('候选插件初始化失败') } }\n`
-          : `export default { name: '${packageName}', setup(plugin) { plugin.registerBrowserEntry('./browser/entry.js') } }\n`
-      )
-      await writeFile(
-        join(directory, 'browser/entry.js'),
-        `export default function (plugin) {
+    const directory = join(root, 'packages', 'package')
+    await mkdir(join(directory, 'browser/chunks'), { recursive: true })
+    const manifest = {
+      name: packageName,
+      version: pluginVersion,
+      type: 'module',
+      pi: { extensions: ['./index.mjs'] },
+      piDesk: { entry: './pi-desk.mjs' }
+    }
+    await writeFile(join(directory, 'package.json'), JSON.stringify(manifest))
+    await writeFile(
+      join(directory, 'index.mjs'),
+      `export default function (pi) {
+        pi.registerTool({ name: 'pidesk_command_fixture', label: 'Fixture', description: '安装态测试工具',
+          parameters: { type: 'object', properties: {} },
+          async execute() { return { content: [{ type: 'text', text: '${pluginVersion}' }] } }
+        })
+      }\n`
+    )
+    await writeFile(
+      join(directory, 'pi-desk.mjs'),
+      `export default { name: '${packageName}', setup(plugin) { plugin.registerBrowserEntry('./browser/entry.js') } }\n`
+    )
+    await writeFile(
+      join(directory, 'browser/entry.js'),
+      `export default function (plugin) {
         plugin.registerContribution('settings-page', 'command-check', { label: '命令验收', icon: { type: 'builtin', name: 'settings' }, load: () => import('./chunks/view.js').then(module => module.default) })
       }\n`
-      )
-      await writeFile(
-        join(directory, 'browser/chunks/view.js'),
-        `import { createElement, createRoot, PluginButton } from '@jetcrab/pi-desk-sdk/react/base'
-        import { PluginMarkdown } from '@jetcrab/pi-desk-sdk/react/markdown'
-        export default { mount({ container }) {
-          const root = createRoot(container, { onUncaughtError(error) { container.dataset.mountError = error.message } })
-          root.render(createElement('div', { 'data-testid': 'pidesk-command-fixture' }, createElement(PluginButton, null, '${version}'), createElement(PluginMarkdown, { content: '命令模块 ${version}' })))
-          return () => root.unmount()
-        } }\n`
-      )
-      const archive = join(root, 'packages', `${version}.tgz`)
-      await execute(
-        process.platform === 'win32' ? 'tar.exe' : 'tar',
-        ['-czf', basename(archive), '-C', dirname(directory), 'package'],
-        { cwd: dirname(archive), timeout: 10_000, windowsHide: true }
-      )
-      const bytes = await readFile(archive)
-      const path = `/${packageName}/-/${version}.tgz`
-      archives.set(path, bytes)
-      versions[version] = {
-        ...manifest,
-        dist: {
-          tarball: `${registry}${path}`,
-          integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`
+    )
+    await writeFile(
+      join(directory, 'browser/chunks/view.js'),
+      `import { createElement, createRoot, PluginButton } from '@jetcrab/pi-desk-sdk/react/base'
+      import { PluginMarkdown } from '@jetcrab/pi-desk-sdk/react/markdown'
+      export default { mount({ container }) {
+        const root = createRoot(container, { onUncaughtError(error) { container.dataset.mountError = error.message } })
+        root.render(createElement('div', { 'data-testid': 'pidesk-command-fixture' }, createElement(PluginButton, null, '${pluginVersion}'), createElement(PluginMarkdown, { content: '命令模块 ${pluginVersion}' })))
+        return () => root.unmount()
+      } }\n`
+    )
+    const archivePath = join(root, 'packages', `${pluginVersion}.tgz`)
+    await execute(
+      process.platform === 'win32' ? 'tar.exe' : 'tar',
+      ['-czf', basename(archivePath), '-C', dirname(directory), 'package'],
+      { cwd: dirname(archivePath), timeout: 10_000, windowsHide: true }
+    )
+    archive = await readFile(archivePath)
+    metadata = {
+      name: packageName,
+      'dist-tags': { latest: pluginVersion },
+      versions: {
+        [pluginVersion]: {
+          ...manifest,
+          dist: {
+            tarball: `${registry}/${packageName}/-/${pluginVersion}.tgz`,
+            integrity: `sha512-${createHash('sha512').update(archive).digest('base64')}`
+          }
         }
       }
     }
@@ -296,30 +293,26 @@ export async function createPiDeskCommandFixture(root, agentDir) {
             )
             return ['completed', 'idle'].includes(current?.status)
           }, '命令会话空闲')
-        const invoke = async (args, failure) => {
+        const callTool = async (tool, parameters) => {
           await idle()
           const id = randomUUID()
-          activeCall = { id, args, marker: `pidesk-smoke:${id}`, sent: false }
-          console.info(`[smoke:pidesk] ${args.join(' ')}`)
+          activeCall = { id, tool, parameters, marker: `pidesk-smoke:${id}`, sent: false }
+          console.info(`[smoke:tool] ${tool} ${JSON.stringify(parameters)}`)
           await request('chat/send', { source, mode: 'auto', text: activeCall.marker, images: [] })
           await waitFor(
             () => {
               if (providerError) throw providerError
               return activeCall.result !== undefined
             },
-            '真实 pidesk 工具结果',
+            `真实工具结果：${tool}`,
             () => JSON.stringify(activeCall)
           )
-          const result = activeCall.result
-          let output
-          try {
-            output = JSON.parse(result)
-          } catch (error) {
-            if (!failure) throw error
-            assert.match(result, failure)
-            transcript.push({ args, error: result })
-            return
-          }
+          transcript.push({ tool, parameters, result: activeCall.result })
+          return activeCall.result
+        }
+        const invoke = async (args) => {
+          const result = await callTool('pidesk', { args })
+          const output = JSON.parse(result)
           assert.ok(['sync', 'async'].includes(output.mode), result)
           if (output.mode === 'async') {
             await waitFor(
@@ -328,97 +321,40 @@ export async function createPiDeskCommandFixture(root, agentDir) {
               () => JSON.stringify(activeCall),
               90_000
             )
-            if (failure) assert.match(activeCall.notice, failure)
-            else assert.doesNotMatch(activeCall.notice, /结果：失败|配置重载失败|尚未生效/)
-          } else if (failure) {
-            assert.fail(`失败命令不能返回同步成功：${args.join(' ')}`)
+            transcript.push({ args, notice: activeCall.notice })
           }
-          transcript.push({ args, output, notice: activeCall.notice })
           return output.message
         }
         const listed = async () => JSON.parse(await invoke(['plugins', 'list']))
         const installed = join(agentDir, 'npm/node_modules', packageName)
-        const installedVersion = async (expected) => {
-          assert.equal(
-            JSON.parse(await readFile(join(installed, 'package.json'), 'utf8')).version,
-            expected
-          )
-          const tools = await request('pi/tools/list', { source })
-          assert.equal(
-            tools.tools.find((tool) => tool.name === 'pidesk_command_fixture')?.description,
-            `fixture-${expected}`
-          )
-        }
-        assert.match(await invoke(['--help']), /plugins install/)
         assert.equal(await invoke(['--version']), version)
-        const info = JSON.parse(await invoke(['info']))
-        assert.equal(info.mode, 'normal')
-        assert.equal(info.agentDir, agentDir)
-        assert.deepEqual((await listed()).plugins, [])
-        await invoke(['plugins', 'install', packageName, '--scope', 'global', '--version', '1.0.0'])
+        await invoke(['plugins', 'install', packageName, '--scope', 'global'])
+        assert.equal(
+          JSON.parse(await readFile(join(installed, 'package.json'), 'utf8')).version,
+          pluginVersion
+        )
+        assert.ok((await listed()).plugins.some((item) => item.name === packageName))
+        await invoke(['session', 'reload'])
         assert.ok(
-          !(await request('pi/tools/list', { source })).tools.some(
+          (await request('pi/tools/list', { source })).tools.some(
             (tool) => tool.name === 'pidesk_command_fixture'
           )
         )
-        await invoke(['session', 'reload'])
-        await installedVersion('1.0.0')
-        const detail = JSON.parse(
-          await invoke(['plugins', 'show', packageName, '--scope', 'global'])
-        )
-        assert.equal(detail.version, '1.0.0')
-        assert.ok(detail.detail.tools.some((tool) => tool.name === 'pidesk_command_fixture'))
+        assert.equal(await callTool('pidesk_command_fixture', {}), pluginVersion)
         await verifyBrowserModules({
           root,
           baseUrl,
           entry: (await request('plugins/browser-entries/list', {})).entries.find(
             (item) => item.pluginName === packageName
           ),
-          version: '1.0.0'
+          version: pluginVersion
         })
-        await writeFile(join(installed, 'index.mjs'), 'export default () => {}\n')
-        await invoke(['plugins', 'install', packageName, '--scope', 'global', '--version', '1.0.0'])
-        assert.equal(await readFile(join(installed, 'index.mjs'), 'utf8'), extension('1.0.0'))
-        await invoke(['session', 'reload'])
-        await installedVersion('1.0.0')
-        await invoke(['plugins', 'install', packageName, '--scope', 'global'])
-        assert.equal(
-          (await request('pi/tools/list', { source })).tools.find(
-            (tool) => tool.name === 'pidesk_command_fixture'
-          )?.description,
-          'fixture-1.0.0'
-        )
-        await invoke(['session', 'reload'])
-        await installedVersion('2.0.0')
-        await invoke(
-          ['plugins', 'install', packageName, '--scope', 'global', '--version', '9.0.0'],
-          /不存在|失败/
-        )
-        await installedVersion('2.0.0')
-        await invoke(
-          ['plugins', 'install', packageName, '--scope', 'global', '--version', '3.0.0'],
-          /候选插件初始化失败/
-        )
-        await installedVersion('2.0.0')
-        await invoke(['plugins', 'install', packageName, '--scope', 'global', '--version', '1.0.0'])
-        await invoke(['session', 'reload'])
-        await installedVersion('1.0.0')
-        const before = (await request('work-sessions/list', {})).workSessions.find(
-          (item) => item.workId === workId
-        )
-        await invoke(['session', 'reload'])
-        assert.match(activeCall.notice, /已重载完成/)
-        const after = (await request('work-sessions/list', {})).workSessions.find(
-          (item) => item.workId === workId
-        )
-        assert.equal(after.sessionId, before.sessionId)
-        assert.equal(after.branchId, before.branchId)
-        assert.ok(after.messageCounts.total > before.messageCounts.total)
         await invoke(['plugins', 'remove', packageName, '--scope', 'global'])
+        await assert.rejects(access(installed), { code: 'ENOENT' })
         assert.ok(!(await listed()).plugins.some((item) => item.name === packageName))
         assert.ok(
-          (await request('pi/tools/list', { source })).tools.some(
-            (tool) => tool.name === 'pidesk_command_fixture'
+          !(await request('plugins/browser-entries/list', {})).entries.some(
+            (item) => item.pluginName === packageName
           )
         )
         await invoke(['session', 'reload'])
@@ -427,54 +363,8 @@ export async function createPiDeskCommandFixture(root, agentDir) {
             (tool) => tool.name === 'pidesk_command_fixture'
           )
         )
-        await invoke(['plugins', 'show', packageName, '--scope', 'global'], /插件不存在/)
-        const localName = 'pidesk-local-fixture'
-        const local = join(agentDir, 'extensions', localName)
-        await mkdir(local, { recursive: true })
-        await writeFile(join(local, 'index.ts'), extension('local-one'))
-        await invoke(['plugins', 'install', localName, '--scope', 'global'])
-        assert.match(activeCall.notice, /服务与界面已更新/)
-        assert.ok(
-          !(await request('pi/tools/list', { source })).tools.some(
-            (tool) => tool.name === 'pidesk_command_fixture'
-          )
-        )
-        await invoke(['session', 'reload'])
-        assert.equal(
-          (await request('pi/tools/list', { source })).tools.find(
-            (tool) => tool.name === 'pidesk_command_fixture'
-          )?.description,
-          'fixture-local-one'
-        )
-        await writeFile(join(local, 'index.ts'), extension('local-two'))
-        await invoke(['plugins', 'install', localName, '--scope', 'global'])
-        assert.equal(
-          (await request('pi/tools/list', { source })).tools.find(
-            (tool) => tool.name === 'pidesk_command_fixture'
-          )?.description,
-          'fixture-local-one'
-        )
-        await invoke(['session', 'reload'])
-        assert.equal(
-          (await request('pi/tools/list', { source })).tools.find(
-            (tool) => tool.name === 'pidesk_command_fixture'
-          )?.description,
-          'fixture-local-two'
-        )
-        await invoke(['plugins', 'remove', localName, '--scope', 'global'], /不支持卸载裸扩展/)
-        const broken = join(agentDir, 'extensions', 'broken-fixture')
-        await mkdir(broken, { recursive: true })
-        await writeFile(join(broken, 'package.json'), '{')
-        assert.ok(
-          (await listed()).plugins.some((item) => item.name === 'broken-fixture' && item.error)
-        )
-        assert.equal(
-          JSON.parse(await readFile(join(agentDir, 'settings.json'), 'utf8')).defaultProvider,
-          'pidesk-smoke'
-        )
-        assert.equal(await invoke(['--version']), version)
         await idle()
-        console.info('[smoke:pidesk] 安装、查询、更新、失败保留、重载和卸载验收通过')
+        console.info('[smoke:pidesk] 插件安装、加载、工具调用、浏览器挂载和卸载验收通过')
       } finally {
         activeCall = undefined
         for (const item of pending.values()) {

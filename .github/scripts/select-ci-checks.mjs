@@ -15,6 +15,19 @@ export function selectPluginChecks(paths, full = false, sdkConsumers = []) {
   return [...new Set([...changed, ...(changed.includes('pi-desk-sdk') ? sdkConsumers : [])])]
 }
 
+const pideskInputs = [
+  /^src\/instrumentation\.ts$/,
+  /^src\/server\/l1_entry\//,
+  /^src\/server\/l[23]_(?:biz|modules)\/(?:app-runtime|conversation|plugin-management|service-process|work-session)\//,
+  /^src\/server\/l4_foundation\/(?:(?:capability-modes|file|git|http|model-settings|pi|pidesk|process|realtime)\/|l4-host-settings-store\.ts$)/,
+  /^src\/common\/l2_biz\/(?:chat|pi-model|plugin|work-session)\//,
+  /^src\/common\/l3_modules\/(?:app-runtime|capability-modes|conversation|plugin-host)\//,
+  /^src\/common\/l4_foundation\/(?:file|http|locale|pi|plugin|realtime)\//,
+  /^(?:bin\/|plugins\/pi-desk-sdk\/|package\.json$|pnpm-|next\.config|tsconfig|docs\/examples\/)/,
+  /^tests\/(?:l[124]-pidesk(?:-|\.)|l2-plugin-(?:command|management)|l4-(?:pi-|(?:e2e-server|browser-cdp|webpack-test)-runtime)|fixtures\/l4-workflow-test-runtime)/,
+  /^\.github\/(?:scripts\/(?:select-ci-checks|release-npm|verify-npm-install)\.mjs$|workflows\/(?:check|release-npm)\.yml$)/
+]
+
 export function selectCiChecks(paths, full) {
   paths = paths.filter((path) => !path.endsWith('.md'))
   return {
@@ -26,13 +39,7 @@ export function selectCiChecks(paths, full) {
           path
         )
       ),
-    pidesk:
-      full ||
-      paths.some((path) =>
-        /^(?:src\/|bin\/|plugins\/pi-desk-sdk\/|package\.json$|pnpm-|next\.config|tsconfig|docs\/examples\/|tests\/(?:l[124]-pidesk(?:-|\.)|l2-plugin-command|l4-(?:e2e-server|browser-cdp)-runtime)|\.github\/(?:scripts\/(?:select-ci-checks|release-npm|verify-npm-install)\.mjs$|workflows\/(?:check|release-npm)\.yml$))/.test(
-          path
-        )
-      ),
+    pidesk: full || paths.some((path) => pideskInputs.some((pattern) => pattern.test(path))),
     website: full || paths.some((path) => path.startsWith('apps/website/')),
     agent:
       full ||

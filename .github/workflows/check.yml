@@ -192,7 +192,7 @@ jobs:
 
   pidesk:
     needs: changes
-    if: needs.changes.outputs.pidesk == 'true' && !contains(fromJSON(inputs.built_packages || '[]'), 'pi-desk')
+    if: needs.changes.outputs.pidesk == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -239,6 +239,7 @@ jobs:
       - name: 宿主命令核心回归
         run: pnpm test:pidesk
       - name: 真实宿主命令链验收
+        if: "!contains(fromJSON(inputs.built_packages || '[]'), 'pi-desk')"
         run: node --test tests/l1-pidesk.e2e.mjs
       - name: 保留命令验收失败现场
         if: failure()

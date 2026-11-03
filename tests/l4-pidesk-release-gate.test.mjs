@@ -613,13 +613,48 @@ test('Pi 安装只使用源码精确版本，并在实际安装版本不符时�
   }
 })
 
-test('Source checks 在两个平台执行核心与真实命令验收', async () => {
+test('Source checks 双平台独立运行源码回归，仅主包未构建时执行开发态命令链', async () => {
   const checks = await readWorkflow('check')
   const job = checks.jobs.pidesk
   for (const os of ['ubuntu-latest', 'windows-latest'])
     assert.ok(job.strategy.matrix.os.includes(os))
-  assert.ok(job.steps.some((step) => /\bpnpm\s+test:pidesk\b/.test(step.run ?? '')))
-  assert.ok(job.steps.some((step) => step.run?.includes('tests/l1-pidesk.e2e.mjs')))
+  const core = job.steps.find((step) => /\bpnpm\s+test:pidesk\b/.test(step.run ?? ''))
+  const smoke = job.steps.find((step) => step.run?.includes('tests/l1-pidesk.e2e.mjs'))
+  assert.ok(core)
+  assert.ok(smoke)
+  for (const pidesk of ['true', 'false']) {
+    for (const built_packages of ['[]', '["pi-desk"]', '["pi-desk-sdk"]']) {
+      const context = { needs: { changes: { outputs: { pidesk } } }, inputs: { built_packages } }
+      assert.equal(evaluateWorkflowCondition(job.if, context), pidesk === 'true')
+      assert.equal(evaluateWorkflowCondition(core.if ?? 'true', context), true)
+      assert.equal(
+        evaluateWorkflowCondition(smoke.if ?? 'true', context),
+        built_packages !== '["pi-desk"]'
+      )
+    }
+  }
+})
+
+test('主包构建和安装态不代跑源码回归，既有业务边界纳入源码测试入口', async () => {
+  const release = await readFile(
+    new URL('../.github/scripts/release-npm.mjs', import.meta.url),
+    'utf8'
+  )
+  assert.equal(release.includes('test:pidesk'), false, '主包构建不代跑源码回归')
+  for (const step of workflow.jobs['installed-commands'].steps) {
+    assert.doesNotMatch(step.run ?? '', /test:pidesk|restore-sdk\.mjs/)
+  }
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+  const tests = manifest.scripts['test:pidesk'].split(/\s+/)
+  for (const path of [
+    'tests/l2-plugin-management-remove.test.ts',
+    'tests/l2-plugin-management-batch.test.ts',
+    'tests/l4-pi-local-extension-maintenance.test.ts',
+    'tests/l4-pi-plugin-owner-replace.test.ts',
+    'tests/l4-pi-plugin-source-changes.test.ts'
+  ]) {
+    assert.ok(tests.includes(path), path)
+  }
 })
 
 test('源码公开边界只由独立检查负责且不因业务选择而跳过', async () => {
@@ -635,21 +670,67 @@ test('源码公开边界只由独立检查负责且不因业务选择而跳过',
   assert.equal(boundary.if, undefined)
 })
 
-test('关键命令实现、回归及验收入口变化触发检查，无关文档和官网不触发', () => {
+test('命令运行依赖与回归入口触发源码检查，纯UI、官网和桌面原生变化不触发', async () => {
   for (const path of [
+    'bin/pi-desk.js',
+    'src/instrumentation.ts',
+    'src/server/l1_entry/node/l1-server.ts',
+    'src/server/l1_entry/websocket/l1-app-socket-runtime.ts',
+    'src/server/l1_entry/api/l1-work-session-add-route.ts',
+    'src/server/l1_entry/api/l1-plugin-browser-resource-route.ts',
+    'src/server/l2_biz/plugin-management/l2-plugin-commands.ts',
+    'src/server/l2_biz/work-session/l2-work-session-manage.ts',
+    'src/server/l3_modules/work-session/l3-work-session.ts',
+    'src/server/l3_modules/app-runtime/l3-app-runtime.ts',
+    'src/server/l4_foundation/pidesk/l4-pidesk-runtime.ts',
     'src/server/l4_foundation/pi/l4-pi-runtime-register.mjs',
+    'src/server/l4_foundation/process/l4-process-tree.js',
+    'src/server/l4_foundation/file/l4-file-path.ts',
+    'src/server/l4_foundation/http/l4-api-response.ts',
+    'src/server/l4_foundation/l4-host-settings-store.ts',
+    'src/common/l2_biz/plugin/l2-plugin-management-contract.ts',
+    'src/common/l2_biz/chat/l2-chat-contract.ts',
+    'src/common/l3_modules/plugin-host/l3-plugin-json-contract.ts',
+    'src/common/l4_foundation/plugin/l4-plugin-package.ts',
+    'src/common/l4_foundation/locale/l4-localized-text.ts',
     'plugins/pi-desk-sdk/src/browser.ts',
     'tests/l1-pidesk.e2e.mjs',
     'tests/l4-pidesk-command-smoke.mjs',
     'tests/l4-pidesk-installed-runners.test.mjs',
+    'tests/l4-pi-local-extension-maintenance.test.ts',
+    'tests/l4-pi-esm-register.mjs',
     'tests/l4-browser-cdp-runtime.mjs',
+    'tests/l4-e2e-server-runtime.mjs',
+    'tests/l4-webpack-test-runtime.mjs',
+    'tests/fixtures/l4-workflow-test-runtime.mjs',
+    'docs/examples/local-application/pi-desk.ts',
+    'package.json',
+    'pnpm-lock.yaml',
+    'next.config.ts',
+    'tsconfig.base.json',
+    '.github/workflows/check.yml',
+    '.github/workflows/release-npm.yml',
+    '.github/scripts/select-ci-checks.mjs',
+    '.github/scripts/release-npm.mjs',
     '.github/scripts/verify-npm-install.mjs'
   ])
     assert.equal(selectCiChecks([path], false).pidesk, true, path)
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+  for (const path of manifest.scripts['test:pidesk']
+    .split(/\s+/)
+    .filter((arg) => arg.startsWith('tests/'))) {
+    assert.equal(selectCiChecks([path], false).pidesk, true, path)
+  }
   for (const path of [
     'README.md',
+    'src/client/l2_biz/workbench/l2-workbench.tsx',
+    'src/client/l4_foundation/locale/l4-region-notice.tsx',
+    'src/common/l4_foundation/theme/l4-theme.ts',
     'apps/website/src/app/page.tsx',
+    'apps/desktop/src-tauri/src/main.rs',
+    'plugins/pi-desk-usage/src/pi-desk.ts',
     'plugins/pi-desk-usage/README.md'
   ])
     assert.equal(selectCiChecks([path], false).pidesk, false, path)
+  assert.equal(selectCiChecks([], true).pidesk, true)
 })

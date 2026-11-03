@@ -367,18 +367,6 @@ async function prepare(entries, output) {
         PI_CODING_AGENT_SESSION_DIR: join(agent, 'sessions')
       }
       if (entry.directory === projectRoot) {
-        await stage('test 宿主命令核心', () =>
-          runAsync('pnpm', ['test:pidesk'], {
-            env: {
-              ...env,
-              PI_OFFLINE: '1',
-              PI_DESK_PI_PACKAGE_DIR: join(
-                projectRoot,
-                'node_modules/@earendil-works/pi-coding-agent'
-              )
-            }
-          })
-        )
         for (const command of ['typecheck', 'check:layers']) {
           await stage(`test ${command}`, () => runAsync('pnpm', [command]))
         }
