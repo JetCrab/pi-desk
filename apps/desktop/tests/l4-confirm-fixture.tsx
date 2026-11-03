@@ -3,20 +3,7 @@ import { DesktopApp } from '../web/l1-desktop-app'
 import { DesktopConfirmProvider, useDesktopConfirm } from '../web/l4-desktop-confirm'
 import type { ControlState, ServerConfig, TargetConfig } from '../web/l4-desktop-ipc'
 
-type Result = { name: string; passed: boolean; detail?: string }
-type Call = { command: string; args: Record<string, unknown> }
-
-declare global {
-  interface Window {
-    __desktopTest: {
-      invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>
-      listen: (name: string, listener: () => void) => Promise<() => void>
-      results: Result[]
-      current: string
-      done: boolean
-    }
-  }
-}
+import type { Call, Result } from './l4-desktop-test'
 
 const localUrl = 'http://127.0.0.1:43001/'
 const remoteUrl = 'https://remote.example.test/'

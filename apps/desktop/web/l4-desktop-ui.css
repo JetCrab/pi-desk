@@ -586,7 +586,15 @@ textarea:disabled {
   gap: 8px;
   margin-bottom: 8px;
 }
-.setup-caption,
+.setup-caption {
+  margin-bottom: 20px;
+}
+.setup-description {
+  margin-top: 8px;
+  max-width: 52ch;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
 .setup-footer {
   display: flex;
   flex-wrap: wrap;
@@ -599,9 +607,6 @@ textarea:disabled {
   margin: 0;
   font-size: 0.875rem;
   font-weight: 600;
-}
-.setup-caption > span {
-  font-size: 0.75rem;
 }
 .setup-steps {
   display: grid;
@@ -619,13 +624,6 @@ textarea:disabled {
   align-content: start;
   gap: 10px;
 }
-.setup-step:not(:last-child)::after {
-  content: '→';
-  position: absolute;
-  right: -22px;
-  top: 0;
-  color: var(--muted-foreground);
-}
 .step-heading {
   display: flex;
   align-items: center;
@@ -637,7 +635,7 @@ textarea:disabled {
 .step-state {
   color: var(--muted-foreground);
   overflow-wrap: anywhere;
-  min-height: 42px;
+  min-height: 21px;
 }
 .setup-step[data-active='true'] .step-heading {
   color: var(--foreground);
@@ -1130,9 +1128,6 @@ input[type='checkbox']:focus-visible {
   .setup-steps {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 20px;
-  }
-  .setup-step::after {
-    display: none;
   }
   .control-content {
     padding-top: 16px;

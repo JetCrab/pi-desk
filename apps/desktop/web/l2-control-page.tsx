@@ -170,12 +170,14 @@ function TargetRow({
             <h2 className={server ? 'local-title' : 'target-title'}>{title}</h2>
             {server ? (
               <>
-                <p
-                  className={`status-line${server.status === 'running' && !piUpdating ? ' good' : ''}`}
-                >
-                  <span className="dot" />
-                  {status}
-                </p>
+                {!preparing && (
+                  <p
+                    className={`status-line${server.status === 'running' && !piUpdating ? ' good' : ''}`}
+                  >
+                    <span className="dot" />
+                    {status}
+                  </p>
+                )}
                 {localCount > 1 && <p className="target-address muted">{url}</p>}
               </>
             ) : (
@@ -214,7 +216,7 @@ function TargetRow({
               </button>
             </div>
           )}
-          <div className="target-row-actions">
+          <div className="target-row-actions" hidden={preparing}>
             <button
               className="icon-button"
               type="button"
@@ -240,7 +242,7 @@ function TargetRow({
           </div>
         </div>
       )}
-      {server && (
+      {server && !preparing && (
         <div className="actions launch-actions">
           <button
             className="primary forward"
@@ -527,7 +529,9 @@ export function ControlPage({
           设置
         </button>
       </DesktopHeader>
-      {state?.hideOnStartup === null && <StartupPreferenceDialog refresh={refresh} />}
+      {state?.hideOnStartup === null && state.environment.status === 'ready' && (
+        <StartupPreferenceDialog refresh={refresh} />
+      )}
       <dialog
         ref={accessDialog}
         className="desktop-dialog"

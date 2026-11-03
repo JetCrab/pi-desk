@@ -2,6 +2,8 @@ import AppKit
 import Foundation
 import WebKit
 
+let runnerArguments = CommandLine.arguments.filter { $0 != "--windows" }
+
 // 故意不实现原生 confirm：回归必须覆盖桌面壳缺少该处理器的实际边界。
 final class TestUI: NSObject, WKUIDelegate {}
 
@@ -47,7 +49,7 @@ final class WebKitTest: NSObject {
     var polling = false
     var timer: Timer?
 
-    init(directory: URL, scene: String?, dark: Bool, width: CGFloat) {
+    init(directory: URL, scene: String?, dark: Bool, width: CGFloat, windows: Bool) {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         if #available(macOS 14.0, *) {
@@ -61,6 +63,10 @@ final class WebKitTest: NSObject {
         super.init()
         view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         view.uiDelegate = ui
+        if windows {
+            // 只切换被测前端的平台分支，不将 WKWebView 验证冒充 Windows/WebView2 原生验收。
+            view.customUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/605.1.15 Safari/605.1.15"
+        }
         let query = scene.map { "?scene=\($0)" } ?? ""
         view.load(URLRequest(url: URL(string: "tauri://localhost/\(query)")!))
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.poll(directory: directory) }
@@ -75,7 +81,7 @@ final class WebKitTest: NSObject {
             timer?.invalidate()
             print(json)
             do {
-                let suffix = CommandLine.arguments.dropFirst(2).joined(separator: "-")
+                let suffix = runnerArguments.dropFirst(2).joined(separator: "-")
                 let name = suffix.isEmpty ? "results.json" : "results-\(suffix).json"
                 try json.write(to: directory.appendingPathComponent(name), atomically: true, encoding: .utf8)
                 let results = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
@@ -83,7 +89,7 @@ final class WebKitTest: NSObject {
             } catch {
                 fputs("Results could not be read: \(error)\n", stderr)
             }
-            if CommandLine.arguments.count > 2, passed {
+            if runnerArguments.count > 2, passed {
                 view.takeSnapshot(with: nil) { [self] image, error in
                     do {
                         guard let tiff = image?.tiffRepresentation,
@@ -91,7 +97,7 @@ final class WebKitTest: NSObject {
                               let png = bitmap.representation(using: .png, properties: [:]) else {
                             throw error ?? NSError(domain: "WebKitSnapshot", code: 1)
                         }
-                        let name = CommandLine.arguments.dropFirst(2).joined(separator: "-")
+                        let name = runnerArguments.dropFirst(2).joined(separator: "-")
                         try png.write(to: directory.appendingPathComponent("\(name).png"))
                     } catch {
                         passed = false
@@ -106,16 +112,16 @@ final class WebKitTest: NSObject {
     }
 }
 
-guard CommandLine.arguments.count == 2 || CommandLine.arguments.count == 5 else {
-    fputs("Usage: webkit-runner <fixture-directory> [stop|pi light|dark width]\n", stderr)
+guard runnerArguments.count == 2 || runnerArguments.count == 5 else {
+    fputs("Usage: webkit-runner <fixture-directory> [scene light|dark width] [--windows]\n", stderr)
     exit(1)
 }
 NSApplication.shared.setActivationPolicy(.prohibited)
-let directory = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
-let scene = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : nil
-let dark = CommandLine.arguments.count > 3 && CommandLine.arguments[3] == "dark"
-let width = CommandLine.arguments.count > 4 ? Double(CommandLine.arguments[4]) ?? 1000 : 1000
-let test = WebKitTest(directory: directory, scene: scene, dark: dark, width: CGFloat(width))
+let directory = URL(fileURLWithPath: runnerArguments[1], isDirectory: true)
+let scene = runnerArguments.count > 2 ? runnerArguments[2] : nil
+let dark = runnerArguments.count > 3 && runnerArguments[3] == "dark"
+let width = runnerArguments.count > 4 ? Double(runnerArguments[4]) ?? 1000 : 1000
+let test = WebKitTest(directory: directory, scene: scene, dark: dark, width: CGFloat(width), windows: CommandLine.arguments.contains("--windows"))
 let deadline = Date().addingTimeInterval(90)
 while !test.finished && Date() < deadline {
     RunLoop.main.run(until: Date().addingTimeInterval(0.02))

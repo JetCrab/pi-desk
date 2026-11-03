@@ -140,7 +140,9 @@ export interface L4PluginRegistrySnapshot {
 }
 
 export interface L4PluginHostTransport {
-  readonly pi: PiNativeBrowserChannel
+  readonly pi: Omit<PiNativeBrowserChannel, 'reload'> & {
+    reload?(source: PluginSource): Promise<void>
+  }
   listBrowserEntries(): Promise<readonly L4PluginBrowserEntryDescriptor[]>
   subscribePush(listener: (message: PluginPushMessage) => void): () => void
   createPiDeskChannel(pluginName: string): PiDeskBrowserChannel
@@ -1885,6 +1887,7 @@ export class L4PluginHostRuntime {
     }
     const piDesk = this.transport.createPiDeskChannel(pluginName)
     const pi = this.transport.pi
+    const reloadPi = pi.reload
     const subscribe = (
       listeners: Set<() => void>,
       listener: () => void,
@@ -1987,7 +1990,22 @@ export class L4PluginHostRuntime {
           execute: (source, input) => invoke(() => pi.bash.execute(source, input)),
           abort: (source) => invoke(() => pi.bash.abort(source))
         },
-        interrupt: (source) => invoke(() => pi.interrupt(source))
+        interrupt: (source) => invoke(() => pi.interrupt(source)),
+        ...(reloadPi
+          ? {
+              reload: (workId: string): Promise<void> =>
+                invoke(async () => {
+                  if (typeof workId !== 'string' || !workId.trim()) {
+                    throw new Error('重载 Pi 配置需要有效 workId')
+                  }
+                  const workSession = this.workSessions.find(
+                    (item) => item.source.workId === workId
+                  )
+                  if (!workSession) throw new Error('工作会话不存在')
+                  await reloadPi(structuredClone(workSession.source))
+                })
+            }
+          : {})
       },
       workSessions,
       workSessionFiles: {

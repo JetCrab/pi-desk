@@ -1,11 +1,7 @@
 'use client'
 
 import { replaceL4HostSettings } from '@client/l4_foundation/locale/l4-region-store'
-import type {
-  PiNativeBrowserChannel,
-  PiDeskBrowserChannel,
-  PluginPushMessage
-} from '@jetcrab/pi-desk-sdk/browser'
+import type { PiDeskBrowserChannel, PluginPushMessage } from '@jetcrab/pi-desk-sdk/browser'
 import { L2ChatSocketContracts } from '@common/l2_biz/chat/l2-chat-websocket-contract'
 import { L2PluginSocketContracts } from '@common/l2_biz/plugin/l2-plugin-websocket-contract'
 import {
@@ -41,7 +37,7 @@ function createTransport(
   owner: L4AppSocketOwner,
   canLoadEntries: () => boolean
 ): L4PluginHostTransport {
-  const pi: PiNativeBrowserChannel = {
+  const pi: L4PluginHostTransport['pi'] = {
     prompt: (source, input) =>
       owner.request(L2ChatSocketContracts.send, {
         source,
@@ -79,6 +75,9 @@ function createTransport(
     },
     interrupt: async (source): Promise<void> => {
       await owner.request(L2ChatSocketContracts.interrupt, { source })
+    },
+    reload: async (source): Promise<void> => {
+      await owner.request(L2ChatSocketContracts.reload, { source })
     }
   }
 

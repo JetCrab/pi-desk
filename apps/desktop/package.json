@@ -1,6 +1,6 @@
 {
   "name": "@jetcrab/pi-desk-desktop",
-  "version": "1.1.25",
+  "version": "1.1.26",
   "private": true,
   "description": "Pi Desk native desktop shell",
   "type": "module",
@@ -10,7 +10,8 @@
     "test:webkit": "node scripts/test-webkit-confirm.mjs",
     "dev": "tauri dev --target i686-pc-windows-msvc",
     "build": "tauri build --target i686-pc-windows-msvc",
-    "build:mac": "tauri build --target universal-apple-darwin",
+    "build:mac": "tauri build --target universal-apple-darwin --bundles app && node scripts/build-macos-installer.mjs",
+    "test:installer:mac": "node scripts/test-macos-installer.mjs",
     "build:linux": "tauri build --target x86_64-unknown-linux-gnu --bundles appimage",
     "package:install:start": "node scripts/package-install-start.mjs",
     "check": "cargo check --manifest-path src-tauri/Cargo.toml --target i686-pc-windows-msvc",
