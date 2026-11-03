@@ -1,0 +1,107 @@
+{
+  "tag": "v1.1.38",
+  "date": 1793683941606,
+  "source": {
+    "base": "1313aaee64d3c5e7de818f19c8c8278e84fc6b1a",
+    "head": "370abad63944b4b659a02c9333f235306bb8dc65"
+  },
+  "packages": [
+    {
+      "name": "@jetcrab/pi-desk-sdk",
+      "version": "1.1.14"
+    },
+    {
+      "name": "@jetcrab/pi-desk",
+      "version": "1.1.38"
+    },
+    {
+      "name": "@jetcrab/pi-desk-bg-run",
+      "version": "1.1.14"
+    },
+    {
+      "name": "@jetcrab/pi-desk-ctx",
+      "version": "1.1.15"
+    },
+    {
+      "name": "@jetcrab/pi-desk-deliverables",
+      "version": "1.1.16"
+    },
+    {
+      "name": "@jetcrab/pi-desk-quota-viewer",
+      "version": "1.1.17"
+    },
+    {
+      "name": "@jetcrab/pi-desk-remote-debug",
+      "version": "1.1.15"
+    },
+    {
+      "name": "@jetcrab/pi-desk-subagent",
+      "version": "1.1.15"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tibo-monitor",
+      "version": "1.1.15"
+    },
+    {
+      "name": "@jetcrab/pi-desk-todo",
+      "version": "1.0.11"
+    },
+    {
+      "name": "@jetcrab/pi-desk-tool-reason",
+      "version": "1.1.1"
+    },
+    {
+      "name": "@jetcrab/pi-desk-usage",
+      "version": "1.1.16"
+    },
+    {
+      "name": "@jetcrab/pi-desk-workspace",
+      "version": "1.1.12"
+    }
+  ],
+  "clients": [
+    {
+      "platform": "windows",
+      "version": "1.1.29",
+      "file": "PiDesk-Windows-x86-Setup.exe",
+      "sha256": "d4b906be3cc34204bca2e04f172663eb18b046258f53255903f4cf127e64eadf"
+    },
+    {
+      "platform": "macos",
+      "version": "1.1.29",
+      "file": "PiDesk-macOS-universal.dmg",
+      "sha256": "93f59eeb43ca4fec7474097b4ac331a35c71617d653d4b49c77bd791cc97f283"
+    },
+    {
+      "platform": "linux",
+      "version": "1.1.29",
+      "file": "PiDesk-Linux-x86_64.AppImage",
+      "sha256": "f2c56a14e3252cacf1431d68f0ff70ff2baa93948de79d78134de8f57c250846"
+    },
+    {
+      "platform": "android",
+      "version": "1.1.0",
+      "file": "PiDesk-Android.apk",
+      "sha256": "298cb6eef6229dbe7d39666f3cc74104ef0f88177ce90bd3361e76aa5d199972"
+    }
+  ],
+  "changes": {
+    "added": [],
+    "breaking": [],
+    "removed": [],
+    "features": [
+      "Added a universal macOS offline installer with a selectable installation location, copy progress, cancellation before replacement begins, and rollback attempts if replacement fails. Open the installer instead of dragging the app; runtime components are still prepared after installation.",
+      "Local extensions can now be uninstalled through plugin management and the `plugins remove` command. External source files and symlink targets are preserved; extensions stored directly in the managed extensions directory are deleted.",
+      "The Deliverables panel now explains when the current session has not loaded the plugin and offers a Pi configuration reload, preserving chat history and the current branch. Browser plugins can also request this reload through the SDK."
+    ],
+    "changed": [
+      "Simplified desktop environment preparation with clearer component status and progress, and installation options and technical error details collapsed by default. Windows authorization and cancellation messages now explain what to expect.",
+      "Improved localized wording and English pluralization across settings, the workbench, conversations, and file views."
+    ],
+    "fixed": [
+      "Fixed language switching and desktop confirmation actions on macOS by using in-app confirmation dialogs, including service controls, update settings, remote access changes, and unsaved-edit warnings.",
+      "macOS environment preparation now waits for Command Line Tools installation and continues automatically when it finishes, without requiring a manual recheck.",
+      "Plugin removal now waits for runtime cleanup before reporting success. Removed sources with running resources remain visible in plugin management so leftover instances can be unloaded."
+    ]
+  }
+}
