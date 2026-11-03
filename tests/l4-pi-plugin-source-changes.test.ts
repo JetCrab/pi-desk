@@ -108,10 +108,17 @@ test('仅完整发现确认删除，局部发现错误不卸载消失来源', as
   const changes = new L4PiPluginSourceChanges()
   await changes.initialize(snapshot([item]))
 
+  await rm(filePath)
+  assert.deepEqual(
+    changes.readAppliedSources().map((item) => item.source),
+    [filePath]
+  )
   assert.deepEqual(await changes.scan(snapshot([], ['temporary discovery error'])), [])
   const deletion = (await changes.scan(snapshot([])))[0]
   assert.ok(deletion)
   assert.equal(deletion.current, null)
+  assert.equal(deletion.previous?.source, filePath)
   changes.commit(deletion)
+  assert.deepEqual(changes.readAppliedSources(), [])
   assert.deepEqual(await changes.scan(snapshot([])), [])
 })

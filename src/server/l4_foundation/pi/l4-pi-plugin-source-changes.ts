@@ -109,6 +109,10 @@ export class L4PiPluginSourceChanges {
     for (const source of snapshot.sources) this.applied.set(source.source, await describe(source))
   }
 
+  readAppliedSources(): L4PiPluginSource[] {
+    return structuredClone([...this.applied.values()].map((item) => item.source))
+  }
+
   async scan(
     snapshot: L4PiPluginSourceSnapshot,
     requested?: readonly string[]

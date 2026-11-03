@@ -63,7 +63,7 @@ const definitions: readonly CommandDefinition[] = [
   },
   {
     path: ['plugins', 'remove'],
-    description: '卸载一个或多个包来源；完成后向本会话汇总结果',
+    description: '卸载包、本地扩展或残留来源并释放实例；完成后向本会话汇总结果',
     name: 'multiple',
     scope: 'required'
   }

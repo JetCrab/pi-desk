@@ -289,6 +289,19 @@ function click(text) {
   return `(() => { const button = [...document.querySelectorAll('button')].find(item => (item.textContent.trim() === ${JSON.stringify(text)} || item.getAttribute('aria-label') === ${JSON.stringify(text)}) && item.checkVisibility() && !item.closest('[inert]'));  if (!button || button.disabled) throw new Error('操作不可用：' + ${JSON.stringify(text)}); button.click(); return true; })()`
 }
 
+async function openInstallationOptions(page, component) {
+  await page.evaluate(`(() => {
+    const options = document.querySelector('.install-options');
+    if (!options) throw new Error('当前阶段没有安装选项');
+    options.open = true;
+    if (${JSON.stringify(component ?? null)}) {
+      const detail = [...options.querySelectorAll('.component')].find(item => item.querySelector('summary')?.textContent.trim().startsWith(${JSON.stringify(component ?? '')}));
+      if (!detail) throw new Error('组件选项不存在');
+      detail.open = true;
+    }
+  })()`)
+}
+
 async function assertSetupFits(page, action) {
   const layout = await page.evaluate(`(() => {
     const root = document.scrollingElement;
@@ -607,7 +620,7 @@ async function validatePiUpdate(page) {
   )
   assert.equal(
     await page.evaluate(
-      `document.body.innerText.includes('首次使用准备') || document.body.innerText.includes('完成后自动打开')`
+      `!!document.querySelector('.setup-caption') || document.body.innerText.includes('完成后自动打开')`
     ),
     false
   )
@@ -639,7 +652,7 @@ async function validatePiUpdate(page) {
     () => page.evaluate(`document.body.innerText.includes('缺少 SDK 能力')`),
     '兼容性失败结果'
   )
-  assert.equal(await page.evaluate(`document.body.innerText.includes('首次使用准备')`), false)
+  assert.equal(await page.evaluate(`!!document.querySelector('.setup-caption')`), false)
   await page.theme('light')
   await page.viewport(960, 720)
   await page.evaluate(
@@ -747,6 +760,7 @@ async function validateDownloadSources(page) {
     await page.evaluate('document.querySelectorAll("[data-testid=download-source-select]").length'),
     0
   )
+  await openInstallationOptions(page)
   await page.evaluate(click('下载设置'))
   await until(
     async () => (await page.evaluate(sourceValue()))?.value === 'official',
@@ -797,9 +811,15 @@ async function validateEnvironmentChoices(page) {
     await page.theme(theme)
     await page.viewport(width, height)
     await page.screenshot(name)
-    await assertSetupFits(page, choose)
+    assert.equal(
+      await page.evaluate(`document.body.innerText.includes(${JSON.stringify(choose)})`),
+      false,
+      '手动选择默认收起'
+    )
     await assertSetupFits(page, '安装并打开')
   }
+  await page.viewport(960, 720)
+  await openInstallationOptions(page, 'Node.js')
   await page.evaluate(click(choose))
   await until(
     () =>
@@ -818,19 +838,17 @@ async function validateEnvironmentChoices(page) {
   await publish(
     `window.desktopLayoutState.environment.components[0].status = 'ready'; window.desktopLayoutState.environment.components[0].detail = null`
   )
+  await page.evaluate(`document.querySelector('.install-options').open = false`)
   await until(
-    () =>
-      page.evaluate(
-        `![...document.querySelectorAll('button')].some(item => item.textContent.trim() === ${JSON.stringify(choose)} && item.checkVisibility())`
-      ),
-    '已有可用 Node 时不再突出更换入口'
+    () => page.evaluate(`!document.body.innerText.includes(${JSON.stringify(choose)})`),
+    '手动选项可以收起'
   )
   await page.evaluate(click('安装并打开'))
   await until(
-    () => page.evaluate(`document.body.innerText.includes('取消安装')`),
+    () => page.evaluate(`document.body.innerText.includes('取消准备')`),
     '用户主动开始下载准备'
   )
-  await page.evaluate(click('取消安装'))
+  await page.evaluate(click('取消准备'))
   await until(
     () => page.evaluate(`document.body.innerText.includes('安装并打开')`),
     '取消后可继续准备'
@@ -841,17 +859,22 @@ async function validateEnvironmentChoices(page) {
     window.desktopLayoutState.environment.error = '下载连接失败（nodejs.org:443）。请检查网络或代理，也可在下载设置中切换下载源，或选择已有运行环境。';
   `)
   await until(
-    () => page.evaluate(`document.body.innerText.includes('重试安装')`),
+    () => page.evaluate(`document.body.innerText.includes('重试')`),
     '下载失败后的恢复操作'
   )
-  await assertSetupFits(page, choose)
-  await assertSetupFits(page, '重试安装')
+  await assertSetupFits(page, '重试')
+  assert.equal(
+    await page.evaluate(`document.querySelector('[role="alert"] details').open`),
+    false,
+    '技术详情默认收起'
+  )
+  await page.evaluate(`document.querySelector('[role="alert"] details').open = true`)
   assert.equal(
     await page.evaluate(
       `document.querySelector('[role="alert"]')?.innerText.includes('nodejs.org:443')`
     ),
     true,
-    '错误信息保留失败目标和可操作提示'
+    '展开后保留失败目标和可操作提示'
   )
   await page.viewport(960, 720)
   await page.screenshot('environment-download-error.png')
@@ -947,7 +970,7 @@ async function validateLayout(page) {
     window.desktopLayoutState.targets[0].server.status = 'starting';
     window.desktopLayoutState.targets[0].server.update = { status: 'installing', version: '1.0.0', error: null };
   `)
-  await until(() => hasText('取消安装'), '已有 Pi 时首次服务安装直接显示步骤')
+  await until(() => hasText('取消准备'), '已有 Pi 时首次服务安装直接显示步骤')
   assert.equal(
     await page.evaluate(`!!document.querySelector('progress[aria-label="Pi Desk安装进度"]')`),
     true
@@ -1124,8 +1147,8 @@ async function validateLayout(page) {
   assert.equal(await hasText('Node.js'), true, '首次准备直接列出需要安装的组件')
   await page.screenshot('environment-required.png')
   await page.evaluate(click('安装并打开'))
-  await until(() => hasText('取消安装'), '准备中的取消入口')
-  await assertSetupFits(page, '取消安装')
+  await until(() => hasText('取消准备'), '准备中的取消入口')
+  await assertSetupFits(page, '取消准备')
   assert.equal(
     await page.evaluate(`document.querySelector('progress[aria-label="Node.js下载进度"]').value`),
     53
@@ -1134,6 +1157,7 @@ async function validateLayout(page) {
   await publish(`
     window.desktopLayoutState.environment.components.forEach(item => { item.download = null; item.status = item.name === 'pi' ? 'missing' : 'ready'; item.detail = item.name === 'pi' ? '正在安装 Pi 1.1.0' : null });
     window.desktopLayoutState.targets[0].server.update = { status: 'installing', version: '1.0.0', error: null };
+    window.desktopLayoutState.environment.step = '正在安装 Pi 1.1.0；正在下载安装 Pi Desk 1.0.0';
   `)
   await until(() => hasText('正在安装 Pi 1.1.0'), 'Pi 与 Pi Desk 同时安装')
   assert.equal(
@@ -1144,23 +1168,25 @@ async function validateLayout(page) {
   )
   await page.screenshot('environment-parallel.png')
   await page.evaluate(`document.documentElement.style.fontSize = '20px'`)
-  await assertSetupFits(page, '取消安装')
+  await assertSetupFits(page, '取消准备')
   await page.screenshot('environment-parallel-large-text.png')
   await page.evaluate(`document.documentElement.style.fontSize = ''`)
   await page.theme('dark')
   await page.screenshot('environment-parallel-dark.png')
   await page.theme('light')
   await page.viewport(720, 560)
-  await assertSetupFits(page, '取消安装')
+  await assertSetupFits(page, '取消准备')
   await page.screenshot('environment-parallel-compact.png')
-  await page.evaluate(click('取消安装'))
+  await page.evaluate(click('取消准备'))
   await publish(`window.desktopLayoutState.targets[0].server.update.status = 'idle'`)
   await until(() => hasText('安装并打开'), '取消后可重新准备')
   await publish(
     `window.desktopLayoutState.environment.status = 'failed'; window.desktopLayoutState.environment.error = 'fixture-download-failed'`
   )
-  await until(() => hasText('重试安装'), '失败后的恢复入口')
-  assert.equal(await hasText('fixture-download-failed'), true, '失败原因无需展开即可看到')
+  await until(() => hasText('重试'), '失败后的恢复入口')
+  assert.equal(await hasText('fixture-download-failed'), false, '技术详情默认收起')
+  await page.evaluate(`document.querySelector('[role="alert"] details').open = true`)
+  assert.equal(await hasText('fixture-download-failed'), true, '技术详情仍可按需查看')
   await page.viewport(960, 720)
   await page.screenshot('environment-error.png')
   await publish(
@@ -1689,6 +1715,7 @@ validation: try {
     '按国家代码或查询失败设置默认源'
   )
   const servicesBeforeSave = JSON.parse(await readFile(join(root, 'config.json'), 'utf8'))
+  await openInstallationOptions(control)
   await control.evaluate(click('下载设置'))
   await until(
     () =>
@@ -1744,11 +1771,11 @@ validation: try {
   await until(
     () =>
       control.evaluate(
-        `document.body.innerText.includes('取消安装') && !!document.querySelector('progress[aria-label="Node.js下载进度"]')`
+        `document.body.innerText.includes('取消准备') && !!document.querySelector('progress[aria-label="Node.js下载进度"]')`
       ),
     '并行准备界面'
   )
-  await assertSetupFits(control, '取消安装')
+  await assertSetupFits(control, '取消准备')
   assert.equal(
     await control.evaluate(
       '!!document.querySelector("[data-testid=environment-download-settings]")'
@@ -1763,14 +1790,14 @@ validation: try {
   )
   await control.screenshot('environment-preparing.png')
   await control.theme('dark')
-  await assertSetupFits(control, '取消安装')
+  await assertSetupFits(control, '取消准备')
   await control.screenshot('environment-preparing-dark.png')
   await control.theme('light')
   await control.viewport(720, 560)
-  await assertSetupFits(control, '取消安装')
+  await assertSetupFits(control, '取消准备')
   await control.screenshot('environment-preparing-compact.png')
   if (nativeDownloadOnly) {
-    await control.evaluate(click('取消安装'))
+    await control.evaluate(click('取消准备'))
     await until(
       () =>
         control.evaluate(
@@ -1844,7 +1871,7 @@ validation: try {
     assert.equal(await control.evaluate('location.hash'), '#/', '安装状态不得切换页面')
     assert.equal(
       await control.evaluate(
-        `[...document.querySelectorAll('ol[aria-label="安装步骤"] li')].filter(item => item.innerText.includes('正在安装')).length`
+        `document.querySelectorAll('ol[aria-label="安装步骤"] li[data-active="true"]').length`
       ),
       1,
       '只有当前组件显示安装中'
@@ -1859,15 +1886,15 @@ validation: try {
     document.dispatchEvent(new Event('visibilitychange'));
   })()`)
   await until(
-    () => control.evaluate(`document.body.innerText.includes('重试安装')`),
+    () => control.evaluate(`document.body.innerText.includes('重试')`),
     '只有错误时显示问题信息'
   )
-  await until(
-    () => control.evaluate(`document.body.innerText.includes('下载连接超时，请检查网络后重试。')`),
-    '安装失败原因直接展示',
-    5000
+  assert.equal(
+    await control.evaluate(`document.querySelector('[role="alert"] details').open`),
+    false,
+    '长技术详情默认收起'
   )
-  await assertSetupFits(control, '重试安装')
+  await assertSetupFits(control, '重试')
   await control.screenshot('environment-error.png')
   await control.evaluate(`(() => {
     window.desktopSetupFixture.environment.status = 'installing';
@@ -1877,10 +1904,10 @@ validation: try {
     document.dispatchEvent(new Event('visibilitychange'));
   })()`)
   await until(
-    () => control.evaluate(`document.body.innerText.includes('取消安装')`),
+    () => control.evaluate(`document.body.innerText.includes('取消准备')`),
     '错误恢复后只显示必要进度'
   )
-  await control.evaluate(click('取消安装'))
+  await control.evaluate(click('取消准备'))
   await until(
     () =>
       control.evaluate(
@@ -1952,6 +1979,7 @@ validation: try {
   ]
   if (expectedSource.mode === 'domestic') manualSources.reverse()
   for (const [source, registry] of manualSources) {
+    await openInstallationOptions(control)
     await control.evaluate(click('下载设置'))
     await until(async () => {
       const select = await control.evaluate(sourceValue())

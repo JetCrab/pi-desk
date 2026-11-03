@@ -97,6 +97,11 @@ test('defineBrowserEntry 保留同步 Entry Factory 和 disposer', async () => {
   assert.throws(() => browser.defineBrowserEntry(null))
 })
 
+test('Browser Native Pi 公开可选的 workId 重载能力', async () => {
+  const declaration = await readFile(join(packageRoot, 'dist', 'browser.d.ts'), 'utf8')
+  assert.match(declaration, /reload\?\(workId: string\): Promise<void>/)
+})
+
 test('React 子入口暴露 Hooks、ErrorBoundary 与通用插件组件', () => {
   assert.equal(typeof react.usePluginConnection, 'function')
   assert.equal(typeof react.usePluginWorkSessions, 'function')

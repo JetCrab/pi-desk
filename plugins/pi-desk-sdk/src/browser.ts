@@ -186,6 +186,8 @@ export interface PiNativeBrowserChannel {
   readonly tools: PiNativeToolMetadataChannel
   readonly bash: PiNativeBashChannel
   interrupt(source: PluginSource): Promise<void>
+  // 人工重载该工作窗口当前绑定的 Pi 配置；旧宿主可能缺少此能力。
+  reload?(workId: string): Promise<void>
 }
 
 export type BrowserNotificationLevel = PluginNotificationLevel

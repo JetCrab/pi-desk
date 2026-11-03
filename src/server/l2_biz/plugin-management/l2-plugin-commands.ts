@@ -2,6 +2,7 @@ import 'server-only'
 
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
+import { l4PluginSourceIdentity } from '@common/l4_foundation/plugin/l4-plugin-package'
 import type {
   L2PluginManagementItem,
   L2PluginManagementSnapshot
@@ -73,9 +74,6 @@ async function resolveTargets(
     }
     if (command.action === 'remove') {
       if (!existing) throw new Error(`插件不存在：${name}`)
-      if (existing.kind !== 'package') {
-        throw new Error(`当前插件管理只支持卸载包来源，不支持卸载裸扩展：${name}`)
-      }
       targets.set(existing.source, { name, source: existing.source, local: false })
       continue
     }
@@ -173,15 +171,18 @@ function completedResult(
   snapshot: L2PluginManagementSnapshot,
   agentDir: string
 ): string {
+  if (command.action === 'remove') {
+    const identity = l4PluginSourceIdentity(target.source)
+    if (snapshot.plugins.some((item) => l4PluginSourceIdentity(item.source) === identity)) {
+      throw new Error('卸载后仍发现该来源，无法确认卸载完成')
+    }
+    return '成功：已卸载并完成宿主插件应用'
+  }
   const item = findL2PluginCommandTarget(
     snapshot.plugins,
     readL2PluginNpmName(target.source) ?? target.name,
     agentDir
   )
-  if (command.action === 'remove') {
-    if (item) throw new Error('卸载后仍发现该包来源，无法确认卸载完成')
-    return '成功：已卸载并完成宿主插件应用'
-  }
   if (!item) throw new Error('未发现安装后的插件，无法确认生效')
   if (item.error) throw new Error(selectL4LocalizedText(item.error.message, 'zh-CN'))
   if (item.status === 'disabled') throw new Error('该插件仍被现有配置禁用，尚未生效')

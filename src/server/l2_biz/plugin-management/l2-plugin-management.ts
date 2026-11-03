@@ -40,9 +40,11 @@ import { readL4PluginReadme } from '@server/l4_foundation/pi/l4-pi-plugin-regist
 import {
   readL4PiPluginPreferences,
   readL4PiPluginUpdateTag,
+  removeL4PiPluginPreference,
   setL4PiPluginUpdateTag,
   setL4PiPluginEnabled
 } from '@server/l4_foundation/pi/l4-pi-plugin-preferences'
+import { removeL4PiLocalExtension } from '@server/l4_foundation/pi/l4-pi-local-extension-maintenance'
 import { getL4PiGlobalPluginRuntime } from '@server/l4_foundation/pi/l4-pi-global-plugin-runtime'
 import {
   L4PiPackageMaintenanceError,
@@ -109,6 +111,7 @@ interface L2PluginPreparedMutation {
   request: L4PiDeskPackageMaintenanceRequest | null
   updateTag: string | null
   pluginName: string | null
+  localExtension?: boolean
 }
 
 export interface L2PluginManagementWorkSessions {
@@ -739,7 +742,12 @@ export class L2PluginManagement {
     )
     if (mutation !== 'add') {
       if (!existing) throw new L2PluginManagementNotFoundError(source)
-      if (existing.kind !== 'package' && mutation !== 'enable' && mutation !== 'disable') {
+      if (
+        existing.kind !== 'package' &&
+        mutation !== 'del' &&
+        mutation !== 'enable' &&
+        mutation !== 'disable'
+      ) {
         throw new L2PluginManagementInvalidPackageError(
           '裸扩展不是已安装包，请编辑源码后加载变更；此操作不会删除源码'
         )
@@ -834,6 +842,18 @@ export class L2PluginManagement {
       .listConfiguredPackages()
       .filter((item) => item.scope === 'user')
     const target = configured.find((item) => item.source === operationSource)
+    if (mutation === 'del' && !target) {
+      const existing = (await this.readSources()).sources.find(
+        (item) => item.source === operationSource
+      )
+      if (!existing) throw new L2PluginManagementNotFoundError(source)
+      return {
+        request: null,
+        updateTag: null,
+        pluginName: null,
+        ...(existing.kind === 'extension' ? { localExtension: true } : {})
+      }
+    }
     let request: L4PiDeskPackageMaintenanceRequest | null = null
     let updateTag: string | null = null
     let pluginName: string | null = null
@@ -876,7 +896,7 @@ export class L2PluginManagement {
     prepared: L2PluginPreparedMutation
   ): Promise<void> {
     const { mutation, source, operationSource } = input
-    const { request, updateTag, pluginName } = prepared
+    const { request, updateTag, pluginName, localExtension } = prepared
     const runtime = getL4PiGlobalPluginRuntime()
     const waiting = (reason: string): void => this.setOperation(operationSource, 'waiting', reason)
     if (request) {
@@ -918,6 +938,26 @@ export class L2PluginManagement {
             setL4PiPluginEnabled(source, !previouslyDisabled, this.agentDir)
             this.sourceCache = null
             throw error
+          }
+        } else if (mutation === 'del' && !request) {
+          await runtime.replaceSource(operationSource, null)
+          if (localExtension) {
+            await removeL4PiLocalExtension({
+              source: operationSource,
+              agentDir: this.agentDir,
+              cwd: this.packageManagerCwd
+            })
+          } else {
+            removeL4PiPluginPreference(operationSource, this.agentDir)
+          }
+          for (const change of await runtime.scanSourceChanges([operationSource])) {
+            if (change.current) {
+              throw new L2PluginManagementInvalidPackageError(
+                '该来源仍被全局资源规则引用，请先移除对应规则后重试卸载'
+              )
+            }
+            await runtime.applySourceChange(change)
+            if (change.previous?.path) clearL4PiPluginNativeDiagnostics(change.previous.path)
           }
         } else if (request) {
           try {
@@ -1065,6 +1105,15 @@ export class L2PluginManagement {
       DefaultPackageManager,
       SettingsManager
     })
+    const current = new Set(snapshot.sources.map((item) => l2PluginSourceIdentity(item.source)))
+    for (const previous of getL4PiGlobalPluginRuntime().readAppliedSources()) {
+      if (!current.has(l2PluginSourceIdentity(previous.source))) {
+        snapshot.sources.push({
+          ...previous,
+          error: '插件来源已移除，运行资源尚未卸载'
+        })
+      }
+    }
     if (!writing() || !this.sourceCache) this.sourceCache = snapshot
     return writing() && this.sourceCache ? this.sourceCache : snapshot
   }

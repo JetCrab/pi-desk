@@ -420,16 +420,64 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       await notice.notification
       assert.match(notice.messages[0], /服务与界面已更新/)
       assert.match(notice.messages[0], /已有 Pi 会话.*主动 reload/)
-      await assert.rejects(
-        () =>
-          execute(
-            { kind: 'plugins', action: 'remove', name: 'local-plugin' },
-            notice.context,
-            management,
-            agentDir
-          ),
-        /不支持卸载裸扩展/
+    })
+
+    await t.test('本地、已消失来源和包可以混合卸载，全部收尾后才通知', async () => {
+      const management = new ManagementFixture()
+      const local = join(agentDir, 'extensions', 'remove-local')
+      const missing = join(agentDir, 'extensions', 'removed-before-command')
+      const npmSource = management.state.plugins[0].source
+      management.state.plugins.push(
+        { ...snapshot(local).plugins[0], kind: 'extension' },
+        { ...snapshot(missing).plugins[0], kind: 'extension', status: 'failed' }
       )
+      const notice = notificationContext(root)
+      await execute(
+        {
+          kind: 'plugins',
+          action: 'remove',
+          names: ['@fixture/plugin', 'remove-local', 'removed-before-command']
+        },
+        notice.context,
+        management,
+        agentDir
+      )
+      assert.deepEqual(management.calls[0], [
+        'batch',
+        { action: 'del', sources: [npmSource, local, missing] }
+      ])
+      assert.ok(management.calls.every(([method]) => method === 'batch' || method === 'wait'))
+      assert.equal(notice.messages.length, 0)
+      management.state.plugins = []
+      management.finish()
+      await notice.notification
+      assert.equal((notice.messages[0].match(/成功：已卸载/g) ?? []).length, 3)
+    })
+
+    await t.test('旧来源卸载完成按来源身份确认，不误认随后加载的同名新包', async () => {
+      const oldSource = join(agentDir, 'extensions', 'legacy-entry')
+      const management = new ManagementFixture()
+      management.state.plugins = [
+        {
+          ...snapshot(oldSource).plugins[0],
+          kind: 'extension',
+          pluginName: 'shared-workflow'
+        }
+      ]
+      const notice = notificationContext(root)
+      await execute(
+        { kind: 'plugins', action: 'remove', name: 'shared-workflow' },
+        notice.context,
+        management,
+        agentDir
+      )
+      assert.deepEqual(management.calls[0], ['del', oldSource])
+      management.state.plugins = [
+        { ...snapshot('npm:@fixture/new-workflow@1.0.0').plugins[0], pluginName: 'shared-workflow' }
+      ]
+      management.finish()
+      await notice.notification
+      assert.match(notice.messages[0], /成功：已卸载/)
     })
 
     await t.test('重载 npm 和本地来源只应用已安装代码，保留版本且同来源去重', async () => {

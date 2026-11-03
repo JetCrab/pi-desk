@@ -8,7 +8,6 @@ import {
   type BrowserPluginHost,
   type BrowserSessionSidebarHeaderAction,
   type BrowserSessionSidebarTabTarget,
-  type PiNativeBrowserChannel,
   type PiDeskBrowserChannel,
   type PluginPushMessage
 } from '@jetcrab/pi-desk-sdk/browser'
@@ -87,7 +86,7 @@ function createTransport(initialEntries: readonly L3PluginBrowserEntryDescriptor
     ((message: { path: string; event: L4PluginLogEvent }) => void) | null
   >()
   let listCount = 0
-  const pi: PiNativeBrowserChannel = {
+  const pi: L4PluginHostTransport['pi'] = {
     prompt: async () => ({ tempId: 'temp-1' }),
     commands: { list: async () => [], execute: async () => undefined },
     tools: { list: async () => [] },
@@ -1351,6 +1350,95 @@ test('Host 各类订阅、Push 和日志回调异常不阻断健康监听器', a
   assert.equal(healthy.push, 1)
   assert.equal(healthy.log, 1)
   await runtime.dispose()
+})
+
+test('Pi reload 只传 workId，等待完成，拒绝不存在的工作窗口且不重试忙碌错误', async (context) => {
+  const descriptor = entry()
+  const transport = createTransport([descriptor])
+  let host!: BrowserPluginHost
+  const calls: unknown[] = []
+  let finish!: () => void
+  let failure: Error | null = null
+  transport.pi.reload = async (input): Promise<void> => {
+    calls.push(input)
+    if (failure) throw failure
+    await new Promise<void>((resolve) => {
+      finish = resolve
+    })
+  }
+  const runtime = createL4PluginHostRuntime(transport, async () => ({
+    default: (plugin: Parameters<BrowserEntryFactory>[0]): void => {
+      host = plugin.host
+    }
+  }))
+  context.after(() => runtime.dispose())
+  await initialize(runtime, [{ ...source, cwd: '/project', status: 'idle' }])
+  let completed = false
+  const pending = host.pi.reload!(source.workId).then(() => {
+    completed = true
+  })
+  assert.equal(completed, false)
+  assert.deepEqual(calls, [source])
+  finish()
+  await pending
+  assert.equal(completed, true)
+  await assert.rejects(host.pi.reload!('missing-work'), /工作会话不存在/)
+  await assert.rejects(host.pi.reload!(''), /有效 workId/)
+  assert.equal(calls.length, 1)
+  failure = new Error('当前会话不能重载 Pi 配置：模型正在运行')
+  await assert.rejects(host.pi.reload!(source.workId), (error) => error === failure)
+  assert.equal(calls.length, 2)
+})
+
+test('同一 workId 重新绑定后重载当前会话，旧 Browser Owner 不得继续操作', async (context) => {
+  const descriptor = entry()
+  const transport = createTransport([descriptor])
+  let host!: BrowserPluginHost
+  let finish!: () => void
+  const calls: unknown[] = []
+  transport.pi.reload = async (input): Promise<void> => {
+    calls.push(input)
+    await new Promise<void>((resolve) => {
+      finish = resolve
+    })
+  }
+  const runtime = createL4PluginHostRuntime(transport, async () => ({
+    default: (plugin: Parameters<BrowserEntryFactory>[0]): void => {
+      host = plugin.host
+    }
+  }))
+  context.after(() => runtime.dispose())
+  await initialize(runtime, [{ ...source, cwd: '/project', status: 'idle' }])
+  const first = host.pi.reload!(source.workId)
+  finish()
+  await first
+  const current = { ...source, sessionId: 'new-session', branchId: 'v1:new' }
+  runtime.replaceWorkSessions([{ ...current, cwd: '/project', status: 'idle' }])
+  const second = host.pi.reload!(source.workId)
+  assert.deepEqual(calls, [source, current])
+  finish()
+  await second
+  const released = host.pi.reload!(source.workId)
+  const releasedRejected = assert.rejects(released, /Browser Entry 已失效/)
+  transport.setEntries([])
+  await runtime.refreshEntries()
+  finish()
+  await releasedRejected
+  await assert.rejects(host.pi.reload!(source.workId), /Browser Entry 已失效/)
+  assert.equal(calls.length, 3)
+})
+
+test('旧 Transport 没有 Pi reload 时，Browser Host 保留能力缺失', async (context) => {
+  const descriptor = entry()
+  let host!: BrowserPluginHost
+  const runtime = createL4PluginHostRuntime(createTransport([descriptor]), async () => ({
+    default: (plugin: Parameters<BrowserEntryFactory>[0]): void => {
+      host = plugin.host
+    }
+  }))
+  context.after(() => runtime.dispose())
+  await initialize(runtime)
+  assert.equal(host.pi.reload, undefined)
 })
 
 test('失败 Entry Factory 不残留宿主订阅', async () => {

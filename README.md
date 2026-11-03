@@ -87,16 +87,16 @@ Open **<http://localhost:6233>**.
 
 The web service runs Pi sessions. Browser, desktop, and mobile clients connect to the same service.
 
-| Application          | Source                              | Purpose                           |
-| -------------------- | ----------------------------------- | --------------------------------- |
-| Web service          | [`src/`](./src) and [`bin/`](./bin) | Browser client and Pi integration |
-| Windows              | [`apps/desktop/`](./apps/desktop)   | Tauri desktop shell               |
-| macOS (experimental) | [`apps/desktop/`](./apps/desktop)   | Tauri desktop shell               |
-| Android              | [`apps/android/`](./apps/android)   | Native Android client for Pi Desk |
-| iOS (experimental)   | [`apps/ios/`](./apps/ios)           | SwiftUI / WKWebView client        |
-| Tunnel               | [`apps/tunnel/`](./apps/tunnel)     | Rust TCP tunnel server and client |
+| Application        | Source                              | Purpose                           |
+| ------------------ | ----------------------------------- | --------------------------------- |
+| Web service        | [`src/`](./src) and [`bin/`](./bin) | Browser client and Pi integration |
+| Windows            | [`apps/desktop/`](./apps/desktop)   | Tauri desktop shell               |
+| macOS              | [`apps/desktop/`](./apps/desktop)   | Tauri desktop shell               |
+| Android            | [`apps/android/`](./apps/android)   | Native Android client for Pi Desk |
+| iOS (experimental) | [`apps/ios/`](./apps/ios)           | SwiftUI / WKWebView client        |
+| Tunnel             | [`apps/tunnel/`](./apps/tunnel)     | Rust TCP tunnel server and client |
 
-> macOS and iOS clients are experimental and are not included in stable releases. The author does not own a Mac or an iOS device, so these clients have not been tested on real hardware and may not work.
+> iOS clients are experimental and are not included in stable releases. The author does not own an iOS device, so these clients have not been tested on real hardware and may not work.
 
 ## Plugins and SDK
 

@@ -6,6 +6,18 @@ export interface DeliverablePushEvent {
   delivery: DeliverableBatch
 }
 
+export interface DeliverableLoadError {
+  kind: 'session-unavailable' | 'error'
+  message: string
+}
+
+export function deliverableLoadError(cause: unknown): DeliverableLoadError {
+  if (cause instanceof Error && 'code' in cause && cause.code === 404) {
+    return { kind: 'session-unavailable', message: '当前会话尚未加载交付物功能' }
+  }
+  return { kind: 'error', message: cause instanceof Error ? cause.message : String(cause) }
+}
+
 type DeliverablePushListener = (event: DeliverablePushEvent) => void
 
 const listeners = new Set<DeliverablePushListener>()
