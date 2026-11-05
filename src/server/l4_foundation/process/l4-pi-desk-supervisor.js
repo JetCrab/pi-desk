@@ -160,7 +160,7 @@ function startManagedHeartbeat() {
   let closing = false
   let timer = null
   let sendErrorWarnedAt = -Infinity
-  const managed = process.env.PI_DESK_MANAGED_RESTART === '1' && process.connected
+  const managed = process.env.PI_DESK_MANAGED_RESTART === '1' && typeof process.send === 'function'
 
   function reportSendError(error, eventType) {
     // 关闭时 IPC 可以先于资源断开，不把正常拆卸记作故障。
@@ -192,6 +192,12 @@ function startManagedHeartbeat() {
   }
 
   if (managed) {
+    if (!process.connected) {
+      console.error('[Pi Desk][Supervisor] 托管父进程已断开，停止服务启动', {
+        servicePid: process.pid
+      })
+      process.exit(1)
+    }
     let previousTickAt = performance.now()
     let previousCpu = process.cpuUsage()
     let delayWarnedAt = -Infinity

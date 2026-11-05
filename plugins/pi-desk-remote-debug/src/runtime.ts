@@ -551,7 +551,13 @@ function stoppedOutcome(): RunOutcome {
 async function cleanupActiveRun(active: ActiveRun): Promise<string[]> {
   const errors: string[] = []
   if (active.tunnel) {
-    await active.tunnel.stop().catch((error) => errors.push(formatCleanupError('Tunnel', error)))
+    await active.tunnel
+      .stop()
+      .then((result) => {
+        if (result.failed)
+          errors.push(formatCleanupError('Tunnel', result.detail ?? '未确认资源释放'))
+      })
+      .catch((error) => errors.push(formatCleanupError('Tunnel', error)))
   }
   if (active.gateway) {
     await active.gateway.close().catch((error) => errors.push(formatCleanupError('Gateway', error)))

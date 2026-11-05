@@ -20,6 +20,7 @@ mod environment_source;
 mod logging;
 mod packages;
 mod process;
+mod reminder;
 mod runtime;
 mod service_port;
 #[cfg(test)]
@@ -41,7 +42,7 @@ fn main() {
     if let Some(code) = desktop_tunnel_cli::run_if_requested() {
         std::process::exit(code);
     }
-    let app = window_chrome::register(tauri::Builder::default())
+    let app = reminder::register(window_chrome::register(tauri::Builder::default()))
         .plugin(tauri_plugin_single_instance::init(|app, arguments, _| {
             if arguments
                 .iter()
@@ -81,6 +82,7 @@ fn main() {
             get_tunnel_connection,
             apply_tunnel_connection_command,
             open_target_command,
+            open_external_url_command,
             start_server_command,
             stop_server_command,
             restart_server_command,
@@ -94,8 +96,13 @@ fn main() {
             cancel_environment_command,
             select_environment_command,
             open_install_help_command,
-            start_tunnel_command,
-            stop_tunnel_command
+            apply_tunnel_publication_command,
+            delete_tunnel_publication_command,
+            set_tunnel_publication_enabled_command,
+            apply_tunnel_forward_command,
+            delete_tunnel_forward_command,
+            set_tunnel_forward_enabled_command,
+            set_tunnel_mode_command
         ])
         .setup(move |app| {
             if exit_for_update {
@@ -381,6 +388,20 @@ async fn open_target_command(
 }
 
 #[tauri::command]
+async fn open_external_url_command(
+    app: AppHandle,
+    window: Window,
+    url: String,
+) -> Result<(), String> {
+    run_command(app, window, "open-external-url", move |app| {
+        let normalized = config::normalize_target_url(&url)?;
+        let target = url::Url::parse(&normalized).map_err(|_| "网页地址无效".to_string())?;
+        windows::open_external(app, &target, "remote-access")
+    })
+    .await
+}
+
+#[tauri::command]
 async fn start_server_command(app: AppHandle, window: Window, url: String) -> Result<(), String> {
     run_command(app, window, "start-server", move |app| {
         runtime::start_server(app, &url, true)
@@ -503,17 +524,89 @@ async fn open_install_help_command(
 }
 
 #[tauri::command]
-async fn start_tunnel_command(app: AppHandle, window: Window, url: String) -> Result<(), String> {
-    run_command(app, window, "start-tunnel", move |app| {
-        runtime::start_tunnel(app, &url, true)
+async fn apply_tunnel_publication_command(
+    app: AppHandle,
+    window: Window,
+    original_port: Option<u16>,
+    value: config::TunnelPublication,
+) -> Result<(), String> {
+    run_command(app, window, "apply-tunnel-publication", move |app| {
+        runtime::apply_tunnel_publication(&app.state::<ShellState>(), original_port, value)
     })
     .await
 }
 
 #[tauri::command]
-async fn stop_tunnel_command(app: AppHandle, window: Window, url: String) -> Result<(), String> {
-    run_command(app, window, "stop-tunnel", move |app| {
-        runtime::stop_tunnel(app, &url)
+async fn delete_tunnel_publication_command(
+    app: AppHandle,
+    window: Window,
+    local_port: u16,
+) -> Result<(), String> {
+    run_command(app, window, "delete-tunnel-publication", move |app| {
+        runtime::delete_tunnel_publication(&app.state::<ShellState>(), local_port)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn set_tunnel_publication_enabled_command(
+    app: AppHandle,
+    window: Window,
+    local_port: u16,
+    enabled: bool,
+) -> Result<(), String> {
+    run_command(app, window, "enable-tunnel-publication", move |app| {
+        runtime::set_tunnel_publication_enabled(&app.state::<ShellState>(), local_port, enabled)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn apply_tunnel_forward_command(
+    app: AppHandle,
+    window: Window,
+    original_port: Option<u16>,
+    value: config::TunnelForward,
+) -> Result<(), String> {
+    run_command(app, window, "apply-tunnel-forward", move |app| {
+        runtime::apply_tunnel_forward(&app.state::<ShellState>(), original_port, value)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn delete_tunnel_forward_command(
+    app: AppHandle,
+    window: Window,
+    local_port: u16,
+) -> Result<(), String> {
+    run_command(app, window, "delete-tunnel-forward", move |app| {
+        runtime::delete_tunnel_forward(&app.state::<ShellState>(), local_port)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn set_tunnel_forward_enabled_command(
+    app: AppHandle,
+    window: Window,
+    local_port: u16,
+    enabled: bool,
+) -> Result<(), String> {
+    run_command(app, window, "enable-tunnel-forward", move |app| {
+        runtime::set_tunnel_forward_enabled(&app.state::<ShellState>(), local_port, enabled)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn set_tunnel_mode_command(
+    app: AppHandle,
+    window: Window,
+    mode: pi_desk_tunnel_common::runtime::TunnelMode,
+) -> Result<(), String> {
+    run_command(app, window, "set-tunnel-mode", move |app| {
+        runtime::set_tunnel_mode(&app.state::<ShellState>(), mode)
     })
     .await
 }

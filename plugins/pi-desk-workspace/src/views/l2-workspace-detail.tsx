@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from 'react'
 import {
   PluginActionRow,
+  PluginAlert,
   PluginButton,
   PluginEmptyState,
   PluginList,
@@ -55,6 +56,8 @@ export function WorkspaceDetail({
   commands,
   tab,
   disabled,
+  commandRunning,
+  commandSubmitting,
   currentSessionId,
   canPreview,
   onTab,
@@ -69,6 +72,8 @@ export function WorkspaceDetail({
   commands: WorkspaceCommandSummary[]
   tab: WorkspaceDetailTab
   disabled: boolean
+  commandRunning: boolean
+  commandSubmitting: boolean
   currentSessionId: string
   canPreview: boolean
   onTab(tab: WorkspaceDetailTab): void
@@ -85,7 +90,7 @@ export function WorkspaceDetail({
   const removals = commands.filter((command) => command.onSuccess === 'removed')
   const occupation = workspace.occupation
   const requirement = occupation?.requirement
-  const blocked = disabled || Boolean(workspace.issue)
+  const blocked = disabled || commandSubmitting || commandRunning || Boolean(workspace.issue)
   const sourceLabel = !occupation?.sourceSessionId
     ? '未记录来源会话'
     : occupation.sourceSessionId === currentSessionId
@@ -142,6 +147,13 @@ export function WorkspaceDetail({
           {expandedActions === 'more' ? '收起' : '更多'}
         </PluginButton>
       </div>
+      {commandSubmitting || commandRunning ? (
+        <PluginAlert tone="info" density="compact">
+          {commandSubmitting
+            ? '正在提交命令，可以关闭此窗口或操作其他工作区。'
+            : '命令正在后台执行，可在任务中心查看日志或停止。'}
+        </PluginAlert>
+      ) : null}
       <div
         id={`${id}-management`}
         className="workspace-management"

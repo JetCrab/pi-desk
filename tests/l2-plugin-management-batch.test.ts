@@ -291,6 +291,33 @@ test('多个缺失包不封锁逐项修复、卸载或其他插件的正式应�
   })
 })
 
+test('安装尚未写入配置时，连续重载失败后仍可恢复', { timeout: 30_000 }, async () => {
+  await fixture(async (management) => {
+    const source = 'npm:reload-before-config@1.0.0'
+    let available = false
+    let applied = 0
+    Reflect.set(management, 'prepareMutation', async (): Promise<Prepared> => {
+      if (!available) throw new Error('下载源暂时不可用')
+      return prepared
+    })
+    Reflect.set(management, 'executeMutation', async (): Promise<void> => {
+      applied += 1
+    })
+    await management.reinstall(source)
+    await Reflect.get(management, 'operationTail')
+    assert.equal(operations(management).get(source)?.phase, 'failed')
+    await management.apply([source])
+    await Reflect.get(management, 'operationTail')
+    assert.equal(operations(management).get(source)?.action, 'apply')
+    assert.equal(operations(management).get(source)?.message, '下载源暂时不可用')
+    available = true
+    await management.apply([source])
+    await management.waitForOperations([source], AbortSignal.timeout(5_000))
+    assert.equal(applied, 1)
+    assert.equal(operations(management).size, 0)
+  })
+})
+
 test('批量更新跳过非更高版本，安装精确目标只解析一次', { timeout: 30_000 }, async () => {
   await fixture(async (management, agentDir) => {
     const names = ['newer', 'same', 'older']

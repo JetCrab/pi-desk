@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <rect width="640" height="360" fill="#fafafa" />
+  <text x="320" y="64" text-anchor="middle" fill="#262626"
+    font-family="Inter, 'Segoe UI', sans-serif" font-size="28" font-weight="600">Pi Desk</text>
+  <path d="M294 170h52m-12-12 12 12-12 12" fill="none" stroke="#737373"
+    stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="320" y="286" text-anchor="middle" fill="#525252"
+    font-family="'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif" font-size="16">将 Pi Desk 拖入 Applications</text>
+</svg>

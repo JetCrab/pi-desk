@@ -1,9 +1,10 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 import { useDesktopAction } from './hooks/l2-use-desktop-action'
 import { useAddressEditor } from './hooks/l2-use-address-editor'
 import { useEnvironmentSetup } from './hooks/l2-use-environment-setup'
 import { usePiUpdate } from './hooks/l2-use-pi-update'
 import { copyDesktopText, runDesktopAction, type DesktopAction } from './l2-desktop-biz'
+import { localAddressPort } from './l2-access-biz'
 import type { ControlState, TargetSnapshot } from './l4-desktop-ipc'
 import { DesktopError, DesktopExpansion, DesktopHeader, DesktopIcon } from './l4-desktop-ui'
 import { EnvironmentView } from './views/l2-environment-view'
@@ -64,7 +65,8 @@ function TargetRow({
   const [copied, setCopied] = useState(false)
   const [copyHint, setCopyHint] = useState('')
   const setupId = useId()
-  const { server, tunnel, url } = target
+  const { server, url } = target
+  const localPort = localAddressPort(url)
   const parsed = new URL(url)
   const title = server
     ? localCount === 1
@@ -353,23 +355,17 @@ function TargetRow({
           )}
         </>
       )}
-      {((server && (!preparing || localCount > 1)) || (!server && tunnel)) && (
+      {((server && !preparing) || localPort !== null) && (
         <div className="target-tools">
-          {(!server || localCount > 1) && (
+          {localPort !== null && (
             <button
               className="quiet forward"
               type="button"
-              aria-label={`${title}的远程访问`}
-              onClick={() => navigate(`#/access?url=${encodeURIComponent(url)}`)}
+              aria-label={`${title}的端口发布`}
+              onClick={() => navigate(`#/access?port=${localPort}`)}
             >
               <DesktopIcon name="globe" />
-              远程访问
-              {tunnel?.status === 'listening' && (
-                <span className="connection-badge good">已开启</span>
-              )}
-              {tunnel?.status === 'failed' && (
-                <span className="connection-badge connection-problem">连接失败</span>
-              )}
+              端口发布
               <DesktopIcon name="arrow" />
             </button>
           )}
@@ -462,23 +458,12 @@ export function ControlPage({
 }: PageProps): React.JSX.Element {
   const confirm = useDesktopConfirm()
   const [editingUrl, setEditingUrl] = useState<string | null | undefined>(undefined)
-  const [choosingAccess, setChoosingAccess] = useState(false)
-  const accessDialog = useRef<HTMLDialogElement>(null)
   const setup = useEnvironmentSetup(state, refresh)
   const piUpdate = usePiUpdate(state, refresh)
   const added = useDesktopAction(refresh)
   const local = state?.targets.filter((target) => target.server) ?? []
   const remote = state?.targets.filter((target) => !target.server) ?? []
 
-  useEffect(() => {
-    if (choosingAccess) accessDialog.current?.showModal()
-    else accessDialog.current?.close()
-  }, [choosingAccess])
-
-  const openAccess = (): void => {
-    if (local.length === 1) navigate(`#/access?url=${encodeURIComponent(local[0].url)}`)
-    else if (local.length > 1) setChoosingAccess(true)
-  }
   const editAddress = async (url: string | null): Promise<void> => {
     if (
       editingUrl !== undefined &&
@@ -514,15 +499,9 @@ export function ControlPage({
   return (
     <main className="desktop-control">
       <DesktopHeader>
-        <button type="button" aria-label="远程访问" disabled={!local.length} onClick={openAccess}>
+        <button type="button" aria-label="远程访问" onClick={() => navigate('#/access')}>
           <DesktopIcon name="globe" />
           远程访问
-          {local.length === 1 && local[0].tunnel?.status === 'listening' && (
-            <span className="connection-badge good">已开启</span>
-          )}
-          {local.length === 1 && local[0].tunnel?.status === 'failed' && (
-            <span className="connection-badge connection-problem">连接失败</span>
-          )}
         </button>
         <button type="button" disabled={piUpdate.updating} onClick={() => navigate('#/settings')}>
           <DesktopIcon name="settings" />
@@ -532,38 +511,6 @@ export function ControlPage({
       {state?.hideOnStartup === null && state.environment.status === 'ready' && (
         <StartupPreferenceDialog refresh={refresh} />
       )}
-      <dialog
-        ref={accessDialog}
-        className="desktop-dialog"
-        aria-labelledby="access-target-title"
-        onClose={() => setChoosingAccess(false)}
-      >
-        <div className="panel-heading">
-          <h2 id="access-target-title">选择远程访问的本机地址</h2>
-          <button
-            className="icon-button"
-            type="button"
-            title="关闭"
-            aria-label="关闭"
-            onClick={() => accessDialog.current?.close()}
-          >
-            <DesktopIcon name="close" />
-          </button>
-        </div>
-        <div className="access-target-list">
-          {local.map((target) => (
-            <button
-              key={target.url}
-              type="button"
-              onClick={() => navigate(`#/access?url=${encodeURIComponent(target.url)}`)}
-            >
-              <DesktopIcon name="monitor" />
-              <span className="path-text">{target.url}</span>
-              <DesktopIcon name="arrow" />
-            </button>
-          ))}
-        </div>
-      </dialog>
       {readError && (
         <div className="page-error" role="alert">
           <p>暂时无法读取状态：{readError}</p>

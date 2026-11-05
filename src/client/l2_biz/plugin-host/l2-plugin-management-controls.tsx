@@ -8,26 +8,21 @@ import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Switch } from '@client/l4_foundation/ui/shadcn/switch'
 
-export type L2PluginManagementControlAction =
-  'reload' | 'update' | 'remove' | 'retry' | 'retry-browser' | 'enable' | 'disable'
+export type L2PluginManagementControlAction = 'reload' | 'update' | 'remove' | 'enable' | 'disable'
 
 interface L2PluginManagementControlsProps {
   plugin: L2PluginManagementItem
   displayName: string
-  browserError: string | null
   disabled: boolean
   pending: boolean
-  browserRetryPending: boolean
   onAction: (action: L2PluginManagementControlAction) => void
 }
 
 export function L2PluginManagementControls({
   plugin,
   displayName,
-  browserError,
   disabled,
   pending,
-  browserRetryPending,
   onAction
 }: L2PluginManagementControlsProps): React.JSX.Element {
   const { t } = useTranslation('pluginManagement')
@@ -48,34 +43,15 @@ export function L2PluginManagementControls({
           {t('update')}
         </Button>
       ) : null}
-      {phase === 'failed' ? (
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={disabled || pending}
-          onClick={() => onAction('retry')}
-        >
-          {t('retry')}
-        </Button>
-      ) : plugin.status === 'failed' ? (
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={disabled || pending}
-          onClick={() => onAction('reload')}
-        >
-          {t('reloadOne')}
-        </Button>
-      ) : browserError && plugin.pluginName ? (
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={disabled || browserRetryPending}
-          onClick={() => onAction('retry-browser')}
-        >
-          {t('retryView')}
-        </Button>
-      ) : null}
+      <Button
+        size="sm"
+        variant="outline"
+        aria-label={t('reloadSource', { name: displayName })}
+        disabled={disabled || pending}
+        onClick={() => onAction('reload')}
+      >
+        {t('reloadOne')}
+      </Button>
       <label className="flex min-h-8 cursor-pointer items-center gap-2 text-sm text-muted-foreground">
         <Switch
           checked={enabled}

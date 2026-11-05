@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Pi Desk</string>
+    <string name="completion_notification_channel">会话完成提醒</string>
     <string name="main_title">网页</string>
     <string name="empty_title">打开你的网页</string>
     <string name="empty_description">添加常用网址，随时打开。</string>

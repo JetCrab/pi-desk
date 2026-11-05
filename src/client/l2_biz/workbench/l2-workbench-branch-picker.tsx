@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent
 } from 'react'
@@ -33,6 +34,7 @@ import {
   loadL2WorkbenchBranchFilter,
   saveL2WorkbenchBranchFilter
 } from './l2-workbench-branch-filter-preferences'
+import styles from './l2-workbench-branch-picker.module.css'
 
 export interface L2WorkbenchBranchPickerModel {
   workId: string
@@ -320,6 +322,7 @@ export function L2WorkbenchBranchPicker({
     rows,
     selectedEntryId ?? model.tree?.leafEntryId ?? null
   )
+  const currentPathEntryId = rows.findLast((row) => row.active)?.node.entryId ?? null
   const selectedIndex = rows.findIndex((row) => row.node.entryId === effectiveSelectedEntryId)
   const selectedRow = selectedIndex >= 0 ? rows[selectedIndex]! : null
   const rowHeight = 36
@@ -623,7 +626,7 @@ export function L2WorkbenchBranchPicker({
           panelClass
         )}
       >
-        <header className="shrink-0 border-b bg-muted/10">
+        <header className="shrink-0 border-b bg-popover">
           <div className="flex min-h-10 items-center gap-2 px-2.5">
             <h2
               className="min-w-0 flex-1 truncate text-sm font-semibold"
@@ -707,7 +710,7 @@ export function L2WorkbenchBranchPicker({
           />
         ) : (
           <>
-            <div className="pi-desk-chat-scrollbar h-36 shrink-0 overflow-y-auto border-b bg-muted px-3 py-3">
+            <div className="pi-desk-chat-scrollbar h-36 shrink-0 overflow-y-auto border-b bg-background px-3 py-3">
               {detailNode && detailAppearance ? (
                 <>
                   <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -755,7 +758,7 @@ export function L2WorkbenchBranchPicker({
             <div
               role="group"
               aria-label={t('branchFilters')}
-              className="flex shrink-0 flex-wrap items-center gap-1 border-b bg-muted/25 px-2 py-2"
+              className="flex shrink-0 flex-wrap items-center gap-1 border-b bg-secondary px-2 py-2"
             >
               <span className="px-1 text-sm font-medium text-muted-foreground">
                 {t('branchFilters')}
@@ -800,13 +803,15 @@ export function L2WorkbenchBranchPicker({
                 id={treeId}
                 role="tree"
                 aria-label={t('branchTree')}
-                className="pi-desk-chat-scrollbar min-h-0 flex-1 overflow-y-auto px-1 py-1"
+                className="pi-desk-chat-scrollbar min-h-0 flex-1 overflow-y-auto bg-background px-1 py-1"
                 onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
               >
                 <div style={{ height: `${startIndex * rowHeight}px` }} aria-hidden="true" />
                 {visibleRows.map((row) => {
                   const selected = row.node.entryId === effectiveSelectedEntryId
                   const guideDepth = Math.min(row.depth, 10)
+                  const guideStep = mobile ? 10 : 14
+                  const currentPathEnd = row.node.entryId === currentPathEntryId
                   const appearance = KIND_APPEARANCE[row.node.kind]
                   return (
                     <div
@@ -815,36 +820,45 @@ export function L2WorkbenchBranchPicker({
                       role="treeitem"
                       aria-level={row.depth + 1}
                       aria-selected={selected}
+                      aria-current={row.current ? 'location' : undefined}
                       aria-expanded={row.foldable ? row.expanded : undefined}
                       className={cn(
-                        'group relative flex min-w-0 items-center rounded-md outline-none transition-colors',
+                        'group relative flex min-w-0 items-center outline-none transition-colors duration-150',
                         appearance.rowClassName,
-                        selected
-                          ? 'bg-accent text-accent-foreground'
-                          : row.current
-                            ? 'bg-primary/[0.055] hover:bg-primary/[0.08]'
-                            : 'hover:bg-muted/50'
+                        styles.row
                       )}
-                      style={{ height: `${rowHeight}px`, paddingLeft: `${guideDepth * 10}px` }}
+                      style={
+                        {
+                          height: `${rowHeight}px`,
+                          paddingLeft: `${guideDepth * guideStep}px`,
+                          '--branch-depth': Math.min(row.depth, 4)
+                        } as CSSProperties
+                      }
                     >
-                      {guideDepth > 0 ? (
+                      {Array.from({ length: guideDepth }, (_, index) => (
                         <span
+                          key={index}
                           aria-hidden="true"
                           className={cn(
-                            'pointer-events-none absolute bottom-0 top-0 w-px',
-                            row.active ? 'bg-primary/25' : 'bg-border/60'
+                            'pointer-events-none absolute bottom-0 top-0',
+                            row.active && index === guideDepth - 1
+                              ? 'w-0.5 bg-foreground/65'
+                              : 'w-px bg-muted-foreground/50'
                           )}
-                          style={{ left: `${guideDepth * 10 - 5}px` }}
+                          style={{ left: `${(index + 0.5) * guideStep}px` }}
                         />
-                      ) : null}
+                      ))}
                       {row.connector ? (
                         <span
                           aria-hidden="true"
                           className={cn(
-                            'pointer-events-none absolute h-px w-2',
-                            row.active ? 'bg-primary/25' : 'bg-border/60'
+                            'pointer-events-none absolute h-px',
+                            row.active ? 'bg-foreground/65' : 'bg-muted-foreground/50'
                           )}
-                          style={{ left: `${guideDepth * 10 - 5}px` }}
+                          style={{
+                            left: `${(guideDepth - 0.5) * guideStep}px`,
+                            width: `${guideStep / 2}px`
+                          }}
                         />
                       ) : null}
                       <div className="flex w-6 shrink-0 items-center justify-center">
@@ -878,8 +892,25 @@ export function L2WorkbenchBranchPicker({
                           if (!mobile && !row.current) performAction(row.node.entryId, 'tree')
                         }}
                       >
-                        <span className={cn('w-9 shrink-0 text-xs', appearance.labelClassName)}>
-                          {t(appearance.label)}
+                        <span className="flex w-9 shrink-0 items-center text-xs">
+                          <span
+                            className={cn(appearance.labelClassName, currentPathEnd && 'sr-only')}
+                          >
+                            {t(appearance.label)}
+                          </span>
+                          {currentPathEnd ? (
+                            <span
+                              className="rounded-sm bg-primary px-1 py-0.5 font-medium leading-none text-primary-foreground"
+                              title={`${t(appearance.label)} · ${t(
+                                row.current ? 'branchCurrentPosition' : 'branchCurrentAncestor'
+                              )}`}
+                              aria-label={t(
+                                row.current ? 'branchCurrentPosition' : 'branchCurrentAncestor'
+                              )}
+                            >
+                              {t('branchPosition')}
+                            </span>
+                          ) : null}
                         </span>
                         {row.node.label ? (
                           <span className="max-w-24 shrink-0 truncate rounded-md bg-muted px-1 text-xs text-foreground">
@@ -943,7 +974,7 @@ export function L2WorkbenchBranchPicker({
               </div>
             )}
 
-            <footer className="flex min-h-9 shrink-0 items-center gap-2 border-t bg-muted/10 px-2">
+            <footer className="flex min-h-9 shrink-0 items-center gap-2 border-t bg-popover px-2">
               <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                 {selectedIndex >= 0 ? selectedIndex + 1 : 0} / {rows.length}
                 {!mobile ? ` · ${t('branchShortcuts')}` : ''}

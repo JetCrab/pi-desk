@@ -1,6 +1,31 @@
 use super::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[test]
+fn desktop_tunnel_cli_stats_are_opt_in_and_reject_duplicates() {
+    let base = args(&[
+        "--tunnel-client",
+        "--local",
+        "127.0.0.1:6233",
+        "--public-port",
+        "11001",
+    ]);
+    assert!(matches!(
+        parse_request(&base),
+        Ok(Request::Client { stats: false, .. })
+    ));
+    let mut stats = base;
+    stats.push("--stats".into());
+    assert!(matches!(
+        parse_request(&stats),
+        Ok(Request::Client { stats: true, .. })
+    ));
+    stats.push("--stats".into());
+    assert!(parse_request(&stats).is_err());
+    assert!(parse_request(&args(&["--tunnel-info", "--stats"])).is_err());
+    assert!(parse_request(&args(&["--tunnel-client", "--client", "legacy"])).is_err());
+}
+
 fn args(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| value.to_string()).collect()
 }
@@ -55,12 +80,19 @@ fn desktop_tunnel_info_reads_only_server_address() {
         .join(format!("config-info-{}-{suffix}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("config.json");
-    let config = serde_json::json!({"tunnel": {"controlServerUrl":"http://tunnel.example:7001", "controlKey":"ab".repeat(32)}});
+    let config = serde_json::json!({"tunnel": {
+        "controlServerUrl":"http://tunnel.example:7001",
+        "controlKey":"ab".repeat(32),
+        "providerSecretKey": {"not": "a CLI identity"},
+        "publications": [{"localPort": 6233}]
+    }});
     std::fs::write(&path, config.to_string()).unwrap();
     assert_eq!(
         inspect_config(&path).unwrap(),
         Some("http://tunnel.example:7001".into())
     );
+    assert_eq!(read_config(&path).unwrap().control_key, "ab".repeat(32));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), config.to_string());
     std::fs::write(&path, "{}").unwrap();
     assert_eq!(inspect_config(&path).unwrap(), None);
     std::fs::remove_dir_all(directory).unwrap();

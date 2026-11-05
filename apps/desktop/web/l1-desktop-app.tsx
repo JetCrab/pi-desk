@@ -11,12 +11,16 @@ type Route =
   | { mode: 'control' }
   | { mode: 'target'; url: string | null; advanced: boolean }
   | { mode: 'settings'; url: string | null }
-  | { mode: 'access'; url: string }
+  | { mode: 'access'; port: number | null }
 
 function routeFromHash(hash: string): Route {
-  if (hash.startsWith('#/access?')) {
-    const url = new URLSearchParams(hash.slice(hash.indexOf('?') + 1)).get('url')
-    if (url) return { mode: 'access', url }
+  const [path, query] = hash.slice(1).split('?', 2)
+  if (path === '/access') {
+    const port = Number(new URLSearchParams(query).get('port'))
+    return {
+      mode: 'access',
+      port: Number.isInteger(port) && port > 0 && port <= 65535 ? port : null
+    }
   }
   if (hash.startsWith('#/settings/target')) {
     const [path, query] = hash.slice(1).split('?', 2)
@@ -25,7 +29,6 @@ function routeFromHash(hash: string): Route {
       return { mode: 'target', url: params.get('url'), advanced: params.get('advanced') === '1' }
     }
   }
-  const [path, query] = hash.slice(1).split('?', 2)
   if (path === '/settings') {
     return { mode: 'settings', url: new URLSearchParams(query).get('url') }
   }
@@ -120,9 +123,11 @@ function DesktopRoutes(): React.JSX.Element {
     />
   ) : route.mode === 'access' ? (
     <AccessPage
-      key={route.url}
-      url={route.url}
-      target={state?.targets.find((target) => target.url === route.url)}
+      key={route.port}
+      port={route.port}
+      localUrls={state?.targets.map((row) => row.url) ?? []}
+      tunnel={state?.tunnel}
+      readError={readError}
       refresh={refresh}
       onDirty={(value) => {
         dirty.current = value

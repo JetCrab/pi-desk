@@ -8,10 +8,19 @@ import { signalProcessTree } from './process.js'
 const STOP_TIMEOUT_MS = 10_000
 const FORCE_STOP_WAIT_MS = 1500
 
+interface TunnelConnectionRow {
+  peerId: string
+  localPort: number
+  source: 'public' | 'client'
+  path: 'unknown' | 'direct' | 'relay'
+  activeTcp: number
+}
+
 interface TunnelCliEvent {
-  type: 'opening' | 'connecting' | 'listening' | 'recovering' | 'failed' | 'stopped'
+  type: 'opening' | 'connecting' | 'listening' | 'recovering' | 'failed' | 'stopped' | 'connections'
   publicAddr?: string
   detail?: string
+  rows?: TunnelConnectionRow[]
 }
 
 export interface TunnelClientResult {
@@ -45,18 +54,23 @@ export function startTunnelClient(input: {
       '--local',
       `127.0.0.1:${input.localPort}`,
       '--public-port',
-      String(input.publicPort)
+      String(input.publicPort),
+      '--stats'
     ],
     {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      detached: process.platform !== 'win32',
       env: { ...process.env, PI_DESK_DESKTOP_CONFIG: host.configPath }
     }
   )
   const pid = child.pid
   if (!pid) {
-    child.kill()
-    throw new Error('Tunnel Client 未返回进程 ID')
+    // 创建失败仍会异步发出 error；同步拒绝前先接住，避免变成宿主未处理异常。
+    child.once('error', (error) => {
+      console.error(`[pi-desk-remote-debug] 隧道程序启动失败：${error.message}`)
+    })
+    throw new Error('无法启动桌面隧道程序')
   }
 
   let readySettled = false
@@ -72,7 +86,7 @@ export function startTunnelClient(input: {
     resolveCompletion = resolve
   })
   let failureDetail: string | null = null
-  let stopRequested = false
+  let stopped = false
 
   const failReady = (detail: string): void => {
     if (readySettled) return
@@ -94,9 +108,11 @@ export function startTunnelClient(input: {
     } catch (error) {
       failureDetail = error instanceof Error ? error.message : String(error)
       input.logger.line('tunnel:error', failureDetail)
+      failReady(failureDetail)
       child.stdin.end()
       return
     }
+    if (failureDetail && event.type !== 'connections' && event.type !== 'stopped') return
     switch (event.type) {
       case 'opening':
         input.logger.line('tunnel', '正在请求公网端口')
@@ -105,7 +121,7 @@ export function startTunnelClient(input: {
         input.logger.line('tunnel', `正在连接 ${event.publicAddr}`)
         break
       case 'listening':
-        input.logger.line('tunnel', `已监听 ${event.publicAddr}`)
+        input.logger.line('tunnel', `公网转发已监听 ${event.publicAddr}`)
         if (!readySettled && event.publicAddr) {
           readySettled = true
           resolveReady(event.publicAddr)
@@ -115,16 +131,37 @@ export function startTunnelClient(input: {
         input.logger.line('tunnel', event.detail ?? '正在恢复连接')
         break
       case 'failed':
-        failureDetail = event.detail ?? 'Tunnel Client 运行失败'
+        failureDetail = desktopFailure(event.detail ?? 'Tunnel Client 运行失败')
         input.logger.line('tunnel:error', failureDetail)
         failReady(failureDetail)
         break
+      case 'connections': {
+        const rows = event.rows!
+        const count = rows.reduce((total, row) => total + row.activeTcp, 0)
+        const detail = rows
+          .map(
+            (row) =>
+              `${row.source === 'public' ? '公网网关→提供端' : '原生客户端→提供端'} ${row.peerId} 本机端口 ${row.localPort} 实际路径 ${row.path} TCP=${row.activeTcp}`
+          )
+          .join('；')
+        input.logger.line('tunnel', `当前活动 TCP=${count}${detail ? `；${detail}` : ''}`)
+        break
+      }
       case 'stopped':
-        input.logger.line('tunnel', '已停止')
+        stopped = true
+        input.logger.line('tunnel', '隧道资源已释放')
         break
     }
   })
-  bindLines(child.stderr, (line) => input.logger.line('tunnel:error', line))
+  bindLines(child.stderr, (line) => {
+    input.logger.line('tunnel:error', line)
+    const detail = desktopFailure(line)
+    if (detail !== line) {
+      failureDetail = detail
+      failReady(detail)
+      child.stdin.end()
+    }
+  })
   child.once('error', (error) => {
     failureDetail = error.message
     failReady(error.message)
@@ -132,12 +169,14 @@ export function startTunnelClient(input: {
   })
   child.once('close', (exitCode) => {
     lines.close()
-    const failed = !stopRequested && (failureDetail !== null || (exitCode ?? 1) !== 0)
-    finish({
-      failed,
-      detail: failed ? (failureDetail ?? `Tunnel Client 退出码 ${exitCode ?? 'null'}`) : null,
-      exitCode
-    })
+    const detail =
+      failureDetail ??
+      ((exitCode ?? 1) !== 0
+        ? `Tunnel Client 退出码 ${exitCode ?? 'null'}`
+        : !stopped
+          ? 'Tunnel Client 未确认资源释放即退出'
+          : null)
+    finish({ failed: detail !== null, detail, exitCode })
   })
 
   let stopPromise: Promise<TunnelClientResult> | null = null
@@ -147,7 +186,6 @@ export function startTunnelClient(input: {
     stop(): Promise<TunnelClientResult> {
       if (completionSettled) return completion
       if (stopPromise) return stopPromise
-      stopRequested = true
       stopPromise = stopTunnelChild(child, pid, completion, input.logger)
       return stopPromise
     }
@@ -167,7 +205,13 @@ async function stopTunnelChild(
   logger.line('tunnel:error', `Tunnel Client PID ${pid} 未及时退出，正在强制终止`)
   signalProcessTree(child, pid, true)
   const forced = await waitForCompletion(completion, FORCE_STOP_WAIT_MS)
-  if (forced) return forced
+  if (forced) {
+    return {
+      ...forced,
+      failed: true,
+      detail: forced.detail ?? 'Tunnel Client 超时后被强制终止，未确认资源释放'
+    }
+  }
   throw new Error(`Tunnel Client PID ${pid} 在终止请求后仍未退出`)
 }
 
@@ -180,7 +224,8 @@ function parseTunnelEvent(line: string): TunnelCliEvent {
     type !== 'listening' &&
     type !== 'recovering' &&
     type !== 'failed' &&
-    type !== 'stopped'
+    type !== 'stopped' &&
+    type !== 'connections'
   ) {
     throw new Error(`Tunnel Client 返回未知事件：${line}`)
   }
@@ -189,7 +234,51 @@ function parseTunnelEvent(line: string): TunnelCliEvent {
   if ((type === 'connecting' || type === 'listening') && !publicAddr) {
     throw new Error(`Tunnel Client ${type} 事件缺少 publicAddr`)
   }
-  return { type, publicAddr, detail }
+  const rows = type === 'connections' ? parseConnectionRows(value.rows) : undefined
+  return { type, publicAddr, detail, rows }
+}
+
+function desktopFailure(detail: string): string {
+  if (
+    /(未知|重复|不支持|unknown|unexpected|unrecognized|unsupported)/i.test(detail) &&
+    /(--stats|参数|argument|option)/i.test(detail)
+  ) {
+    return `桌面隧道程序不支持 --stats，请同步升级 Pi Desk 桌面端：${detail}`
+  }
+  return detail
+}
+
+function parseConnectionRows(value: unknown): TunnelConnectionRow[] {
+  if (!Array.isArray(value)) throw new Error('Tunnel Client connections 事件缺少 rows')
+  return value.map((value: unknown) => {
+    if (typeof value !== 'object' || value === null) {
+      throw new Error('Tunnel Client connections 行格式无效')
+    }
+    const row = value as Record<string, unknown>
+    if (
+      typeof row.peerId !== 'string' ||
+      !row.peerId ||
+      typeof row.localPort !== 'number' ||
+      !Number.isInteger(row.localPort) ||
+      row.localPort < 1 ||
+      row.localPort > 65535 ||
+      (row.source !== 'public' && row.source !== 'client') ||
+      (row.path !== 'unknown' && row.path !== 'direct' && row.path !== 'relay') ||
+      typeof row.activeTcp !== 'number' ||
+      !Number.isInteger(row.activeTcp) ||
+      row.activeTcp < 0 ||
+      row.activeTcp > 0xffffffff
+    ) {
+      throw new Error('Tunnel Client connections 行格式无效')
+    }
+    return {
+      peerId: row.peerId,
+      localPort: row.localPort,
+      source: row.source,
+      path: row.path,
+      activeTcp: row.activeTcp
+    }
+  })
 }
 
 async function waitForCompletion(

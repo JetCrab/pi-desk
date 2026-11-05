@@ -417,6 +417,50 @@ test('端口冲突先返回确认清单，确认重试才创建Run并启动命�
   }
 })
 
+test('隧道停止返回失败时仍清理Gateway和命令，Run不能报告已停止', async () => {
+  const order: string[] = []
+  const runtime = new RemoteDebugRuntime(pluginFacade([]), {
+    createLogger: async () =>
+      testLogger(() => {
+        order.push('logger')
+      }),
+    startCommand: () => ({
+      pid: 1234,
+      completion: new Promise<CommandResult>(() => undefined),
+      async stop() {
+        order.push('command')
+        return { exitCode: 0, signal: null, error: null }
+      }
+    }),
+    waitForPort: async () => undefined,
+    startGateway: async () => ({
+      port: 39129,
+      close: async () => {
+        order.push('gateway')
+      }
+    }),
+    startTunnel: () => ({
+      ready: Promise.resolve('tunnel.example:43333'),
+      completion: new Promise<TunnelClientResult>(() => undefined),
+      async stop() {
+        order.push('tunnel')
+        return { failed: true, detail: '未确认资源释放', exitCode: 1 }
+      }
+    })
+  })
+  try {
+    const started = await runtime.start(cwd, 'web')
+    assert.ok('runId' in started)
+    await waitFor(() => runtime.state().runs[0]?.status === 'running')
+    const run = await runtime.stop(started.runId)
+    assert.equal(run.status, 'failed')
+    assert.match(run.failure?.message ?? '', /Tunnel 清理失败：未确认资源释放/)
+    assert.deepEqual(order, ['tunnel', 'gateway', 'command', 'logger'])
+  } finally {
+    await runtime.dispose()
+  }
+})
+
 function deferredCommand(): {
   handle: ManagedCommand
   resolve(result: CommandResult): void

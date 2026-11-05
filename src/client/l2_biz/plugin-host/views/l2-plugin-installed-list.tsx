@@ -43,6 +43,7 @@ interface InstalledListProps {
   onSelect: (keys: string[], selected: boolean) => void
   onUpdateAll: () => void
   onUpdateSelected: () => void
+  onReloadSelected: () => void
   onRemoveSelected: () => void
   onFilter: (filter: string) => void
   onDetail: (source: string) => void
@@ -60,7 +61,11 @@ export function L2PluginInstalledList(props: InstalledListProps): React.JSX.Elem
   const failed = (plugin: L2PluginManagementItem): boolean =>
     plugin.status === 'failed' ||
     plugin.operation?.phase === 'failed' ||
-    Boolean(plugin.updateError || (plugin.pluginName && props.browserErrors.has(plugin.pluginName)))
+    Boolean(
+      plugin.error ||
+      plugin.updateError ||
+      (plugin.pluginName && props.browserErrors.has(plugin.pluginName))
+    )
   const plugins = all.filter((plugin) => {
     if (props.statusFilter === 'updates' && !plugin.updateAvailable) return false
     if (props.statusFilter === 'disabled' && plugin.status !== 'disabled') return false
@@ -69,7 +74,7 @@ export function L2PluginInstalledList(props: InstalledListProps): React.JSX.Elem
       .toLocaleLowerCase()
       .includes(props.filter.trim().toLocaleLowerCase())
   })
-  const selectable = plugins.filter((plugin) => plugin.kind !== 'extension')
+  const selectable = plugins
   const selected = all.filter((plugin) => props.selected.has(pluginRequestKey(plugin.source)))
   const updates = all.filter(
     (plugin) => plugin.updateAvailable === true && plugin.kind !== 'extension' && !busy(plugin)
@@ -78,6 +83,7 @@ export function L2PluginInstalledList(props: InstalledListProps): React.JSX.Elem
     props.selected.has(pluginRequestKey(plugin.source))
   )
   const selectedReady = selected.filter((plugin) => !busy(plugin))
+  const selectedRemovable = selectedReady.filter((plugin) => plugin.kind !== 'extension')
   const allSelected =
     selectable.length > 0 &&
     selectable.every((plugin) => props.selected.has(pluginRequestKey(plugin.source)))
@@ -134,7 +140,7 @@ export function L2PluginInstalledList(props: InstalledListProps): React.JSX.Elem
               {t('updateAll', { count: updates.length })}
             </Button>
           ) : null}
-          {all.some((plugin) => plugin.kind !== 'extension') ? (
+          {all.length > 0 ? (
             <Button size="sm" variant="ghost" onClick={() => props.onBatchMode(!props.batchMode)}>
               {t(props.batchMode ? 'finishSelection' : 'batchManage')}
             </Button>
@@ -170,6 +176,14 @@ export function L2PluginInstalledList(props: InstalledListProps): React.JSX.Elem
                 <Button
                   size="sm"
                   variant="outline"
+                  disabled={props.disabled || !selectedReady.length}
+                  onClick={props.onReloadSelected}
+                >
+                  {t('reloadSelected')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
                   disabled={props.disabled || props.loading || !selectedUpdates.length}
                   onClick={props.onUpdateSelected}
                 >
@@ -178,7 +192,7 @@ export function L2PluginInstalledList(props: InstalledListProps): React.JSX.Elem
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={props.disabled || !selectedReady.length}
+                  disabled={props.disabled || !selectedRemovable.length}
                   onClick={props.onRemoveSelected}
                 >
                   {t('removeSelected')}
@@ -220,7 +234,7 @@ export function L2PluginInstalledList(props: InstalledListProps): React.JSX.Elem
                   className={`min-w-0 px-4 py-3 ${props.selected.has(key) && props.batchMode ? 'bg-accent/40' : ''}`}
                 >
                   <div className="flex items-start gap-3">
-                    {props.batchMode && plugin.kind !== 'extension' ? (
+                    {props.batchMode ? (
                       <div className="flex min-h-8 shrink-0 items-center">
                         <Checkbox
                           checked={props.selected.has(key)}
@@ -259,10 +273,8 @@ export function L2PluginInstalledList(props: InstalledListProps): React.JSX.Elem
                         <L2PluginManagementControls
                           plugin={plugin}
                           displayName={name}
-                          browserError={browserError}
                           disabled={props.disabled}
                           pending={busy(plugin)}
-                          browserRetryPending={props.requests.has(`entry:${plugin.pluginName}`)}
                           onAction={(action) => props.onAction(plugin, action)}
                         />
                       </div>
@@ -274,9 +286,7 @@ export function L2PluginInstalledList(props: InstalledListProps): React.JSX.Elem
                       <L2PluginManagementFeedback
                         plugin={plugin}
                         browserError={browserError}
-                        requestError={
-                          props.errors[key] ?? props.errors[`entry:${plugin.pluginName}`]
-                        }
+                        requestError={props.errors[key]}
                       />
                     </div>
                   </div>

@@ -1,103 +1,43 @@
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::mpsc;
-use std::time::Duration;
 
-use pi_desk_tunnel_common::config::{TunnelConfig, ensure_device_id, require_ready};
-use pi_desk_tunnel_common::worker::{TunnelWorkerConfig, TunnelWorkerEvent, start_tunnel_worker};
-use serde::{Deserialize, Serialize};
+use pi_desk_tunnel_common::config::{TunnelConfig, normalize_tunnel_config, require_ready};
+use serde::Deserialize;
+
+use pi_desk_tunnel_common::provider_cli;
 
 #[derive(Debug)]
 struct Arguments {
     config_path: PathBuf,
-    client: String,
-    local_addr: String,
+    local_addr: SocketAddr,
     public_port: u16,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-enum CliEvent<'a> {
-    Opening,
-    Connecting {
-        #[serde(rename = "publicAddr")]
-        public_addr: &'a str,
-    },
-    Listening {
-        #[serde(rename = "publicAddr")]
-        public_addr: &'a str,
-    },
-    Recovering {
-        detail: &'a str,
-    },
-    Failed {
-        detail: &'a str,
-    },
-    Stopped,
+    stats: bool,
 }
 
 fn main() -> ExitCode {
     match run() {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
-            emit(CliEvent::Failed { detail: &error });
+            provider_cli::emit_failed(&error);
             ExitCode::FAILURE
         }
     }
 }
 
 fn run() -> Result<u8, String> {
-    let arguments = parse_arguments()?;
-    validate_local_address(&arguments.local_addr)?;
-
-    let mut config = read_client_tunnel_config(&arguments.config_path)?;
-    ensure_device_id(&mut config, &arguments.client)?;
-    let (control_key, device_id) = require_ready(&config, &arguments.client)?;
-
-    let worker = start_tunnel_worker(TunnelWorkerConfig {
-        control_server_url: config.control_server_url,
+    let arguments = parse_arguments(std::env::args().skip(1))?;
+    let config = read_client_tunnel_config(&arguments.config_path)?;
+    let control_key = require_ready(&config)?;
+    provider_cli::run_provider(
+        config.control_server_url,
         control_key,
-        device_id,
-        local_addr: arguments.local_addr,
-        public_port: arguments.public_port,
-    })?;
-    let stop_receiver = monitor_stdin();
-    let mut stopping = false;
-    let mut failed = false;
-
-    loop {
-        if !stopping && stop_receiver.try_recv().is_ok() {
-            stopping = true;
-            worker.stop();
-        }
-        match worker.recv_timeout(Duration::from_millis(200)) {
-            Ok(TunnelWorkerEvent::Opening) => emit(CliEvent::Opening),
-            Ok(TunnelWorkerEvent::Connecting { public_addr }) => emit(CliEvent::Connecting {
-                public_addr: &public_addr,
-            }),
-            Ok(TunnelWorkerEvent::Listening { public_addr }) => emit(CliEvent::Listening {
-                public_addr: &public_addr,
-            }),
-            Ok(TunnelWorkerEvent::Recovering(detail)) => {
-                emit(CliEvent::Recovering { detail: &detail })
-            }
-            Ok(TunnelWorkerEvent::Failed(detail)) => {
-                failed = true;
-                emit(CliEvent::Failed { detail: &detail });
-            }
-            Ok(TunnelWorkerEvent::Stopped) => {
-                emit(CliEvent::Stopped);
-                return Ok(if failed { 1 } else { 0 });
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err("Tunnel Worker 意外断开".to_string());
-            }
-        }
-    }
+        arguments.local_addr,
+        arguments.public_port,
+        arguments.stats,
+    )
 }
 
 fn read_client_tunnel_config(path: &Path) -> Result<TunnelConfig, String> {
@@ -108,17 +48,15 @@ fn read_client_tunnel_config(path: &Path) -> Result<TunnelConfig, String> {
             format!("读取 Pi Desk 配置失败：{error}")
         }
     })?;
-    let desktop: DesktopConfig = serde_json::from_str(&content)
-        .map_err(|error| format!("Pi Desk 配置格式无效：{error}"))?;
-    Ok(TunnelConfig {
+    let desktop: DesktopConfig =
+        serde_json::from_str(&content).map_err(|error| format!("Pi Desk 配置格式无效：{error}"))?;
+    normalize_tunnel_config(TunnelConfig {
         control_server_url: desktop.tunnel.control_server_url,
         control_key: desktop.tunnel.control_key,
-        ..TunnelConfig::default()
     })
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct DesktopConfig {
     #[serde(default)]
     tunnel: DesktopTunnelConfig,
@@ -133,91 +71,97 @@ struct DesktopTunnelConfig {
     control_key: String,
 }
 
-fn parse_arguments() -> Result<Arguments, String> {
-    let mut values = std::env::args().skip(1);
+fn parse_arguments(values: impl IntoIterator<Item = String>) -> Result<Arguments, String> {
+    let mut values = values.into_iter();
     let mut config_path = None;
-    let mut client = None;
     let mut local_addr = None;
     let mut public_port = None;
+    let mut stats = false;
 
     while let Some(argument) = values.next() {
-        let value = values
-            .next()
-            .ok_or_else(|| format!("参数 {argument} 缺少值"))?;
         match argument.as_str() {
-            "--config" => config_path = Some(PathBuf::from(value)),
-            "--client" => client = Some(value),
-            "--local" => local_addr = Some(value),
-            "--public-port" => {
-                public_port = Some(
-                    value
-                        .parse::<u16>()
-                        .map_err(|_| "public-port 必须是 1 到 65535 的端口".to_string())?,
-                )
+            "--stats" if !stats => stats = true,
+            "--client" => {
+                return Err("--client 已移除；请删除该参数，CLI 使用本次运行的临时身份".into());
             }
-            _ => return Err(format!("未知参数：{argument}")),
+            "--config" if config_path.is_none() => {
+                config_path = Some(PathBuf::from(values.next().ok_or("缺少 --config 的值")?));
+            }
+            "--local" if local_addr.is_none() => {
+                local_addr = Some(validate_local_address(
+                    &values.next().ok_or("缺少 --local 的值")?,
+                )?);
+            }
+            "--public-port" if public_port.is_none() => {
+                let port = values
+                    .next()
+                    .ok_or("缺少 --public-port 的值")?
+                    .parse::<u16>()
+                    .map_err(|_| "public-port 必须是 1 到 65535 的端口")?;
+                if port == 0 {
+                    return Err("public-port 必须是 1 到 65535 的端口".into());
+                }
+                public_port = Some(port);
+            }
+            _ => return Err(format!("未知或重复参数：{argument}")),
         }
     }
-
-    let public_port = public_port.ok_or_else(|| "缺少 --public-port".to_string())?;
-    if public_port == 0 {
-        return Err("public-port 必须是 1 到 65535 的端口".to_string());
-    }
     Ok(Arguments {
-        config_path: config_path.ok_or_else(|| "缺少 --config".to_string())?,
-        client: client.ok_or_else(|| "缺少 --client".to_string())?,
-        local_addr: local_addr.ok_or_else(|| "缺少 --local".to_string())?,
-        public_port,
+        config_path: config_path.ok_or("缺少 --config")?,
+        local_addr: local_addr.ok_or("缺少 --local")?,
+        public_port: public_port.ok_or("缺少 --public-port")?,
+        stats,
     })
 }
 
-fn validate_local_address(value: &str) -> Result<(), String> {
+fn validate_local_address(value: &str) -> Result<SocketAddr, String> {
     let address = value
         .parse::<SocketAddr>()
         .map_err(|_| "local 必须是有效的本机 Socket 地址".to_string())?;
     if !address.ip().is_loopback() || address.port() == 0 {
         return Err("local 只允许有效的回环地址".to_string());
     }
-    Ok(())
-}
-
-fn monitor_stdin() -> mpsc::Receiver<()> {
-    let (sender, receiver) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("pi-desk-tunnel-stdin".to_string())
-        .spawn(move || {
-            let mut stdin = io::stdin().lock();
-            let mut buffer = [0_u8; 64];
-            loop {
-                match stdin.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(_) => {}
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
-                }
-            }
-            let _ = sender.send(());
-        })
-        .expect("应创建 stdin 监听线程");
-    receiver
-}
-
-fn emit(event: CliEvent<'_>) {
-    let mut stdout = io::stdout().lock();
-    if serde_json::to_writer(&mut stdout, &event).is_ok() {
-        let _ = stdout.write_all(b"\n");
-        let _ = stdout.flush();
-    }
+    Ok(address)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::validate_local_address;
+    use super::*;
+
+    fn parse(values: &[&str]) -> Result<Arguments, String> {
+        parse_arguments(values.iter().map(|value| value.to_string()))
+    }
 
     #[test]
     fn only_accepts_loopback_targets() {
         assert!(validate_local_address("127.0.0.1:30333").is_ok());
         assert!(validate_local_address("[::1]:30333").is_ok());
         assert!(validate_local_address("0.0.0.0:30333").is_err());
+        assert!(validate_local_address("127.0.0.1:0").is_err());
+    }
+
+    #[test]
+    fn provider_arguments_keep_stats_opt_in_and_reject_removed_identity_flag() {
+        let args = [
+            "--config",
+            "desktop.json",
+            "--local",
+            "127.0.0.1:6233",
+            "--public-port",
+            "11001",
+        ];
+        assert!(!parse(&args).unwrap().stats);
+        let mut stats = args.to_vec();
+        stats.push("--stats");
+        assert!(parse(&stats).unwrap().stats);
+        stats.push("--stats");
+        assert!(parse(&stats).unwrap_err().contains("重复"));
+        assert!(
+            parse(&["--client", "remoteDebug"])
+                .unwrap_err()
+                .contains("已移除")
+        );
+        assert!(parse(&["--unknown"]).is_err());
+        assert!(parse(&["--config"]).is_err());
     }
 }

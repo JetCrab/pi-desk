@@ -31,10 +31,18 @@ function fixtureState(): ControlState {
           autoStart: false,
           needsSetup: true,
           update: { status: 'idle', version: null, error: null }
-        },
-        tunnel: null
+        }
       }
     ],
+    tunnel: {
+      providerId: null,
+      mode: 'auto',
+      restartRequired: false,
+      publications: [],
+      forwards: [],
+      connections: [],
+      error: null
+    },
     environment: {
       status: 'required',
       step: '需要准备运行环境',

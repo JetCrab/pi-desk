@@ -24,6 +24,7 @@ import {
   markerBase,
   occupiedMarker,
   parseWorkspaceRef,
+  pruneCommandRuns,
   readCommandResult,
   readMarker,
   reconcileInterruptedOperations,
@@ -190,9 +191,11 @@ function combineSignals(external: AbortSignal | undefined, internal: AbortContro
 
 export class WorkspaceRuntime {
   private active: WorkspaceSelection | undefined
+  private activeRequirement: string | undefined
   private previewDirectory: string | undefined
   private interruptedOperationsReconciled = false
   private readonly runningControllers = new Set<AbortController>()
+  private readonly shutdownController = new AbortController()
 
   constructor(private readonly dependencies: WorkspaceRuntimeDependencies) {}
 
@@ -202,11 +205,16 @@ export class WorkspaceRuntime {
       : null
   }
 
+  get activeTitle(): string | null {
+    return this.activeRequirement ? shortWorkspaceTitle(this.activeRequirement) : null
+  }
+
   async restore(
     context: WorkspaceRuntimeContext,
     entries: Array<{ type?: string; customType?: string; data?: unknown }>
   ): Promise<void> {
     this.active = restoreActiveSelection(entries)
+    this.activeRequirement = undefined
     this.previewDirectory = undefined
     if (!this.interruptedOperationsReconciled) {
       await this.reconcileInterruptedOperationRecords(context)
@@ -219,6 +227,7 @@ export class WorkspaceRuntime {
     const configPath = join(context.cwd, CONFIG_RELATIVE_PATH)
     if (!context.trusted) {
       this.active = undefined
+      this.activeRequirement = undefined
       this.syncPreviewDirectory(context)
       return {
         trusted: false,
@@ -232,6 +241,7 @@ export class WorkspaceRuntime {
     const loaded = await loadConfigForSession(context.cwd)
     if (!loaded.config) {
       this.active = undefined
+      this.activeRequirement = undefined
       this.syncPreviewDirectory(context)
       return {
         trusted: true,
@@ -328,7 +338,7 @@ export class WorkspaceRuntime {
         workspaceId: record.id,
         assignmentId: record.marker.occupation.id
       }
-      this.setActive(selection)
+      this.setActive(selection, record.marker.occupation.requirement)
       const snapshot = await this.snapshot(context)
       return {
         workspaceRef: formatWorkspaceRef(selection.workspaceId, selection.assignmentId),
@@ -363,8 +373,24 @@ export class WorkspaceRuntime {
       throw new WorkspaceError('workspace assignment 已失效或已经被重新分配')
     }
     await verifyWorkspace(record, definition, baseRoot)
-    this.setActive(selection)
+    this.setActive(selection, record.marker.occupation.requirement)
     return this.snapshot(context)
+  }
+
+  async startRun(
+    context: WorkspaceRuntimeContext,
+    input: WorkspaceRunInput
+  ): Promise<WorkspaceRunResult> {
+    // 只等待任务登记，终态仍由同一次执行写入记录、Task 与 Push。
+    return new Promise((resolve, reject) => {
+      void this.runCommand(
+        context,
+        input,
+        this.shutdownController.signal,
+        undefined,
+        resolve
+      ).catch(reject)
+    })
   }
 
   async run(
@@ -373,15 +399,31 @@ export class WorkspaceRuntime {
     signal?: AbortSignal,
     onUpdate?: (message: string) => void
   ): Promise<WorkspaceRunResult> {
+    return this.runCommand(context, input, signal, onUpdate)
+  }
+
+  private async runCommand(
+    context: WorkspaceRuntimeContext,
+    input: WorkspaceRunInput,
+    signal?: AbortSignal,
+    onUpdate?: (message: string) => void,
+    onStarted?: (result: WorkspaceRunResult) => void
+  ): Promise<WorkspaceRunResult> {
     requireTrusted(context)
     const config = await this.requireConfig(context.cwd)
+    signal?.throwIfAborted()
     const locator = input.workspace ?? this.activeRef
     if (!locator) throw new WorkspaceError('未选择工作区；请先 acquire 或 use')
 
     const workspaceId = locator.includes('@') ? parseWorkspaceRef(locator).workspaceId : locator
     const baseRoot = this.baseRoot(context.cwd)
 
-    return withLock(`workspace:${join(baseRoot, workspaceId)}`, async () => {
+    const lockKey = `workspace:${join(baseRoot, workspaceId)}`
+    if (onStarted && lockChains.has(lockKey)) {
+      throw new WorkspaceError('该工作区已有命令正在执行，请在任务中心查看')
+    }
+
+    return withLock(lockKey, async () => {
       let record = await getWorkspace(context.cwd, workspaceId, baseRoot)
       const definition = config.definitions[record.marker.definition]
       if (!definition) throw new WorkspaceError('workspace definition 已不存在')
@@ -424,7 +466,17 @@ export class WorkspaceRuntime {
         handler: command,
         parameters,
         signal,
-        onUpdate
+        onUpdate,
+        onStarted: onStarted
+          ? async (logPath: string): Promise<void> => {
+              onStarted({
+                workspaceId: record.id,
+                command: command.id,
+                logPath,
+                snapshot: await this.snapshot(context)
+              })
+            }
+          : undefined
       })
 
       if (executed.record.marker.status !== 'occupied') {
@@ -478,6 +530,19 @@ export class WorkspaceRuntime {
         logPath: executed.logPath,
         snapshot: await this.snapshot(context)
       }
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn('[workspace] 工作区命令执行失败', {
+        workspaceId,
+        command: input.command,
+        error: message
+      })
+      this.dependencies.changed({
+        workspaceId,
+        summary: `${input.command} 执行失败：${message}`,
+        level: 'error'
+      })
+      throw error
     })
   }
 
@@ -560,9 +625,11 @@ export class WorkspaceRuntime {
   }
 
   shutdown(): void {
+    this.shutdownController.abort()
     for (const controller of this.runningControllers) controller.abort()
     this.runningControllers.clear()
     this.active = undefined
+    this.activeRequirement = undefined
     this.previewDirectory = undefined
   }
 
@@ -601,6 +668,7 @@ export class WorkspaceRuntime {
   ): Promise<void> {
     if (!this.active || !context.trusted) {
       if (!context.trusted) this.active = undefined
+      this.activeRequirement = undefined
       this.syncPreviewDirectory(context)
       return
     }
@@ -617,8 +685,10 @@ export class WorkspaceRuntime {
         throw new WorkspaceError('workspace assignment 已失效')
       }
       await verifyWorkspace(record, definition, baseRoot)
+      this.activeRequirement = record.marker.occupation.requirement
     } catch {
       this.active = undefined
+      this.activeRequirement = undefined
     }
     this.syncPreviewDirectory(context)
   }
@@ -772,6 +842,7 @@ export class WorkspaceRuntime {
     parameters: Record<string, JsonValue>
     signal?: AbortSignal
     onUpdate?: (message: string) => void
+    onStarted?: (logPath: string) => Promise<void>
   }): Promise<{
     record: WorkspaceRecord
     result: Extract<WorkspaceCommandResult, { success: true }>
@@ -783,8 +854,7 @@ export class WorkspaceRuntime {
     }
 
     const handlerPath = await resolveHandlerPath(options.context.cwd, options.handler.handler)
-    const protectedLogs = await collectProtectedLogPaths(options.context.cwd, options.baseRoot)
-    const paths = await createCommandRunPaths(options.context.cwd, protectedLogs)
+    const paths = await createCommandRunPaths(options.context.cwd)
     await writeFile(
       paths.logPath,
       `Workspace command ${options.commandId}\nHandler: ${handlerPath}\nInput: ${paths.inputPath}\nOutput: ${paths.outputPath}\n`,
@@ -836,7 +906,29 @@ export class WorkspaceRuntime {
         detailSource: { kind: 'text-file', path: paths.logPath },
         interrupt: async () => controller.abort()
       })
+      this.dependencies.changed({ workspaceId: record.id })
+      await options.onStarted?.(paths.logPath)
+      if (!controller.signal.aborted) {
+        try {
+          const protectedLogs = await collectProtectedLogPaths(
+            options.context.cwd,
+            options.baseRoot
+          )
+          await pruneCommandRuns(options.context.cwd, [...protectedLogs, paths.logPath])
+        } catch (error) {
+          console.warn('[workspace] 历史命令日志维护失败', {
+            workspaceId: record.id,
+            command: options.commandId,
+            error: error instanceof Error ? error.message : String(error)
+          })
+        }
+      }
       options.onUpdate?.(`执行 ${options.commandId}：${options.handler.description}`)
+      if (controller.signal.aborted) {
+        const message = '工作区命令已中断'
+        await this.persistFailedOperation(record, options.baseRoot, message)
+        throw new WorkspaceError(`${message}；日志：${paths.logPath}`)
+      }
       let executionError: Error | undefined
       const execution = await this.dependencies
         .exec(
@@ -917,7 +1009,8 @@ export class WorkspaceRuntime {
     await writeMarker(record.root, marker, { baseRoot })
   }
 
-  private setActive(selection: WorkspaceSelection | undefined): void {
+  private setActive(selection: WorkspaceSelection | undefined, requirement?: string): void {
+    this.activeRequirement = requirement
     if (selectionEquals(this.active, selection)) return
     this.active = selection
     this.dependencies.persist(selection ?? null)

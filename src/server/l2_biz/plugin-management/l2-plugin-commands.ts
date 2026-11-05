@@ -68,7 +68,6 @@ async function resolveTargets(
     const existing = findL2PluginCommandTarget(snapshot.plugins, name, agentDir)
     if (command.action === 'reload') {
       if (!existing) throw new Error(`插件不存在：${name}`)
-      if (existing.status === 'disabled') throw new Error(`插件已禁用，请先启用：${name}`)
       targets.set(existing.source, { name, source: existing.source, local: false })
       continue
     }
@@ -185,11 +184,14 @@ function completedResult(
   )
   if (!item) throw new Error('未发现安装后的插件，无法确认生效')
   if (item.error) throw new Error(selectL4LocalizedText(item.error.message, 'zh-CN'))
-  if (item.status === 'disabled') throw new Error('该插件仍被现有配置禁用，尚未生效')
+  if (item.status === 'disabled') {
+    if (command.action === 'reload') return '成功：已完成重载检查与修复，插件保持停用'
+    throw new Error('该插件仍被现有配置禁用，尚未生效')
+  }
   if (command.version && item.version !== command.version) {
     throw new Error(`实际版本 ${item.version ?? '未知'} 与目标版本 ${command.version} 不一致`)
   }
-  if (command.action === 'reload') return '成功：已重新加载本机代码，已有 Pi 会话保持不变'
+  if (command.action === 'reload') return '成功：已重载插件，已有 Pi 会话保持不变'
   return target.local
     ? '成功：已加载当前代码，服务与界面已更新'
     : `成功：已安装${item.version ? ` ${item.version}` : ''}并完成宿主加载`

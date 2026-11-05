@@ -179,6 +179,10 @@ jobs:
           }
           node .github/scripts/check-desktop-tunnel.mjs (Join-Path $release 'pi-desk-desktop.exe')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PI_DESK_TUNNEL_TEST_DESKTOP_EXECUTABLE = Join-Path $release 'pi-desk-desktop.exe'
+          cargo test --manifest-path apps/tunnel/Cargo.toml -p pi-desk-tunnel-client --target i686-pc-windows-msvc --locked --test cli -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item Env:PI_DESK_TUNNEL_TEST_DESKTOP_EXECUTABLE
           node .github/scripts/pack-client.mjs windows $installers[0].FullName $env:CLIENT_OUTPUT
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4

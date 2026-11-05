@@ -47,7 +47,7 @@ public final class WebSessionStore {
         }
         WebSession session = sessions.get(url);
         if (session == null) {
-            session = new WebSession(url);
+            session = new WebSession(url, applicationContext);
             sessions.put(url, session);
         }
         return session;
@@ -82,6 +82,15 @@ public final class WebSessionStore {
             imagePickerLaunchers.remove(url);
         } else {
             imagePickerLaunchers.put(url, launcher);
+        }
+    }
+
+    public synchronized void setReminderPermissionHost(
+            String rawUrl, WebReminderBridge.PermissionHost host) {
+        String url = WebEndpoint.normalize(rawUrl);
+        WebSession session = host == null ? sessions.get(url) : session(url);
+        if (session != null) {
+            session.reminder.setPermissionHost(host);
         }
     }
 
@@ -200,6 +209,7 @@ public final class WebSessionStore {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 session.javaScriptReady = false;
+                session.reminder.onPageStarted();
                 super.onPageStarted(view, url, favicon);
             }
 
@@ -219,6 +229,7 @@ public final class WebSessionStore {
             @Override
             public void onPageFinished(WebView view, String url) {
                 session.javaScriptReady = true;
+                session.reminder.onPageFinished(view, url);
                 super.onPageFinished(view, url);
             }
         };
@@ -244,12 +255,14 @@ public final class WebSessionStore {
     public static final class WebSession {
         public final String url;
         final WebUrlPolicy urlPolicy;
+        final WebReminderBridge reminder;
         WebView webView;
         volatile boolean javaScriptReady;
 
-        WebSession(String url) {
+        WebSession(String url, Context context) {
             this.url = url;
             urlPolicy = new WebUrlPolicy(url);
+            reminder = new WebReminderBridge(context, url);
         }
 
         public WebView webView() {
@@ -261,6 +274,7 @@ public final class WebSessionStore {
         }
 
         void destroy() {
+            reminder.destroy();
             if (webView == null) {
                 return;
             }

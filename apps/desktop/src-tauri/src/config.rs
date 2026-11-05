@@ -1,3 +1,4 @@
+use pi_desk_tunnel_common::runtime::{provider_id, TunnelMode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -30,8 +31,6 @@ pub struct TargetConfig {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<ServerConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tunnel: Option<TargetTunnelConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -79,12 +78,21 @@ fn default_periodic_update() -> UpdatePolicy {
     UpdatePolicy::None
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TargetTunnelConfig {
-    #[serde(default)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TunnelPublication {
+    pub local_port: u16,
+    pub public_port: Option<u16>,
     pub enabled: bool,
-    pub public_port: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TunnelForward {
+    pub provider_id: String,
+    pub remote_port: u16,
+    pub local_port: u16,
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -95,7 +103,13 @@ pub struct TunnelConnectionConfig {
     #[serde(default)]
     pub control_key: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub device_id: String,
+    pub provider_secret_key: String,
+    #[serde(default)]
+    pub publications: Vec<TunnelPublication>,
+    #[serde(default)]
+    pub forwards: Vec<TunnelForward>,
+    #[serde(default)]
+    pub mode: TunnelMode,
 }
 
 impl Default for DesktopConfig {
@@ -104,7 +118,6 @@ impl Default for DesktopConfig {
             targets: vec![TargetConfig {
                 url: DEFAULT_LOCAL_URL.to_string(),
                 server: Some(default_server_config()),
-                tunnel: None,
             }],
             tunnel: TunnelConnectionConfig::default(),
         }
@@ -135,8 +148,6 @@ pub fn normalize(config: DesktopConfig) -> Result<DesktopConfig, String> {
     let mut targets = Vec::with_capacity(config.targets.len());
     let mut urls = HashSet::new();
     let mut server_ports = HashSet::new();
-    let mut public_ports = HashSet::new();
-
     for target in config.targets {
         let target = normalize_target(target)?;
         if !urls.insert(target.url.clone()) {
@@ -148,20 +159,12 @@ pub fn normalize(config: DesktopConfig) -> Result<DesktopConfig, String> {
                 return Err(format!("多个本机服务不能使用同一个端口：{port}"));
             }
         }
-        if let Some(target_tunnel) = target.tunnel.as_ref() {
-            if !public_ports.insert(target_tunnel.public_port) {
-                return Err(format!(
-                    "多个网址不能使用同一个公网端口：{}",
-                    target_tunnel.public_port
-                ));
-            }
-        }
         targets.push(target);
     }
 
     Ok(DesktopConfig {
         targets,
-        tunnel: config.tunnel,
+        tunnel: normalize_tunnel(config.tunnel)?,
     })
 }
 
@@ -177,12 +180,7 @@ pub fn normalize_target(config: TargetConfig) -> Result<TargetConfig, String> {
         }
         None => None,
     };
-    let tunnel = config.tunnel.map(normalize_target_tunnel).transpose()?;
-    Ok(TargetConfig {
-        url,
-        server,
-        tunnel,
-    })
+    Ok(TargetConfig { url, server })
 }
 
 pub fn normalize_target_url(value: &str) -> Result<String, String> {
@@ -226,9 +224,52 @@ pub fn target_port(url: &str) -> Result<u16, String> {
         .ok_or_else(|| "网页地址缺少端口".to_string())
 }
 
-fn normalize_target_tunnel(config: TargetTunnelConfig) -> Result<TargetTunnelConfig, String> {
-    if config.public_port == 0 {
-        return Err("公网端口必须在 1 到 65535 之间".to_string());
+pub fn normalize_tunnel(
+    mut config: TunnelConnectionConfig,
+) -> Result<TunnelConnectionConfig, String> {
+    let shared = pi_desk_tunnel_common::config::normalize_tunnel_config(
+        pi_desk_tunnel_common::config::TunnelConfig {
+            control_server_url: config.control_server_url,
+            control_key: config.control_key,
+        },
+    )?;
+    config.control_server_url = shared.control_server_url;
+    config.control_key = shared.control_key;
+    if !config.provider_secret_key.is_empty() {
+        provider_id(&config.provider_secret_key)?;
+    }
+    let mut local_ports = HashSet::new();
+    let mut public_ports = HashSet::new();
+    for publication in &config.publications {
+        if publication.local_port == 0 || publication.public_port == Some(0) {
+            return Err("发布端口必须在 1 到 65535 之间".into());
+        }
+        if !local_ports.insert(publication.local_port) {
+            return Err(format!("本机发布端口重复：{}", publication.local_port));
+        }
+        if let Some(port) = publication.public_port {
+            if !public_ports.insert(port) {
+                return Err(format!("公网端口重复：{port}"));
+            }
+        }
+    }
+    local_ports.clear();
+    for forward in &mut config.forwards {
+        forward.provider_id = forward.provider_id.trim().to_ascii_lowercase();
+        if forward.provider_id.len() != 64
+            || !forward
+                .provider_id
+                .bytes()
+                .all(|value| value.is_ascii_hexdigit())
+        {
+            return Err("提供端标识必须是64位十六进制公钥".into());
+        }
+        if forward.remote_port == 0 || forward.local_port == 0 {
+            return Err("映射端口必须在 1 到 65535 之间".into());
+        }
+        if !local_ports.insert(forward.local_port) {
+            return Err(format!("本地映射端口重复：{}", forward.local_port));
+        }
     }
     Ok(config)
 }
@@ -298,9 +339,68 @@ pub fn load(path: &Path) -> Result<DesktopConfig, String> {
         return normalize(DesktopConfig::default());
     }
 
-    let config: DesktopConfig =
-        serde_json::from_value(value).map_err(|error| format!("桌面配置格式无效：{error}"))?;
+    let config = decode_config(value)?;
     normalize(config)
+}
+
+fn decode_config(mut value: serde_json::Value) -> Result<DesktopConfig, String> {
+    let mut legacy = Vec::new();
+    if let Some(targets) = value
+        .get_mut("targets")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for target in targets {
+            if let Some(old) = target
+                .as_object_mut()
+                .and_then(|target| target.remove("tunnel"))
+            {
+                if old.is_null() {
+                    continue;
+                }
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct LegacyPublication {
+                    #[serde(default)]
+                    enabled: bool,
+                    public_port: u16,
+                }
+                let old: LegacyPublication = serde_json::from_value(old)
+                    .map_err(|error| format!("旧隧道配置无效：{error}"))?;
+                let url = target
+                    .get("url")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or("旧隧道网址缺失")?;
+                legacy.push((
+                    url.to_string(),
+                    TunnelPublication {
+                        local_port: target_port(url)?,
+                        public_port: Some(old.public_port),
+                        enabled: old.enabled,
+                    },
+                ));
+            }
+        }
+    }
+    let mut config: DesktopConfig =
+        serde_json::from_value(value).map_err(|error| format!("桌面配置格式无效：{error}"))?;
+    for (url, publication) in legacy {
+        if let Some(previous) = config
+            .tunnel
+            .publications
+            .iter()
+            .find(|item| item.local_port == publication.local_port)
+        {
+            if previous != &publication {
+                return Err(format!(
+                    "旧隧道迁移冲突：网址 {url} 的本机端口 {} 与已有发布设置不一致，原文件未修改",
+                    publication.local_port
+                ));
+            }
+        } else {
+            config.tunnel.publications.push(publication);
+        }
+    }
+    Ok(config)
 }
 
 pub fn save(path: &Path, config: &DesktopConfig) -> Result<(), String> {
@@ -351,6 +451,10 @@ fn temporary_path(path: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
+#[path = "config_tunnel_tests.rs"]
+mod tunnel_tests;
+
+#[cfg(test)]
 #[path = "config_update_tests.rs"]
 mod update_tests;
 
@@ -361,8 +465,8 @@ mod tests {
 
     use super::{
         default_server_config, load, normalize, normalize_target_url, save, DesktopConfig,
-        PackageConfig, ReleaseChannel, ServerConfig, TargetConfig, TargetTunnelConfig,
-        TunnelConnectionConfig, UpdatePolicy,
+        PackageConfig, ReleaseChannel, ServerConfig, TargetConfig, TunnelConnectionConfig,
+        UpdatePolicy,
     };
 
     #[test]
@@ -421,12 +525,10 @@ mod tests {
                 TargetConfig {
                     url: "https://example.com".to_string(),
                     server: None,
-                    tunnel: None,
                 },
                 TargetConfig {
                     url: "https://EXAMPLE.com:443/".to_string(),
                     server: None,
-                    tunnel: None,
                 },
             ],
             tunnel: TunnelConnectionConfig::default(),
@@ -436,60 +538,35 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_server_and_public_ports() {
+    fn rejects_duplicate_server_ports() {
         let server_targets = DesktopConfig {
             targets: vec![
                 TargetConfig {
                     url: "http://localhost:30333/a".to_string(),
                     server: Some(default_server_config()),
-                    tunnel: None,
                 },
                 TargetConfig {
                     url: "http://127.0.0.1:30333/b".to_string(),
                     server: Some(default_server_config()),
-                    tunnel: None,
                 },
             ],
             tunnel: TunnelConnectionConfig::default(),
         };
         assert!(normalize(server_targets).is_err());
-
-        let tunnel_targets = DesktopConfig {
-            targets: vec![
-                TargetConfig {
-                    url: "http://127.0.0.1:30333".to_string(),
-                    server: None,
-                    tunnel: Some(TargetTunnelConfig {
-                        enabled: false,
-                        public_port: 40001,
-                    }),
-                },
-                TargetConfig {
-                    url: "http://127.0.0.1:30334".to_string(),
-                    server: None,
-                    tunnel: Some(TargetTunnelConfig {
-                        enabled: false,
-                        public_port: 40001,
-                    }),
-                },
-            ],
-            tunnel: TunnelConnectionConfig::default(),
-        };
-        assert!(normalize(tunnel_targets).is_err());
     }
 
     #[test]
     fn desktop_target_validation_does_not_own_shared_tunnel_credentials() {
         let config = DesktopConfig {
-            targets: vec![TargetConfig {
-                url: "http://127.0.0.1:30333".to_string(),
-                server: None,
-                tunnel: Some(TargetTunnelConfig {
+            targets: vec![],
+            tunnel: TunnelConnectionConfig {
+                publications: vec![super::TunnelPublication {
+                    local_port: 5432,
+                    public_port: None,
                     enabled: true,
-                    public_port: 40001,
-                }),
-            }],
-            tunnel: TunnelConnectionConfig::default(),
+                }],
+                ..Default::default()
+            },
         };
 
         assert!(normalize(config).is_ok());
@@ -506,7 +583,6 @@ mod tests {
                     ready_path: "/api/health".to_string(),
                     package: default_server_config().package,
                 }),
-                tunnel: None,
             }],
             tunnel: TunnelConnectionConfig::default(),
         })
@@ -540,7 +616,7 @@ mod tests {
             let loaded = load(&path).expect("旧配置应被忽略而不报错");
             assert_eq!(loaded.targets.len(), 1);
             assert_eq!(loaded.targets[0].url, "http://127.0.0.1:30333/");
-            assert!(loaded.targets[0].tunnel.is_none());
+            assert!(loaded.tunnel.publications.is_empty());
             let package = loaded.targets[0]
                 .server
                 .as_ref()
@@ -614,7 +690,6 @@ mod tests {
                         channel: ReleaseChannel::Stable,
                     }),
                 }),
-                tunnel: None,
             }],
             tunnel: TunnelConnectionConfig::default(),
         })

@@ -77,7 +77,6 @@ impl Fixture {
                 targets: vec![TargetConfig {
                     url: url.clone(),
                     server: Some(server.clone()),
-                    tunnel: None,
                 }],
                 tunnel: TunnelConnectionConfig::default(),
             },
@@ -235,7 +234,6 @@ fn stopped_update_then_failed_start_restores_previous_install_after_reload() {
         targets: vec![TargetConfig {
             url: fixture.url.clone(),
             server: Some(fixture.server.clone()),
-            tunnel: None,
         }],
         tunnel: TunnelConnectionConfig::default(),
     };

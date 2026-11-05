@@ -86,4 +86,5 @@ export type WorkspaceSnapshot = {
 export type WorkspaceChangedEvent = {
   workspaceId: string | null
   summary?: string
+  level?: 'error'
 }

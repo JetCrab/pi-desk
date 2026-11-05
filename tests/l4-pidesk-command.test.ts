@@ -60,7 +60,8 @@ test('统一文档中的命令示例可执行，并区分插件维护与主动�
         command.kind === 'plugins' && command.action === 'reload' && command.names?.length === 2
     )
   )
-  assert.match(guide, /不下载、不修改版本或渠道、不重启宿主/)
+  assert.match(guide, /远程包缺失或安装不完整时先补装/)
+  assert.match(guide, /不主动升级、不切换渠道、不启用已停用插件/)
   assert.match(guide, /省略版本和标签/)
   assert.match(guide, /已有插件沿保存的更新渠道/)
   assert.match(guide, /不冻结常规聊天/)

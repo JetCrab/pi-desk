@@ -102,6 +102,12 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+
       - name: Rust workspace 测试
         working-directory: apps/tunnel
         run: |
@@ -127,39 +133,13 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ inputs.source_sha || github.sha }}
 
-      - name: 容器 HTTP 健康探针
+      - name: 验证镜像公网入口、原生映射和强制中继
         if: ${{ !inputs.check_only }}
         run: |
-          export PI_DESK_TUNNEL_SERVER_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-          export PI_DESK_TUNNEL_PRIVATE_KEY="$(python3 -c 'import base64, secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())')"
-          echo "::add-mask::$PI_DESK_TUNNEL_SERVER_KEY"
-          echo "::add-mask::$PI_DESK_TUNNEL_PRIVATE_KEY"
-          docker run --detach --name "$CONTAINER_NAME" --pull=never \
-            --log-opt max-size=10m --log-opt max-file=2 \
-            --publish 127.0.0.1::7001 \
-            --env PI_DESK_TUNNEL_SERVER_KEY --env PI_DESK_TUNNEL_PRIVATE_KEY \
-            "$IMAGE_REPOSITORY:$IMAGE_VERSION"
-          address="$(docker port "$CONTAINER_NAME" 7001/tcp)"
-          HEALTH_URL="http://$address/api/v1/system/health" python3 - <<'PY'
-          import json
-          import os
-          import time
-          import urllib.error
-          import urllib.request
-
-          deadline = time.monotonic() + 30
-          while True:
-              try:
-                  with urllib.request.urlopen(os.environ["HEALTH_URL"], timeout=2) as response:
-                      if response.status != 200 or json.load(response) != {"status": "ok"}:
-                          raise SystemExit("健康接口未返回预期的 HTTP 200 与 status=ok")
-                  print("容器 HTTP 健康探针通过")
-                  break
-              except urllib.error.URLError as error:
-                  if time.monotonic() >= deadline:
-                      raise SystemExit(f"容器 HTTP 健康探针失败：{error}") from error
-                  time.sleep(1)
-          PY
+          cargo build --locked --manifest-path apps/tunnel/Cargo.toml -p pi-desk-tunnel-server --example test-transport-smoke
+          node .github/scripts/check-tunnel-image.mjs \
+            "$IMAGE_REPOSITORY:$IMAGE_VERSION" \
+            "$CARGO_TARGET_DIR/debug/examples/test-transport-smoke"
 
       - name: 保存已验证镜像
         if: ${{ !inputs.check_only }}
@@ -178,19 +158,25 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: 失败时输出容器日志
+      - name: 保留数据链验收失败现场
         if: failure()
-        run: |
-          if docker container inspect "$CONTAINER_NAME" > /dev/null 2>&1; then
-            docker logs "$CONTAINER_NAME"
-          fi
+        uses: actions/upload-artifact@v4
+        with:
+          name: tunnel-smoke-failure-${{ github.run_id }}
+          overwrite: true
+          path: temp/run/tunnel-image/
+          if-no-files-found: ignore
+          retention-days: 7
 
-      - name: 清理探针容器
+      - name: 清理验收容器
         if: always()
         run: |
-          if docker container inspect "$CONTAINER_NAME" > /dev/null 2>&1; then
-            docker rm --force "$CONTAINER_NAME"
-          fi
+          for role in gateway relay; do
+            name="$CONTAINER_NAME-$role"
+            if docker container inspect "$name" > /dev/null 2>&1; then
+              docker rm --force "$name"
+            fi
+          done
 
   publish:
     if: >-

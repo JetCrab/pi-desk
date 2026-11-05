@@ -1,5 +1,6 @@
 package com.jetcrab.android.web;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.content.ActivityNotFoundException;
@@ -8,18 +9,22 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
+import android.util.Log;
 import android.view.ViewGroup;
 import android.webkit.WebView;
 import android.widget.FrameLayout;
 
-public final class WebTaskActivity extends Activity {
+public final class WebTaskActivity extends Activity implements WebReminderBridge.PermissionHost {
     private static final int IMAGE_PICK_REQUEST = 1001;
+    private static final int NOTIFICATION_PERMISSION_REQUEST = 1002;
 
     private WebSessionStore sessionStore;
     private String activeUrl;
     private WebTaskBackDispatcher backDispatcher;
     private FrameLayout container;
     private Object platformBackCallback;
+    private Runnable notificationPermissionResult;
+    private boolean notificationPermissionInFlight;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -43,6 +48,7 @@ public final class WebTaskActivity extends Activity {
         setContentView(container);
         attachWebView();
         sessionStore.setImagePickerLauncher(activeUrl, this::openImagePicker);
+        sessionStore.setReminderPermissionHost(activeUrl, this);
         updateRecentTaskTitle();
     }
 
@@ -57,9 +63,11 @@ public final class WebTaskActivity extends Activity {
         backDispatcher.invalidate();
         if (!requestedUrl.equals(activeUrl)) {
             sessionStore.setImagePickerLauncher(activeUrl, null);
+            sessionStore.setReminderPermissionHost(activeUrl, null);
             activeUrl = requestedUrl;
             attachWebView();
             sessionStore.setImagePickerLauncher(activeUrl, this::openImagePicker);
+            sessionStore.setReminderPermissionHost(activeUrl, this);
         }
         setIntent(intent);
         updateRecentTaskTitle();
@@ -94,6 +102,45 @@ public final class WebTaskActivity extends Activity {
     }
 
     @Override
+    public boolean requestNotificationPermission(Runnable result) {
+        if (Build.VERSION.SDK_INT < 33 || isFinishing() || isDestroyed()) {
+            return false;
+        }
+        notificationPermissionResult = result;
+        if (!notificationPermissionInFlight) {
+            try {
+                requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS},
+                        NOTIFICATION_PERMISSION_REQUEST);
+                notificationPermissionInFlight = true;
+            } catch (RuntimeException error) {
+                notificationPermissionResult = null;
+                Log.w("PiDeskReminder", "无法申请系统通知权限", error);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    @Override
+    public void cancelNotificationPermissionRequest() {
+        notificationPermissionResult = null;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != NOTIFICATION_PERMISSION_REQUEST) {
+            return;
+        }
+        notificationPermissionInFlight = false;
+        Runnable callback = notificationPermissionResult;
+        notificationPermissionResult = null;
+        if (callback != null) {
+            callback.run();
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         if (Build.VERSION.SDK_INT >= 33 && platformBackCallback != null) {
             Api33Back.unregister(this, platformBackCallback);
@@ -104,6 +151,7 @@ public final class WebTaskActivity extends Activity {
         }
         if (sessionStore != null && activeUrl != null) {
             sessionStore.setImagePickerLauncher(activeUrl, null);
+            sessionStore.setReminderPermissionHost(activeUrl, null);
             if (!isChangingConfigurations()) {
                 sessionStore.release(activeUrl);
             }

@@ -358,6 +358,26 @@ async function register(client, value) {
   )
   await client.wait(`document.querySelector('[data-testid="todo-widget"]')`, '登记后显示Todo')
 }
+async function stablePopover(client, visible, action, label) {
+  await client.eval(`(() => {
+    const matches = () => Boolean(document.querySelector('[data-testid="todo-popover"]')) === ${visible};
+    let stable = matches();
+    const observer = new MutationObserver(() => { stable &&= matches() });
+    observer.observe(document.body, { childList: true, subtree: true });
+    window.__todoPopoverWatch = () => {
+      observer.disconnect();
+      return stable && matches();
+    };
+  })()`)
+  await action()
+  assert.equal(
+    await client.eval(
+      `new Promise(resolve => setTimeout(() => resolve(window.__todoPopoverWatch()), 650))`
+    ),
+    true,
+    label
+  )
+}
 async function bounds(client) {
   await client.wait(
     `(()=>{const panel=document.querySelector('[data-testid="todo-popover"]');if(!panel)return true;const popup=panel.closest('[role="dialog"]');if(popup?.getAnimations().some(a=>a.playState==='running'))return false;const key=JSON.stringify(panel.getBoundingClientRect().toJSON());const old=window.__todoBounds;window.__todoBounds={key,count:old?.key===key?old.count+1:0};return window.__todoBounds.count>=2})()`,
@@ -478,6 +498,73 @@ try {
       true,
       '进度更新不抢输入焦点'
     )
+    await stablePopover(
+      first,
+      false,
+      async () => {
+        await first.hover('[data-testid="todo-summary"]')
+        await first.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 })
+      },
+      '快速划过不展开，移走后超过500ms也不延迟弹出'
+    )
+    await first.eval(`(() => {
+      const trigger = document.querySelector('[data-testid="todo-summary"]');
+      trigger.addEventListener('pointerover', () => {
+        const start = performance.now();
+        const observer = new MutationObserver(() => {
+          if (trigger.getAttribute('aria-expanded') !== 'true') return;
+          window.__todoHoverDelay = performance.now() - start;
+          observer.disconnect();
+        });
+        observer.observe(trigger, { attributes: true, attributeFilter: ['aria-expanded'] });
+      }, { once: true });
+    })()`)
+    await first.hover('[data-testid="todo-summary"]')
+    await first.wait(`document.querySelector('[data-testid="todo-popover"]')`, '悬停任务列表')
+    assert.ok((await first.eval('window.__todoHoverDelay')) >= 500, '连续悬停至少500ms后才展开')
+    await stablePopover(
+      first,
+      true,
+      () => first.hover('[data-testid="todo-popover"]'),
+      '从摘要移入列表保持展开，不重新等待500ms'
+    )
+    await first.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 })
+    await first.wait(`!document.querySelector('[data-testid="todo-popover"]')`, '移走后关闭预览')
+    await first.click('[data-testid="todo-summary"]')
+    await first.wait(
+      `document.querySelector('[data-testid="todo-popover"]')`,
+      '点击立即展开，不等待悬停计时',
+      450
+    )
+    await first.click('[data-testid="todo-summary"]')
+    await first.wait(`!document.querySelector('[data-testid="todo-popover"]')`, '再次点击关闭')
+    await stablePopover(
+      first,
+      false,
+      async () => {},
+      '点击关闭取消待展开计时，不会在500ms后重新弹出'
+    )
+    await first.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 })
+    await first.eval(`document.querySelector('[data-testid="todo-dismiss"]').focus()`)
+    for (const type of ['keyDown', 'keyUp']) {
+      await first.send('Input.dispatchKeyEvent', {
+        type,
+        key: 'Tab',
+        code: 'Tab',
+        windowsVirtualKeyCode: 9,
+        modifiers: 8
+      })
+    }
+    await first.wait(
+      `document.querySelector('[data-testid="todo-popover"]')`,
+      '键盘聚焦立即展开，不等待悬停计时',
+      450
+    )
+    await first.key('Escape', 'Escape', 27)
+    await first.wait(`!document.querySelector('[data-testid="todo-popover"]')`, '键盘关闭预览')
+    await first.eval(`document.querySelector('[data-work-id="${works[0]}"] textarea').focus()`)
+    passed.push('E07：500ms悬停延迟、划过取消、移入列表保持、点击立即展开及关闭、键盘聚焦')
+
     await first.hover('[data-testid="todo-summary"]')
     await first.wait(`document.querySelector('[data-testid="todo-popover"]')`, '悬停任务列表')
     await first.wait(

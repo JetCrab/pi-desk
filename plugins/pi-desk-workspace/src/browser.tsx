@@ -159,6 +159,7 @@ function WorkspaceView({
                   timeFormatter={timeFormatter}
                   selectedId={dialog?.workspaceId ?? null}
                   disabled={busy}
+                  submissions={biz.submissions}
                   onSelect={biz.openDetail}
                 />
               )
@@ -219,11 +220,16 @@ function WorkspaceView({
                   size="sm"
                   variant="primary"
                   disabled={
-                    busy || !biz.connectionReady || Boolean(workspace.issue) || biz.commandInvalid
+                    busy ||
+                    biz.commandRunning ||
+                    biz.commandSubmitting ||
+                    !biz.connectionReady ||
+                    Boolean(workspace.issue) ||
+                    biz.commandInvalid
                   }
                   onClick={biz.executeCommand}
                 >
-                  {busy ? '执行中…' : command ? commandActionLabel(command) : '执行'}
+                  {busy ? '提交中…' : command ? commandActionLabel(command) : '执行'}
                 </PluginButton>
               </>
             ) : undefined
@@ -236,6 +242,16 @@ function WorkspaceView({
               <div ref={errorRef} tabIndex={-1} className="workspace-error">
                 <PluginAlert tone="error" density="compact">
                   {error}
+                  <PluginActionRow>
+                    <PluginButton
+                      size="sm"
+                      variant="secondary"
+                      disabled={biz.refreshing || !biz.connectionReady}
+                      onClick={() => void biz.refresh()}
+                    >
+                      刷新状态
+                    </PluginButton>
+                  </PluginActionRow>
                 </PluginAlert>
               </div>
             ) : null}
@@ -260,7 +276,9 @@ function WorkspaceView({
                   workspace={workspace}
                   command={command}
                   values={dialog.command.values}
-                  disabled={busy || biz.commandInvalid}
+                  disabled={
+                    busy || biz.commandSubmitting || biz.commandRunning || biz.commandInvalid
+                  }
                   hasError={Boolean(biz.error)}
                   onValue={biz.setValue}
                 />
@@ -273,6 +291,8 @@ function WorkspaceView({
                 commands={commands}
                 tab={dialog.tab}
                 disabled={busy || !biz.connectionReady}
+                commandRunning={biz.commandRunning}
+                commandSubmitting={biz.commandSubmitting}
                 currentSessionId={target.source.sessionId}
                 canPreview={!busy && Boolean(host.projects?.preview)}
                 onTab={biz.selectTab}
@@ -301,13 +321,17 @@ function WorkspaceView({
       >
         {workspace && command ? (
           <div className="workspace-confirm">
-            <p className="workspace-description">
-              {command.id} · {command.description}
-            </p>
-            <code className="workspace-path">{workspace.root}</code>
             <PluginAlert tone="warning" density="compact">
               {commandImpact(command)}
             </PluginAlert>
+            <p className="workspace-description">确认后在后台执行，可在任务中心查看进度与日志。</p>
+            <details className="workspace-command-context">
+              <summary>执行命令与目录</summary>
+              <p className="workspace-description">
+                {command.id} · {command.description}
+              </p>
+              <code className="workspace-path">{workspace.root}</code>
+            </details>
           </div>
         ) : null}
       </PluginConfirmDialog>

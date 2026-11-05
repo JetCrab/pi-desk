@@ -181,6 +181,6 @@ export function commandImpact(command: WorkspaceCommandSummary): string | null {
   if (command.onSuccess === 'removed')
     return '将删除工作区目录及其中的项目文件、依赖和插件元数据，删除后不可恢复。'
   if (command.onSuccess === 'available')
-    return '将清除当前需求、来源会话关联和本次占用记录，并由项目脚本恢复为可复用状态。未提交文件可能被清理，请先保存或提交；来源聊天本身不会被删除。'
+    return '未提交文件可能被清理，请先保存或提交。重置将清除当前需求、来源会话关联和本次占用记录，恢复为可用工作区；来源聊天本身不会被删除。'
   return null
 }

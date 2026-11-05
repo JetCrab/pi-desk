@@ -133,6 +133,7 @@ export default function workspaceExtension(pi: ExtensionAPI): void {
       pi.appendEntry(SELECTION_ENTRY, selection ?? { workspaceId: null, assignmentId: null })
     },
     changed(event): void {
+      if (currentContext) updateStatus(currentContext)
       sessionPlugin.push('changed', jsonObject(event))
     },
     previewDirectoryChanged(directory): void {
@@ -147,7 +148,7 @@ export default function workspaceExtension(pi: ExtensionAPI): void {
     if (!context.hasUI) return
     context.ui.setStatus(
       'workspace',
-      runtime.activeRef ? `隔离工作区：${runtime.activeRef}` : undefined
+      runtime.activeTitle ? `隔离工作区：${runtime.activeTitle}` : undefined
     )
   }
 
@@ -188,10 +189,9 @@ export default function workspaceExtension(pi: ExtensionAPI): void {
 
   sessionPlugin.registerMethod('run', async (input, context) => {
     try {
-      const result = await runtime.run(
+      const result = await runtime.startRun(
         runtimeContext(context.extensionContext),
-        runInput(input),
-        context.extensionContext.signal
+        runInput(input)
       )
       updateStatus(context.extensionContext)
       return jsonObject(result)

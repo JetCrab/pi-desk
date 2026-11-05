@@ -20,6 +20,7 @@ import {
   parseConfig,
   parseWorkspaceRef,
   projectKey,
+  pruneCommandRuns,
   readCommandResult,
   readMarker,
   reconcileInterruptedOperations,
@@ -324,7 +325,8 @@ test('日志清理保留被引用的日志并按平台处理路径大小写', as
     )
   )
 
-  await createCommandRunPaths(project, [
+  await createCommandRunPaths(project)
+  await pruneCommandRuns(project, [
     process.platform === 'win32' ? join(runRoot, 'OLD-PROTECTED', 'command.log') : protectedLog
   ])
   assert.equal(await readFile(protectedLog, 'utf8'), '仍被操作记录引用的日志\n')

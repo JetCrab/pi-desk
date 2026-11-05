@@ -1,12 +1,6 @@
 'use client'
 
-import {
-  CheckIcon,
-  CopyIcon,
-  ChevronRightIcon,
-  LoaderCircleIcon,
-  RefreshCwIcon
-} from 'lucide-react'
+import { CheckIcon, CopyIcon, ChevronRightIcon, LoaderCircleIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
@@ -90,7 +84,6 @@ interface L2PluginCapabilityDetailsProps {
   detailLoading: boolean
   detailError: string | null
   browserContributions: readonly L4PluginBrowserContributionDescriptor[]
-  onRetry: () => void
 }
 
 interface ContextEventCapability {
@@ -682,8 +675,7 @@ export function L2PluginCapabilityDetails({
   detail,
   detailLoading,
   detailError,
-  browserContributions,
-  onRetry
+  browserContributions
 }: L2PluginCapabilityDetailsProps): React.JSX.Element {
   const { t } = useTranslation('pluginManagement')
   const { locale } = useL4Region()
@@ -719,15 +711,7 @@ export function L2PluginCapabilityDetails({
           <LoaderCircleIcon className="size-4 animate-spin" />
           {t('loadingFullDetails')}
         </div>
-      ) : detailError ? (
-        <div className="flex items-start gap-2" role="alert">
-          <p className="min-w-0 flex-1 break-words text-sm text-destructive">{detailError}</p>
-          <Button type="button" size="sm" variant="outline" onClick={onRetry}>
-            <RefreshCwIcon data-icon="inline-start" />
-            {t('retry')}
-          </Button>
-        </div>
-      ) : detail ? (
+      ) : detailError ? null : detail ? (
         <>
           <ToolsSection detail={detail} />
           <PromptResources detail={detail} />

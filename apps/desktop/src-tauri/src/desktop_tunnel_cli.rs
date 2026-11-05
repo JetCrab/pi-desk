@@ -1,20 +1,17 @@
-use pi_desk_tunnel_common::config::{
-    ensure_device_id, normalize_tunnel_config, require_ready, TunnelConfig,
-};
-use pi_desk_tunnel_common::worker::{start_tunnel_worker, TunnelWorkerConfig, TunnelWorkerEvent};
-use serde::{Deserialize, Serialize};
+use pi_desk_tunnel_common::config::{normalize_tunnel_config, require_ready, TunnelConfig};
+use pi_desk_tunnel_common::provider_cli;
+use serde::Deserialize;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::time::Duration;
 
 pub(crate) enum Request {
     Info,
     Client {
         local_addr: String,
         public_port: u16,
+        stats: bool,
     },
 }
 
@@ -28,6 +25,7 @@ pub(crate) fn parse_request(args: &[String]) -> Result<Request, String> {
     let mut values = args[1..].iter();
     let mut local_addr = None;
     let mut public_port = None;
+    let mut stats = false;
     while let Some(argument) = values.next() {
         match argument.as_str() {
             "--local" if local_addr.is_none() => {
@@ -50,12 +48,14 @@ pub(crate) fn parse_request(args: &[String]) -> Result<Request, String> {
                 }
                 public_port = Some(port);
             }
-            _ => return Err("隧道命令包含未知或重复参数".into()),
+            "--stats" if !stats => stats = true,
+            _ => return Err(format!("隧道命令包含未知或重复参数：{argument}")),
         }
     }
     Ok(Request::Client {
         local_addr: local_addr.ok_or("缺少 --local")?,
         public_port: public_port.ok_or("缺少 --public-port")?,
+        stats,
     })
 }
 
@@ -71,7 +71,7 @@ pub(crate) fn run_if_requested() -> Option<i32> {
         Ok(code) => code,
         Err(error) => {
             if args.iter().any(|value| value == "--tunnel-client") {
-                emit(CliEvent::Failed { detail: &error });
+                provider_cli::emit_failed(&error);
             } else {
                 eprintln!("[pi-desk-desktop] stage=tunnel-info-error error={error}");
             }
@@ -101,7 +101,8 @@ fn run(args: &[String]) -> Result<i32, String> {
         Request::Client {
             local_addr,
             public_port,
-        } => run_client(&path, local_addr, public_port),
+            stats,
+        } => run_client(&path, local_addr, public_port, stats),
     }
 }
 
@@ -143,106 +144,29 @@ pub(crate) fn inspect_config(path: &Path) -> Result<Option<String>, String> {
     Ok(Some(url.to_string().trim_end_matches('/').to_string()))
 }
 
-fn run_client(path: &Path, local_addr: String, public_port: u16) -> Result<i32, String> {
+fn run_client(
+    path: &Path,
+    local_addr: String,
+    public_port: u16,
+    stats: bool,
+) -> Result<i32, String> {
     let desktop = read_config(path)?;
-    let mut config = normalize_tunnel_config(TunnelConfig {
+    let config = normalize_tunnel_config(TunnelConfig {
         control_server_url: desktop.control_server_url,
         control_key: desktop.control_key,
-        ..TunnelConfig::default()
     })?;
-    // 命令实例独占临时 device id，不复用或修改桌面持久化的隧道目标。
-    ensure_device_id(&mut config, "command")?;
-    let (control_key, device_id) = require_ready(&config, "command")?;
-    let worker = start_tunnel_worker(TunnelWorkerConfig {
-        control_server_url: config.control_server_url,
+    let control_key = require_ready(&config)?;
+    let local_addr = local_addr
+        .parse::<SocketAddr>()
+        .map_err(|_| "local 地址无效")?;
+    provider_cli::run_provider(
+        config.control_server_url,
         control_key,
-        device_id,
         local_addr,
         public_port,
-    })?;
-    let stop_receiver = monitor_stdin()?;
-    let mut stopping = false;
-    let mut failed = false;
-    loop {
-        if !stopping && stop_receiver.try_recv().is_ok() {
-            stopping = true;
-            worker.stop();
-        }
-        match worker.recv_timeout(Duration::from_millis(200)) {
-            Ok(TunnelWorkerEvent::Opening) => emit(CliEvent::Opening),
-            Ok(TunnelWorkerEvent::Connecting { public_addr }) => emit(CliEvent::Connecting {
-                public_addr: &public_addr,
-            }),
-            Ok(TunnelWorkerEvent::Listening { public_addr }) => emit(CliEvent::Listening {
-                public_addr: &public_addr,
-            }),
-            Ok(TunnelWorkerEvent::Recovering(detail)) => {
-                emit(CliEvent::Recovering { detail: &detail })
-            }
-            Ok(TunnelWorkerEvent::Failed(detail)) => {
-                failed = true;
-                emit(CliEvent::Failed { detail: &detail });
-            }
-            Ok(TunnelWorkerEvent::Stopped) => {
-                emit(CliEvent::Stopped);
-                return Ok(if failed { 1 } else { 0 });
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err("Tunnel Worker 意外断开".into());
-            }
-        }
-    }
-}
-
-fn monitor_stdin() -> Result<mpsc::Receiver<()>, String> {
-    let (sender, receiver) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("desktop-tunnel-stdin".into())
-        .spawn(move || {
-            let mut stdin = io::stdin().lock();
-            let mut buffer = [0_u8; 64];
-            loop {
-                match stdin.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(_) => {}
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
-                }
-            }
-            let _ = sender.send(());
-        })
-        .map_err(|error| format!("创建 stdin 监听失败：{error}"))?;
-    Ok(receiver)
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-enum CliEvent<'a> {
-    Opening,
-    Connecting {
-        #[serde(rename = "publicAddr")]
-        public_addr: &'a str,
-    },
-    Listening {
-        #[serde(rename = "publicAddr")]
-        public_addr: &'a str,
-    },
-    Recovering {
-        detail: &'a str,
-    },
-    Failed {
-        detail: &'a str,
-    },
-    Stopped,
-}
-
-fn emit(event: CliEvent<'_>) {
-    let mut stdout = io::stdout().lock();
-    if serde_json::to_writer(&mut stdout, &event).is_ok() {
-        let _ = stdout.write_all(b"\n");
-        let _ = stdout.flush();
-    }
+        stats,
+    )
+    .map(i32::from)
 }
 
 #[cfg(test)]

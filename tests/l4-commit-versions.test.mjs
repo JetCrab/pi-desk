@@ -95,6 +95,49 @@ fn after() -> u8 { 2 }
   }
 })
 
+test('共享隧道同步桌面和网关版本，验收示例不消耗产品版本', async (t) => {
+  const repo = await repository(t)
+  for (const [file, content] of [
+    [
+      'apps/desktop/package.json',
+      JSON.stringify({ name: '@jetcrab/pi-desk-desktop', version: '1.1.29' })
+    ],
+    ['apps/desktop/src-tauri/tauri.conf.json', JSON.stringify({ version: '1.1.29' })],
+    [
+      'apps/desktop/src-tauri/Cargo.toml',
+      '[package]\nname = "pi-desk-desktop"\nversion = "1.1.29"\n'
+    ],
+    [
+      'apps/desktop/src-tauri/Cargo.lock',
+      '[[package]]\nname = "pi-desk-desktop"\nversion = "1.1.29"\n'
+    ],
+    [
+      'apps/tunnel/server/Cargo.toml',
+      '[package]\nname = "pi-desk-tunnel-server"\nversion = "1.1.1"\n'
+    ],
+    ['apps/tunnel/Cargo.lock', '[[package]]\nname = "pi-desk-tunnel-server"\nversion = "1.1.1"\n'],
+    ['apps/tunnel/common/src/runtime.rs', 'pub const PROTOCOL: u8 = 1;\n']
+  ]) {
+    await repo.save(file, content)
+  }
+  repo.git('add', '.')
+  repo.git('commit', '-m', 'fixture: 原生共享依赖')
+  await repo.save('apps/tunnel/common/src/runtime.rs', 'pub const PROTOCOL: u8 = 2;\n')
+  repo.git('add', 'apps/tunnel/common/src/runtime.rs')
+  await prepareCommitVersions(repo.root)
+  const versions = readVersions(repo.root, ':')
+  assert.equal(versions.desktop, '1.1.30')
+  assert.equal(versions.tunnel, '1.1.2')
+  assert.equal(versions['pi-desk'], '1.0.0')
+  assert.match(repo.git('show', ':apps/desktop/src-tauri/Cargo.lock'), /version = "1\.1\.30"/)
+  assert.match(repo.git('show', ':apps/tunnel/Cargo.lock'), /version = "1\.1\.2"/)
+  repo.git('commit', '-m', 'feat: 共享隧道')
+  await repo.save('apps/tunnel/server/examples/test-transport-smoke.rs', 'fn main() {\n}\n')
+  repo.git('add', 'apps/tunnel/server/examples/test-transport-smoke.rs')
+  await prepareCommitVersions(repo.root)
+  assert.deepEqual(readVersions(repo.root, ':'), versions)
+})
+
 test('代码提交递增所属单元，失败后再次准备不重复递增', async (t) => {
   const repo = await repository(t)
   await repo.save('src/feature.ts', 'export const value = 2\n')

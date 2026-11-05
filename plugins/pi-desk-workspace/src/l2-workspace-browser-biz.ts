@@ -5,7 +5,16 @@ import {
   type BrowserSessionSidebarTabTarget,
   type PluginJsonObject
 } from '@jetcrab/pi-desk-sdk/browser'
-import { subscribeWorkspaceChanged, withWorkspaceSnapshotTimeout } from './browser-runtime.js'
+import {
+  getWorkspaceSubmissions,
+  reconcileWorkspaceSubmissions,
+  sameWorkspaceSource,
+  submitWorkspaceCommand,
+  subscribeWorkspaceChanged,
+  subscribeWorkspaceSubmissions,
+  withWorkspaceSnapshotTimeout,
+  type WorkspaceSubmission
+} from './browser-runtime.js'
 import type {
   JsonValue,
   WorkspaceCommandSummary,
@@ -41,6 +50,9 @@ export type WorkspaceBrowserController = {
   workspace: WorkspaceSnapshotItem | null
   command: WorkspaceCommandSummary | null
   commandInvalid: boolean
+  commandRunning: boolean
+  commandSubmitting: boolean
+  submissions: readonly WorkspaceSubmission[]
   refresh(): Promise<WorkspaceSnapshot | null>
   openDetail(workspaceId: string): void
   closeDetail(): void
@@ -70,6 +82,14 @@ export function useWorkspaceBrowserBiz(
   const [pending, setPending] = useState<string | null>(null)
   const pendingRef = useRef<string | null>(null)
   const refreshEpoch = useRef(0)
+  const allSubmissions = useSyncExternalStore(
+    subscribeWorkspaceSubmissions,
+    getWorkspaceSubmissions,
+    getWorkspaceSubmissions
+  )
+  const submissions = allSubmissions.filter((item) =>
+    sameWorkspaceSource(item.source, target.source)
+  )
   const connectionReady = useSyncExternalStore(
     host.connection.subscribe,
     () => host.connection.getSnapshot().status === 'ready',
@@ -82,28 +102,31 @@ export function useWorkspaceBrowserBiz(
     [host, target.source]
   )
 
-  const applySnapshot = useCallback((next: WorkspaceSnapshot): void => {
-    const running = pendingRef.current?.startsWith('run:') === true
-    setSnapshot(next)
-    setDialog((current) => {
-      if (!current) return null
-      const item = next.workspaces.find((entry) => entry.id === current.workspaceId)
-      if (!item) return null
-      // 手工表单只绑定打开时的 assignment，不能悄悄接管重新分配后的工作区。
-      if (!running && current.command) {
-        const selected = next.definitions
-          .find((entry) => entry.id === item.definition)
-          ?.commands.find((entry) => entry.id === current.command?.commandId)
-        if (
-          current.command.workspaceRef !== (item.workspaceRef ?? item.id) ||
-          !selected?.from.includes(item.status)
-        ) {
-          return { ...current, tab: 'actions', command: null }
+  const applySnapshot = useCallback(
+    (next: WorkspaceSnapshot): void => {
+      setSnapshot(next)
+      reconcileWorkspaceSubmissions(target.source, next)
+      setDialog((current) => {
+        if (!current) return null
+        const item = next.workspaces.find((entry) => entry.id === current.workspaceId)
+        if (!item) return null
+        // 手工表单只绑定打开时的 assignment，不能悄悄接管重新分配后的工作区。
+        if (current.command) {
+          const selected = next.definitions
+            .find((entry) => entry.id === item.definition)
+            ?.commands.find((entry) => entry.id === current.command?.commandId)
+          if (
+            current.command.workspaceRef !== (item.workspaceRef ?? item.id) ||
+            !selected?.from.includes(item.status)
+          ) {
+            return { ...current, tab: 'actions', command: null }
+          }
         }
-      }
-      return current
-    })
-  }, [])
+        return current
+      })
+    },
+    [target.source]
+  )
 
   const refresh = useCallback(async (): Promise<WorkspaceSnapshot | null> => {
     if (signal.aborted) return null
@@ -165,6 +188,11 @@ export function useWorkspaceBrowserBiz(
   const definition = snapshot?.definitions.find((item) => item.id === workspace?.definition)
   const command =
     definition?.commands.find((item) => item.id === dialog?.command?.commandId) ?? null
+  const submission = submissions.find((item) => item.workspaceId === workspace?.id)
+  const commandSubmitting = Boolean(submission && !submission.error)
+  const commandRunning = Boolean(
+    workspace?.occupation?.operations.some((operation) => operation.result === null)
+  )
   const commandInvalid = Boolean(
     dialog?.command &&
     (!workspace ||
@@ -203,7 +231,8 @@ export function useWorkspaceBrowserBiz(
   function openDetail(workspaceId: string): void {
     if (pendingRef.current) return
     setActionError(null)
-    setDialog({ workspaceId, tab: 'records', command: null })
+    const failed = submissions.find((item) => item.workspaceId === workspaceId && item.error)
+    setDialog({ workspaceId, tab: 'records', command: failed?.draft ?? null })
   }
 
   function selectTab(tab: WorkspaceDetailTab): void {
@@ -211,7 +240,15 @@ export function useWorkspaceBrowserBiz(
   }
 
   function openCommand(commandId: string): void {
-    if (!workspace || !dialog || pendingRef.current || workspace.issue) return
+    if (
+      !workspace ||
+      !dialog ||
+      pendingRef.current ||
+      commandSubmitting ||
+      commandRunning ||
+      workspace.issue
+    )
+      return
     const selected = definition?.commands.find(
       (item) => item.id === commandId && item.from.includes(workspace.status)
     )
@@ -266,51 +303,54 @@ export function useWorkspaceBrowserBiz(
 
   async function runCommand(parameters: Record<string, JsonValue>): Promise<void> {
     const draft = dialog?.command
-    if (!draft || !workspace || !command || commandInvalid || workspace.issue) return
-    if (!beginAction(`run:${workspace.id}:${command.id}`)) return
-    try {
-      const value = await invoke('run', {
-        workspace: draft.workspaceRef,
-        command: command.id,
-        parameters
-      })
-      if (signal.aborted) return
-      // 命令响应建立新基线，之前发出的读取不能覆盖操作结果。
-      refreshEpoch.current += 1
-      setRefreshing(false)
-      const next =
-        value.snapshot && typeof value.snapshot === 'object' && !Array.isArray(value.snapshot)
-          ? snapshotFrom(value.snapshot as PluginJsonObject)
-          : await refresh()
-      if (signal.aborted) return
-      if (next) applySnapshot(next)
-      setDialog((current) => {
-        if (current?.command !== draft) return current
-        const item = next?.workspaces.find((entry) => entry.id === workspace.id)
-        if (command.onSuccess === 'removed' || (next && !item)) return null
-        return { ...current, command: null, tab: 'records' }
-      })
-      host.notify({ level: 'success', title: '工作区命令已完成' })
-    } catch (cause) {
-      reportActionError(cause)
-      await refresh()
-      // 失败回到表单，原参数保留；不自动重放结果未知的调用。
-      if (!signal.aborted)
-        setDialog((current) =>
-          current?.command === draft
-            ? {
-                ...current,
-                command: { ...draft, confirmation: null }
-              }
-            : current
-        )
-    } finally {
-      endAction()
+    if (
+      !draft ||
+      !workspace ||
+      !command ||
+      commandInvalid ||
+      commandSubmitting ||
+      commandRunning ||
+      workspace.issue ||
+      pendingRef.current ||
+      !connectionReady ||
+      signal.aborted
+    )
+      return
+    setActionError(null)
+    setDialog(null)
+    const value = await submitWorkspaceCommand(
+      { source: target.source, workspaceId: workspace.id, draft },
+      () =>
+        invoke('run', {
+          workspace: draft.workspaceRef,
+          command: command.id,
+          parameters
+        })
+    )
+    if (signal.aborted) return
+    // 受理响应建立基线；关闭弹窗和其他工作区操作不等待响应或刷新。
+    refreshEpoch.current += 1
+    setRefreshing(false)
+    if (value?.snapshot && typeof value.snapshot === 'object' && !Array.isArray(value.snapshot)) {
+      try {
+        applySnapshot(snapshotFrom(value.snapshot as PluginJsonObject))
+      } catch (cause) {
+        console.warn('[workspace] 命令受理快照无效，将重新读取', { error: messageOf(cause) })
+      }
     }
+    void refresh()
   }
 
   function executeCommand(): void {
-    if (!dialog?.command || !command || commandInvalid || workspace?.issue || pendingRef.current)
+    if (
+      !dialog?.command ||
+      !command ||
+      commandInvalid ||
+      commandSubmitting ||
+      commandRunning ||
+      workspace?.issue ||
+      pendingRef.current
+    )
       return
     try {
       const parameters = parseWorkspaceForm(command.parameters, dialog.command.values)
@@ -330,7 +370,14 @@ export function useWorkspaceBrowserBiz(
   }
 
   async function switchActive(): Promise<void> {
-    if (!workspace?.workspaceRef || workspace.issue || !beginAction(`use:${workspace.id}`)) return
+    if (
+      !workspace?.workspaceRef ||
+      workspace.issue ||
+      commandSubmitting ||
+      commandRunning ||
+      !beginAction(`use:${workspace.id}`)
+    )
+      return
     try {
       const next = snapshotFrom(
         await invoke('use', { workspace: workspace.active ? null : workspace.workspaceRef })
@@ -395,13 +442,16 @@ export function useWorkspaceBrowserBiz(
   return {
     snapshot,
     refreshing,
-    error: actionError ?? refreshError,
+    error: actionError ?? submission?.error ?? refreshError,
     pending,
     connectionReady,
     dialog,
     workspace,
     command,
     commandInvalid,
+    commandRunning,
+    commandSubmitting,
+    submissions,
     refresh,
     openDetail,
     closeDetail,

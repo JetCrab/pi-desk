@@ -9,6 +9,47 @@ import test from 'node:test'
 import { startTunnelClient } from '../src/tunnel-client.js'
 import type { RunLogger } from '../src/log.js'
 
+test('隧道进程创建失败后仍消费异步错误，避免影响宿主', (context) => {
+  const oldExecutable = process.env.PI_DESK_DESKTOP_EXECUTABLE
+  const oldConfig = process.env.PI_DESK_DESKTOP_CONFIG
+  process.env.PI_DESK_DESKTOP_EXECUTABLE = process.execPath
+  process.env.PI_DESK_DESKTOP_CONFIG = resolve('temp/fixture/desktop-config.json')
+  const fake = Object.assign(new EventEmitter(), {
+    pid: undefined,
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: () => false
+  })
+  const messages: string[] = []
+  context.mock.method(console, 'error', (message: string) => messages.push(message))
+  context.mock.method(
+    childProcess,
+    'spawn',
+    () => fake as unknown as ChildProcessWithoutNullStreams
+  )
+  syncBuiltinESMExports()
+  context.after(() => {
+    if (oldExecutable === undefined) delete process.env.PI_DESK_DESKTOP_EXECUTABLE
+    else process.env.PI_DESK_DESKTOP_EXECUTABLE = oldExecutable
+    if (oldConfig === undefined) delete process.env.PI_DESK_DESKTOP_CONFIG
+    else process.env.PI_DESK_DESKTOP_CONFIG = oldConfig
+    fake.stdin.destroy()
+    fake.stdout.destroy()
+    fake.stderr.destroy()
+    context.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
+  const logger = {
+    line(): void {
+      return
+    }
+  } as unknown as RunLogger
+  assert.throws(() => startTunnelClient({ localPort: 39123, publicPort: 43333, logger }))
+  assert.doesNotThrow(() => fake.emit('error', new Error('spawn EACCES')))
+  assert.ok(messages.some((message) => message.includes('spawn EACCES')))
+})
+
 for (const failed of [false, true]) {
   test(`桌面隧道事件${failed ? '失败' : '就绪与停止'}由插件正确处理`, async (context) => {
     const oldExecutable = process.env.PI_DESK_DESKTOP_EXECUTABLE
@@ -36,7 +77,10 @@ for (const failed of [false, true]) {
       fake.stderr.end()
       fake.emit('close', code)
     }
-    fake.stdin.once('finish', () => finish(0))
+    fake.stdin.once('finish', () => {
+      fake.stdout.write('{"type":"stopped"}\n')
+      finish(0)
+    })
     context.mock.method(
       childProcess,
       'spawn',
@@ -47,7 +91,8 @@ for (const failed of [false, true]) {
           '--local',
           '127.0.0.1:39123',
           '--public-port',
-          '43333'
+          '43333',
+          '--stats'
         ])
         assert.equal(options.env.PI_DESK_DESKTOP_CONFIG, configPath)
         queueMicrotask(() => {

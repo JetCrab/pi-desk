@@ -64,7 +64,6 @@ impl Fixture {
                 .map(|url| TargetConfig {
                     url: url.clone(),
                     server: Some(server.clone()),
-                    tunnel: None,
                 })
                 .collect(),
             tunnel: TunnelConnectionConfig::default(),

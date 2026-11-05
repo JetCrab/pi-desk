@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
 import { createRequire } from 'node:module'
+import { createServer } from 'node:net'
 import { resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import test from 'node:test'
@@ -409,3 +410,87 @@ test(
     )
   }
 )
+
+test('普通进程仅继承托管环境标记时不误判父进程失联', () => {
+  const supervisorPath =
+    require.resolve('../src/server/l4_foundation/process/l4-pi-desk-supervisor.js')
+  const result = spawnSync(
+    process.execPath,
+    [
+      '-e',
+      `
+    const { startManagedHeartbeat } = require(${JSON.stringify(supervisorPath)})
+    const heartbeat = startManagedHeartbeat()
+    heartbeat.ready()
+    heartbeat.dispose()
+    console.log('standalone-ready')
+  `
+    ],
+    {
+      env: { ...process.env, PI_DESK_MANAGED_RESTART: '1' },
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 5_000
+    }
+  )
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /standalone-ready/)
+})
+
+for (const stage of ['before', 'after']) {
+  test(
+    `父 IPC 在保护初始化${stage === 'before' ? '前' : '后'}断开时托管服务退出`,
+    { timeout: 8_000 },
+    async (context) => {
+      const supervisorPath =
+        require.resolve('../src/server/l4_foundation/process/l4-pi-desk-supervisor.js')
+      const source = `
+      const { createServer } = require('node:net')
+      const { startManagedHeartbeat } = require(${JSON.stringify(supervisorPath)})
+      if (process.argv[1] === 'before') {
+        process.once('disconnect', () => {
+          startManagedHeartbeat()
+          createServer().listen(0, '127.0.0.1')
+        })
+        process.send({ ready: true })
+      } else {
+        startManagedHeartbeat()
+        const server = createServer()
+        server.listen(0, '127.0.0.1', () => process.send({ ready: true, port: server.address().port }))
+      }
+    `
+      const child = spawn(process.execPath, ['-e', source, stage], {
+        cwd: projectRoot,
+        env: { ...process.env, PI_DESK_MANAGED_RESTART: '1' },
+        stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+        windowsHide: true
+      })
+      let diagnostics = ''
+      child.stderr.on('data', (chunk) => {
+        diagnostics += chunk
+      })
+      let ready
+      child.on('message', (message) => {
+        ready = message
+      })
+      context.after(async () => {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+        await waitFor(() => child.exitCode !== null || child.signalCode !== null, '测试进程释放')
+        if (ready?.port) {
+          const listener = createServer()
+          await new Promise((resolveListen, rejectListen) => {
+            listener.once('error', rejectListen)
+            listener.listen(ready.port, '127.0.0.1', resolveListen)
+          })
+          await new Promise((resolveClose, rejectClose) => {
+            listener.close((error) => (error ? rejectClose(error) : resolveClose()))
+          })
+        }
+      })
+      await waitFor(() => ready?.ready, '测试进程就绪')
+      child.disconnect()
+      await waitFor(() => child.exitCode !== null, '失联服务退出')
+      assert.equal(child.exitCode, 1, diagnostics)
+    }
+  )
+}

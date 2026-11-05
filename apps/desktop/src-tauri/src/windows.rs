@@ -1,4 +1,4 @@
-use crate::{logging, runtime::ShellState, window_chrome};
+use crate::{logging, reminder, runtime::ShellState, window_chrome};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -42,6 +42,19 @@ pub(crate) fn window_origin(app: &AppHandle, label: &str) -> Option<url::Origin>
     let state = app.state::<ShellState>();
     let labels = state.windows.labels.lock().ok()?;
     let window = labels.values().find(|window| window.label == label)?;
+    Url::parse(&window.target).ok().map(|url| url.origin())
+}
+
+pub(crate) fn reminder_origin(app: &AppHandle, label: &str) -> Option<url::Origin> {
+    if !label.starts_with("browser-") || label.starts_with("browser-preview-") {
+        return None;
+    }
+    let state = app.state::<ShellState>();
+    let labels = state.windows.labels.lock().ok()?;
+    let window = labels.values().find(|window| window.label == label)?;
+    if window.invalid.load(Ordering::Acquire) {
+        return None;
+    }
     Url::parse(&window.target).ok().map(|url| url.origin())
 }
 
@@ -170,6 +183,7 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
     let popup_label = label.clone();
     let popup_target = value.to_string();
     let invalid = Arc::new(AtomicBool::new(false));
+    let reminder_script = reminder::script(&url.origin());
     let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()))
         .title("Pi Desk")
         .inner_size(1280.0, 820.0)
@@ -200,6 +214,9 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
             if accepted {
                 if let Some(window) = navigate_app.get_webview_window(&navigate_label) {
                     window_chrome::restore(&window, "navigation");
+                    if !preview {
+                        reminder::clear(&window);
+                    }
                 }
             }
             accepted
@@ -233,9 +250,23 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
                 NewWindowResponse::Allow
             }
         })
-        .on_page_load(|window, payload| {
+        .on_page_load(move |window, payload| {
             if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
                 window_chrome::restore(&window, "page-started");
+                if !preview {
+                    reminder::clear(&window);
+                }
+            }
+            #[cfg(any(windows, target_os = "macos"))]
+            if !preview && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                if let Err(error) = window.eval(&reminder_script) {
+                    let state = window.app_handle().state::<ShellState>();
+                    logging::write(
+                        &state.log_path,
+                        "reminder-injection-failed",
+                        &error.to_string(),
+                    );
+                }
             }
             let state = window.app_handle().state::<ShellState>();
             logging::write(
@@ -267,10 +298,16 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
         },
     );
     drop(labels);
+    if !preview {
+        reminder::install(&window)?;
+    }
     let app_for_close = app.clone();
     let target = value.to_string();
     let hidden = window.clone();
     window.on_window_event(move |event| {
+        if !preview && matches!(event, WindowEvent::Focused(true) | WindowEvent::Destroyed) {
+            reminder::clear(&hidden);
+        }
         if let WindowEvent::CloseRequested { api, .. } = event {
             if preview {
                 return;
@@ -377,6 +414,7 @@ fn watch_process(window: &WebviewWindow, invalid: Option<Arc<AtomicBool>>) -> Re
                             }
                             if let Some(window) = event_app.get_webview_window(&event_label) {
                                 window_chrome::restore(&window, "process-failed");
+                                reminder::clear(&window);
                             }
                         }
                         let state = event_app.state::<ShellState>();

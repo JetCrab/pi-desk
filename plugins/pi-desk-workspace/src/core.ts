@@ -1133,10 +1133,7 @@ export async function readCommandResult(path: string): Promise<WorkspaceCommandR
   fail(`${path}.success`, '必须明确为 true 或 false')
 }
 
-export async function createCommandRunPaths(
-  projectRoot: string,
-  protectedLogPaths: readonly string[] = []
-): Promise<{
+export async function createCommandRunPaths(projectRoot: string): Promise<{
   directory: string
   inputPath: string
   outputPath: string
@@ -1144,7 +1141,6 @@ export async function createCommandRunPaths(
 }> {
   const runRoot = join(projectRoot, 'temp', 'pi', 'workspace')
   await mkdir(runRoot, { recursive: true })
-  await pruneCommandRuns(runRoot, protectedLogPaths)
 
   const directory = join(
     runRoot,
@@ -1159,11 +1155,12 @@ export async function createCommandRunPaths(
   }
 }
 
-async function pruneCommandRuns(
-  runRoot: string,
+export async function pruneCommandRuns(
+  projectRoot: string,
   protectedLogPaths: readonly string[],
   keepUnprotected = 100
 ): Promise<void> {
+  const runRoot = join(projectRoot, 'temp', 'pi', 'workspace')
   const protectedDirectories = protectedLogPaths.map((path) => dirname(path))
   const entries = await Promise.all(
     (await readdir(runRoot, { withFileTypes: true }))

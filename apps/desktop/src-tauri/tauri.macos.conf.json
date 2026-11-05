@@ -6,7 +6,13 @@
     "macOS": {
       "minimumSystemVersion": "11.0",
       "signingIdentity": "-",
-      "hardenedRuntime": false
+      "hardenedRuntime": false,
+      "dmg": {
+        "background": "dmg-background.png",
+        "windowSize": { "width": 640, "height": 360 },
+        "appPosition": { "x": 160, "y": 170 },
+        "applicationFolderPosition": { "x": 480, "y": 170 }
+      }
     }
   }
 }
