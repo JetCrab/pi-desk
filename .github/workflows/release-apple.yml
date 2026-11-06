@@ -59,7 +59,7 @@ jobs:
   macos:
     needs: guard
     if: inputs.platform == 'all' || inputs.platform == 'macos'
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 70
     env:
       BUILD_PROFILE: release
@@ -214,7 +214,7 @@ jobs:
   ios:
     needs: guard
     if: inputs.platform == 'all' || inputs.platform == 'ios'
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
