@@ -128,6 +128,7 @@ jobs:
           tests/l4-release-dev-state.test.mjs
           tests/l4-release-dev-plan.test.mjs
           tests/l4-workflow-contracts.test.mjs
+          tests/l4-macos-installer-workflow.test.mjs
           tests/l4-restore-sdk.test.mjs
           tests/l4-release-main.test.mjs
           tests/l4-restore-release-artifacts.test.mjs

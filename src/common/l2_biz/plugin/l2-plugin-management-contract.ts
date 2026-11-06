@@ -247,6 +247,7 @@ export const L2PluginManagementBatchRequestSchema = z.discriminatedUnion('action
     })
     .strict(),
   z.object({ action: z.literal('update'), sources: L2PluginManagementSourcesSchema }).strict(),
+  z.object({ action: z.literal('apply'), sources: L2PluginManagementSourcesSchema }).strict(),
   z.object({ action: z.literal('del'), sources: L2PluginManagementSourcesSchema }).strict(),
   z
     .object({

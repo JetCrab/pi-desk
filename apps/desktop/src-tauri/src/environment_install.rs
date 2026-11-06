@@ -617,12 +617,7 @@ fn install_bash(
         true,
         log,
         cancelled,
-        &|| {
-            state.set_component_step(
-                Component::Bash,
-                "正在等待 Git 安装结束，随后停止本次准备。",
-            )
-        },
+        &|| state.set_component_step(Component::Bash, "正在等待 Git 安装结束，随后停止本次准备。"),
     )?;
     if code != 0 {
         return Err(format!(

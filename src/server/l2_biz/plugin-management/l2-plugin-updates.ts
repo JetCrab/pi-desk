@@ -102,6 +102,10 @@ export class L2PluginUpdates {
         updateError: null
       }
       result.set(source.source, empty)
+      if (!source.path || (name && !source.version)) {
+        this.clear(source.source)
+        continue
+      }
       const check =
         input.checkUpdates === true &&
         (!selected || selected.has(identity)) &&
@@ -125,7 +129,6 @@ export class L2PluginUpdates {
           ])
           let value = this.cache.get(key)?.value
           if (check) {
-            if (!source.path || !source.version) throw new Error('无法读取插件已安装版本')
             const resolved = await resolveL4PluginInstall(`npm:${name}@${tag}`, {
               downloadSource,
               agentDir: this.agentDir,

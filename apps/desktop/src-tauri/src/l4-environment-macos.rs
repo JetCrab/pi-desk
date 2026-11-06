@@ -142,11 +142,7 @@ mod tests {
     #[test]
     fn cancellation_does_not_continue_preparation() {
         let cancelled = Cell::new(false);
-        let result = wait_for_tools(
-            &|| cancelled.get(),
-            || Ok(false),
-            || cancelled.set(true),
-        );
+        let result = wait_for_tools(&|| cancelled.get(), || Ok(false), || cancelled.set(true));
         assert_eq!(result.unwrap_err(), "操作已取消");
     }
 

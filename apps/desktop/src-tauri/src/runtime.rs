@@ -3,11 +3,9 @@ use crate::environment::{Component, EnvironmentSnapshot, EnvironmentState};
 use crate::environment_source::DownloadSource;
 use crate::packages::{self, should_select_version};
 use crate::process::{self, ManagedProcess};
-use crate::tunnel::{self, TunnelWorkerConfig, TunnelWorkerEvent, TunnelWorkerHandle};
+use crate::tunnel::{DesktopTunnel, DesktopTunnelSnapshot, TunnelRetry};
 use crate::{logging, service_port, windows};
-use pi_desk_tunnel_common::config::{
-    ensure_device_id, require_ready, TunnelConfig, DESKTOP_DEVICE_KEY,
-};
+use pi_desk_tunnel_common::runtime::{generate_secret_key, TunnelMode};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -57,19 +55,9 @@ pub struct ServerSnapshot {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TunnelSnapshot {
-    pub status: String,
-    pub detail: String,
-    pub public_addr: Option<String>,
-    pub public_port: u16,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TargetSnapshot {
     pub url: String,
     pub server: Option<ServerSnapshot>,
-    pub tunnel: Option<TunnelSnapshot>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -79,6 +67,7 @@ pub struct ControlState {
     pub hide_on_open: bool,
     pub show_on_close: bool,
     pub targets: Vec<TargetSnapshot>,
+    pub tunnel: DesktopTunnelSnapshot,
     pub environment: EnvironmentSnapshot,
 }
 
@@ -105,18 +94,6 @@ enum ServerPhase {
     Failed(String),
 }
 
-#[derive(Clone, Debug, Default)]
-enum TunnelPhase {
-    #[default]
-    Stopped,
-    Opening,
-    Connecting(String),
-    Listening(String),
-    Recovering(String),
-    Stopping,
-    Failed(String),
-}
-
 struct ManagedChild {
     child: ManagedProcess,
     version: Option<String>,
@@ -138,8 +115,6 @@ struct TargetRuntime {
     operation: Option<Arc<AtomicBool>>,
     stop_requested: bool,
     open_after_start: Option<OpenDestination>,
-    tunnel_worker: Option<TunnelWorkerHandle>,
-    tunnel_phase: TunnelPhase,
     last_check: Option<Instant>,
     notified_version: Option<String>,
 }
@@ -214,6 +189,7 @@ pub struct ShellState {
     environment_operation: Mutex<Option<Arc<AtomicBool>>>,
     environment_worker: Mutex<Option<JoinHandle<()>>>,
     target_runtimes: Mutex<HashMap<String, TargetRuntime>>,
+    tunnel: Mutex<DesktopTunnel>,
     workers: Mutex<Vec<JoinHandle<()>>>,
     monitor: Mutex<Option<(mpsc::Sender<()>, JoinHandle<()>)>>,
     pub(crate) closing: AtomicBool,
@@ -256,6 +232,7 @@ impl ShellState {
             log_path,
             windows: windows::WindowRegistry::new(data_directory),
             target_runtimes: Mutex::new(HashMap::new()),
+            tunnel: Mutex::new(DesktopTunnel::default()),
             workers: Mutex::new(Vec::new()),
             monitor: Mutex::new(None),
             closing: AtomicBool::new(false),
@@ -404,27 +381,6 @@ pub fn tunnel_connection(state: &ShellState) -> Result<TunnelConnectionInput, St
     })
 }
 
-fn ensure_desktop_tunnel_ready_config(config: &mut DesktopConfig) -> Result<TunnelConfig, String> {
-    let mut tunnel = TunnelConfig {
-        control_server_url: config.tunnel.control_server_url.clone(),
-        control_key: config.tunnel.control_key.clone(),
-        ..TunnelConfig::default()
-    };
-    if !config.tunnel.device_id.is_empty() {
-        tunnel
-            .device_ids
-            .insert(DESKTOP_DEVICE_KEY.into(), config.tunnel.device_id.clone());
-    }
-    ensure_device_id(&mut tunnel, DESKTOP_DEVICE_KEY)?;
-    require_ready(&tunnel, DESKTOP_DEVICE_KEY)?;
-    config.tunnel.device_id = tunnel
-        .device_ids
-        .get(DESKTOP_DEVICE_KEY)
-        .cloned()
-        .unwrap_or_default();
-    Ok(tunnel)
-}
-
 fn save_config(state: &ShellState, config: DesktopConfig) -> Result<(), String> {
     config::save(&state.config_path, &config)?;
     *state
@@ -477,14 +433,7 @@ pub fn apply_target(
         config.targets.push(next.clone());
         None
     };
-    let mut config = config::normalize(config)?;
-    if config
-        .targets
-        .iter()
-        .any(|target| target.tunnel.as_ref().is_some_and(|tunnel| tunnel.enabled))
-    {
-        ensure_desktop_tunnel_ready_config(&mut config)?;
-    }
+    let config = config::normalize(config)?;
     save_config(&state, config)?;
     if let Some(previous) = previous {
         if previous.url != next.url {
@@ -542,11 +491,6 @@ pub fn apply_target(
                     runtime.notified_version = None;
                 }
             }
-            if previous.tunnel.as_ref().map(|tunnel| tunnel.public_port)
-                != next.tunnel.as_ref().map(|tunnel| tunnel.public_port)
-            {
-                stop_tunnel_runtime(&state, &next.url);
-            }
         }
     }
     write_shell_log(&state, "target-saved", &format!("url={}", next.url));
@@ -577,7 +521,6 @@ pub fn delete_target(app: &AppHandle, url: &str) -> Result<(), String> {
 fn remove_target_runtime(app: &AppHandle, url: &str) -> Result<(), String> {
     let state = app.state::<ShellState>();
     stop_active_child(&state, url)?;
-    stop_tunnel_runtime(&state, url);
     state
         .target_runtimes
         .lock()
@@ -602,14 +545,7 @@ pub fn apply_tunnel_connection(state: &ShellState, value: serde_json::Value) -> 
     let mut config = state.config()?;
     config.tunnel.control_server_url = input.control_server_url;
     config.tunnel.control_key = input.control_key;
-    if config
-        .targets
-        .iter()
-        .any(|target| target.tunnel.as_ref().is_some_and(|tunnel| tunnel.enabled))
-    {
-        ensure_desktop_tunnel_ready_config(&mut config)?;
-    }
-    save_config(state, config)
+    save_config(state, config::normalize(config)?)
 }
 
 pub fn open_control_window(app: &AppHandle) -> Result<(), String> {
@@ -2382,10 +2318,6 @@ pub fn control_state(state: &ShellState) -> Result<ControlState, String> {
             TargetSnapshot {
                 url: target.url.clone(),
                 server,
-                tunnel: target
-                    .tunnel
-                    .as_ref()
-                    .map(|tunnel| tunnel_snapshot(&runtime.tunnel_phase, tunnel.public_port)),
             }
         })
         .collect();
@@ -2394,6 +2326,11 @@ pub fn control_state(state: &ShellState) -> Result<ControlState, String> {
         hide_on_open: info.hide_on_open,
         show_on_close: info.show_on_close,
         targets,
+        tunnel: state
+            .tunnel
+            .lock()
+            .map_err(|_| "隧道状态不可用")?
+            .snapshot(&config.tunnel),
         environment: state.environment.snapshot(),
     })
 }
@@ -2414,6 +2351,7 @@ pub fn start_update_monitor(app: &AppHandle) -> Result<(), String> {
         .name("desktop-state-monitor".into())
         .spawn(move || {
             let mut previous = String::new();
+            let mut previous_tunnel_failures = String::new();
             while matches!(
                 receive.recv_timeout(Duration::from_millis(500)),
                 Err(mpsc::RecvTimeoutError::Timeout)
@@ -2464,6 +2402,40 @@ pub fn start_update_monitor(app: &AppHandle) -> Result<(), String> {
                     }
                 }
                 if let Ok(snapshot) = control_state(&state).and_then(|snapshot| {
+                    let failures = snapshot
+                        .tunnel
+                        .publications
+                        .iter()
+                        .filter(|row| {
+                            row.phase == pi_desk_tunnel_common::worker::TunnelPhase::Failed
+                        })
+                        .map(|row| {
+                            format!("发布 localPort={} {}", row.config.local_port, row.detail)
+                        })
+                        .chain(
+                            snapshot
+                                .tunnel
+                                .forwards
+                                .iter()
+                                .filter(|row| {
+                                    row.phase == pi_desk_tunnel_common::worker::TunnelPhase::Failed
+                                })
+                                .map(|row| {
+                                    format!(
+                                        "映射 localPort={} {}",
+                                        row.config.local_port, row.detail
+                                    )
+                                }),
+                        )
+                        .chain(snapshot.tunnel.error.iter().cloned())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if failures != previous_tunnel_failures {
+                        if !failures.is_empty() {
+                            write_shell_log(&state, "tunnel-failed", &failures);
+                        }
+                        previous_tunnel_failures = failures;
+                    }
                     serde_json::to_string(&snapshot).map_err(|error| error.to_string())
                 }) {
                     if snapshot != previous {
@@ -2522,173 +2494,220 @@ fn monitor_processes(state: &ShellState) {
                 }
             }
         }
-        let mut stopped = false;
-        if let Some(worker) = &runtime.tunnel_worker {
-            loop {
-                match worker.try_recv() {
-                    Ok(TunnelWorkerEvent::Opening) => runtime.tunnel_phase = TunnelPhase::Opening,
-                    Ok(TunnelWorkerEvent::Connecting { public_addr }) => {
-                        runtime.tunnel_phase = TunnelPhase::Connecting(public_addr)
-                    }
-                    Ok(TunnelWorkerEvent::Listening { public_addr }) => {
-                        runtime.tunnel_phase = TunnelPhase::Listening(public_addr)
-                    }
-                    Ok(TunnelWorkerEvent::Recovering(error)) => {
-                        runtime.tunnel_phase = TunnelPhase::Recovering(error)
-                    }
-                    Ok(TunnelWorkerEvent::Failed(error)) => {
-                        write_shell_log(
-                            state,
-                            "tunnel-failed",
-                            &format!("url={url} error={error}"),
-                        );
-                        runtime.tunnel_phase = TunnelPhase::Failed(error);
-                    }
-                    Ok(TunnelWorkerEvent::Stopped) => {
-                        stopped = true;
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        stopped = true;
-                        break;
-                    }
-                }
-            }
-        }
-        if stopped {
-            runtime.tunnel_worker.take();
-            if !matches!(runtime.tunnel_phase, TunnelPhase::Failed(_)) {
-                runtime.tunnel_phase = TunnelPhase::Stopped;
-            }
-        }
     }
 }
 
 pub fn start_tunnels_if_enabled(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<ShellState>();
-    for target in state.config()?.targets {
-        if target.tunnel.as_ref().is_some_and(|tunnel| tunnel.enabled) {
-            if let Err(error) = start_tunnel(app, &target.url, false) {
-                write_shell_log(
-                    &state,
-                    "tunnel-auto-start-error",
-                    &format!("url={} error={error}", target.url),
-                );
-            }
-        }
+    let result = mutate_tunnel(&state, None, |_, _| Ok(()));
+    if let Err(error) = result {
+        write_shell_log(&state, "tunnel-auto-start-error", &error);
     }
     Ok(())
 }
 
-pub fn start_tunnel(app: &AppHandle, url: &str, persist_enabled: bool) -> Result<(), String> {
-    let state = app.state::<ShellState>();
-    let _write = state
-        .config_write
-        .lock()
-        .map_err(|_| "配置写入不可用".to_string())?;
+fn mutate_tunnel(
+    state: &ShellState,
+    retry: Option<TunnelRetry>,
+    change: impl FnOnce(
+        &mut config::TunnelConnectionConfig,
+        &DesktopTunnelSnapshot,
+    ) -> Result<(), String>,
+) -> Result<(), String> {
+    let _write = state.config_write.lock().map_err(|_| "配置写入不可用")?;
     if state.closing.load(Ordering::Acquire) {
         return Err("桌面程序正在退出".into());
     }
-    let url = config::normalize_target_url(url)?;
-    if state
-        .target_runtimes
-        .lock()
-        .map_err(|_| "运行状态不可用".to_string())?
-        .get(&url)
-        .is_some_and(|runtime| runtime.tunnel_worker.is_some())
+    let mut previous = state.config()?;
+    let mut config = previous.clone();
+    let mut owner = state.tunnel.lock().map_err(|_| "隧道状态不可用")?;
+    change(&mut config.tunnel, &owner.snapshot(&previous.tunnel))?;
+    let mut config = config::normalize(config)?;
+    if config.tunnel.provider_secret_key.is_empty()
+        && (config.tunnel.publications.iter().any(|item| item.enabled)
+            || config.tunnel.forwards.iter().any(|item| item.enabled))
     {
-        return Ok(());
+        config.tunnel.provider_secret_key = generate_secret_key()?;
     }
-    let mut config = state.config()?;
-    let target = config
-        .targets
-        .iter_mut()
-        .find(|target| target.url == url)
-        .ok_or_else(|| "网址不存在".to_string())?;
-    let target_tunnel = target
-        .tunnel
-        .as_mut()
-        .ok_or_else(|| "未配置公网端口".to_string())?;
-    if persist_enabled {
-        target_tunnel.enabled = true;
+    save_config(state, config.clone())?;
+    if let Err(error) = owner.reconcile(&config.tunnel, retry) {
+        // 入队可以部分成功，回退设置不撤销已接纳的命令；快照仍展示 owner/Worker 中的端口。
+        previous.tunnel.provider_secret_key = config.tunnel.provider_secret_key;
+        return match save_config(state, previous) {
+            Ok(()) => Err(format!("隧道命令提交失败，已恢复原配置；请检查端口状态后重试：{error}")),
+            Err(restore_error) => Err(format!("隧道命令提交失败：{error}；恢复原配置失败：{restore_error}。仍运行的端口保留在隧道列表中")),
+        };
     }
-    if !target_tunnel.enabled {
-        return Err("公网端口未启用".into());
-    }
-    let public_port = target_tunnel.public_port;
-    let tunnel = ensure_desktop_tunnel_ready_config(&mut config)?;
-    let (control_key, device_id) = require_ready(&tunnel, DESKTOP_DEVICE_KEY)?;
-    save_config(&state, config)?;
-    let worker = tunnel::start_tunnel_worker(TunnelWorkerConfig {
-        control_server_url: tunnel.control_server_url.clone(),
-        control_key,
-        device_id,
-        local_addr: format!("127.0.0.1:{}", config::target_port(&url)?),
-        public_port,
-    })?;
-    let mut runtimes = state
-        .target_runtimes
-        .lock()
-        .map_err(|_| "运行状态不可用".to_string())?;
-    let runtime = runtimes.entry(url.clone()).or_default();
-    runtime.tunnel_worker = Some(worker);
-    runtime.tunnel_phase = TunnelPhase::Opening;
-    write_shell_log(
-        &state,
-        "tunnel-start",
-        &format!("url={url} public_port={public_port}"),
-    );
     Ok(())
 }
 
-pub fn stop_tunnel(app: &AppHandle, url: &str) -> Result<(), String> {
-    let state = app.state::<ShellState>();
-    let _write = state
-        .config_write
-        .lock()
-        .map_err(|_| "配置写入不可用".to_string())?;
-    let url = config::normalize_target_url(url)?;
-    let mut config = state.config()?;
-    let tunnel = config
-        .targets
-        .iter_mut()
-        .find(|target| target.url == url)
-        .and_then(|target| target.tunnel.as_mut())
-        .ok_or_else(|| "未配置公网端口".to_string())?;
-    tunnel.enabled = false;
-    save_config(&state, config)?;
-    stop_tunnel_runtime(&state, &url);
-    Ok(())
-}
-
-fn stop_tunnel_runtime(state: &ShellState, url: &str) {
-    if let Ok(mut runtimes) = state.target_runtimes.lock() {
-        if let Some(runtime) = runtimes.get_mut(url) {
-            if let Some(worker) = &runtime.tunnel_worker {
-                worker.stop();
-                runtime.tunnel_phase = TunnelPhase::Stopping;
+pub fn apply_tunnel_publication(
+    state: &ShellState,
+    original_port: Option<u16>,
+    value: config::TunnelPublication,
+) -> Result<(), String> {
+    mutate_tunnel(state, None, |config, snapshot| {
+        if let Some(port) = original_port {
+            if let Some(item) = config
+                .publications
+                .iter_mut()
+                .find(|item| item.local_port == port)
+            {
+                *item = value;
+            } else if snapshot
+                .publications
+                .iter()
+                .any(|row| row.config.local_port == port)
+            {
+                config.publications.push(value);
+            } else {
+                return Err("原发布端口不存在".into());
             }
+        } else {
+            config.publications.push(value);
         }
-    }
+        Ok(())
+    })
 }
 
-fn tunnel_snapshot(phase: &TunnelPhase, public_port: u16) -> TunnelSnapshot {
-    let (status, detail, public_addr) = match phase {
-        TunnelPhase::Stopped => ("stopped", "公网端口未连接".into(), None),
-        TunnelPhase::Opening => ("opening", "正在申请公网端口".into(), None),
-        TunnelPhase::Connecting(addr) => ("connecting", "正在连接".into(), Some(addr.clone())),
-        TunnelPhase::Listening(addr) => ("listening", "公网端口已连接".into(), Some(addr.clone())),
-        TunnelPhase::Recovering(error) => ("recovering", error.clone(), None),
-        TunnelPhase::Stopping => ("stopping", "正在停止".into(), None),
-        TunnelPhase::Failed(error) => ("failed", error.clone(), None),
-    };
-    TunnelSnapshot {
-        status: status.into(),
-        detail,
-        public_addr,
-        public_port,
-    }
+pub fn delete_tunnel_publication(state: &ShellState, local_port: u16) -> Result<(), String> {
+    mutate_tunnel(state, None, |config, snapshot| {
+        if let Some(index) = config
+            .publications
+            .iter()
+            .position(|item| item.local_port == local_port)
+        {
+            config.publications.remove(index);
+        } else if !snapshot
+            .publications
+            .iter()
+            .any(|row| row.config.local_port == local_port)
+        {
+            return Err("发布端口不存在".into());
+        }
+        Ok(())
+    })
+}
+
+pub fn set_tunnel_publication_enabled(
+    state: &ShellState,
+    local_port: u16,
+    enabled: bool,
+) -> Result<(), String> {
+    mutate_tunnel(
+        state,
+        enabled.then_some(TunnelRetry::Publication(local_port)),
+        |config, snapshot| {
+            if let Some(item) = config
+                .publications
+                .iter_mut()
+                .find(|item| item.local_port == local_port)
+            {
+                item.enabled = enabled;
+            } else {
+                let mut item = snapshot
+                    .publications
+                    .iter()
+                    .find(|row| row.config.local_port == local_port)
+                    .ok_or("发布端口不存在")?
+                    .config
+                    .clone();
+                if enabled {
+                    item.enabled = true;
+                    config.publications.push(item);
+                }
+            }
+            Ok(())
+        },
+    )
+}
+
+pub fn apply_tunnel_forward(
+    state: &ShellState,
+    original_port: Option<u16>,
+    value: config::TunnelForward,
+) -> Result<(), String> {
+    mutate_tunnel(state, None, |config, snapshot| {
+        if let Some(port) = original_port {
+            if let Some(item) = config
+                .forwards
+                .iter_mut()
+                .find(|item| item.local_port == port)
+            {
+                *item = value;
+            } else if snapshot
+                .forwards
+                .iter()
+                .any(|row| row.config.local_port == port)
+            {
+                config.forwards.push(value);
+            } else {
+                return Err("原本地映射不存在".into());
+            }
+        } else {
+            config.forwards.push(value);
+        }
+        Ok(())
+    })
+}
+
+pub fn delete_tunnel_forward(state: &ShellState, local_port: u16) -> Result<(), String> {
+    mutate_tunnel(state, None, |config, snapshot| {
+        if let Some(index) = config
+            .forwards
+            .iter()
+            .position(|item| item.local_port == local_port)
+        {
+            config.forwards.remove(index);
+        } else if !snapshot
+            .forwards
+            .iter()
+            .any(|row| row.config.local_port == local_port)
+        {
+            return Err("本地映射不存在".into());
+        }
+        Ok(())
+    })
+}
+
+pub fn set_tunnel_forward_enabled(
+    state: &ShellState,
+    local_port: u16,
+    enabled: bool,
+) -> Result<(), String> {
+    mutate_tunnel(
+        state,
+        enabled.then_some(TunnelRetry::Forward(local_port)),
+        |config, snapshot| {
+            if let Some(item) = config
+                .forwards
+                .iter_mut()
+                .find(|item| item.local_port == local_port)
+            {
+                item.enabled = enabled;
+            } else {
+                let mut item = snapshot
+                    .forwards
+                    .iter()
+                    .find(|row| row.config.local_port == local_port)
+                    .ok_or("本地映射不存在")?
+                    .config
+                    .clone();
+                if enabled {
+                    item.enabled = true;
+                    config.forwards.push(item);
+                }
+            }
+            Ok(())
+        },
+    )
+}
+
+pub fn set_tunnel_mode(state: &ShellState, mode: TunnelMode) -> Result<(), String> {
+    mutate_tunnel(state, None, |config, _| {
+        config.mode = mode;
+        Ok(())
+    })
 }
 
 pub fn shutdown(app: &AppHandle) {
@@ -2711,26 +2730,34 @@ pub fn shutdown(app: &AppHandle) {
             if let Some(cancel) = &runtime.operation {
                 cancel.store(true, Ordering::Release);
             }
-            if let Some(tunnel) = &runtime.tunnel_worker {
-                tunnel.stop();
-            }
         }
     }
-    if let Some((stop, monitor)) = state
+    let monitor = state
         .monitor
         .lock()
         .ok()
-        .and_then(|mut monitor| monitor.take())
-    {
+        .and_then(|mut monitor| monitor.take());
+    if let Some((stop, monitor)) = monitor {
         let _ = stop.send(());
         let _ = monitor.join();
     }
-    if let Some(worker) = state
+    // take 后释放 ShellState 锁再等待，监视器和 worker 收尾都可能读取状态。
+    let tunnel_worker = state
+        .tunnel
+        .lock()
+        .ok()
+        .and_then(|mut tunnel| tunnel.take_worker());
+    if let Some(worker) = tunnel_worker {
+        if let Err(error) = worker.shutdown() {
+            write_shell_log(&state, "tunnel-shutdown-failed", &error);
+        }
+    }
+    let environment_worker = state
         .environment_worker
         .lock()
         .ok()
-        .and_then(|mut worker| worker.take())
-    {
+        .and_then(|mut worker| worker.take());
+    if let Some(worker) = environment_worker {
         let _ = worker.join();
     }
     let workers = state
@@ -2746,8 +2773,10 @@ pub fn shutdown(app: &AppHandle) {
         .lock()
         .map(|runtimes| runtimes.keys().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
+    let mut failed_services = 0;
     for url in urls {
         if let Err(error) = stop_active_child(&state, &url) {
+            failed_services += 1;
             write_shell_log(
                 &state,
                 "server-stop-failed",
@@ -2757,8 +2786,20 @@ pub fn shutdown(app: &AppHandle) {
     }
     windows::remove_all(app);
     state.environment.cleanup_cache(&state.log_path);
-    write_shell_log(&state, "desktop-exit", "桌面托管操作和服务进程已结束");
+    if failed_services == 0 {
+        write_shell_log(&state, "desktop-exit", "桌面托管操作和服务进程已结束");
+    } else {
+        write_shell_log(
+            &state,
+            "desktop-exit-incomplete",
+            &format!("桌面退出，但 {failed_services} 个托管服务未确认释放；请查看停止失败日志"),
+        );
+    }
 }
+
+#[cfg(test)]
+#[path = "l2-runtime-tunnel-tests.rs"]
+mod tunnel_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2828,12 +2869,10 @@ mod tests {
                 TargetConfig {
                     url: "https://example.com/".into(),
                     server: None,
-                    tunnel: None,
                 },
                 TargetConfig {
                     url: "http://127.0.0.1:30333/".into(),
                     server: Some(default_server_config()),
-                    tunnel: None,
                 },
             ],
             tunnel: TunnelConnectionConfig::default(),
@@ -3200,7 +3239,6 @@ child.on('exit', code => {{
                 targets: vec![TargetConfig {
                     url: url.clone(),
                     server: Some(server.clone()),
-                    tunnel: None,
                 }],
                 tunnel: TunnelConnectionConfig::default(),
             },
@@ -3307,7 +3345,6 @@ child.on('exit', code => {{
                 targets: vec![TargetConfig {
                     url: url.clone(),
                     server: Some(server.clone()),
-                    tunnel: None,
                 }],
                 tunnel: TunnelConnectionConfig::default(),
             },
@@ -3444,7 +3481,6 @@ child.on('message', () => process.exit(9));
                 targets: vec![TargetConfig {
                     url: url.clone(),
                     server: Some(server.clone()),
-                    tunnel: None,
                 }],
                 tunnel: TunnelConnectionConfig::default(),
             },
@@ -3746,7 +3782,6 @@ http.createServer((req, res) => res.writeHead(503).end('not ready'))
                     targets: vec![TargetConfig {
                         url: url.clone(),
                         server: Some(server.clone()),
-                        tunnel: None,
                     }],
                     tunnel: TunnelConnectionConfig::default(),
                 },
@@ -3860,7 +3895,6 @@ http.createServer((req, res) => res.writeHead(503).end('not ready'))
                 targets: vec![TargetConfig {
                     url: url.clone(),
                     server: Some(server.clone()),
-                    tunnel: None,
                 }],
                 tunnel: TunnelConnectionConfig::default(),
             },

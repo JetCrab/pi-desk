@@ -7,6 +7,15 @@ use std::time::{Duration, Instant};
 
 use crate::logging;
 
+#[cfg(unix)]
+#[path = "l4-process-unix.rs"]
+mod unix_tree;
+#[cfg(unix)]
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
 const TAIL_LIMIT: usize = 64 * 1024;
 pub(crate) type ProcessEnvironment = Vec<(OsString, OsString)>;
 
@@ -15,7 +24,9 @@ pub struct ManagedProcess {
     #[cfg(windows)]
     job: windows_job::Job,
     #[cfg(unix)]
-    process_group: Option<i32>,
+    tree: unix_tree::Tree,
+    #[cfg(unix)]
+    readers_stopped: Arc<AtomicBool>,
     stdout: Option<JoinHandle<io::Result<Vec<u8>>>>,
     stderr: Option<JoinHandle<io::Result<Vec<u8>>>>,
     log_path: PathBuf,
@@ -29,9 +40,9 @@ impl ManagedProcess {
     }
 
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        let result = self.child.try_wait()?;
+        let result = self.poll_child()?;
         if let Some(status) = &result {
-            self.stop_tree()?;
+            self.stop_tree(false)?;
             self.finish_readers()?;
             logging::write(
                 &self.log_path,
@@ -56,30 +67,76 @@ impl ManagedProcess {
             .to_string()
     }
 
-    fn stop_tree(&mut self) -> io::Result<()> {
+    fn poll_child(&mut self) -> io::Result<Option<ExitStatus>> {
+        #[cfg(unix)]
+        {
+            if !self.tree.exited()? {
+                return Ok(None);
+            }
+            self.stop_tree(false)?;
+        }
+        self.child.try_wait()
+    }
+
+    fn stop_tree(&mut self, _graceful: bool) -> io::Result<()> {
         #[cfg(windows)]
         {
             self.job.terminate()?;
         }
         #[cfg(unix)]
-        if let Some(group) = self.process_group {
-            // 仅向 spawn 时创建的独立进程组发信号，不按端口或进程名结束用户服务。
-            if unsafe { libc::killpg(group, libc::SIGKILL) } == -1 {
-                let error = io::Error::last_os_error();
-                if error.raw_os_error() != Some(libc::ESRCH) {
-                    return Err(error);
-                }
-            }
-            self.process_group = None;
-        }
+        self.tree.stop(_graceful, &self.log_path)?;
         Ok(())
     }
 
+    fn wait_after_stop(&mut self) -> io::Result<ExitStatus> {
+        #[cfg(windows)]
+        return self.child.wait();
+        #[cfg(unix)]
+        {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if let Some(status) = self.child.try_wait()? {
+                    return Ok(status);
+                }
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "等待托管根进程退出超时",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+
     fn finish_readers(&mut self) -> io::Result<(Vec<u8>, Vec<u8>)> {
+        #[cfg(unix)]
+        let readers_pending = {
+            let deadline = Instant::now() + Duration::from_millis(250);
+            while [&self.stdout, &self.stderr]
+                .iter()
+                .any(|reader| reader.as_ref().is_some_and(|reader| !reader.is_finished()))
+                && Instant::now() < deadline
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+            let pending = [&self.stdout, &self.stderr]
+                .iter()
+                .any(|reader| reader.as_ref().is_some_and(|reader| !reader.is_finished()));
+            self.readers_stopped.store(true, Ordering::Relaxed);
+            pending
+        };
         let stdout = join_reader(self.stdout.take());
         let stderr = join_reader(self.stderr.take());
         if !stdout.as_ref().is_ok_and(Vec::is_empty) || !stderr.as_ref().is_ok_and(Vec::is_empty) {
             self.output = (stdout?, stderr?);
+        }
+        #[cfg(unix)]
+        if readers_pending {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "输出管道仍由未确认退出的进程持有，已停止读取",
+            ));
         }
         Ok(self.output.clone())
     }
@@ -87,15 +144,29 @@ impl ManagedProcess {
 
 impl Drop for ManagedProcess {
     fn drop(&mut self) {
-        if let Err(error) = self.stop_tree() {
+        let stopped = self.stop_tree(true);
+        if let Err(error) = &stopped {
             logging::write(
                 &self.log_path,
                 "process-drop-error",
                 &format!("{} {error}", self.context),
             );
+            #[cfg(windows)]
             return;
         }
-        let _ = self.child.wait();
+        if stopped.is_ok() {
+            if let Err(error) = self.wait_after_stop() {
+                logging::write(
+                    &self.log_path,
+                    "process-wait-error",
+                    &format!("{} {error}", self.context),
+                );
+            }
+        }
+        #[cfg(unix)]
+        if stopped.is_err() {
+            let _ = self.child.try_wait();
+        }
         if let Err(error) = self.finish_readers() {
             logging::write(
                 &self.log_path,
@@ -126,11 +197,10 @@ pub(crate) fn spawn_with_environment(
 
 pub fn stop_child(child: &mut ManagedProcess) -> Result<(), String> {
     child
-        .stop_tree()
+        .stop_tree(true)
         .map_err(|error| format!("结束进程树失败：{error}"))?;
     let status = child
-        .child
-        .wait()
+        .wait_after_stop()
         .map_err(|error| format!("等待命令进程退出失败：{error}"))?;
     let result = child.finish_readers();
     logging::write(
@@ -209,10 +279,10 @@ fn capture_process(
 ) -> Result<Output, String> {
     let started = Instant::now();
     loop {
-        match process.child.try_wait() {
+        match process.poll_child() {
             Ok(Some(status)) => {
                 process
-                    .stop_tree()
+                    .stop_tree(false)
                     .map_err(|error| format!("清理命令进程树失败：{error}"))?;
                 let (stdout, stderr) = process.finish_readers().map_err(|error| {
                     logging::write(
@@ -351,11 +421,21 @@ fn spawn_command(
         }
     };
     #[cfg(unix)]
-    let process_group = Some(child.id() as i32);
+    let tree = match unix_tree::Tree::new(child.id()) {
+        Ok(tree) => tree,
+        Err(error) => {
+            let mut child = child;
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("取得命令进程身份失败：{error}"));
+        }
+    };
     let mut managed = ManagedProcess {
         child,
         #[cfg(unix)]
-        process_group,
+        tree,
+        #[cfg(unix)]
+        readers_stopped: Arc::new(AtomicBool::new(false)),
         #[cfg(windows)]
         job,
         stdout: None,
@@ -366,6 +446,21 @@ fn spawn_command(
     };
     let stdout = managed.child.stdout.take().expect("stdout 已配置为 pipe");
     let stderr = managed.child.stderr.take().expect("stderr 已配置为 pipe");
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags == -1
+                || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
+            {
+                return Err(format!(
+                    "配置命令输出非阻塞读取失败：{}",
+                    io::Error::last_os_error()
+                ));
+            }
+        }
+    }
     managed.stdout = Some(
         start_reader(
             stdout,
@@ -373,6 +468,8 @@ fn spawn_command(
             managed.context.clone(),
             "stdout",
             true,
+            #[cfg(unix)]
+            managed.readers_stopped.clone(),
         )
         .map_err(|error| format!("启动 stdout 读取线程失败：{error}"))?,
     );
@@ -383,6 +480,8 @@ fn spawn_command(
             managed.context.clone(),
             "stderr",
             true,
+            #[cfg(unix)]
+            managed.readers_stopped.clone(),
         )
         .map_err(|error| format!("启动 stderr 读取线程失败：{error}"))?,
     );
@@ -395,6 +494,7 @@ fn start_reader(
     context: String,
     stream: &'static str,
     capture: bool,
+    #[cfg(unix)] stopped: Arc<AtomicBool>,
 ) -> io::Result<JoinHandle<io::Result<Vec<u8>>>> {
     thread::Builder::new()
         .name(format!("desktop-{stream}"))
@@ -403,16 +503,17 @@ fn start_reader(
             let mut buffer = [0u8; 8192];
             let mut pending = Vec::new();
             loop {
+                #[cfg(unix)]
+                if stopped.load(Ordering::Relaxed) {
+                    logging::write(
+                        &log_path,
+                        "process-read-cancel",
+                        &format!("{context} stream={stream} 输出管道仍被持有，停止读取"),
+                    );
+                    break;
+                }
                 match reader.read(&mut buffer) {
-                    Ok(0) => {
-                        logging::write_output(
-                            &log_path,
-                            &context,
-                            stream,
-                            decode_output(&pending).as_bytes(),
-                        );
-                        return Ok(tail);
-                    }
+                    Ok(0) => break,
                     Ok(length) => {
                         pending.extend_from_slice(&buffer[..length]);
                         let split = pending
@@ -441,6 +542,10 @@ fn start_reader(
                             tail.extend_from_slice(chunk);
                         }
                     }
+                    #[cfg(unix)]
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                     Err(error) => {
                         logging::write(
@@ -452,6 +557,13 @@ fn start_reader(
                     }
                 }
             }
+            logging::write_output(
+                &log_path,
+                &context,
+                stream,
+                decode_output(&pending).as_bytes(),
+            );
+            Ok(tail)
         })
 }
 

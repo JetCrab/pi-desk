@@ -69,6 +69,10 @@ import type { L2WorkbenchComposerSlots } from './l2-workbench-chat-composer'
 import type { L2WorkbenchPluginSessionSlots } from './l2-workbench-plugin-slots'
 import { createL2WorkbenchBiz } from './l2-workbench-biz'
 import { createL2WorkbenchVersionRefresh } from './l2-workbench-version-refresh'
+import {
+  remindL2CompletedWorkSessions,
+  startL2CompletionReminders
+} from './l2-workbench-completion-reminders'
 import { L2FileWorkspaceRuntime } from './file-workspace/l2-file-workspace-runtime'
 import { L2ProjectFileBrowser } from './file-workspace/l2-project-file-browser'
 import {
@@ -242,6 +246,7 @@ export function L2Workbench({
   renderPluginSessionHeader
 }: L2WorkbenchProps): React.JSX.Element {
   const { t } = useTranslation('workbench')
+  useEffect(startL2CompletionReminders, [])
   const { clientId, appSocket } = useL4AppSocket()
   const toast = useL4AppToast()
   const pluginHost = useL4PluginHost()
@@ -711,6 +716,7 @@ export function L2Workbench({
   const applyWorkSessionUpdate = useCallback(
     (update: L2WorkSessionsUpdate): void => {
       try {
+        const previous = workSessionsRef.current
         const next = applyL2WorkSessionsUpdate(
           {
             workSessions: workSessionsRef.current,
@@ -719,6 +725,7 @@ export function L2Workbench({
           update
         )
         applyWorkSessionSnapshot(next)
+        remindL2CompletedWorkSessions(previous, next.workSessions, t('settings:reminderTitle'))
       } catch (cause) {
         setError(errorMessage(cause, t('workSessionUpdateInvalid')))
         reloadWorkSessions()

@@ -277,7 +277,7 @@ export function L2PluginContributionHost({
               </L4ErrorDetails>
               <Button type="button" variant="outline" size="sm" onClick={retry}>
                 <RefreshCwIcon />
-                {t('retry')}
+                {t('reloadOne')}
               </Button>
             </PopoverContent>
           </Popover>
@@ -302,7 +302,7 @@ export function L2PluginContributionHost({
                 </L4ErrorDetails>
                 <Button type="button" variant="outline" size="sm" className="mt-3" onClick={retry}>
                   <RefreshCwIcon />
-                  {t('retry')}
+                  {t('reloadOne')}
                 </Button>
               </div>
             </div>

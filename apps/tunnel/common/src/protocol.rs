@@ -2,11 +2,14 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use serde::{Deserialize, Serialize};
 
-pub const HEALTH_PATH: &str = "/api/v1/system/health";
-pub const OPEN_TUNNEL_PATH: &str = "/api/v1/tunnel/open";
-pub const STATUS_TUNNEL_PATH: &str = "/api/v1/tunnel/status";
-pub const CLOSE_TUNNEL_PATH: &str = "/api/v1/tunnel/close";
+pub const HEALTH_PATH: &str = "/api/v2/system/health";
+pub const OPEN_TUNNEL_PATH: &str = "/api/v2/tunnel/open";
+pub const STATUS_TUNNEL_PATH: &str = "/api/v2/tunnel/status";
+pub const CLOSE_TUNNEL_PATH: &str = "/api/v2/tunnel/close";
+pub const RESOLVE_TUNNEL_PATH: &str = "/api/v2/tunnel/resolve";
 pub const MAX_REQUEST_BYTES: usize = 512 * 1024;
+pub const LEASE_DURATION: std::time::Duration = std::time::Duration::from_secs(30);
+pub const RENEW_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 const NONCE_BYTES: usize = 24;
 const TAG_BYTES: usize = 16;
@@ -123,30 +126,76 @@ impl HealthResponse {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct OpenTunnelRequest {
     pub request_id: String,
-    pub device_id: String,
-    pub public_port: u16,
+    pub provider_id: String,
+    pub port: u16,
+    pub public_port: Option<u16>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TunnelRelayTransport {
-    #[default]
-    Noise,
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TunnelRelayConfig {
+    pub url: String,
+    pub auth_token: String,
+    #[serde(default = "default_relay_quic_port")]
+    pub quic_port: u16,
+}
+
+pub fn default_relay_quic_port() -> u16 {
+    7842
+}
+
+impl std::fmt::Debug for TunnelRelayConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TunnelRelayConfig")
+            .field("url", &self.url)
+            .field("quic_port", &self.quic_port)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
+pub struct OpenTunnelResponse {
+    pub tunnel_id: String,
+    pub service_token: String,
+    pub relay: TunnelRelayConfig,
+    pub gateway_id: String,
+    pub public_addr: Option<String>,
+}
+
+impl std::fmt::Debug for OpenTunnelResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OpenTunnelResponse")
+            .field("tunnel_id", &self.tunnel_id)
+            .field("public_addr", &self.public_addr)
+            .field("gateway_id", &self.gateway_id)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct OpenTunnelResponse {
+pub struct ResolveTunnelRequest {
+    pub provider_id: String,
+    pub port: u16,
+}
+
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
+pub struct ResolveTunnelResponse {
     pub tunnel_id: String,
-    pub public_port: u16,
-    pub public_addr: String,
-    pub relay_addr: String,
     pub service_token: String,
-    pub server_public_key: String,
-    #[serde(default)]
-    pub relay_transport: TunnelRelayTransport,
+    pub relay: TunnelRelayConfig,
+}
+
+impl std::fmt::Debug for ResolveTunnelResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResolveTunnelResponse")
+            .field("tunnel_id", &self.tunnel_id)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
@@ -157,8 +206,8 @@ pub struct StatusTunnelRequest {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TunnelStatus {
-    AwaitingClient,
-    Listening,
+    AwaitingProvider,
+    Ready,
     Failed,
 }
 
@@ -208,6 +257,30 @@ pub fn random_hex<const N: usize>() -> Result<String, getrandom::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relay_quic_port_supports_old_v2_and_custom_roundtrip_without_debug_token() {
+        let old = serde_json::json!({
+            "url": "https://relay.example.com",
+            "auth_token": "test-relay-token"
+        });
+        let mut relay: TunnelRelayConfig = serde_json::from_value(old).unwrap();
+        assert_eq!(relay.quic_port, 7842);
+        relay.quic_port = 20012;
+        let custom = serde_json::json!({
+            "url": "https://relay.example.com",
+            "auth_token": "test-relay-token",
+            "quic_port": 20012
+        });
+        assert_eq!(serde_json::to_value(&relay).unwrap(), custom);
+        assert_eq!(
+            serde_json::from_value::<TunnelRelayConfig>(custom).unwrap(),
+            relay
+        );
+        let debug = format!("{relay:?}");
+        assert!(debug.contains("20012"));
+        assert!(!debug.contains("test-relay-token"));
+    }
 
     #[test]
     fn encryption_binds_the_request_path() {

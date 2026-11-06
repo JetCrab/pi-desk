@@ -156,6 +156,7 @@ function TodoProgress({
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
   const [pinned, setPinned] = useState(false)
+  const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const widgetRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -174,6 +175,7 @@ function TodoProgress({
 
   useEffect(
     () => (): void => {
+      if (enterTimer.current) clearTimeout(enterTimer.current)
       if (leaveTimer.current) clearTimeout(leaveTimer.current)
     },
     []
@@ -181,16 +183,26 @@ function TodoProgress({
 
   function enter(): void {
     if (leaveTimer.current) clearTimeout(leaveTimer.current)
-    setHovered(true)
+    if (enterTimer.current) clearTimeout(enterTimer.current)
+    if (open) {
+      setHovered(true)
+      return
+    }
+    enterTimer.current = setTimeout(() => {
+      enterTimer.current = null
+      setHovered(true)
+    }, 500)
   }
 
   function leave(): void {
+    if (enterTimer.current) clearTimeout(enterTimer.current)
     if (leaveTimer.current) clearTimeout(leaveTimer.current)
     leaveTimer.current = setTimeout(() => setHovered(false), 160)
   }
 
   function close(): void {
     ignoreReturnFocus.current = Boolean(panelRef.current?.contains(document.activeElement))
+    if (enterTimer.current) clearTimeout(enterTimer.current)
     if (leaveTimer.current) clearTimeout(leaveTimer.current)
     setPinned(false)
     setHovered(false)

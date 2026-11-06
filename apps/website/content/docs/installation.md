@@ -10,6 +10,8 @@
 
 **Windows 版**：先安装 [Node.js](https://nodejs.org/zh-cn/download)（22.19.0 或更新版本）和 [Git for Windows](https://git-scm.com/download/win)。安装客户端后打开控制中心，点击“启动”，再打开本机网址。首次提示安装 Pi 时，点击“安装”。中国用户可在“安装选项 → 下载源”选择“国内镜像”，加速下载所需组件。
 
+**macOS 版**：打开 DMG，将 Pi Desk 拖入 Applications，复制完成后从“应用程序”打开。覆盖安装前，先在控制中心停止本机服务，再从 Pi Desk 菜单退出应用；关闭窗口不等于退出。
+
 **Android 版**：填写电脑上已启动的 Pi Desk 访问地址。手机只负责访问，不运行服务；连接方法见[远程访问](/docs/devices/)。
 
 ## 通过 Docker 启动

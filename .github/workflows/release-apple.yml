@@ -119,46 +119,73 @@ jobs:
       - name: 前端类型检查
         working-directory: apps/desktop
         run: pnpm run typecheck:web
-      - name: 隔离验证 macOS 原生安装器
+      - name: 验证隔离桌面交互与隧道界面
         working-directory: apps/desktop
-        run: pnpm run test:installer:mac
-      - name: 构建通用 macOS 离线安装器
+        run: pnpm run test:webkit --screenshots
+      - name: 保存界面检查附件
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-webkit-checks-${{ github.run_id }}
+          overwrite: true
+          path: temp/run/desktop-webkit-confirm/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: 构建通用 macOS 拖拽安装 DMG
         working-directory: apps/desktop
+        env:
+          # Tauri 在 CI 中默认跳过 Finder 布局，必须显式启用。
+          TAURI_BUNDLER_DMG_IGNORE_CI: 'true'
         run: |
-          build_args=(exec tauri build --target universal-apple-darwin --bundles app --config "$CARGO_TARGET_DIR/tauri-ci.json")
+          build_args=(exec tauri build --target universal-apple-darwin --bundles dmg --config "$CARGO_TARGET_DIR/tauri-ci.json")
           pnpm "${build_args[@]}"
-          release="$CARGO_TARGET_DIR/universal-apple-darwin/$BUILD_PROFILE"
-          node scripts/build-macos-installer.mjs "$release/bundle/macos/Pi Desk.app" "$release/bundle/installer-macos"
+      - name: 验证 macOS 托管进程退出与端口释放
+        run: |
+          export TAURI_CONFIG="$(node -p 'require("node:fs").readFileSync(process.env.CARGO_TARGET_DIR + "/tauri-ci.json", "utf8")')"
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml process:: -- --test-threads=1
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml service_port:: -- --test-threads=1
+          cargo test --locked --manifest-path apps/tunnel/Cargo.toml --workspace -- --test-threads=1
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml tunnel -- --test-threads=1
       - run: node .github/scripts/rust-cache.mjs save
-      - name: 检查两种架构与签名结构并归档
+      - name: 检查 DMG 拖拽布局、双架构与签名并归档
         env:
           SIGNED: ${{ steps.signing.outputs.signed }}
         run: |
           set -euo pipefail
           release="$CARGO_TARGET_DIR/universal-apple-darwin/$BUILD_PROFILE"
-          dmgs=("$release/bundle/installer-macos/"*.dmg)
+          dmgs=("$release/bundle/dmg/"*.dmg)
           test "${#dmgs[@]}" = 1
           test -s "${dmgs[0]}"
           mountpoint="$RUNNER_TEMP/pi-desk-dmg-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          payload_root="$RUNNER_TEMP/pi-desk-payload-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          mkdir -p "$mountpoint" "$payload_root"
+          mkdir -p "$mountpoint"
           hdiutil attach "${dmgs[0]}" -readonly -nobrowse -mountpoint "$mountpoint"
-          trap 'status=$?; trap - EXIT; hdiutil detach "$mountpoint" > /dev/null || status=1; rm -rf "$payload_root"; exit "$status"' EXIT
-          installer="$mountpoint/Pi Desk Installer.app"
-          codesign --verify --deep --strict "$installer"
-          lipo "$installer/Contents/MacOS/PiDeskInstaller" -verify_arch arm64 x86_64
-          archive="$installer/Contents/Resources/PiDesk.zip"
-          expected=$(/usr/libexec/PlistBuddy -c 'Print :PayloadSHA256' "$installer/Contents/Info.plist")
-          test "$(shasum -a 256 "$archive" | awk '{print $1}')" = "$expected"
-          ditto -x -k "$archive" "$payload_root"
-          app="$payload_root/Pi Desk.app"
+          cleanup() {
+            exit_status=$?
+            trap - EXIT
+            if ! hdiutil detach "$mountpoint" > /dev/null; then
+              echo '卸载 DMG 失败' >&2
+              if [[ "$exit_status" == 0 ]]; then
+                exit_status=1
+              fi
+            fi
+            exit "$exit_status"
+          }
+          trap cleanup EXIT
+          app="$mountpoint/Pi Desk.app"
+          test -d "$app"
+          test -L "$mountpoint/Applications"
+          test "$(readlink "$mountpoint/Applications")" = "/Applications"
+          test -s "$mountpoint/.DS_Store"
+          cmp apps/desktop/src-tauri/dmg-background.png "$mountpoint/.background/dmg-background.png"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.jetcrab.desktop"
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
           lipo "$app/Contents/MacOS/$executable" -verify_arch arm64 x86_64
           codesign --verify --deep --strict "$app"
+          node .github/scripts/check-desktop-tunnel.mjs "$app/Contents/MacOS/$executable"
+          PI_DESK_TUNNEL_TEST_DESKTOP_EXECUTABLE="$app/Contents/MacOS/$executable" \
+            cargo test --locked --manifest-path apps/tunnel/Cargo.toml -p pi-desk-tunnel-client --test cli -- --test-threads=1
           version=$(node -p 'require("./apps/desktop/package.json").version')
-          for bundle in "$app" "$installer"; do
-            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$bundle/Contents/Info.plist")" = "$version"
-          done
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
           suffix=adhoc
           pack_args=(macos "${dmgs[0]}" "$CLIENT_OUTPUT")
           if [[ "$SIGNED" == true ]]; then
@@ -169,9 +196,9 @@ jobs:
           (cd "$CLIENT_OUTPUT" && shasum -a 256 ./*.dmg > SHA256SUMS.txt)
           {
             echo '## macOS 构建结果'
-            echo "- 版本：$version；架构：Apple Silicon + Intel"
-            echo "- 签名类型：$suffix，未进行 Apple 公证。"
-            echo '- DMG 内为原生离线安装器，双击安装器安装主应用；首次打开可能需要在隐私与安全性中选择“仍要打开”。'
+            echo "- 版本：${version}；架构：Apple Silicon + Intel"
+            echo "- 签名类型：${suffix}，未进行 Apple 公证。"
+            echo '- 打开 DMG，将 Pi Desk.app 拖入 Applications；覆盖前先停止服务并退出应用。首次打开可能需要在隐私与安全性中选择“仍要打开”。'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: 清理临时签名
         if: always()

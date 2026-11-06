@@ -3,11 +3,13 @@ use std::time::Duration;
 use crate::protocol::{
     CLOSE_TUNNEL_PATH, CloseTunnelRequest, CryptoContext, CryptoError, ErrorResponse,
     MAX_REQUEST_BYTES, MutationResponse, OPEN_TUNNEL_PATH, OpenTunnelRequest, OpenTunnelResponse,
-    STATUS_TUNNEL_PATH, StatusTunnelRequest, StatusTunnelResponse,
+    RESOLVE_TUNNEL_PATH, ResolveTunnelRequest, ResolveTunnelResponse, STATUS_TUNNEL_PATH,
+    StatusTunnelRequest, StatusTunnelResponse,
 };
 
 const OCTET_STREAM: &str = "application/octet-stream";
 
+#[derive(Clone)]
 pub struct ControlClient {
     agent: ureq::Agent,
     base_url: String,
@@ -25,6 +27,7 @@ pub enum ControlClientError {
     ResponseDecryption(CryptoError),
     ResponseDeserialization(serde_json::Error),
     InvalidResponse,
+    ProtocolMismatch,
     Rejected(ControlServerError),
     TransportStatus(u16),
     UnexpectedStatus(u16),
@@ -36,6 +39,7 @@ pub enum ControlServerError {
     PortConflict,
     RequestConflict,
     NotFound,
+    NotReady,
     Unauthorized,
     InvalidRequest,
     Internal,
@@ -44,10 +48,11 @@ pub enum ControlServerError {
 impl std::fmt::Display for ControlServerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidPort => formatter.write_str("公网端口必须是 1 到 65535 的有效端口"),
+            Self::InvalidPort => formatter.write_str("端口必须是 1 到 65535 的有效端口"),
             Self::PortConflict => formatter.write_str("公网端口已被占用"),
             Self::RequestConflict => formatter.write_str("请求标识与已有请求冲突"),
             Self::NotFound => formatter.write_str("隧道不存在或已关闭"),
+            Self::NotReady => formatter.write_str("提供端隧道尚未就绪"),
             Self::Unauthorized => formatter.write_str("隧道控制密钥无效"),
             Self::InvalidRequest => formatter.write_str("隧道请求无效"),
             Self::Internal => formatter.write_str("隧道服务端无法处理请求"),
@@ -67,6 +72,9 @@ impl std::fmt::Display for ControlClientError {
             Self::ResponseDecryption(_) => formatter.write_str("隧道控制服务响应无法验证"),
             Self::ResponseDeserialization(_) | Self::InvalidResponse => {
                 formatter.write_str("隧道控制服务响应格式无效")
+            }
+            Self::ProtocolMismatch => {
+                formatter.write_str("控制服务不支持隧道 v2，请核对地址并同步升级服务端与客户端")
             }
             Self::Rejected(error) => error.fmt(formatter),
             Self::TransportStatus(status) => {
@@ -136,6 +144,23 @@ impl ControlClient {
         Ok(response)
     }
 
+    pub fn resolve_tunnel(
+        &self,
+        provider_id: &str,
+        port: u16,
+    ) -> Result<ResolveTunnelResponse, ControlClientError> {
+        let response = self.post_encrypted(
+            RESOLVE_TUNNEL_PATH,
+            serde_json::to_vec(&ResolveTunnelRequest {
+                provider_id: provider_id.to_owned(),
+                port,
+            })
+            .map_err(ControlClientError::RequestSerialization)?,
+        )?;
+        let plaintext = self.tunnel_plaintext(RESOLVE_TUNNEL_PATH, response)?;
+        serde_json::from_slice(&plaintext).map_err(ControlClientError::ResponseDeserialization)
+    }
+
     pub fn close_tunnel(&self, tunnel_id: &str) -> Result<(), ControlClientError> {
         let response = self.post_encrypted(
             CLOSE_TUNNEL_PATH,
@@ -192,6 +217,9 @@ impl ControlClient {
         status: u16,
         response: &mut ureq::http::Response<ureq::Body>,
     ) -> Result<ControlClientError, ControlClientError> {
+        if status == 404 && self.require_content_type(response).is_err() {
+            return Ok(ControlClientError::ProtocolMismatch);
+        }
         if matches!(status, 408 | 413 | 503) {
             return Ok(ControlClientError::TransportStatus(status));
         }
@@ -211,6 +239,7 @@ impl ControlClient {
             "port_conflict" => ControlServerError::PortConflict,
             "request_conflict" => ControlServerError::RequestConflict,
             "not_found" => ControlServerError::NotFound,
+            "not_ready" => ControlServerError::NotReady,
             "unauthorized" => ControlServerError::Unauthorized,
             "invalid_request" => ControlServerError::InvalidRequest,
             _ => ControlServerError::Internal,

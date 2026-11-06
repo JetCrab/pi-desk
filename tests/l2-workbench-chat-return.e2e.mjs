@@ -34,12 +34,13 @@ assert.ok(
     'follow-retained',
     'follow-remount',
     'send-switch',
+    'send-follow',
     'switch-ended',
     'resize-entry'
   ].includes(scenario)
 )
 assert.ok(
-  !desktop || ['switch-ended', 'resize-entry'].includes(scenario),
+  !desktop || ['switch-ended', 'resize-entry', 'send-follow'].includes(scenario),
   '桌面参数仅用于切换与拖宽回归'
 )
 assert.ok(scenario !== 'resize-entry' || desktop, '拖宽回归需要 --desktop')
@@ -97,7 +98,12 @@ async function fixture(modelPort) {
       '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>文件预览</title><p>返回聊天后保留阅读位置。</p></html>'
     )
     const session = SessionManager.create(cwd)
-    for (let index = 0; index < 5; index += 1) {
+    const turnCount = scenario === 'send-follow' ? (id === workId ? 0 : 65) : 5
+    if (turnCount === 0) {
+      await mkdir(dirname(session.getSessionFile()), { recursive: true })
+      await writeFile(session.getSessionFile(), `${JSON.stringify(session.getHeader())}\n`)
+    }
+    for (let index = 0; index < turnCount; index += 1) {
       session.appendMessage({
         role: 'user',
         content: [{ type: 'text', text: `${id} 提问 ${index + 1}` }],
@@ -207,7 +213,7 @@ async function scrollBy(client, deltaY) {
     `(() => {
       const log = document.querySelector('${column} [role="log"]');
       const rect = log.getBoundingClientRect();
-      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      return { x: rect.x + 1, y: rect.y + rect.height / 2 };
     })()`
   )
   await client.send('Input.dispatchMouseEvent', {
@@ -471,7 +477,253 @@ async function checkFollowReturn(client, mode) {
   await finishReply(client)
 }
 
+async function checkSendFollow(client) {
+  const destination = desktop ? replacementWorkId : otherWorkId
+  const changeSession = async (from, to) => {
+    if (desktop) {
+      await click(client, `[data-testid="work-session-row-${to}"]`)
+      await waitFor(
+        client,
+        `document.querySelector('[data-work-id="${to}"] textarea') !== null`,
+        '会话已切换'
+      )
+      await settle(client)
+    } else {
+      await switchMobile(client, from, to)
+    }
+  }
+  const checkTail = async (label) => {
+    await waitFor(client, `(${metrics})?.gap <= 2`, label, () => serverOutput, 3000)
+    await settle(client)
+    const tailVisible = await evaluate(
+      client,
+      `(() => {
+      const log = document.querySelector('${column} [role="log"]');
+      const tail = log?.querySelector('[data-chat-logical-tail]');
+      const last = [...(tail?.querySelectorAll('p') ?? [])].at(-1);
+      const rect = log?.getBoundingClientRect();
+      return Boolean(last && last.getBoundingClientRect().top < rect.bottom && last.getBoundingClientRect().bottom > rect.top);
+    })()`
+    )
+    assert.equal(tailVisible, true, `${label}必须显示真实尾部，不能只到历史窗口底部`)
+    console.log(label, await evaluate(client, metrics))
+  }
+  const grow = async (label) => {
+    send(`\n\n${answer}\n\n${label}`)
+    await checkFollowing(client, label)
+    await checkTail(label)
+  }
+  const readHistory = async () => {
+    await scrollBy(client, -500)
+    await waitFor(client, `(${metrics})?.gap > 300`, '阅读历史退出跟随')
+    await settle(client)
+  }
+  const append = async (text, mode) => {
+    const oldQueueCount = await evaluate(
+      client,
+      `(() => {
+      const label = [...document.querySelectorAll('${column} button')].find(e => e.ariaLabel?.includes('排队'))?.ariaLabel;
+      return Number(label?.match(/\\d+/)?.[0] ?? 0);
+    })()`
+    )
+    await evaluate(client, `document.querySelector('${column} textarea').focus()`)
+    await client.send('Input.insertText', { text })
+    const label = mode === 'follow_up' ? '当前轮结束后发送' : '立即引导当前响应'
+    await waitFor(
+      client,
+      `document.querySelector('${column} [aria-label="${label}"]')?.disabled === false`,
+      '追加可发送'
+    )
+    if (mode === 'enter') {
+      await client.send('Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13
+      })
+      await client.send('Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13
+      })
+    } else {
+      await click(client, `${column} [aria-label="${label}"]`)
+    }
+    await waitFor(
+      client,
+      `document.querySelector('${column} [aria-label="查看 ${oldQueueCount + 1} 条排队消息"]') !== null`,
+      '追加已入队'
+    )
+    await checkTail(`${mode}入队即恢复跟随`)
+  }
+  const consume = async (text, hidden = false) => {
+    const nextRequest = modelRequestCount + 1
+    const arrived = once(modelEvents, 'reply', { signal: AbortSignal.timeout(20000) })
+    if (hidden) await changeSession(workId, destination)
+    send('当前响应完成，继续处理排队消息。', true)
+    await arrived
+    assert.equal(modelRequestCount, nextRequest)
+    if (hidden) await checkFollowSwitch(client, destination, workId)
+    await checkFollowing(client, text)
+    await checkTail('排队消息消费后保持跟随')
+  }
+
+  for (const text of ['空会话第一次发送', '首次回答结束后第二次发送']) {
+    await startReply(client, text)
+    await checkTail(text)
+    await grow(`${text}持续输出`)
+    await changeSession(workId, destination)
+    await checkFollowSwitch(client, destination, workId)
+    await grow(`${text}切回后继续输出`)
+    if (text === '空会话第一次发送') {
+      await finishReply(client)
+      await checkTail('首次回答结束')
+    }
+  }
+
+  await append('原本在底部追加', 'auto')
+  await grow('底部追加后继续输出')
+  await consume('原本在底部追加')
+  await readHistory()
+  await append('上翻后回车追加', 'enter')
+  await grow('上翻后回车追加仍在队列')
+  await consume('上翻后回车追加', true)
+  await grow('隐藏期间消费后返回继续输出')
+
+  await readHistory()
+  await append('上翻后立即引导', 'auto')
+  await readHistory()
+  const reading = await evaluate(client, metrics)
+  send(`\n\n${answer}\n\n恢复跟随后再次上翻的普通增量`)
+  await waitFor(
+    client,
+    `document.querySelector('${column} [role="log"]').textContent.includes('恢复跟随后再次上翻的普通增量')`,
+    '普通增量已到达'
+  )
+  await settle(client)
+  assert.ok(
+    Math.abs((await evaluate(client, metrics)).top - reading.top) <= 2,
+    '再次上翻后普通增量不得拉回底部'
+  )
+  await consume('上翻后立即引导')
+  await readHistory()
+  await append('上翻后轮后发送', 'follow_up')
+  await grow('轮后发送仍在队列')
+  await consume('上翻后轮后发送', true)
+
+  await readHistory()
+  await evaluate(
+    client,
+    `(() => {
+    const original = WebSocket.prototype.send;
+    window.__sendAccepted = false;
+    WebSocket.prototype.send = function(data) {
+      const request = typeof data === 'string' ? JSON.parse(data) : null;
+      if (request?.head?.path !== 'chat/send') return original.call(this, data);
+      WebSocket.prototype.send = original;
+      const accepted = (event) => {
+        const response = JSON.parse(event.data);
+        if (response.head?.op !== 'resp' || response.head.requestId !== request.head.requestId) return;
+        this.removeEventListener('message', accepted);
+        window.__sendAccepted = response.body.code === 0;
+      };
+      this.addEventListener('message', accepted);
+      window.__releaseSend = () => { original.call(this, data); window.__releaseSend = null; };
+    };
+    document.querySelector('${column} textarea').focus();
+  })()`
+  )
+  await client.send('Input.insertText', { text: '发送后切走且隐藏接管' })
+  await waitFor(
+    client,
+    `document.querySelector('${column} [aria-label="立即引导当前响应"]')?.disabled === false`,
+    '延迟追加可发送'
+  )
+  await click(client, `${column} [aria-label="立即引导当前响应"]`)
+  await waitFor(client, 'Boolean(window.__releaseSend)', '发送尚未接管')
+  await changeSession(workId, destination)
+  await evaluate(client, 'window.__releaseSend()')
+  await waitFor(client, 'window.__sendAccepted', '发送在隐藏期间成功接管')
+  await checkFollowSwitch(client, destination, workId)
+  await checkTail('隐藏接管后返回恢复跟随')
+  await consume('发送后切走且隐藏接管', true)
+  await finishReply(client)
+
+  // 从长历史恢复到不含真实尾部的窗口，只操作外部输入框也必须解除旧阅读目标。
+  await changeSession(workId, replacementWorkId)
+  const historyColumn = `[data-work-id="${replacementWorkId}"]`
+  await evaluate(client, `document.querySelector('${historyColumn} textarea').focus()`)
+  await client.send('Input.insertText', { text: '长历史运行中恢复阅读' })
+  const arrived = once(modelEvents, 'reply', { signal: AbortSignal.timeout(20000) })
+  await waitFor(
+    client,
+    `document.querySelector('${historyColumn} [aria-label="发送消息"]')?.disabled === false`,
+    '长历史可发送'
+  )
+  await click(client, `${historyColumn} [aria-label="发送消息"]`)
+  await arrived
+  await waitFor(
+    client,
+    `document.querySelector('${historyColumn} [role="log"]').textContent.includes('长历史运行中恢复阅读')`,
+    '长历史新提问已显示'
+  )
+  await settle(client)
+  for (let index = 0; index < 5; index++) {
+    const point = await evaluate(
+      client,
+      `(() => { const r = document.querySelector('${historyColumn} [role="log"]').getBoundingClientRect(); return { x:r.x+1,y:r.y+r.height/2 }; })()`
+    )
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseWheel',
+      ...point,
+      deltaX: 0,
+      deltaY: -100000
+    })
+    await settle(client)
+  }
+  await waitFor(
+    client,
+    `document.querySelector('${historyColumn} [role="log"]').textContent.includes('${replacementWorkId} 提问 1')`,
+    '早期历史已挂载'
+  )
+  await changeSession(replacementWorkId, workId)
+  await changeSession(workId, replacementWorkId)
+  await waitFor(
+    client,
+    `document.querySelector('${historyColumn} [role="log"]') && !document.querySelector('${historyColumn} [data-chat-logical-tail]')`,
+    '恢复窗口明确不含真实尾部'
+  )
+  await evaluate(client, `document.querySelector('${historyColumn} textarea').focus()`)
+  await client.send('Input.insertText', { text: '缺尾历史窗口追加' })
+  await waitFor(
+    client,
+    `document.querySelector('${historyColumn} [aria-label="立即引导当前响应"]')?.disabled === false`,
+    '缺尾窗口可追加'
+  )
+  await click(client, `${historyColumn} [aria-label="立即引导当前响应"]`)
+  const historyTail = `(() => {
+    const log = document.querySelector('${historyColumn} [role="log"]');
+    const scroll = log && [...log.querySelectorAll('div')].find(e => ['auto','scroll'].includes(getComputedStyle(e).overflowY));
+    return Boolean(scroll && log.querySelector('[data-chat-logical-tail]') && scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight <= 2);
+  })()`
+  await waitFor(client, historyTail, '追加后回到真实尾部', () => serverOutput, 3000)
+  send(`\n\n${answer}\n\n缺尾恢复后继续输出`)
+  await waitFor(
+    client,
+    `document.querySelector('${historyColumn} [role="log"]').textContent.includes('缺尾恢复后继续输出')`,
+    '缺尾恢复后的新内容已显示'
+  )
+  await waitFor(client, historyTail, '旧阅读观察器不得重新拉回历史', () => serverOutput, 3000)
+  console.log('缺尾历史窗口追加、外部输入操作和后续尺寸变化通过')
+}
+
 async function checkEntryResize(client, following = false) {
+  // 开发指示器自身有宽度动画，不属于聊天布局的空闲计数。
+  await evaluate(
+    client,
+    `document.querySelectorAll('nextjs-portal').forEach(element => { element.style.display = 'none' })`
+  )
   const waitForDevelopmentIdle = () =>
     waitFor(
       client,
@@ -696,6 +948,19 @@ async function main() {
     )
     const chatUrl = `http://127.0.0.1:${appPort}/${scenario === 'resize-entry' ? '' : '?chatScrollDebug=1'}`
     await navigate(client, chatUrl)
+    if (scenario === 'send-follow') {
+      await waitFor(
+        client,
+        `document.querySelector('${column} textarea')?.disabled === false`,
+        '空会话就绪',
+        () => serverOutput,
+        60000
+      )
+      await checkSendFollow(client)
+      success = true
+      console.log(`连续发送与运行中追加回归通过：${desktop ? '桌面端' : '移动端'}`)
+      return
+    }
     if (scenario === 'resize-entry') {
       await waitFor(client, `Math.abs((${metrics})?.offset - 12) <= 2`, '短回复定位到最后提问')
       await settle(client)

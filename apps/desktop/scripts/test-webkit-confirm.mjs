@@ -75,7 +75,18 @@ try {
           ['stop', 'light', '1000'],
           ['stop', 'dark', '1000'],
           ['pi', 'light', '440'],
-          ['pi', 'dark', '440']
+          ['pi', 'dark', '440'],
+          ['tunnel', 'light', '1000'],
+          ['tunnel', 'dark', '1000'],
+          ['tunnel', 'light', '440'],
+          ['tunnel-mapping', 'light', '1000'],
+          ['tunnel-mapping', 'dark', '1000'],
+          ['tunnel-connections', 'light', '1000'],
+          ['tunnel-connections', 'dark', '440'],
+          ['tunnel-failure', 'dark', '440'],
+          ['tunnel-share', 'light', '1000'],
+          ['tunnel-connect', 'dark', '440'],
+          ['tunnel-settings', 'light', '1000']
         ]
     for (const [scene, theme, width] of scenes) {
       execFileSync(binary, [output, scene, theme, width, ...platformArgs], {

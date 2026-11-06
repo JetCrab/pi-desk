@@ -57,7 +57,7 @@ const definitions: readonly CommandDefinition[] = [
   {
     path: ['plugins', 'reload'],
     description:
-      '重新加载一个或多个已安装插件；不下载、不重启宿主，不重载已有 Pi 会话；完成后向本会话汇总结果',
+      '重载一个或多个已配置插件，缺包或安装不完整时按原配置补装；保留启停和渠道，不重载已有 Pi 会话；完成后汇总结果',
     name: 'multiple',
     scope: 'required'
   },

@@ -38,10 +38,10 @@
 | 批量安装或更新         | `["plugins", "install", "<name-1>", "<name-2>", "--scope", "global"]`         |
 | 安装并跟随 dev         | `["plugins", "install", "<name>", "--scope", "global", "--tag", "dev"]`       |
 | 安装指定 npm 版本      | `["plugins", "install", "<name>", "--scope", "global", "--version", "1.2.3"]` |
-| 重载已安装插件当前代码 | `["plugins", "reload", "<name-1>", "<name-2>", "--scope", "global"]`          |
+| 重载插件并修复缺失包   | `["plugins", "reload", "<name-1>", "<name-2>", "--scope", "global"]`          |
 | 卸载插件并释放实例             | `["plugins", "remove", "<name-1>", "<name-2>", "--scope", "global"]`          |
 
-`install` 包含首次安装、更新和重装；目标版本已安装也会重装。`reload` 只重新加载本机现有码，不下载、不修改版本或渠道、不重启宿主，也不重载已有 Pi 会话；它不接受 `--version` 或 `--tag`。
+`install` 包含首次安装、更新和重装；目标版本已安装也会重装。`reload` 根据当前状态重新加载，远程包缺失或安装不完整时先补装；优先使用配置中的固定版本，否则保留可读取的本机版本，都没有时按原来源和保存的渠道解析。健康包不下载，重载不主动升级、不切换渠道、不启用已停用插件，也不自动重启宿主或重载已有 Pi 会话；它不接受 `--version` 或 `--tag`。补装失败可再次重载，无法取得的本地源码需恢复文件或卸载失效配置。
 
 ### 本地插件
 

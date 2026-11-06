@@ -50,6 +50,7 @@ export interface L2WorkbenchChatInputState {
   text: string
   images: L2WorkbenchImageAttachment[]
   outbox: L2WorkbenchOutboxState | null
+  followRequested: boolean
   notice: string | null
   error: string | null
   models: L2WorkbenchModelCatalogState
@@ -70,6 +71,7 @@ export interface L2WorkbenchChatInputRuntime {
   addFiles: (source: L2ChatSource, files: readonly File[]) => Promise<void>
   removeImage: (source: L2ChatSource, localId: string) => void
   send: (source: L2ChatSource, mode: 'auto' | 'follow_up') => Promise<void>
+  clearFollowRequest: (source: L2ChatSource) => void
   restoreOutbox: (source: L2ChatSource) => Promise<void>
   deleteOutbox: (source: L2ChatSource) => Promise<void>
   interrupt: (source: L2ChatSource) => Promise<void>
@@ -112,6 +114,7 @@ function emptyState(): L2WorkbenchChatInputState {
     text: '',
     images: [],
     outbox: null,
+    followRequested: false,
     notice: null,
     error: null,
     models: { status: 'idle', models: [], presets: [], error: null }
@@ -576,6 +579,8 @@ export function createL2WorkbenchChatInputRuntime(
           })
         })
         trimMessageImages()
+        // 接管成功即交还跟随；本地 Outbox 清理失败不能撤销已接管的发送。
+        replaceState(source, (state) => ({ ...state, followRequested: true }))
         await repository.clearOutbox(source)
         const latest = statesBySource.get(key)
         if (latest?.outbox?.images === current.images) {
@@ -598,6 +603,11 @@ export function createL2WorkbenchChatInputRuntime(
         notify()
         throw cause
       }
+    },
+
+    clearFollowRequest(source): void {
+      if (!ensureState(source).followRequested) return
+      replaceState(source, (state) => ({ ...state, followRequested: false }))
     },
 
     async prepareForPageReload(): Promise<boolean> {

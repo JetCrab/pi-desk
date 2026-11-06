@@ -19,8 +19,6 @@ export type DesktopAction =
   | 'check-update'
   | 'update'
   | 'cancel-update'
-  | 'start-tunnel'
-  | 'stop-tunnel'
   | 'check-environment'
   | 'cancel-environment'
   | 'check-pi-update'
@@ -36,8 +34,6 @@ const commands: Record<DesktopAction, string> = {
   'check-update': 'check_package_update_command',
   update: 'update_package_command',
   'cancel-update': 'cancel_package_update_command',
-  'start-tunnel': 'start_tunnel_command',
-  'stop-tunnel': 'stop_tunnel_command',
   'check-environment': 'check_environment_command',
   'cancel-environment': 'cancel_environment_command',
   'check-pi-update': 'check_pi_update_command',
@@ -177,8 +173,7 @@ export async function saveDesktopSettings(
               }
             : null
         }
-      : null,
-    tunnel: current?.target?.tunnel ?? null
+      : null
   }
   await desktopCommand('apply_target_command', { originalUrl, value })
   return value.url
@@ -191,9 +186,7 @@ export async function saveDesktopAddress(
   const url = normalizeDesktopAddress(address)
   const settings = originalUrl ? await getTargetSettings(originalUrl) : null
   if (originalUrl && !settings?.target) throw new Error('这个地址已被移除，请刷新后重试')
-  const value: TargetConfig = settings?.target
-    ? { ...settings.target, url }
-    : { url, server: null, tunnel: null }
+  const value: TargetConfig = settings?.target ? { ...settings.target, url } : { url, server: null }
   await desktopCommand('apply_target_command', { originalUrl, value })
   return url
 }

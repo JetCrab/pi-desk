@@ -89,7 +89,9 @@ export function L2PluginManagement({
   )
   const descriptorError = management.pluginHost.getEntryListError()
   const selectedPlugin = snapshot?.plugins.find(
-    (plugin) => plugin.source === management.detailSource
+    (plugin) =>
+      management.detailSource &&
+      pluginRequestKey(plugin.source) === pluginRequestKey(management.detailSource)
   )
   const catalogPlugin = catalog.selection
     ? snapshot?.plugins.find(
@@ -117,6 +119,26 @@ export function L2PluginManagement({
       Boolean(plugin?.operation && plugin.operation.phase !== 'failed')
     )
   }
+  const affectedSources =
+    snapshot?.plugins
+      .filter(
+        (plugin) =>
+          plugin.status === 'failed' ||
+          plugin.error ||
+          plugin.operation?.phase === 'failed' ||
+          (plugin.pluginName && browserErrors.has(plugin.pluginName))
+      )
+      .map((plugin) => plugin.source) ?? []
+  const recoverySources = affectedSources.length
+    ? affectedSources
+    : snapshot?.loadError
+      ? snapshot.plugins.map((plugin) => plugin.source)
+      : []
+  const runtimeErrors = [
+    snapshot?.loadError ? selectL4LocalizedText(snapshot.loadError, locale) : null,
+    descriptorError,
+    management.errors.entries
+  ].filter((error, index, all): error is string => Boolean(error) && all.indexOf(error) === index)
   const catalogPending = busy(`npm:${catalog.selection?.name ?? ''}`)
   const directPending = direct.sources.some(busy)
   const directErrors = direct.sources
@@ -284,31 +306,44 @@ export function L2PluginManagement({
             {t('pendingRestart')}
           </p>
         ) : null}
-        {snapshot?.loadError || descriptorError ? (
-          <div role="alert" className="max-h-32 space-y-1 overflow-y-auto text-sm text-destructive">
-            {snapshot?.loadError ? (
-              <p className="[overflow-wrap:anywhere]">
-                {selectL4LocalizedText(snapshot.loadError, locale)}
+        {runtimeErrors.length ? (
+          <div role="alert" className="space-y-2 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-destructive">
+                {t(snapshot?.loadError ? 'loadFailedSummary' : 'viewFailed')}
               </p>
-            ) : null}
-            {descriptorError ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="min-w-0 [overflow-wrap:anywhere]">{descriptorError}</p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={management.requests.has('entries')}
-                  onClick={() => void management.refreshEntries()}
-                >
-                  {t('retry')}
-                </Button>
-              </div>
-            ) : null}
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={
+                  management.requests.has('entries') ||
+                  (recoverySources.length > 0 && (disabled || recoverySources.every(busy)))
+                }
+                onClick={() => {
+                  if (recoverySources.length)
+                    void management.executeBatch({ action: 'apply', sources: recoverySources })
+                  else void management.refreshEntries()
+                }}
+              >
+                {t(recoverySources.length ? 'reloadAffected' : 'reloadOne')}
+              </Button>
+            </div>
+            <Collapsible>
+              <CollapsibleTrigger className="group flex min-h-8 items-center gap-2 text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                {t('errorDetails')}
+                <ChevronDownIcon className="size-4 transition-transform group-aria-expanded:rotate-180" />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <pre className="pi-desk-chat-scrollbar max-h-40 overflow-y-auto rounded-lg bg-muted p-3 font-mono text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+                  {runtimeErrors.join('\n\n')}
+                </pre>
+              </CollapsibleContent>
+            </Collapsible>
           </div>
         ) : null}
-        {management.errors.reload || management.errors.entries ? (
+        {management.errors.reload ? (
           <p role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
-            {management.errors.reload ?? management.errors.entries}
+            {management.errors.reload}
           </p>
         ) : null}
       </header>
@@ -390,6 +425,18 @@ export function L2PluginManagement({
               onUpdateSelected={() =>
                 void management.executeBatch({ action: 'update', sources: updateSources(true) })
               }
+              onReloadSelected={() =>
+                void management.executeBatch({
+                  action: 'apply',
+                  sources:
+                    snapshot?.plugins
+                      .filter(
+                        (plugin) =>
+                          selected.has(pluginRequestKey(plugin.source)) && !busy(plugin.source)
+                      )
+                      .map((plugin) => plugin.source) ?? []
+                })
+              }
               onRemoveSelected={() =>
                 management.setConfirmation({
                   kind: 'batch',
@@ -399,7 +446,9 @@ export function L2PluginManagement({
                       snapshot?.plugins
                         .filter(
                           (plugin) =>
-                            selected.has(pluginRequestKey(plugin.source)) && !busy(plugin.source)
+                            plugin.kind !== 'extension' &&
+                            selected.has(pluginRequestKey(plugin.source)) &&
+                            !busy(plugin.source)
                         )
                         .map((plugin) => plugin.source) ?? []
                   }
@@ -491,16 +540,8 @@ export function L2PluginManagement({
                   <L2PluginManagementControls
                     plugin={selectedPlugin}
                     displayName={pluginDisplayName(selectedPlugin)}
-                    browserError={
-                      selectedPlugin.pluginName
-                        ? (browserErrors.get(selectedPlugin.pluginName) ?? null)
-                        : null
-                    }
                     disabled={disabled}
                     pending={busy(selectedPlugin.source)}
-                    browserRetryPending={management.requests.has(
-                      `entry:${selectedPlugin.pluginName}`
-                    )}
                     onAction={(action) => management.handleControlAction(selectedPlugin, action)}
                   />
                 </div>
@@ -519,14 +560,14 @@ export function L2PluginManagement({
                   }
                 />
               </div>
-              <Collapsible className="rounded-lg border">
-                <CollapsibleTrigger className="group flex min-h-9 w-full items-center justify-between px-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  {t('advancedOptions')}
-                  <ChevronDownIcon className="size-4 transition-transform group-aria-expanded:rotate-180" />
-                </CollapsibleTrigger>
-                <CollapsibleContent keepMounted className="hidden data-open:block">
-                  <div className="flex flex-wrap items-center gap-3 px-3 pb-3">
-                    {selectedPlugin.source.startsWith('npm:') ? (
+              {selectedPlugin.source.startsWith('npm:') ? (
+                <Collapsible className="rounded-lg border">
+                  <CollapsibleTrigger className="group flex min-h-9 w-full items-center justify-between px-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    {t('advancedOptions')}
+                    <ChevronDownIcon className="size-4 transition-transform group-aria-expanded:rotate-180" />
+                  </CollapsibleTrigger>
+                  <CollapsibleContent keepMounted className="hidden data-open:block">
+                    <div className="px-3 pb-3">
                       <L2PluginManagementChannel
                         value={selectedPlugin.updateTag ?? 'latest'}
                         label={t('installChannel')}
@@ -539,22 +580,10 @@ export function L2PluginManagement({
                           })
                         }
                       />
-                    ) : null}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={
-                        disabled ||
-                        (busy(selectedPlugin.source) &&
-                          selectedPlugin.operation?.phase !== 'waiting')
-                      }
-                      onClick={() => management.handleControlAction(selectedPlugin, 'reload')}
-                    >
-                      {t('reloadOne')}
-                    </Button>
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              ) : null}
               {management.detailLoading ? (
                 <p role="status" className="text-sm text-muted-foreground">
                   {t('loadingPackage')}
@@ -583,21 +612,24 @@ export function L2PluginManagement({
                             )?.contributions ?? [])
                         : []
                     }
-                    onRetry={() => void management.loadDetail(selectedPlugin.source)}
                   />
                 </CollapsibleContent>
               </Collapsible>
               {management.detailError ? (
-                <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
-                  <span>{management.detailError}</span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void management.loadDetail(selectedPlugin.source)}
-                  >
-                    {t('retry')}
-                  </Button>
-                </div>
+                <Collapsible className="space-y-2 text-sm">
+                  <p role="alert" className="text-destructive">
+                    {t('detailFailed')}
+                  </p>
+                  <CollapsibleTrigger className="group flex min-h-8 items-center gap-2 text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    {t('errorDetails')}
+                    <ChevronDownIcon className="size-4 transition-transform group-aria-expanded:rotate-180" />
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <pre className="max-h-40 overflow-y-auto rounded-lg bg-muted p-3 font-mono text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+                      {management.detailError}
+                    </pre>
+                  </CollapsibleContent>
+                </Collapsible>
               ) : null}
             </div>
           ) : catalog.selection ? (

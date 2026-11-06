@@ -18,10 +18,13 @@ import { spawnE2eServer, stopE2eServerTree } from './l4-e2e-server-runtime.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const edgePath = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
-const runRoot = join(projectRoot, 'temp', 'pi', 'workbench-chat-virtual-e2e', String(process.pid))
-const agentDir = join(runRoot, 'agent')
+const taskId = `history-window-${process.pid}`
+const runRoot = join(projectRoot, 'temp/run/chat-virtual', taskId)
+const agentRoot = join(projectRoot, 'temp/pi/chat-virtual-e2e', taskId)
+const agentDir = join(agentRoot, 'agent')
+const buildRoot = join(projectRoot, 'temp/build/chat-virtual', taskId)
 const workSessionStorePath = join(agentDir, 'pi-desk', 'work-sessions.json')
-const resultPath = join(projectRoot, 'temp', 'pi', 'virtual-list-evaluation', 'integration.json')
+const resultPath = join(runRoot, 'integration.json')
 const password = 'Qq.445566'
 const usage = {
   input: 10,
@@ -52,7 +55,8 @@ async function createSession(SessionManager, cwd, title, count, prefix) {
       content: [
         {
           type: 'text',
-          text: `${prefix} ${index} 回答\n\n${'动态高度内容。'.repeat(1 + (index % 6))}`
+          // 尾部回复必须超过视口，上一条定位后才能验证下一条导航。
+          text: `${prefix} ${index} 回答\n\n${index === count - 1 ? '动态高度内容。\n\n'.repeat(40) : '动态高度内容。'.repeat(1 + (index % 6))}`
         }
       ],
       api: 'openai-responses',
@@ -73,8 +77,8 @@ async function createFixture() {
   process.env.PI_CODING_AGENT_DIR = agentDir
   process.env.PI_CODING_AGENT_SESSION_DIR = join(agentDir, 'sessions')
   const { SessionManager } = await import('@earendil-works/pi-coding-agent')
-  const largeCwd = join(runRoot, '超长会话项目')
-  const smallCwd = join(runRoot, '短会话项目')
+  const largeCwd = join(agentRoot, 'long-project')
+  const smallCwd = join(agentRoot, 'short-project')
   const largeSessionId = await createSession(
     SessionManager,
     largeCwd,
@@ -124,7 +128,9 @@ async function clickAndMeasure(client, label, expectedText) {
 
 async function main() {
   let client
+  let success = false
   try {
+    await mkdir(runRoot, { recursive: true })
     await createFixture()
     appPort = await reservePort()
     cdpPort = await reservePort()
@@ -133,6 +139,7 @@ async function main() {
       agentDir,
       port: appPort,
       development: true,
+      nextDirectory: buildRoot,
       onOutput: (output) => {
         serverOutput += output
       }
@@ -222,8 +229,11 @@ async function main() {
         const ratios = samples.map((sample) => sample.ratio);
         const minimumTopIndex = tops.indexOf(Math.min(...tops));
         const minimumRatioIndex = ratios.indexOf(Math.min(...ratios));
+        const target = [...scroll.querySelectorAll('[data-chat-user-message]')].find(element => element.textContent.startsWith('长会话 1198 用户'));
         return {
           samples,
+          targetOffset: target?.getBoundingClientRect().top - scroll.getBoundingClientRect().top,
+          gap: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight,
           rebound: Math.max(...tops.slice(minimumTopIndex)) - tops[minimumTopIndex],
           ratioRebound: Math.max(...ratios.slice(minimumRatioIndex)) - ratios[minimumRatioIndex],
           heightRange: Math.max(...samples.map((sample) => sample.height)) - Math.min(...samples.map((sample) => sample.height))
@@ -235,7 +245,8 @@ async function main() {
       previousNavigation.rebound <= 2,
       `上一条消息定位发生反向回跳：${JSON.stringify(previousNavigation.samples)}`
     )
-    await waitFor(client, `document.body.innerText.includes('长会话 1198 用户')`, '上一轮可见')
+    assert.ok(Math.abs(previousNavigation.targetOffset - 12) <= 2, '上一条提问必须实际定位到顶部')
+    assert.ok(previousNavigation.gap > 2, '下一条导航前必须尚未到达物理底部')
 
     await waitFor(
       client,
@@ -327,11 +338,20 @@ async function main() {
     await mkdir(dirname(resultPath), { recursive: true })
     await writeFile(resultPath, `${JSON.stringify(output, null, 2)}\n`, 'utf8')
     console.log(JSON.stringify(output, null, 2))
+    success = true
   } finally {
+    await writeFile(join(runRoot, 'server.log'), serverOutput)
     client?.close()
-    await stopBrowserTree(browserProcess, cdpPort)
-    if (serverRuntime) await stopE2eServerTree(serverRuntime)
-    await rm(runRoot, { recursive: true, force: true })
+    try {
+      await stopBrowserTree(browserProcess, cdpPort)
+    } finally {
+      if (serverRuntime) await stopE2eServerTree(serverRuntime)
+    }
+    if (success) {
+      await rm(agentRoot, { recursive: true, force: true })
+      await rm(buildRoot, { recursive: true, force: true })
+      await rm(runRoot, { recursive: true, force: true })
+    } else console.error(`失败现场：${runRoot}`)
   }
 }
 

@@ -1,7 +1,17 @@
 # 第三方归属
 
-`tunnel/common/src/rathole_runtime.rs` 及 `tunnel/common/src/rathole_runtime/` 基于 [rathole](https://github.com/rapiz1/rathole) 裁剪和修改，上游基线提交为 `5a9dd6d939744859af322aeff7fd60f7483a68bc`。该实现继承并继续改造了 SuperTool 的程序化运行、运行事件和动态服务生命周期逻辑。
+Pi Desk TCP 隧道使用 [iroh 1.4.1](https://github.com/n0-computer/iroh/tree/v1.4.1) 提供加密端点、可靠双向流、直连和中继能力。自托管中继构建固定于发布提交 `d6c6963b9602d1b8dd2ba53b6519e7eb19cc7940`。
 
-该部分使用 Apache-2.0 许可证，完整文本见 [`licenses/rathole-APACHE-2.0.txt`](./licenses/rathole-APACHE-2.0.txt)。
+上游采用 MIT OR Apache-2.0 双许可；本项目保留两份原始许可证：
 
-本仓库只保留 Noise TCP、Yamux 和动态服务生命周期。rathole 上游自带的 TLS、WebSocket、UDP、代理、CLI、TOML/文件配置与热更新能力均已从派生源码及依赖中移除；`apps/tunnel/client` 是本项目基于公共 Worker 新增的无头宿主。
+- [Apache-2.0](licenses/iroh-APACHE-2.0.txt)
+- [MIT](licenses/iroh-MIT.txt)
+
+iroh 主库及 `iroh-relay` 的部分实现来自 Tailscale，分别保留上游归属说明：
+
+- [iroh BSD-3-Clause](licenses/iroh-BSD-3-Clause.txt)
+- [iroh-relay BSD-3-Clause](licenses/iroh-relay-BSD-3-Clause.txt)
+
+分发桌面程序、网关或中继时保留适用的原始声明。
+
+其他 Rust 依赖以 `Cargo.lock` 为实际清单，各自许可证和版权不受本声明改写。本项目自有代码继续使用根目录的 [Apache-2.0 许可证](LICENSE)。

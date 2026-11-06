@@ -21,17 +21,47 @@ export type ServerSnapshot = {
   update: PackageUpdate | null
 }
 
-export type TunnelSnapshot = {
-  status: 'stopped' | 'opening' | 'connecting' | 'listening' | 'recovering' | 'stopping' | 'failed'
+export type TunnelPhase =
+  'stopped' | 'opening' | 'connecting' | 'listening' | 'recovering' | 'stopping' | 'failed'
+export type TunnelMode = 'auto' | 'relay-only'
+export type TunnelPath = 'unknown' | 'direct' | 'relay'
+export type TunnelPublication = { localPort: number; publicPort: number | null; enabled: boolean }
+export type TunnelForward = {
+  providerId: string
+  remotePort: number
+  localPort: number
+  enabled: boolean
+}
+export type PublicationSnapshot = TunnelPublication & {
+  phase: TunnelPhase
   detail: string
   publicAddr: string | null
-  publicPort: number
+}
+export type ForwardSnapshot = TunnelForward & {
+  phase: TunnelPhase
+  detail: string
+  path: TunnelPath
+}
+export type TunnelConnectionRow = {
+  peerId: string
+  localPort: number
+  source: 'public' | 'client'
+  path: TunnelPath
+  activeTcp: number
+}
+export type TunnelSnapshot = {
+  providerId: string | null
+  mode: TunnelMode
+  restartRequired: boolean
+  publications: PublicationSnapshot[]
+  forwards: ForwardSnapshot[]
+  connections: TunnelConnectionRow[]
+  error: string | null
 }
 
 export type TargetSnapshot = {
   url: string
   server: ServerSnapshot | null
-  tunnel: TunnelSnapshot | null
 }
 
 export type EnvironmentComponent = {
@@ -59,6 +89,7 @@ export type ControlState = {
   hideOnOpen: boolean
   showOnClose: boolean
   targets: TargetSnapshot[]
+  tunnel: TunnelSnapshot
   environment: EnvironmentSnapshot
 }
 
@@ -87,7 +118,6 @@ export type ServerConfig = {
 export type TargetConfig = {
   url: string
   server: ServerConfig | null
-  tunnel: { enabled: boolean; publicPort: number } | null
 }
 
 export type TargetSettings = { target: TargetConfig | null; defaultServer: ServerConfig }

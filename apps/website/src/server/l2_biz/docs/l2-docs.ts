@@ -5,7 +5,7 @@ import path from 'node:path'
 import { Marked, Renderer } from 'marked'
 import type { DocumentContent, DocumentPath } from '@common/l2_biz/docs/l2-docs'
 import type { SiteRelease } from '@common/l3_modules/site/l3-site-release'
-import { createHeadingIdGenerator } from '@server/l4_foundation/l4-markdown'
+import { createHeadingIdGenerator, renderCodeBlock } from '@server/l4_foundation/l4-markdown'
 import { createQrCodeDataUrl } from '@server/l4_foundation/l4-qr-code'
 
 function escapeHtml(value: string): string {
@@ -55,6 +55,7 @@ export async function getDocumentContent(
   const headingId = createHeadingIdGenerator()
   const parser = new Marked({
     renderer: {
+      code: renderCodeBlock,
       heading({ tokens, depth, text }): string {
         const id = headingId(text)
         if (depth === 2) headings.push({ id, title: text })

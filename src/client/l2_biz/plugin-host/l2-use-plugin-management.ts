@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
   L2PluginManagementBatchRequest,
@@ -60,9 +60,11 @@ export function pluginManagementActionLabel(action: PluginManagementAction): str
         ? 'batchInstall'
         : action.input.action === 'update'
           ? 'updateSelected'
-          : action.input.action === 'del'
-            ? 'removeSelected'
-            : 'setChannel'
+          : action.input.action === 'apply'
+            ? 'reloadSelected'
+            : action.input.action === 'del'
+              ? 'removeSelected'
+              : 'setChannel'
     case 'add':
       return 'actionAdd'
     case 'update':
@@ -93,7 +95,6 @@ interface PluginManagementState {
   executeBatch: (input: L2PluginManagementBatchRequest) => Promise<void>
   execute: (action: PluginManagementAction) => Promise<void>
   requestInstall: (input: L2PluginManagementInstallRequest, item?: L2PluginCatalogItem) => void
-  applyChanges: (sources?: string[]) => Promise<void>
   loadDetail: (source: string) => Promise<void>
   openDetail: (source: string) => void
   closeDetail: () => void
@@ -124,6 +125,8 @@ export function useL2PluginManagement({
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
   const detailRequest = useRef(0)
+  const detailSourceRef = useRef<string | null>(null)
+  const reloadDetailSource = useRef<string | null>(null)
   const listRequest = useRef(0)
   const mounted = useRef(true)
 
@@ -241,6 +244,15 @@ export function useL2PluginManagement({
     }
   }, [biz, onSnapshot, t, basicMode])
 
+  const invalidateReloadDetail = (sources: string[]): void => {
+    const source = detailSourceRef.current
+    if (!source || !sources.includes(source)) return
+    detailRequest.current += 1
+    reloadDetailSource.current = source
+    setDetail(null)
+    setDetailError(null)
+    setDetailLoading(false)
+  }
   const executeBatch = async (input: L2PluginManagementBatchRequest): Promise<void> => {
     const sources = input.action === 'add' ? input.items.map((item) => item.source) : input.sources
     const available = sources.filter((source) => !busySource(source))
@@ -253,6 +265,7 @@ export function useL2PluginManagement({
       setRequest(key, true)
       setError(key, null)
     })
+    if (input.action === 'apply') invalidateReloadDetail(available)
     setConfirmation(null)
     let remaining = [...available]
     try {
@@ -356,17 +369,27 @@ export function useL2PluginManagement({
     if (item?.official === true) void execute(action)
     else setConfirmation(action)
   }
-  const applyChanges = async (sources?: string[]): Promise<void> => {
-    const key = sources?.[0] ? pluginRequestKey(sources[0]) : 'apply'
-    if (inFlight.current.has(key)) return
+  const reloadPlugin = async (plugin: L2PluginManagementItem): Promise<void> => {
+    if (busySource(plugin.source)) return
+    const key = pluginRequestKey(plugin.source)
+    const browserOnly =
+      plugin.pluginName &&
+      plugin.status !== 'failed' &&
+      !plugin.error &&
+      plugin.operation?.phase !== 'failed' &&
+      pluginHost.getFailedEntries().some((entry) => entry.pluginName === plugin.pluginName)
     setRequest(key, true)
     setError(key, null)
+    invalidateReloadDetail([plugin.source])
     try {
-      const next = await biz.apply(sources)
-      if (mounted.current) {
-        listRequest.current += 1
-        onSnapshot(next)
-        await readSnapshot()
+      if (browserOnly) await pluginHost.retryEntry(plugin.pluginName!)
+      else {
+        const next = await biz.apply([plugin.source])
+        if (mounted.current) {
+          listRequest.current += 1
+          onSnapshot(next)
+          await readSnapshot()
+        }
       }
     } catch (cause) {
       setError(
@@ -384,26 +407,53 @@ export function useL2PluginManagement({
     try {
       await action()
     } catch (cause) {
-      setError(key, cause instanceof Error ? cause.message : t('retryFailed'))
+      setError(key, cause instanceof Error ? cause.message : t('refreshEntriesFailed'))
     } finally {
       setRequest(key, false)
     }
   }
-  const loadDetail = async (source: string): Promise<void> => {
-    const request = ++detailRequest.current
-    setDetailLoading(true)
-    setDetailError(null)
-    try {
-      const next = await biz.get(source)
-      if (mounted.current && request === detailRequest.current) setDetail(next)
-    } catch (cause) {
-      if (mounted.current && request === detailRequest.current)
-        setDetailError(cause instanceof Error ? cause.message : t('detailFailed'))
-    } finally {
-      if (mounted.current && request === detailRequest.current) setDetailLoading(false)
-    }
-  }
+  const loadDetail = useCallback(
+    async (source: string): Promise<void> => {
+      if (detailSourceRef.current !== source) return
+      const request = ++detailRequest.current
+      setDetail(null)
+      setDetailLoading(true)
+      setDetailError(null)
+      try {
+        const next = await biz.get(source)
+        if (mounted.current && request === detailRequest.current) setDetail(next)
+      } catch (cause) {
+        if (mounted.current && request === detailRequest.current)
+          setDetailError(cause instanceof Error ? cause.message : t('detailFailed'))
+      } finally {
+        if (mounted.current && request === detailRequest.current) setDetailLoading(false)
+      }
+    },
+    [biz, t]
+  )
+  useEffect(() => {
+    const source = reloadDetailSource.current
+    if (!source || source !== detailSourceRef.current) return
+    const plugin = snapshot?.plugins.find(
+      (item) => pluginRequestKey(item.source) === pluginRequestKey(source)
+    )
+    if (
+      requests.has(pluginRequestKey(source)) ||
+      (plugin?.operation && plugin.operation.phase !== 'failed')
+    )
+      return
+    reloadDetailSource.current = null
+    queueMicrotask(() => {
+      if (!mounted.current || detailSourceRef.current !== source) return
+      const currentSource = plugin?.source ?? source
+      detailSourceRef.current = currentSource
+      setDetailSource(currentSource)
+      void loadDetail(currentSource)
+    })
+  }, [snapshot, requests, loadDetail])
   const closeDetail = (): void => {
+    detailSourceRef.current = null
+    reloadDetailSource.current = null
     detailRequest.current += 1
     setDetailSource(null)
     setDetail(null)
@@ -411,9 +461,12 @@ export function useL2PluginManagement({
     setDetailLoading(false)
   }
   const openDetail = (source: string): void => {
+    detailSourceRef.current = source
+    reloadDetailSource.current = null
     setDetailSource(source)
     setDetail(null)
-    void loadDetail(source)
+    if (busySource(source)) invalidateReloadDetail([source])
+    else void loadDetail(source)
   }
   const handleControlAction = (
     plugin: L2PluginManagementItem,
@@ -421,7 +474,7 @@ export function useL2PluginManagement({
   ): void => {
     switch (action) {
       case 'reload':
-        void applyChanges([plugin.source])
+        void reloadPlugin(plugin)
         break
       case 'update':
         void execute({ kind: 'update', source: plugin.source })
@@ -433,19 +486,6 @@ export function useL2PluginManagement({
       case 'disable':
         void execute({ kind: action, source: plugin.source })
         break
-      case 'retry-browser':
-        if (plugin.pluginName)
-          void runBrowserRequest(`entry:${plugin.pluginName}`, () =>
-            pluginHost.retryEntry(plugin.pluginName!)
-          )
-        break
-      case 'retry': {
-        const action = plugin.operation?.action
-        if (action === 'apply') void applyChanges([plugin.source])
-        else if (action === 'add') requestInstall({ source: plugin.source })
-        else if (action) void execute({ kind: action, source: plugin.source })
-        break
-      }
     }
   }
   return {
@@ -463,7 +503,6 @@ export function useL2PluginManagement({
     executeBatch,
     execute,
     requestInstall,
-    applyChanges,
     loadDetail,
     openDetail,
     closeDetail,

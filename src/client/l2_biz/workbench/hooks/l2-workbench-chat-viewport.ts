@@ -40,6 +40,8 @@ interface L2WorkbenchChatViewportManagerProps {
   containsTail: boolean
   latestUserAnchor: string | null
   entrySnapshot: L2WorkbenchChatViewportSnapshot | null
+  followRequested: boolean
+  onFollowHandled: () => void
   onResetToTail: () => void
   onSaveSnapshot: (snapshot: L2WorkbenchChatViewportSnapshot) => void
   onClearSnapshot: () => void
@@ -70,6 +72,8 @@ export function L2WorkbenchChatViewportManager({
   containsTail,
   latestUserAnchor,
   entrySnapshot,
+  followRequested,
+  onFollowHandled,
   onResetToTail,
   onSaveSnapshot,
   onClearSnapshot
@@ -111,6 +115,16 @@ export function L2WorkbenchChatViewportManager({
   useLayoutEffect(() => {
     const scrollElement = scrollRef.current
     if (!scrollElement) return
+    // 本页发送优先于旧阅读目标；隐藏时保留请求，返回真实尾部后才消费。
+    if (followRequested) {
+      // 重复布局 effect 不能清掉本次已经建立的首屏跟随目标。
+      if (entryPositionRef.current?.follow === false) entryPositionRef.current = null
+      entrySnapshotRef.current = null
+      suspendedViewportRef.current = null
+      onClearSnapshot()
+      if (!visible) stopScroll()
+      return
+    }
     // 切到其他会话后仍按进入规则定位；同会话查看文件只暂停阅读。
     if (!active && !running) {
       initializedRef.current = false
@@ -140,6 +154,8 @@ export function L2WorkbenchChatViewportManager({
     if (suspended === null) return
     if (suspended === 'follow') {
       onClearSnapshot()
+      // 隐藏期间可能换轮，返回后的懒布局仍需沿用首屏的跟随校正。
+      entryPositionRef.current = { anchor: null, follow: true }
       scrollElement.scrollTop = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight)
       markProgrammaticScroll(state, scrollElement)
       void scrollToBottom({ animation: 'instant' })
@@ -163,6 +179,7 @@ export function L2WorkbenchChatViewportManager({
   }, [
     active,
     containsTail,
+    followRequested,
     latestUserAnchor,
     onClearSnapshot,
     running,
@@ -187,14 +204,27 @@ export function L2WorkbenchChatViewportManager({
     const initializing = !initializedRef.current
     const hasNewUser =
       latestUserAnchor !== null && latestUserAnchor !== positionedUserAnchorRef.current
-    const entryPosition = hasNewUser ? null : entryPositionRef.current
-    if (!initializing && !hasNewUser && !entryPosition) return
-    if (initializing && !running && !containsTail) {
+    // 重建时消息可能分批到达；新提问换锚点，但不能提前丢掉首屏跟随校正。
+    const continuingEntryFollow = hasNewUser && entryPositionRef.current?.follow === true
+    const entryPosition = hasNewUser || followRequested ? null : entryPositionRef.current
+    if (!initializing && !hasNewUser && !entryPosition && !followRequested) return
+    if (!containsTail && (followRequested || (initializing && !running))) {
       onResetToTail()
       return
     }
 
     const currentScrollElement = scrollRef.current
+    if (followRequested && !hasNewUser && currentScrollElement) {
+      // 入队不产生新锚点，不重跑提问定位，也不拆除同轮留白。
+      refreshL3ConversationTailSpacer(currentScrollElement)
+      currentScrollElement.scrollTop = Math.max(0, state.calculatedTargetScrollTop)
+      markProgrammaticScroll(state, currentScrollElement)
+      void scrollToBottom({ animation: 'instant' })
+      initializedRef.current = true
+      logL3ConversationScroll('viewport:send-follow', currentScrollElement, { containsTail })
+      onFollowHandled()
+      return
+    }
     if (hasNewUser) {
       entryPositionRef.current = null
       onClearSnapshot()
@@ -248,10 +278,13 @@ export function L2WorkbenchChatViewportManager({
       target ??= findL3ConversationMessage(scrollElement, 'data-chat-user-message')
 
       const followAfterPosition =
-        entryPosition?.follow ??
-        (target !== null && snapshot === null && (running || !initializing))
+        followRequested ||
+        (entryPosition?.follow ??
+          (target !== null && snapshot === null && (running || !initializing)))
       const enterRunningAtBottom =
-        entryPosition?.follow ?? (initializing && running && snapshot === null)
+        followRequested ||
+        continuingEntryFollow ||
+        (entryPosition?.follow ?? (initializing && running && snapshot === null))
       const entryTarget = target
       stopScroll()
       if (entryTarget) {
@@ -276,7 +309,7 @@ export function L2WorkbenchChatViewportManager({
       initializedRef.current = true
       positionedUserAnchorRef.current = latestUserAnchor
       entrySnapshotRef.current = null
-      if (initializing || entryPosition) {
+      if (initializing || entryPosition || continuingEntryFollow) {
         const anchor = target?.dataset.chatScrollAnchor
         entryPositionRef.current = {
           anchor: anchor ? { messageId: anchor, offset: targetOffset } : null,
@@ -313,6 +346,10 @@ export function L2WorkbenchChatViewportManager({
       releaseFrame = window.requestAnimationFrame(() => {
         positioningRef.current = releaseEntryAnchor !== null
       })
+      if (followRequested) {
+        logL3ConversationScroll('viewport:send-follow', scrollElement, { containsTail })
+        onFollowHandled()
+      }
     }
 
     // 已提交的消息在绘制前定位，避免新消息到达后切走取消待执行的定位。
@@ -327,8 +364,10 @@ export function L2WorkbenchChatViewportManager({
     }
   }, [
     containsTail,
+    followRequested,
     latestUserAnchor,
     onClearSnapshot,
+    onFollowHandled,
     onResetToTail,
     pageVisible,
     ready,
@@ -377,7 +416,7 @@ export function L2WorkbenchChatViewportManager({
     if (!scrollElement) return
 
     const save = (): void => {
-      if (positioningRef.current) return
+      if (positioningRef.current || followRequested) return
       // 留白是消息定位的布局空间，不代表用户退出了跟随。
       if (containsTail && state.isAtBottom) {
         onClearSnapshot()
@@ -392,7 +431,16 @@ export function L2WorkbenchChatViewportManager({
       scrollElement.removeEventListener('scroll', save)
       save()
     }
-  }, [containsTail, onClearSnapshot, onSaveSnapshot, running, scrollRef, state, visible])
+  }, [
+    containsTail,
+    followRequested,
+    onClearSnapshot,
+    onSaveSnapshot,
+    running,
+    scrollRef,
+    state,
+    visible
+  ])
 
   return null
 }

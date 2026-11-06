@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import type { SessionPluginMethodHandler } from '@jetcrab/pi-desk-sdk/session'
 import { COMMAND_RESULT_SCHEMA, type WorkspaceCommandInput } from '../src/core.js'
 import workspaceExtension from '../src/index.js'
 
@@ -19,7 +20,7 @@ interface CapturedTool {
 
 const testRoot = resolve(process.cwd(), '../../temp/pi/workspace/tool-tests')
 
-test('workspace acquire 和 run 不向 AI 返回完整池 Snapshot', async () => {
+test('模型工具与浏览器方法维持执行语义，底部状态随工作区标题更新', async () => {
   const project = join(testRoot, `project-${Date.now()}`)
   const poolRoot = join(testRoot, 'home')
   await mkdir(join(project, '.pi', 'workspace', 'commands'), { recursive: true })
@@ -38,6 +39,11 @@ definitions:
         from: [occupied]
         onSuccess: occupied
         handler: .pi/workspace/commands/verify.mjs
+      reset:
+        description: Reset workspace
+        from: [occupied]
+        onSuccess: available
+        handler: .pi/workspace/commands/verify.mjs
 `,
     'utf8'
   )
@@ -54,12 +60,20 @@ definitions:
 
   const tools: CapturedTool[] = []
   let sessionStart: ((event: unknown, context: ExtensionContext) => unknown) | undefined
+  let sessionTree: ((event: unknown, context: ExtensionContext) => unknown) | undefined
   let resourcesDiscover: ((event: unknown, context: ExtensionContext) => unknown) | undefined
   let sessionShutdown: ((event: unknown, context: ExtensionContext) => unknown) | undefined
   const eventHandlers = new Map<string, (value: unknown) => unknown>()
   const registeredMethods: string[] = []
+  const methods = new Map<string, SessionPluginMethodHandler>()
+  let heldCommand: Promise<void> | undefined
+  let releaseCommand: (() => void) | undefined
+  let commandFinished: (() => void) | undefined
+  let acceptanceTimer: ReturnType<typeof setTimeout> | undefined
   const previewRegistrations: unknown[] = []
   const entries: Array<{ type: string; data: unknown }> = []
+  let branch: typeof entries | undefined
+  const statuses = new Map<string, string | undefined>()
   const originalHome = process.env.HOME
   const originalProfile = process.env.USERPROFILE
   let context: ExtensionContext | undefined
@@ -70,6 +84,7 @@ definitions:
       async exec(_program: string, args: string[]) {
         const input = JSON.parse(await readFile(args[2]!, 'utf8')) as WorkspaceCommandInput
         if (input.command === 'provision') await mkdir(input.workspace.root, { recursive: true })
+        if (input.command === 'verify' && heldCommand) await heldCommand
         await writeFile(
           args[3]!,
           JSON.stringify({
@@ -89,6 +104,7 @@ definitions:
       },
       on(name: string, handler: (event: unknown, context: ExtensionContext) => unknown): void {
         if (name === 'session_start') sessionStart = handler
+        if (name === 'session_tree') sessionTree = handler
         if (name === 'resources_discover') resourcesDiscover = handler
         if (name === 'session_shutdown') sessionShutdown = handler
       },
@@ -97,7 +113,18 @@ definitions:
           if (channel === 'pi-desk:session-preview-directory') previewRegistrations.push(value)
           const event = value as {
             type?: string
-            registration?: { pluginName?: string; method?: string }
+            registration?: {
+              pluginName?: string
+              method?: string
+              execute?: SessionPluginMethodHandler
+            }
+            data?: { summary?: string }
+          }
+          if (
+            channel === 'pi-desk:session-plugin-push:v1' &&
+            event.data?.summary === 'verify completed'
+          ) {
+            commandFinished?.()
           }
           if (
             event.type === 'register' &&
@@ -105,6 +132,8 @@ definitions:
             event.registration.method
           ) {
             registeredMethods.push(event.registration.method)
+            if (event.registration.execute)
+              methods.set(event.registration.method, event.registration.execute)
           }
         },
         on(channel: string, handler: (value: unknown) => unknown): () => void {
@@ -120,16 +149,27 @@ definitions:
     const signal = new AbortController().signal
     context = {
       cwd: project,
-      hasUI: false,
+      hasUI: true,
+      ui: {
+        setStatus(key: string, text: string | undefined): void {
+          statuses.set(key, text)
+        }
+      },
       signal,
       isProjectTrusted: () => true,
       sessionManager: {
-        getBranch: () => [],
+        getBranch: () =>
+          (branch ?? entries).map((entry) => ({
+            type: 'custom',
+            customType: entry.type,
+            data: entry.data
+          })),
         getSessionId: () => 'session-tool'
       }
     } as unknown as ExtensionContext
     assert.ok(sessionStart)
     await sessionStart({}, context)
+    assert.equal(statuses.get('workspace'), undefined)
     assert.deepEqual(previewRegistrations, [{ directory: project, default: true }])
     assert.ok(resourcesDiscover)
     const resources = await resourcesDiscover(
@@ -151,6 +191,7 @@ definitions:
     assert.equal('workspaces' in acquired.details, false)
     assert.equal(typeof acquired.details.root, 'string')
     assert.equal('entry' in acquired.details, false)
+    assert.equal(statuses.get('workspace'), '隔离工作区：最小结果测试')
     assert.deepEqual(previewRegistrations.at(-1), {
       directory: acquired.details.root,
       default: true
@@ -189,7 +230,76 @@ definitions:
     assert.equal(previewRegistrations.length, 2)
     assert.equal(entries.length, 1)
     assert.equal(entries[0]?.type, 'workspace-selection-v2')
+
+    heldCommand = new Promise<void>((done) => {
+      releaseCommand = done
+    })
+    const finished = new Promise<void>((done) => {
+      commandFinished = done
+    })
+    const methodContext = {
+      source: { workId: 'work-fixture', sessionId: 'session-tool', branchId: 'branch-fixture' },
+      extensionContext: context
+    }
+    const runMethod = methods.get('run')!
+    const accepted = await Promise.race([
+      runMethod(
+        { workspace: acquired.details.workspaceRef as string, command: 'verify' },
+        methodContext
+      ),
+      new Promise<never>((_done, reject) => {
+        acceptanceTimer = setTimeout(
+          () => reject(new Error('浏览器run在Handler结束前未返回')),
+          5_000
+        )
+      })
+    ])
+    clearTimeout(acceptanceTimer)
+    assert.equal(accepted.command, 'verify')
+    const acceptedSnapshot = accepted.snapshot as {
+      workspaces: Array<{ occupation: { operations: Array<{ result: string | null }> } }>
+    }
+    assert.equal(acceptedSnapshot.workspaces[0]?.occupation.operations.at(-1)?.result, null)
+    releaseCommand!()
+    await finished
+    await methods.get('snapshot')!({}, methodContext)
+    assert.equal(statuses.get('workspace'), '隔离工作区：最小结果测试')
+
+    const second = await tool.execute(
+      'acquire-2',
+      { action: 'acquire', definition: 'demo', requirement: '切换目标' },
+      signal,
+      undefined,
+      context
+    )
+    assert.equal(statuses.get('workspace'), '隔离工作区：切换目标')
+    const useMethod = methods.get('use')!
+    await useMethod({ workspace: acquired.details.workspaceRef as string }, methodContext)
+    assert.equal(statuses.get('workspace'), '隔离工作区：最小结果测试')
+    await tool.execute(
+      'use-2',
+      { action: 'use', workspace: second.details.workspaceRef },
+      signal,
+      undefined,
+      context
+    )
+    assert.equal(statuses.get('workspace'), '隔离工作区：切换目标')
+
+    assert.ok(sessionTree)
+    branch = entries.slice(0, 1)
+    await sessionTree({}, context)
+    assert.equal(statuses.get('workspace'), '隔离工作区：最小结果测试')
+    await useMethod({ workspace: null }, methodContext)
+    assert.equal(statuses.get('workspace'), undefined)
+    await sessionTree({}, context)
+    assert.equal(statuses.get('workspace'), '隔离工作区：最小结果测试')
+    await tool.execute('reset-1', { action: 'run', command: 'reset' }, signal, undefined, context)
+    assert.equal(statuses.get('workspace'), undefined)
+    await sessionTree({}, context)
+    assert.equal(statuses.get('workspace'), undefined)
   } finally {
+    clearTimeout(acceptanceTimer)
+    releaseCommand?.()
     if (sessionShutdown && context) await sessionShutdown({}, context)
     process.env.HOME = originalHome
     process.env.USERPROFILE = originalProfile

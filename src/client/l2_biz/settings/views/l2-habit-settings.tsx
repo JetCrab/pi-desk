@@ -22,6 +22,9 @@ import {
   type L3NewWorkSessionBehavior
 } from '@client/l3_modules/preferences/l3-work-session-create-preferences'
 import { L4ChoiceGroup } from '@client/l4_foundation/ui/l4-choice-group'
+import { Button } from '@client/l4_foundation/ui/shadcn/button'
+import { Switch } from '@client/l4_foundation/ui/shadcn/switch'
+import { useL2CompletionReminderSettings } from '../hooks/l2-use-completion-reminder-settings'
 
 const NEW_WORK_SESSION_BEHAVIOR_OPTIONS = [
   {
@@ -66,6 +69,8 @@ const IMAGE_PREVIEW_MODE_OPTIONS = [
 
 export function L2HabitSettings(): React.JSX.Element {
   const { t } = useTranslation('settings')
+  const reminders = useL2CompletionReminderSettings()
+  const desktop = reminders.platform === 'windows' || reminders.platform === 'macos'
   const newWorkSessionBehavior = useSyncExternalStore(
     subscribeL3NewWorkSessionBehavior,
     readL3NewWorkSessionBehavior,
@@ -122,6 +127,89 @@ export function L2HabitSettings(): React.JSX.Element {
           <p className="mt-3 text-sm text-muted-foreground">{t('imagePreviewApply')}</p>
         </section>
       </div>
+      <section aria-labelledby="completion-reminder-title" className="min-w-0 border-t pt-4">
+        <h3 id="completion-reminder-title" className="text-sm font-semibold">
+          {t('completionReminders')}
+        </h3>
+        <p className="mt-1 text-sm text-muted-foreground">{t('completionRemindersDescription')}</p>
+        <div className="mt-3 grid gap-2">
+          <label className="flex min-h-8 cursor-pointer items-center justify-between gap-4 text-sm">
+            {t('reminderSystem')}
+            <Switch
+              checked={reminders.preferences.system}
+              onCheckedChange={reminders.setSystem}
+              aria-label={t('reminderSystem')}
+              disabled={reminders.busy}
+            />
+          </label>
+          {reminders.preferences.system && reminders.permission === 'default' ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
+              <span>{t('reminderPermissionNeeded')}</span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={reminders.busy}
+                onClick={reminders.authorize}
+              >
+                {t('reminderAuthorize')}
+              </Button>
+            </div>
+          ) : null}
+          {reminders.preferences.system &&
+          (reminders.permission === 'denied' || reminders.permission === 'unsupported') ? (
+            <p className="text-sm text-muted-foreground" role="status">
+              {t(
+                reminders.permission === 'denied'
+                  ? 'reminderPermissionDenied'
+                  : 'reminderUnsupported'
+              )}
+            </p>
+          ) : null}
+          <label className="flex min-h-8 cursor-pointer items-center justify-between gap-4 text-sm">
+            {t('reminderSound')}
+            <Switch
+              checked={reminders.preferences.sound}
+              onCheckedChange={reminders.setSound}
+              aria-label={t('reminderSound')}
+              disabled={reminders.busy}
+            />
+          </label>
+          {desktop ? (
+            <label className="flex min-h-8 cursor-pointer items-center justify-between gap-4 text-sm">
+              {t(reminders.platform === 'macos' ? 'reminderDock' : 'reminderTaskbar')}
+              <Switch
+                checked={reminders.preferences.attention}
+                onCheckedChange={reminders.setAttention}
+                aria-label={t(reminders.platform === 'macos' ? 'reminderDock' : 'reminderTaskbar')}
+                disabled={reminders.busy}
+              />
+            </label>
+          ) : null}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={
+              reminders.busy ||
+              !(
+                reminders.preferences.system ||
+                reminders.preferences.sound ||
+                (desktop && reminders.preferences.attention)
+              )
+            }
+            onClick={() => reminders.test(t('reminderTitle'), t('reminderTestBody'))}
+          >
+            {t('reminderTest')}
+          </Button>
+          <span className="text-xs text-muted-foreground">{t('reminderSystemSettings')}</span>
+        </div>
+        {reminders.error ? (
+          <p className="mt-2 text-sm text-destructive" role="alert">
+            {t('reminderFailed')}
+          </p>
+        ) : null}
+      </section>
     </section>
   )
 }

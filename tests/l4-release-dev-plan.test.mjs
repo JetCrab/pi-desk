@@ -217,6 +217,24 @@ test('重跑只有同批完整且未过期的制品才能复用', () => {
   assert.equal(hasNpmArtifacts([packages, smoke], '43', ['pi-desk']), false)
 })
 
+test('共享隧道代码触发桌面检查，服务端与文档变化保持各自范围', () => {
+  assert.deepEqual(nativeCheckTargets(['apps/tunnel/common/src/runtime.rs']), {
+    desktop_checks: true,
+    android_checks: false,
+    tunnel_checks: true
+  })
+  assert.deepEqual(nativeCheckTargets(['apps/tunnel/server/src/tunnel.rs']), {
+    desktop_checks: false,
+    android_checks: false,
+    tunnel_checks: true
+  })
+  assert.deepEqual(nativeCheckTargets(['apps/tunnel/common/README.md']), {
+    desktop_checks: false,
+    android_checks: false,
+    tunnel_checks: false
+  })
+})
+
 test('桌面三平台共用产品版本但分别记录成功，检查与打包选择分开', () => {
   assert.deepEqual(developmentUnits({ desktop: '1.1.2', website: '1.0.1', 'pi-desk': '1.0.8' }), {
     windows: '1.1.2',

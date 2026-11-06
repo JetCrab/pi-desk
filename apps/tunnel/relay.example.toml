@@ -1,0 +1,16 @@
+# 独立 iroh-relay 1.4.1 配置样例；与网关进程分别监听。
+# 证书须匹配 PI_DESK_TUNNEL_IROH_RELAY_URL 的 TLS 主机名。
+enable_relay = true
+http_bind_addr = "0.0.0.0:8080"
+enable_quic_addr_discovery = true
+enable_metrics = false
+# 空列表强制要求部署时提供 IROH_RELAY_ACCESS_TOKEN，未设置时启动失败。
+access.shared_token = []
+
+[tls]
+https_bind_addr = "0.0.0.0:8443"
+# 端口必须与网关 PI_DESK_TUNNEL_IROH_RELAY_QUIC_PORT 一致。
+quic_bind_addr = "0.0.0.0:7842"
+cert_mode = "Manual"
+manual_cert_path = "/etc/iroh-relay/certs/fullchain.pem"
+manual_key_path = "/etc/iroh-relay/certs/privkey.pem"

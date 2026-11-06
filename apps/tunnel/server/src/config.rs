@@ -1,18 +1,15 @@
 use std::env;
 use std::net::Ipv6Addr;
+use std::num::NonZeroU16;
 
 use anyhow::{Context, Result, anyhow};
-use pi_desk_tunnel_common::protocol::parse_key_hex;
-use pi_desk_tunnel_common::runtime::derive_noise_public_key;
+use pi_desk_tunnel_common::protocol::{TunnelRelayConfig, default_relay_quic_port, parse_key_hex};
 
 pub struct ServerConfig {
     pub control_bind: String,
     pub control_key: [u8; 32],
-    pub relay_bind: String,
-    pub public_relay: String,
     pub public_host: String,
-    pub relay_private_key: String,
-    pub relay_public_key: String,
+    pub relay: TunnelRelayConfig,
 }
 
 impl ServerConfig {
@@ -21,15 +18,21 @@ impl ServerConfig {
             .context("必须设置 PI_DESK_TUNNEL_SERVER_KEY（64 位十六进制密钥）")?;
         let control_key = parse_key_hex(&key_hex)
             .map_err(|_| anyhow!("PI_DESK_TUNNEL_SERVER_KEY 必须是严格 64 位十六进制密钥"))?;
-        let relay_private_key = env::var("PI_DESK_TUNNEL_PRIVATE_KEY")
-            .context("必须设置 PI_DESK_TUNNEL_PRIVATE_KEY")?;
-        let relay_public_key = derive_noise_public_key(&relay_private_key)
-            .map_err(|_| anyhow!("PI_DESK_TUNNEL_PRIVATE_KEY 无效"))?;
-        let public_relay = validate_socket_address(
-            &env::var("PI_DESK_TUNNEL_PUBLIC_RELAY")
-                .unwrap_or_else(|_| "127.0.0.1:7002".to_string()),
-            "PI_DESK_TUNNEL_PUBLIC_RELAY",
-        )?;
+        let relay_url = env::var("PI_DESK_TUNNEL_IROH_RELAY_URL")
+            .context("必须设置 PI_DESK_TUNNEL_IROH_RELAY_URL")?;
+        let relay_token = env::var("PI_DESK_TUNNEL_IROH_RELAY_TOKEN")
+            .context("必须设置 PI_DESK_TUNNEL_IROH_RELAY_TOKEN")?;
+        if relay_url.trim().is_empty() || relay_token.trim().is_empty() {
+            return Err(anyhow!("iroh relay 地址和准入 token 不能为空"));
+        }
+        let relay_quic_port = match env::var("PI_DESK_TUNNEL_IROH_RELAY_QUIC_PORT") {
+            Ok(value) => parse_relay_quic_port(Some(&value))?,
+            Err(env::VarError::NotPresent) => parse_relay_quic_port(None)?,
+            Err(error) => {
+                return Err(error)
+                    .context("PI_DESK_TUNNEL_IROH_RELAY_QUIC_PORT 必须是 1–65535 的端口");
+            }
+        };
         let public_host = validate_public_host(
             &env::var("PI_DESK_TUNNEL_PUBLIC_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
         )?;
@@ -40,16 +43,23 @@ impl ServerConfig {
                 "PI_DESK_TUNNEL_BIND",
             )?,
             control_key,
-            relay_bind: validate_socket_address(
-                &env::var("PI_DESK_TUNNEL_RELAY_BIND")
-                    .unwrap_or_else(|_| "0.0.0.0:7002".to_string()),
-                "PI_DESK_TUNNEL_RELAY_BIND",
-            )?,
-            public_relay,
             public_host,
-            relay_private_key,
-            relay_public_key,
+            relay: TunnelRelayConfig {
+                url: relay_url,
+                auth_token: relay_token,
+                quic_port: relay_quic_port,
+            },
         })
+    }
+}
+
+fn parse_relay_quic_port(value: Option<&str>) -> Result<u16> {
+    match value {
+        None => Ok(default_relay_quic_port()),
+        Some(value) => value
+            .parse::<NonZeroU16>()
+            .map(NonZeroU16::get)
+            .map_err(|_| anyhow!("PI_DESK_TUNNEL_IROH_RELAY_QUIC_PORT 必须是 1–65535 的端口")),
     }
 }
 
@@ -87,7 +97,15 @@ fn validate_public_host(value: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_public_host, validate_socket_address};
+    use super::{parse_relay_quic_port, validate_public_host, validate_socket_address};
+
+    #[test]
+    fn relay_quic_port_defaults_and_accepts_custom_boundaries() {
+        assert_eq!(parse_relay_quic_port(None).unwrap(), 7842);
+        assert_eq!(parse_relay_quic_port(Some("20012")).unwrap(), 20012);
+        assert_eq!(parse_relay_quic_port(Some("1")).unwrap(), 1);
+        assert_eq!(parse_relay_quic_port(Some("65535")).unwrap(), 65535);
+    }
 
     #[test]
     fn validates_runtime_listener_addresses_without_a_port_range() {

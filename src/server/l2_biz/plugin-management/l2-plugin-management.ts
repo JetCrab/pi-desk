@@ -184,12 +184,14 @@ function errorMessage(error: unknown): string {
 }
 
 async function readPackageMetadata(packageRoot: string): Promise<L2PluginPackageMetadata> {
-  if ((await stat(packageRoot)).isFile()) return { version: null, error: null }
   let manifest: L2PluginPackageManifest
   try {
-    manifest = JSON.parse(
-      await readFile(join(packageRoot, 'package.json'), 'utf8')
-    ) as L2PluginPackageManifest
+    if ((await stat(packageRoot)).isFile()) return { version: null, error: null }
+    const value: unknown = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('package.json 必须是对象')
+    }
+    manifest = value as L2PluginPackageManifest
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
       return { version: null, error: null }
@@ -430,6 +432,8 @@ export class L2PluginManagement {
           mutations.push(this.acceptMutation('update', source, snapshot!))
         } else if (input.action === 'del') {
           await this.del(source)
+        } else if (input.action === 'apply') {
+          await this.apply([source])
         } else {
           await this.setUpdateTag(source, input.tag)
         }
@@ -574,7 +578,38 @@ export class L2PluginManagement {
       throw new L2PluginManagementOperationConflictError('基础模式不加载外部插件')
     if (sources?.some((source) => this.deferredMaintenance.has(source)))
       throw new L2PluginManagementRestartPendingError()
-    const changes = await getL4PiGlobalPluginRuntime().scanSourceChanges(sources)
+    const runtime = getL4PiGlobalPluginRuntime()
+    // 安装在写入配置前失败的项仍保留在清单里，也必须能通过重载恢复。
+    const unconfigured =
+      sources?.filter(
+        (source) =>
+          ['add', 'apply'].includes(this.operations.get(source)?.action ?? '') &&
+          this.operations.get(source)?.phase === 'failed'
+      ) ?? []
+    const current = unconfigured.length ? await this.readSources() : null
+    const missing = unconfigured.filter(
+      (source) => !current?.sources.some((item) => item.source === source)
+    )
+    const selected = sources?.filter((source) => !missing.includes(source))
+    const changes = selected?.length === 0 ? [] : await runtime.scanSourceChanges(selected)
+    for (const source of missing) {
+      changes.push({
+        source,
+        previous: null,
+        current: {
+          source,
+          kind: 'package',
+          path: null,
+          nativePaths: [],
+          piDeskRoot: null,
+          version: null,
+          description: null,
+          enabled: true,
+          error: '插件包尚未安装'
+        },
+        fingerprint: null
+      })
+    }
     this.assertOpen()
     const accepted = changes.filter((change) => {
       if (this.deferredMaintenance.has(change.source)) return false
@@ -609,14 +644,32 @@ export class L2PluginManagement {
       this.activeSource = change.source
       try {
         this.setOperation(change.source, 'checking', null)
-        await this.probeSourceChange(change)
-        this.assertOpen()
-        this.setOperation(change.source, 'applying', null)
-        await getL4PiGlobalPluginRuntime().applySourceChange(change)
-        if (change.current?.path) clearL4PiPluginNativeDiagnostics(change.current.path)
-        if (change.previous?.path) clearL4PiPluginNativeDiagnostics(change.previous.path)
-        this.capabilityCache = null
-        this.operations.delete(change.source)
+        let repaired = await this.repairSourceChange(change)
+        if (!repaired) {
+          try {
+            await this.probeSourceChange(change)
+          } catch (error) {
+            if (
+              !/Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND/i.test(
+                errorMessage(error)
+              )
+            )
+              throw error
+            repaired = await this.repairSourceChange(change, true)
+            if (!repaired) throw error
+          }
+        }
+        if (!repaired) {
+          this.assertOpen()
+          this.setOperation(change.source, 'applying', null)
+          await getL4PiGlobalPluginRuntime().applySourceChange(change)
+        }
+        if (!this.deferredMaintenance.has(change.source)) {
+          if (change.current?.path) clearL4PiPluginNativeDiagnostics(change.current.path)
+          if (change.previous?.path) clearL4PiPluginNativeDiagnostics(change.previous.path)
+          this.capabilityCache = null
+          this.operations.delete(change.source)
+        }
       } catch (error) {
         this.setOperation(change.source, 'failed', errorMessage(error))
       } finally {
@@ -629,11 +682,65 @@ export class L2PluginManagement {
     })
   }
 
+  private async repairSourceChange(
+    change: L4PiPluginSourceChange,
+    missingDependency = false
+  ): Promise<boolean> {
+    const source = change.current
+    if (source?.kind !== 'package' || !/^(?:npm:|git:|https?:|git@)/.test(source.source))
+      return false
+    const npmName = l2PluginNpmName(source.source)
+    const metadata = source.path ? await readPackageMetadata(source.path) : null
+    const consistency = npmName
+      ? await readL4PiPackageRootConsistencyError({
+          agentDir: this.agentDir,
+          configured: [{ source: source.source, installedPath: source.path ?? undefined }]
+        })
+      : null
+    if (
+      !missingDependency &&
+      source.path &&
+      !source.error &&
+      !metadata?.error &&
+      !consistency &&
+      (!npmName || metadata?.version)
+    )
+      return false
+
+    // 配置固定版本优先；未固定但还有本机版本时原版本修复，不沿渠道升级。
+    const pinned = /^npm:(?:@[^/]+\/)?[^@]+@v?\d+\./.test(source.source)
+    const target =
+      npmName && !pinned && metadata?.version ? `npm:${npmName}@${metadata.version}` : source.source
+    const input: L2PluginMutationInput = {
+      mutation: 'add',
+      source: target,
+      operationSource: change.source,
+      reinstall: true,
+      options: {}
+    }
+    console.info('[Pi Desk][PluginManagement] 重载修复插件包', { source: change.source, target })
+    const prepared = await this.prepareMutation(input)
+    if (prepared) {
+      // 补装保留用户选择的渠道；启停和资源过滤由原有维护流程保留。
+      prepared.updateTag = null
+      await this.executeMutation(input, prepared)
+    }
+    return true
+  }
+
   private async probeSourceChange(change: L4PiPluginSourceChange): Promise<void> {
     const source = change.current
     if (!source || !source.enabled) return
     if (source.error) throw new L2PluginManagementInvalidPackageError(source.error)
     if (!source.path) throw new L2PluginManagementInvalidPackageError('插件来源目录不存在')
+    const metadata = await readPackageMetadata(source.path)
+    if (metadata.error) {
+      throw new L2PluginManagementInvalidPackageError(
+        typeof metadata.error.message === 'string'
+          ? metadata.error.message
+          : metadata.error.message.default
+      )
+    }
     const startedAt = performance.now()
     console.info('[Pi Desk][PluginManagement] 源码候选预检开始', { source: change.source })
     const root = join(this.stagingRoot, randomUUID())
@@ -649,7 +756,12 @@ export class L2PluginManagement {
         'utf8'
       )
       if (source.piDeskRoot || source.nativePaths.length > 0) {
-        const diagnostic = await runL4PiPluginProbe(cwd, agentDir, source.nativePaths.length > 0)
+        const diagnostic = await runL4PiPluginProbe(
+          cwd,
+          agentDir,
+          source.nativePaths.length > 0,
+          this.lifetime.signal
+        )
         const error =
           diagnostic.loadError ??
           diagnostic.packages.find((item) => item.status === 'failed')?.error?.message

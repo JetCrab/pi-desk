@@ -1,5 +1,5 @@
 export const WORKSPACE_STYLES = `
-.workspace-panel { display: flex; height: 100%; min-height: 0; flex-direction: column; background: var(--background); }
+.workspace-panel { display: flex; height: 100%; min-height: 0; flex-direction: column; background: var(--sidebar); }
 .workspace-panel .pi-desk-ui-panel-header-copy { flex: 1; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
 .workspace-project-title { display: block; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .workspace-body { min-height: 0; flex: 1; }
@@ -55,6 +55,10 @@ export const WORKSPACE_STYLES = `
 .workspace-log { min-width: 0; overflow: hidden; }
 .workspace-error { margin-bottom: .75rem; outline: none; }
 .workspace-confirm { display: grid; min-width: 0; gap: .75rem; }
+.workspace-command-context { min-width: 0; color: var(--muted-foreground); }
+.workspace-command-context summary { cursor: pointer; padding-block: .25rem; font-size: .875rem; }
+.workspace-command-context[open] > :not(summary) { margin-top: .5rem; }
+.workspace-command-context .workspace-path { font-weight: 400; }
 .workspace-management { padding: .75rem; border-radius: .5rem; background: var(--muted); }
 @container (max-width: 30rem) {
   .workspace-quick-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }

@@ -514,7 +514,7 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       management.finish()
       await notice.notification
       assert.equal(notice.messages.length, 1)
-      assert.match(notice.messages[0], /成功：已重新加载本机代码/)
+      assert.match(notice.messages[0], /成功：已重载插件/)
       assert.doesNotMatch(notice.messages[0], /已安装|重装|已重启/)
       assert.equal(management.state.plugins[0].source, npmSource)
       assert.equal(management.state.plugins[0].version, '1.0.0')
@@ -551,20 +551,37 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       await notice.notification
       assert.equal(notice.messages.length, 1)
       assert.match(notice.messages[0], /@fixture\/one：失败.*候选插件预检失败/)
-      assert.match(notice.messages[0], /@fixture\/two：成功.*重新加载/)
+      assert.match(notice.messages[0], /@fixture\/two：成功.*重载/)
       assert.match(notice.messages[0], /@fixture\/three：未接纳.*已有未完成操作/)
       assert.ok(management.calls.every(([method]) => method === 'apply' || method === 'wait'))
     })
 
-    await t.test('未知、重名或禁用来源不触发重载，全部拒绝不承诺通知', async () => {
-      for (const scenario of ['unknown', 'ambiguous', 'disabled', 'rejected']) {
+    await t.test('停用来源允许重载修复，完成后仍保持停用', async () => {
+      const management = new ManagementFixture()
+      management.state.plugins[0].status = 'disabled'
+      const notice = notificationContext(root)
+      const result = await execute(
+        { kind: 'plugins', action: 'reload', name: '@fixture/plugin' },
+        notice.context,
+        management,
+        agentDir
+      )
+      assert.equal(result.mode, 'async')
+      assert.deepEqual(management.calls[0], ['apply', [management.state.plugins[0].source]])
+      management.finish()
+      await notice.notification
+      assert.match(notice.messages[0], /成功：.*保持停用/)
+      assert.equal(management.state.plugins[0].status, 'disabled')
+    })
+
+    await t.test('未知或重名来源不触发重载，全部拒绝不承诺通知', async () => {
+      for (const scenario of ['unknown', 'ambiguous', 'rejected']) {
         const management = new ManagementFixture()
         const notice = notificationContext(root)
         const source = management.state.plugins[0].source
         if (scenario === 'unknown') management.state.plugins = []
         if (scenario === 'ambiguous')
           management.state.plugins.push(snapshot('npm:@fixture/plugin@2.0.0').plugins[0])
-        if (scenario === 'disabled') management.state.plugins[0].status = 'disabled'
         if (scenario === 'rejected') management.rejected.set(source, '插件管理正在关闭')
         await assert.rejects(
           execute(
@@ -573,13 +590,7 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
             management,
             agentDir
           ),
-          scenario === 'unknown'
-            ? /不存在/
-            : scenario === 'ambiguous'
-              ? /多个来源/
-              : scenario === 'disabled'
-                ? /禁用/
-                : /正在关闭/
+          scenario === 'unknown' ? /不存在/ : scenario === 'ambiguous' ? /多个来源/ : /正在关闭/
         )
         assert.deepEqual(management.calls, scenario === 'rejected' ? [['apply', [source]]] : [])
         assert.equal(notice.messages.length, 0)

@@ -34,12 +34,14 @@ export function WorkspaceList({
   timeFormatter,
   selectedId,
   disabled,
+  submissions,
   onSelect
 }: {
   workspaces: WorkspaceSnapshotItem[]
   timeFormatter: Intl.DateTimeFormat
   selectedId: string | null
   disabled: boolean
+  submissions: readonly { workspaceId: string; error: string | null }[]
   onSelect(workspaceId: string): void
 }): React.JSX.Element {
   const [showAvailable, setShowAvailable] = useState(false)
@@ -58,7 +60,12 @@ export function WorkspaceList({
       <PluginList density="compact">
         {entries.map((workspace) => {
           const name = workspaceDisplayName(workspace)
-          const usage = workspaceUsage(workspace)
+          const submission = submissions.find((item) => item.workspaceId === workspace.id)
+          const usage = submission
+            ? submission.error
+              ? '提交未确认'
+              : '正在提交…'
+            : workspaceUsage(workspace)
           const duplicate = (nameCounts.get(`${workspace.definition}:${name}`) ?? 0) > 1
           return (
             <PluginListItem
@@ -86,7 +93,12 @@ export function WorkspaceList({
                     {usage ? (
                       <span
                         className="workspace-list-usage"
-                        data-error={Boolean(workspace.issue) || usage === '最近操作失败'}
+                        role="status"
+                        data-error={
+                          Boolean(submission?.error) ||
+                          Boolean(workspace.issue) ||
+                          usage === '最近操作失败'
+                        }
                       >
                         {usage}
                       </span>

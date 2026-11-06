@@ -78,7 +78,7 @@ export function renderReleaseNotes(record, { repository }) {
       '### Notes',
       '',
       'The macOS build is not notarized.',
-      'Open the DMG and double-click Pi Desk Installer to install. If macOS blocks the installer or the installed app, review it in System Settings → Privacy & Security → Open Anyway.',
+      'Open the DMG and follow its installation instructions. If macOS blocks the app, review it in System Settings → Privacy & Security → Open Anyway.',
       ''
     )
   }
