@@ -128,6 +128,8 @@ test('发送记录清理未完成时，本地图已可展示并随正式消息�
     const draftUrls = runtime.getState(source).images.map((image) => image.objectUrl)
     sending = runtime.send(source, 'auto')
     await clearing.promise
+    assert.equal(runtime.getState(source).followRequested, true)
+    runtime.clearFollowRequest(source)
     fixture.startMessage()
     const temporary = localImageTexts.map((_, imageIndex) =>
       runtime.acquireMessageImage({ source, tempId: localTempId, entryId: null, imageIndex })
@@ -145,6 +147,7 @@ test('发送记录清理未完成时，本地图已可展示并随正式消息�
     cleared.resolve()
     await sending
     assert.equal(runtime.getState(source).outbox, null)
+    assert.equal(runtime.getState(source).followRequested, false)
     for (const url of draftUrls) await assert.rejects(fetch(url))
     const reopened = await runtime.acquireMessageImage(input)
     assert.equal(reopened.url, images[0]!.url)
@@ -167,6 +170,7 @@ test('发送确认后的本地清理失败不丢图，删除发送记录不影�
   try {
     await runtime.loadSource(source)
     await assert.rejects(runtime.send(source, 'auto'), /本地存储清理失败/)
+    assert.equal(runtime.getState(source).followRequested, true)
     fixture.startMessage()
     fixture.commitMessage()
     const image = await runtime.acquireMessageImage(input)
@@ -175,6 +179,7 @@ test('发送确认后的本地清理失败不丢图，删除发送记录不影�
     assert.deepEqual(fixture.imageReads, [])
     image.release()
     runtime.reconcileWorkSessions([])
+    assert.equal(runtime.getState(source).followRequested, false)
     await assert.rejects(fetch(image.url))
   } finally {
     runtime.dispose()
@@ -197,9 +202,11 @@ test('来源失效后的发送响应不重新登记本地图', async () => {
     await runtime.loadSource(source)
     sending = runtime.send(source, 'auto')
     await started.promise
+    assert.equal(runtime.getState(source).followRequested, false)
     runtime.reconcileWorkSessions([])
     response.resolve({ tempId: localTempId })
     await sending
+    assert.equal(runtime.getState(source).followRequested, false)
     assert.throws(() =>
       runtime.acquireMessageImage({ source, tempId: localTempId, entryId: null, imageIndex: 0 })
     )

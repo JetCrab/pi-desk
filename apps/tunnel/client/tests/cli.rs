@@ -86,7 +86,7 @@ async fn cli_recovers_forwards_rejects_conflict_and_releases_port() {
         gateway,
         TunnelRegistryConfig {
             relay: relay_config,
-            public_host: "127.0.0.1".to_string(),
+            public_host: "legacy-gateway.example.com".to_string(),
         },
     );
     let control_listener = TcpListener::bind(&control_address)
@@ -104,6 +104,11 @@ async fn cli_recovers_forwards_rejects_conflict_and_releases_port() {
         .await
     });
 
+    let connecting = wait_for_event(&mut first_lines, "connecting").await;
+    assert_eq!(
+        connecting.get("publicAddr").and_then(Value::as_str),
+        Some(public_address.as_str())
+    );
     let listening = wait_for_event(&mut first_lines, "listening").await;
     assert_eq!(
         listening.get("publicAddr").and_then(Value::as_str),

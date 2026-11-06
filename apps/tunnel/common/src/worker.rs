@@ -719,6 +719,10 @@ impl Publication {
     }
 
     async fn run_inner(&mut self) -> Result<(), String> {
+        let public_addr = self
+            .control
+            .public_addr(self.config.public_port)
+            .map_err(|error| error.to_string())?;
         loop {
             if self.cancel.is_cancelled() {
                 return Ok(());
@@ -781,7 +785,7 @@ impl Publication {
             self.update(
                 TunnelPhase::Connecting,
                 "正在连接提供端",
-                opened.value.public_addr.clone(),
+                public_addr.clone(),
             );
             let provider = endpoint(
                 &self.endpoint,
@@ -829,7 +833,7 @@ impl Publication {
                 }
             };
             let result = if registered {
-                self.maintain(&provider, &tunnel_id, &mut lease, opened.value.public_addr)
+                self.maintain(&provider, &tunnel_id, &mut lease, public_addr.clone())
                     .await
             } else {
                 Ok(())

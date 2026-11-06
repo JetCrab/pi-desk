@@ -1,5 +1,6 @@
 @import 'tailwindcss' source(none);
 @import '@fontsource-variable/inter';
+@import './l4-code-block.css';
 @source '../../../';
 @custom-variant dark (&:is([data-theme='dark'] *));
 

@@ -64,6 +64,7 @@ test('断线的未知发送结果保留Outbox且不会自动重新发送', async
   try {
     runtime.setText(source, 'send once')
     await assert.rejects(runtime.send(source, 'auto'), (cause) => cause === failure)
+    assert.equal(runtime.getState(source).followRequested, false)
     assert.equal(runtime.getState(source).outbox?.status, 'unknown')
     assert.equal(runtime.getState(source).outbox?.error, 'WebSocket connection closed')
     assert.equal(await runtime.prepareForPageReload(), false)
@@ -73,6 +74,57 @@ test('断线的未知发送结果保留Outbox且不会自动重新发送', async
     assert.deepEqual(outbox, { text: 'send once', images: [] })
   } finally {
     runtime.dispose()
+  }
+})
+
+test('仅成功接管在当前页面的对应Source请求跟随，消费后不重发', async () => {
+  let rejectSend = false
+  const accepted = Promise.withResolvers<{ tempId: string }>()
+  const started = Promise.withResolvers<void>()
+  const biz = {
+    async sendChat(): Promise<{ tempId: string }> {
+      if (rejectSend) throw new Error('拒绝发送')
+      started.resolve()
+      return accepted.promise
+    }
+  } as unknown as L2WorkbenchBiz
+  const chatRuntime = {
+    getSourceState: () => ({ syncStatus: 'ready' }),
+    subscribeSourceEvents: () => () => undefined
+  } as unknown as L2WorkbenchChatRuntime
+  const repository = {
+    writeDraft: async () => undefined,
+    moveDraftToOutbox: async () => undefined,
+    clearOutbox: async () => undefined
+  } as unknown as L2WorkbenchChatInputRepository
+  const runtime = createL2WorkbenchChatInputRuntime(biz, chatRuntime, repository)
+  const otherPage = createL2WorkbenchChatInputRuntime(biz, chatRuntime, repository)
+  const otherSource = { ...source, workId: 'work-2' }
+  const otherBranch = { ...source, branchId: 'v1:other' }
+  let sending: Promise<void> | undefined
+  try {
+    runtime.setText(source, '接管后恢复跟随')
+    sending = runtime.send(source, 'auto')
+    await started.promise
+    assert.equal(runtime.getState(source).followRequested, false)
+    accepted.resolve({ tempId: 'accepted-message' })
+    await sending
+    assert.equal(runtime.getState(source).followRequested, true)
+    assert.equal(runtime.getState(otherSource).followRequested, false)
+    assert.equal(runtime.getState(otherBranch).followRequested, false)
+    assert.equal(otherPage.getState(source).followRequested, false)
+
+    runtime.clearFollowRequest(source)
+    runtime.setText(source, '拒绝的消息不请求跟随')
+    assert.equal(runtime.getState(source).followRequested, false)
+    rejectSend = true
+    await assert.rejects(runtime.send(source, 'follow_up'), /拒绝发送/)
+    assert.equal(runtime.getState(source).followRequested, false)
+  } finally {
+    accepted.resolve({ tempId: 'accepted-message' })
+    await sending
+    runtime.dispose()
+    otherPage.dispose()
   }
 })
 

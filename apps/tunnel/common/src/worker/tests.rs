@@ -133,6 +133,29 @@ fn snapshot_is_latest_state_without_control_or_registration_credentials() {
 }
 
 #[test]
+fn publication_addresses_use_control_host_and_published_port() {
+    for (url, expected) in [
+        (
+            "http://tunnel.example.com:7001/",
+            "tunnel.example.com:40333",
+        ),
+        ("http://127.0.0.1:7001", "127.0.0.1:40333"),
+        ("http://[2001:db8::1]:7001", "[2001:db8::1]:40333"),
+        (
+            "http://tunnel.example.com/control",
+            "tunnel.example.com:40333",
+        ),
+    ] {
+        let control = ControlIo::new(&config(url));
+        assert_eq!(
+            control.public_addr(Some(40333)).unwrap().as_deref(),
+            Some(expected)
+        );
+        assert_eq!(control.public_addr(None).unwrap(), None);
+    }
+}
+
+#[test]
 fn control_errors_have_explicit_recovery_boundaries() {
     use crate::control::{ControlClientError as Error, ControlServerError as Server};
     assert!(control_io::resolve_retryable(&Error::Rejected(

@@ -3,12 +3,13 @@ import 'server-only'
 import { readFile, readdir } from 'node:fs/promises'
 import path from 'node:path'
 import { Marked } from 'marked'
-import { createHeadingIdGenerator } from '@server/l4_foundation/l4-markdown'
+import { createHeadingIdGenerator, renderCodeBlock } from '@server/l4_foundation/l4-markdown'
 
 function renderMarkdown(markdown: string): string {
   const headingId = createHeadingIdGenerator()
   const parser = new Marked({
     renderer: {
+      code: renderCodeBlock,
       heading({ tokens, depth, text }): string {
         const id = headingId(text)
         return `<h${depth} id="${id}">${this.parser.parseInline(tokens)}</h${depth}>\n`

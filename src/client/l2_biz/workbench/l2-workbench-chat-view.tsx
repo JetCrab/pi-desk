@@ -61,6 +61,18 @@ function L2WorkbenchChatViewComponent({
   )
   const getSnapshot = useCallback(() => chatRuntime.getSourceState(source), [chatRuntime, source])
   const state = useSyncExternalStore(chatRuntime.subscribe, getSnapshot, getSnapshot)
+  const getFollowRequest = useCallback(
+    () => inputRuntime.getState(source).followRequested,
+    [inputRuntime, source]
+  )
+  const followRequested = useSyncExternalStore(
+    inputRuntime.subscribe,
+    getFollowRequest,
+    getFollowRequest
+  )
+  const clearFollowRequest = useCallback((): void => {
+    inputRuntime.clearFollowRequest(source)
+  }, [inputRuntime, source])
   // 异步任务仍是当前轮次的延续，不能只用 main_running 判断处理过程结束。
   const running =
     workSession.status === 'main_running' || workSession.status === 'background_running'
@@ -181,6 +193,8 @@ function L2WorkbenchChatViewComponent({
                 containsTail={turnWindow.containsTail}
                 latestUserAnchor={latestUserAnchor}
                 entrySnapshot={entrySnapshot}
+                followRequested={followRequested}
+                onFollowHandled={clearFollowRequest}
                 onResetToTail={turnWindow.resetToTail}
                 onSaveSnapshot={saveViewportSnapshot}
                 onClearSnapshot={clearViewportSnapshot}

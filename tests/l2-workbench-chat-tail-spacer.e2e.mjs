@@ -25,19 +25,16 @@ import {
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const edgePath = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
-const runRoot = join(
-  projectRoot,
-  'temp',
-  'pi',
-  'workbench-chat-tail-spacer-e2e',
-  String(process.pid)
-)
-const agentDir = join(runRoot, 'agent')
-const projectDir = join(runRoot, '尾部占位回归项目')
-const shortProjectDir = join(runRoot, '短内容回归项目')
+const taskId = `tail-spacer-${process.pid}`
+const runRoot = join(projectRoot, 'temp/run/chat-tail-spacer', taskId)
+const agentRoot = join(projectRoot, 'temp/pi/chat-tail-spacer-e2e', taskId)
+const agentDir = join(agentRoot, 'agent')
+const buildRoot = join(projectRoot, 'temp/build/chat-tail-spacer', taskId)
+const projectDir = join(agentRoot, 'long-project')
+const shortProjectDir = join(agentRoot, 'short-project')
 const workSessionStorePath = join(agentDir, 'pi-desk', 'work-sessions.json')
-const outputPath = join(projectRoot, 'temp', '验收', '客户端_移动端', '聊天__尾部占位修复.png')
-const shortOutputPath = join(projectRoot, 'temp', '验收', '客户端_移动端', '聊天__短内容无滚动.png')
+const outputPath = join(runRoot, 'tail-spacer.png')
+const shortOutputPath = join(runRoot, 'short-content.png')
 const workId = 'tail-spacer-regression-work-session'
 const shortWorkId = 'short-chat-regression-work-session'
 const password = 'Qq.445566'
@@ -298,7 +295,9 @@ function tailMetricsExpression(targetWorkId = workId, markerText = finalMarker) 
 
 async function main() {
   let client
+  let success = false
   try {
+    await mkdir(runRoot, { recursive: true })
     await createFixture()
     appPort = await reservePort()
     cdpPort = await reservePort()
@@ -307,6 +306,7 @@ async function main() {
       agentDir,
       port: appPort,
       development: true,
+      nextDirectory: buildRoot,
       onOutput: (output) => {
         serverOutput += output
       }
@@ -662,11 +662,20 @@ async function main() {
         2
       )
     )
+    success = true
   } finally {
+    await writeFile(join(runRoot, 'server.log'), serverOutput)
     client?.close()
-    await stopBrowserTree(browserProcess, cdpPort)
-    if (serverRuntime) await stopE2eServerTree(serverRuntime)
-    await rm(runRoot, { recursive: true, force: true })
+    try {
+      await stopBrowserTree(browserProcess, cdpPort)
+    } finally {
+      if (serverRuntime) await stopE2eServerTree(serverRuntime)
+    }
+    if (success) {
+      await rm(agentRoot, { recursive: true, force: true })
+      await rm(buildRoot, { recursive: true, force: true })
+      await rm(runRoot, { recursive: true, force: true })
+    } else console.error(`失败现场：${runRoot}`)
   }
 }
 

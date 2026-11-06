@@ -18,6 +18,8 @@
 
 连接信息为 `pidesk-tcp://<providerId>:<remotePort>`，仅编码已有目标，不含控制密钥或授权token，也不注册系统URL协议。只有共享端口匹配已配置的本机HTTP(S)网址时，页面才提供网页链接；普通TCP端口只提供地址。
 
+公网展示地址由客户端使用自身控制服务 URL 的主机名和配置的公网端口生成，IPv6 使用 `[地址]:端口`；不带控制端口、路径或 URL scheme。控制服务主机必须也能到达对应公网业务端口；控制与业务分离、仅控制服务经过代理或 CDN 时，不能直接使用该展示地址。仅客户端访问的共享不生成公网地址。
+
 控制地址和控制密钥可以在可信设备之间共享；`providerSecretKey` 是提供端自身身份，不能让两个同时在线的提供端使用同一份私钥。迁移设备时先退出原提供端，新增设备使用各自生成的身份。
 
 发布目标固定为提供端的 `127.0.0.1:<本机端口>`；发布配置独立于网址书签。映射只监听 IPv4 `127.0.0.1`，端口占用时报告错误，不自动换号或停止占用者。
@@ -63,7 +65,23 @@ stdout 为 NDJSON；默认只输出 `opening`、`connecting`、`listening`、`re
 
 ## 部署网关与 relay
 
-同一隧道镜像包含网关和 relay 两个程序，使用 Linux Docker host 网络分别启动两个服务。配置入口为 [`.env.example`](./.env.example)、[`docker-compose.yml`](./docker-compose.yml) 和 [`relay.example.toml`](./relay.example.toml)：
+### 一行启动
+
+在 Linux x86_64 服务器安装 Docker、Docker Compose v2、Python 3 和 curl。将域名的 A 记录指向服务器，不能有 AAAA 记录；公网 TCP `443` 必须直达本机。命令会向 Let's Encrypt 申请 relay 证书，执行即表示接受其服务条款。
+
+将域名和证书联系邮箱替换为实际值：
+
+```bash
+(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/JetCrab/pi-desk/main/apps/tunnel/deploy/init.py | sudo python3 - --domain tunnel.example.com --email admin@example.com --image ghcr.io/jetcrab/pi-desk-tunnel:1.1.2)
+```
+
+脚本固定实际镜像摘要，使用两个容器启动网关和 relay。配置、独立生成的密钥及自动续期的证书缓存保存在 `/home/apps/pi-desk-tunnel/`；重复运行不覆盖配置或重建已有容器。运行结束后，用显示的控制服务地址和控制密钥配置桌面端。旧 v2 客户端继续使用服务端配置的公网域名。
+
+放行 TCP `443`、`7001`、UDP `7842`，以及每个实际发布的公网业务 TCP 端口。脚本不安装 Docker、不修改防火墙。它检查本机 TLS、relay 和控制服务，但仍需从其他设备验证公网访问、原生连接及实际业务转发。部署目录已存在但不属于该入口时，脚本不会接管。
+
+### 手动配置
+
+同一隧道镜像包含网关和 relay 两个程序，使用 Linux Docker host 网络分别启动两个服务。手动配置入口为 [`.env.example`](./.env.example)、[`docker-compose.yml`](./docker-compose.yml) 和 [`relay.example.toml`](./relay.example.toml)：
 
 | 服务                    | 职责与构建入口                                                                         |
 | ----------------------- | -------------------------------------------------------------------------------------- |
@@ -76,18 +94,18 @@ stdout 为 NDJSON；默认只输出 `opening`、`connecting`、`listening`、`re
 
 示例占位值不能直接用于生产。容器不会自动生成控制密钥、relay token 或 `connection.txt`。
 
-| 配置项                                | 用途                                                                                                      |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `PI_DESK_TUNNEL_IMAGE`                | 两个容器共用的镜像版本；源码构建默认 `pi-desk-tunnel:local`，发行部署填写实际 GHCR 版本                   |
-| `PI_DESK_TUNNEL_BIND`                 | 控制 HTTP 监听，默认 `0.0.0.0:7001`                                                                       |
-| `PI_DESK_TUNNEL_SERVER_KEY`           | 必填，严格 64 位十六进制控制密钥                                                                          |
-| `PI_DESK_TUNNEL_PUBLIC_HOST`          | 公网业务主机名或 IP，不含端口；Compose 要求显式设置                                                       |
-| `PI_DESK_TUNNEL_IROH_RELAY_URL`       | 必填，可信客户端可达的 relay URL；示例为 `https://relay.example.com:8443`                                 |
-| `PI_DESK_TUNNEL_IROH_RELAY_QUIC_PORT` | QUIC 地址发现 UDP 端口，默认 `7842`，有效范围 `1–65535`；须与 relay TOML 的 `tls.quic_bind_addr` 端口一致 |
-| `PI_DESK_TUNNEL_IROH_RELAY_TOKEN`     | 必填，relay 准入 token；Compose 同时传为 relay 的 `IROH_RELAY_ACCESS_TOKEN`                               |
-| `IROH_RELAY_CONFIG_PATH`              | Compose 挂载的宿主机私有 relay TOML 文件                                                                  |
-| `IROH_RELAY_CERT_DIR`                 | Compose 只读挂载的证书目录，示例内含 `fullchain.pem` 与 `privkey.pem`                                     |
-| `RUST_LOG`                            | 日志过滤，Compose 默认 `info`                                                                             |
+| 配置项                                | 用途                                                                                                            |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `PI_DESK_TUNNEL_IMAGE`                | 两个容器共用的镜像版本；源码构建默认 `pi-desk-tunnel:local`，发行部署填写实际 GHCR 版本                         |
+| `PI_DESK_TUNNEL_BIND`                 | 控制 HTTP 监听，默认 `0.0.0.0:7001`                                                                             |
+| `PI_DESK_TUNNEL_SERVER_KEY`           | 必填，严格 64 位十六进制控制密钥                                                                                |
+| `PI_DESK_TUNNEL_PUBLIC_HOST`          | 可选，仅供旧 v2 客户端的 `public_addr`；无端口主机名或 IP，默认 `127.0.0.1`，兼容公网访问的旧客户端时须显式设置 |
+| `PI_DESK_TUNNEL_IROH_RELAY_URL`       | 必填，可信客户端可达的 relay URL；示例为 `https://relay.example.com:8443`                                       |
+| `PI_DESK_TUNNEL_IROH_RELAY_QUIC_PORT` | QUIC 地址发现 UDP 端口，默认 `7842`，有效范围 `1–65535`；须与 relay TOML 的 `tls.quic_bind_addr` 端口一致       |
+| `PI_DESK_TUNNEL_IROH_RELAY_TOKEN`     | 必填，relay 准入 token；Compose 同时传为 relay 的 `IROH_RELAY_ACCESS_TOKEN`                                     |
+| `IROH_RELAY_CONFIG_PATH`              | Compose 挂载的宿主机私有 relay TOML 文件                                                                        |
+| `IROH_RELAY_CERT_DIR`                 | Compose 只读挂载的证书目录，示例内含 `fullchain.pem` 与 `privkey.pem`                                           |
+| `RUST_LOG`                            | 日志过滤，Compose 默认 `info`                                                                                   |
 
 控制密钥和 relay token 由部署者准备，两者不同。控制端通过加密 open/resolve 响应向可信原生端分发 relay 配置，token 不放在 URL 查询参数中。relay 的 shared-token 准入与逐端口的 service token 授权分别生效。
 
@@ -113,6 +131,8 @@ gateway 访问同机 relay 时，应在保留正确 TLS 主机名的前提下，
 ## 升级与回退
 
 控制协议使用 `/api/v2`，不兼容旧 v1/Noise 数据通道，没有运行时双栈或自动降级。升级前备份桌面配置和旧制品，在维护窗口同步切换服务端与桌面端；使用 `--stats` 的插件需要支持该参数的桌面端。
+
+v2 的 `open.public_addr` 字段及服务端 `PI_DESK_TUNNEL_PUBLIC_HOST` 配置保留。新客户端连接现有 v2 服务端时，桌面展示和 CLI 的 `connecting/listening.publicAddr` 均使用控制 URL 主机和发布端口，不采用服务端返回的主机；CLI 事件结构不变。旧客户端仍使用服务端 `public_addr`，升级网关时应保留原公网主机配置；未配置时默认返回 `127.0.0.1:<公网端口>`，不会自动适配旧客户端。新客户端不使用该变量作为控制与业务分离部署的地址覆盖。
 
 保持公网主机和公网端口时，普通程序的原访问地址可保持不变，但切换会断开现有 TCP。旧 `targets[].tunnel` 按 URL 的有效本机端口读取转换为独立发布配置，保留公网端口和启用状态；同一本机端口的设置冲突时报告具体记录并保留原文件，不静默丢弃。回退使用外部保存的旧服务端、桌面、插件制品及升级前配置，不在新源码启用旧栈。
 

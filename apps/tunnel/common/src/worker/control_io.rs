@@ -33,6 +33,18 @@ impl ControlIo {
         }
     }
 
+    pub fn public_addr(
+        &self,
+        public_port: Option<u16>,
+    ) -> Result<Option<String>, ControlClientError> {
+        let Some(port) = public_port else {
+            return Ok(None);
+        };
+        let url = url::Url::parse(&self.url).map_err(|_| ControlClientError::InvalidBaseUrl)?;
+        let host = url.host_str().ok_or(ControlClientError::InvalidBaseUrl)?;
+        Ok(Some(format!("{host}:{port}")))
+    }
+
     // 所有调用者持有并等待此 future；取消后也必须等待，不能丢弃迟到 open。
     async fn request<T: Send + 'static>(
         &self,
