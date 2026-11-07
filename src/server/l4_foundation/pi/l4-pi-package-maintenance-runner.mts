@@ -6,8 +6,6 @@ import { L4PluginRegistrySchema } from '@common/l4_foundation/plugin/l4-plugin-p
 import { createJiti } from 'jiti'
 import packageRootApi from '../process/l4-package-root.js'
 
-const PACKAGE_CLI_TIMEOUT_MS = 5 * 60 * 1000
-
 type PackageAction = 'install' | 'update' | 'remove' | 'reinstall'
 
 let activeChild: ChildProcess | null = null
@@ -68,13 +66,16 @@ async function main(): Promise<void> {
   // scoped 源只覆盖对应 scope，公共依赖继续使用原有默认源。
   const registryKey = scope ? `npm_config_${scope}:registry` : 'npm_config_registry'
   const inheritedEnvironment = { ...process.env }
-  if (registry) {
-    // Windows 子进程的环境名不区分大小写，不能同时保留两种拼写。
-    for (const key of Object.keys(inheritedEnvironment)) {
-      if (key.toLowerCase() === registryKey.toLowerCase()) delete inheritedEnvironment[key]
-    }
+  // 自动审计会查询整个共享依赖树，不能让无关包的联网检查阻塞维护。
+  const maintenanceEnvironment: Record<string, string> = {
+    npm_config_audit: 'false',
+    npm_config_fund: 'false',
+    ...(registry ? { [registryKey]: registry } : {})
   }
-  const registryEnvironment: Record<string, string> = registry ? { [registryKey]: registry } : {}
+  for (const key of Object.keys(inheritedEnvironment)) {
+    // Windows 子进程的环境名不区分大小写，不能同时保留两种拼写。
+    if (Object.hasOwn(maintenanceEnvironment, key.toLowerCase())) delete inheritedEnvironment[key]
+  }
 
   const configuredAgentDir = process.env.PI_CODING_AGENT_DIR
   const agentDir =
@@ -103,7 +104,7 @@ async function main(): Promise<void> {
       cwd,
       env: {
         ...inheritedEnvironment,
-        ...registryEnvironment,
+        ...maintenanceEnvironment,
         FORCE_COLOR: '0',
         NO_COLOR: '1',
         PI_CODING_AGENT_DIR: agentDir,
@@ -113,13 +114,12 @@ async function main(): Promise<void> {
       windowsHide: true
     })
     activeChild = child
-    let timedOut = false
+    // 在线 Runner 与托管父进程各自按单次启动计时；此层不再设置第二份截止时间。
     let settled = false
     const finish = (callback: () => void): void => {
       if (settled) return
       settled = true
       activeChild = null
-      clearTimeout(timeout)
       callback()
     }
 
@@ -128,10 +128,6 @@ async function main(): Promise<void> {
     child.once('error', (error) => finish(() => rejectRun(error)))
     child.once('close', (code) => {
       finish(() => {
-        if (timedOut) {
-          rejectRun(new Error(`Pi ${action} ${source} 超时`))
-          return
-        }
         if (code !== 0) {
           rejectRun(new Error(`Pi ${action} ${source} 退出码 ${code ?? 'null'}`))
           return
@@ -139,12 +135,6 @@ async function main(): Promise<void> {
         resolveRun()
       })
     })
-
-    const timeout = setTimeout(() => {
-      timedOut = true
-      void terminateProcessTree(child)
-    }, PACKAGE_CLI_TIMEOUT_MS)
-    timeout.unref()
   })
   const jiti = createJiti(import.meta.url, {
     nativeModules: [

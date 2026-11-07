@@ -202,6 +202,50 @@ setInterval(() => {}, 1000)
   assert.equal(await processExists(pids[1]!), false)
 })
 
+test('子进程从各自启动时计时，前项超时不取消后项', { timeout: 20_000 }, async (context) => {
+  await mkdir(agentDir, { recursive: true })
+  const controller = new AbortController()
+  const pids: number[] = []
+  context.after(async () => {
+    controller.abort()
+    for (const pid of pids) await terminateRemaining(pid)
+    await rm(testRoot, { recursive: true, force: true })
+  })
+  context.mock.timers.enable({ apis: ['setTimeout'] })
+  const start = (name: string): Promise<unknown> =>
+    runL4PiRunnerProcess({
+      args: [
+        '-e',
+        `require('node:fs').writeFileSync(${JSON.stringify(join(testRoot, name))}, String(process.pid)); setInterval(() => {}, 1000)`
+      ],
+      agentDir,
+      env: runnerEnvironment,
+      maxOutputBytes: 1024,
+      timeoutMs: 1_000,
+      signal: controller.signal,
+      timeoutError: () => new Error(`${name}超时`)
+    })
+  const first = start('first')
+  const firstRejected = assert.rejects(first, /first超时/)
+  pids.push(Number(await waitForFile(join(testRoot, 'first'))))
+  context.mock.timers.tick(750)
+  let secondSettled = false
+  const second = start('second').finally(() => {
+    secondSettled = true
+  })
+  const secondRejected = assert.rejects(second, /second超时/)
+  pids.push(Number(await waitForFile(join(testRoot, 'second'))))
+  context.mock.timers.tick(250)
+  await firstRejected
+  assert.equal(secondSettled, false)
+  context.mock.timers.tick(749)
+  await Promise.resolve()
+  assert.equal(secondSettled, false, '后启动的进程必须获得完整的独立时限')
+  context.mock.timers.tick(1)
+  await secondRejected
+  for (const pid of pids) assert.equal(await processExists(pid), false)
+})
+
 test('取消并行准备会先释放完整进程树，预取消不启动进程', { timeout: 30_000 }, async (context) => {
   await mkdir(join(agentDir, 'sessions'), { recursive: true })
   const marker = join(testRoot, 'canceled-process-tree.json')

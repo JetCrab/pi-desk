@@ -106,16 +106,21 @@ async function acceptTargets(
   management: CommandManagement
 ): Promise<CommandAcceptance[]> {
   if (command.action === 'reload') {
-    const acceptances: CommandAcceptance[] = []
-    for (const target of targets) {
-      try {
-        await management.apply([target.source])
-        acceptances.push({ target, error: null })
-      } catch (error) {
-        acceptances.push({ target, error: failureMessage(error) })
-      }
+    try {
+      const response = await management.batch({
+        action: 'apply',
+        sources: targets.map((target) => target.source)
+      })
+      const results = new Map(response.results.map((result) => [result.source, result.error]))
+      return targets.map((target) => ({
+        target,
+        error: results.has(target.source)
+          ? results.get(target.source)!
+          : '业务未返回该来源的接纳结果'
+      }))
+    } catch (error) {
+      return targets.map((target) => ({ target, error: failureMessage(error) }))
     }
-    return acceptances
   }
   const results = new Map<string, string | null>()
   const packages = targets.filter((target) => !target.local)

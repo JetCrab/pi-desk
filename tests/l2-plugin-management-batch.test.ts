@@ -57,11 +57,20 @@ async function fixture(
   process.env.PI_CODING_AGENT_SESSION_DIR = join(agentDir, 'sessions')
   delete process.env.PI_DESK_SAFE_MODE
   let management: Management | undefined
+  const previousRuntime = globalThis.__piDeskGlobalPluginRuntime
+  let runtime:
+    | import('../src/server/l4_foundation/pi/l4-pi-global-plugin-runtime').L4PiGlobalPluginRuntime
+    | undefined
   let succeeded = false
   try {
     const { L2PluginManagement } = await jiti.import<
       typeof import('../src/server/l2_biz/plugin-management/l2-plugin-management')
     >('../src/server/l2_biz/plugin-management/l2-plugin-management.ts')
+    const { L4PiGlobalPluginRuntime } = await jiti.import<
+      typeof import('../src/server/l4_foundation/pi/l4-pi-global-plugin-runtime')
+    >('../src/server/l4_foundation/pi/l4-pi-global-plugin-runtime.ts')
+    runtime = new L4PiGlobalPluginRuntime(root, agentDir)
+    globalThis.__piDeskGlobalPluginRuntime = runtime
     management = new L2PluginManagement(
       { runPluginRestart: (operation) => operation() },
       root,
@@ -78,6 +87,8 @@ async function fixture(
   } finally {
     management?.dispose()
     if (management) await Reflect.get(management, 'operationTail')
+    await runtime?.dispose()
+    globalThis.__piDeskGlobalPluginRuntime = previousRuntime
     for (const [key, value] of saved) {
       if (value === undefined) delete process.env[key]
       else process.env[key] = value
@@ -92,71 +103,117 @@ function operations(management: Management): Map<string, L2PluginManagementOpera
 
 const prepared: Prepared = { request: null, updateTag: null, pluginName: null }
 
-test(
-  '10项同时准备，准备全部收尾后串行应用；部分失败不阻断其余项',
-  { timeout: 30_000 },
-  async () => {
-    await fixture(async (management) => {
-      const allStarted = gate()
-      const release = gate()
-      const sources = Array.from({ length: 10 }, (_, i) => `npm:batch-fixture-${i}`)
-      const started: string[] = []
-      const applied: string[] = []
-      let activeWrites = 0
-      let maxWrites = 0
-      Reflect.set(management, 'prepareMutation', async (input: Mutation): Promise<Prepared> => {
-        started.push(input.source)
-        if (started.length === 10) allStarted.open()
-        await release.promise
-        if (input.source === sources[2]) throw new Error('候选预检失败')
-        return prepared
-      })
-      Reflect.set(management, 'executeMutation', async (input: Mutation): Promise<void> => {
-        activeWrites += 1
-        maxWrites = Math.max(maxWrites, activeWrites)
+for (const action of ['add', 'apply'] as const) {
+  test(
+    `${action}：10项同时准备，准备全部收尾后串行应用；部分失败不阻断其余项`,
+    { timeout: 30_000 },
+    async () => {
+      await fixture(async (management, agentDir) => {
+        const allStarted = gate()
+        const release = gate()
+        const sources = Array.from({ length: 10 }, (_, i) => `npm:batch-fixture-${i}`)
+        if (action === 'apply')
+          await writeFile(join(agentDir, 'settings.json'), JSON.stringify({ packages: sources }))
+        const started: string[] = []
+        const applied: string[] = []
+        let activeWrites = 0
+        let maxWrites = 0
+        Reflect.set(management, 'prepareMutation', async (input: Mutation): Promise<Prepared> => {
+          started.push(input.source)
+          if (started.length === 10) allStarted.open()
+          await release.promise
+          if (input.source === sources[2]) throw new Error('候选预检失败')
+          return prepared
+        })
+        Reflect.set(management, 'executeMutation', async (input: Mutation): Promise<void> => {
+          activeWrites += 1
+          maxWrites = Math.max(maxWrites, activeWrites)
+          try {
+            assert.equal(started.length, 10)
+            applied.push(input.source)
+            await setImmediate()
+            if (input.source === sources[5]) throw new Error('目标加载失败')
+          } finally {
+            activeWrites -= 1
+          }
+        })
         try {
-          assert.equal(started.length, 10)
-          applied.push(input.source)
-          await setImmediate()
-          if (input.source === sources[5]) throw new Error('目标加载失败')
+          const accepted = await management.batch(
+            action === 'add'
+              ? { action, items: sources.map((source) => ({ source })) }
+              : { action, sources }
+          )
+          assert.ok(accepted.results.every((item) => item.error === null))
+          await allStarted.promise
+          assert.equal(started.length, 10, '不能等前一项准备结束才开始下一项')
+          assert.deepEqual(applied, [], '准备未收尾不能触碰正式安装')
+          await assert.rejects(management.reinstall(`${sources[0]}@2.0.0`), /未完成/)
+          await assert.rejects(management.reload(), /维护仍在执行/)
+          const duplicate = await management.batch({
+            action: 'add',
+            items: [{ source: sources[0] }]
+          })
+          assert.match(duplicate.results[0].error!, /未完成/)
+          release.open()
+          await Reflect.get(management, 'operationTail')
+          assert.equal(maxWrites, 1)
+          assert.deepEqual(
+            applied,
+            sources.filter((source) => source !== sources[2])
+          )
+          assert.equal(operations(management).get(sources[2])?.message, '候选预检失败')
+          assert.equal(operations(management).get(sources[5])?.message, '目标加载失败')
+          assert.equal(operations(management).size, 2)
+          await management.waitForOperations([sources[9]], new AbortController().signal)
+          await assert.rejects(
+            management.waitForOperations([sources[2]], new AbortController().signal),
+            /候选预检失败/
+          )
         } finally {
-          activeWrites -= 1
+          release.open()
         }
       })
-      try {
-        const accepted = await management.batch({
-          action: 'add',
-          items: sources.map((source) => ({ source }))
-        })
-        assert.ok(accepted.results.every((item) => item.error === null))
-        await allStarted.promise
-        assert.equal(started.length, 10, '不能等前一项准备结束才开始下一项')
-        assert.deepEqual(applied, [], '准备未收尾不能触碰正式安装')
-        await assert.rejects(management.reinstall(`${sources[0]}@2.0.0`), /未完成/)
-        await assert.rejects(management.reload(), /维护仍在执行/)
-        const duplicate = await management.batch({ action: 'add', items: [{ source: sources[0] }] })
-        assert.match(duplicate.results[0].error!, /未完成/)
-        release.open()
-        await Reflect.get(management, 'operationTail')
-        assert.equal(maxWrites, 1)
-        assert.deepEqual(
-          applied,
-          sources.filter((source) => source !== sources[2])
-        )
-        assert.equal(operations(management).get(sources[2])?.message, '候选预检失败')
-        assert.equal(operations(management).get(sources[5])?.message, '目标加载失败')
-        assert.equal(operations(management).size, 2)
-        await management.waitForOperations([sources[9]], new AbortController().signal)
-        await assert.rejects(
-          management.waitForOperations([sources[2]], new AbortController().signal),
-          /候选预检失败/
-        )
-      } finally {
-        release.open()
+    }
+  )
+}
+
+test('重载排队不提前开始维护或消耗执行时限', { timeout: 30_000 }, async (context) => {
+  await fixture(async (management, agentDir) => {
+    const source = 'npm:queued-reload@1.0.0'
+    await writeFile(join(agentDir, 'settings.json'), JSON.stringify({ packages: [source] }))
+    const started = gate()
+    const release = gate()
+    const preparedSources: string[] = []
+    const applied: string[] = []
+    context.mock.timers.enable({ apis: ['setTimeout'] })
+    Reflect.set(management, 'prepareMutation', async (input: Mutation): Promise<Prepared> => {
+      preparedSources.push(input.source)
+      if (input.source === 'npm:first') {
+        started.open()
+        await release.promise
       }
+      return prepared
     })
-  }
-)
+    Reflect.set(management, 'executeMutation', async (input: Mutation): Promise<void> => {
+      applied.push(input.source)
+    })
+    try {
+      await management.reinstall('npm:first')
+      await started.promise
+      await management.batch({ action: 'apply', sources: [source] })
+      context.mock.timers.tick(360_000)
+      await setImmediate()
+      assert.deepEqual(preparedSources, ['npm:first'])
+      assert.equal(operations(management).get(source)?.phase, 'queued')
+      release.open()
+      await management.waitForOperations([source], AbortSignal.timeout(5_000))
+      assert.deepEqual(applied, ['npm:first', source])
+      assert.equal(operations(management).size, 0)
+    } finally {
+      release.open()
+    }
+  })
+})
 
 test('不同入口共享32项容量，重复来源拒绝且失败项可显式重试', { timeout: 30_000 }, async () => {
   await fixture(async (management) => {

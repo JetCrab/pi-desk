@@ -480,7 +480,7 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       assert.match(notice.messages[0], /成功：已卸载/)
     })
 
-    await t.test('重载 npm 和本地来源只应用已安装代码，保留版本且同来源去重', async () => {
+    await t.test('重载 npm 和本地来源共用批量队列，保留版本且同来源去重', async () => {
       const management = new ManagementFixture()
       const npmSource = management.state.plugins[0].source
       management.state.plugins[0].pluginName = 'fixture-plugin'
@@ -506,8 +506,7 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       assert.match(result.message, /重载.*已被接纳/)
       assert.equal(notice.messages.length, 0)
       assert.deepEqual(management.calls, [
-        ['apply', [npmSource]],
-        ['apply', [local]],
+        ['batch', { action: 'apply', sources: [npmSource, local] }],
         ['wait', [npmSource]],
         ['wait', [local]]
       ])
@@ -553,7 +552,7 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
       assert.match(notice.messages[0], /@fixture\/one：失败.*候选插件预检失败/)
       assert.match(notice.messages[0], /@fixture\/two：成功.*重载/)
       assert.match(notice.messages[0], /@fixture\/three：未接纳.*已有未完成操作/)
-      assert.ok(management.calls.every(([method]) => method === 'apply' || method === 'wait'))
+      assert.ok(management.calls.every(([method]) => method === 'batch' || method === 'wait'))
     })
 
     await t.test('停用来源允许重载修复，完成后仍保持停用', async () => {
@@ -567,7 +566,10 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
         agentDir
       )
       assert.equal(result.mode, 'async')
-      assert.deepEqual(management.calls[0], ['apply', [management.state.plugins[0].source]])
+      assert.deepEqual(management.calls[0], [
+        'batch',
+        { action: 'apply', sources: [management.state.plugins[0].source] }
+      ])
       management.finish()
       await notice.notification
       assert.match(notice.messages[0], /成功：.*保持停用/)
@@ -592,7 +594,10 @@ test('插件命令接纳、应用和结果通知', { timeout: 30_000 }, async (t
           ),
           scenario === 'unknown' ? /不存在/ : scenario === 'ambiguous' ? /多个来源/ : /正在关闭/
         )
-        assert.deepEqual(management.calls, scenario === 'rejected' ? [['apply', [source]]] : [])
+        assert.deepEqual(
+          management.calls,
+          scenario === 'rejected' ? [['batch', { action: 'apply', sources: [source] }]] : []
+        )
         assert.equal(notice.messages.length, 0)
       }
     })

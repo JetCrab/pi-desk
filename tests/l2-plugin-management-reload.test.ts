@@ -127,7 +127,7 @@ test(
         npm_config_userconfig: npmrc,
         npm_config_globalconfig: globalNpmrc,
         npm_config_cache: join(root, 'npm-cache'),
-        npm_config_audit: 'false',
+        NPM_CONFIG_AUDIT: 'true',
         npm_config_fund: 'false',
         npm_config_update_notifier: 'false'
       }
@@ -239,6 +239,11 @@ test(
       const final = await management.list()
       assert.equal(final.loadError, null, '补装和移除后根目录不一致诊断应消失')
       assert.equal(final.plugins.length, 2)
+      assert.equal(
+        requests.some((path) => path.startsWith('/-/npm/v1/security/')),
+        false,
+        '维护进程应关闭自动审计，不受继承的 npm 配置大小写影响'
+      )
       succeeded = true
     } finally {
       management?.dispose()
