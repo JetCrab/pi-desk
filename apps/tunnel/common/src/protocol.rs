@@ -136,6 +136,7 @@ pub struct OpenTunnelRequest {
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TunnelRelayConfig {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub url: String,
     pub auth_token: String,
     #[serde(default = "default_relay_quic_port")]

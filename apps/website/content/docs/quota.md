@@ -10,7 +10,7 @@
 
 目前支持 OpenRouter、Moonshot / Kimi API、SiliconFlow、智谱 Coding Plan、OpenCode Go、CommandCode、CPA 和 Antigravity Manager。CPA 一次配置即可查询其中的 Codex、Devin 账号；其他账号类型会显示状态和暂不支持的提示。各渠道需要对应的管理权限、查询凭据或套餐。
 
-当前实现没有 Windows 专属限制。请求由运行 Pi Desk 的电脑发出，这台电脑必须能访问对应服务，手机只负责查看界面。
+请求由运行 Pi Desk 的电脑发出，这台电脑必须能访问对应服务，手机只负责查看界面。
 
 ## 先配置，再查看查询结果
 

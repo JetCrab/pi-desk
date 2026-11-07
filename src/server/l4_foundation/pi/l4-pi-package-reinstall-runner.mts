@@ -21,12 +21,13 @@ async function main(): Promise<void> {
   const packageName = /^npm:((?:@[^/]+\/)?[^@]+)(?:@.+)?$/.exec(source)?.[1]
   const installed = manager
     .listConfiguredPackages()
-    .some(
+    .find(
       (item) =>
         item.scope === 'user' &&
         /^npm:((?:@[^/]+\/)?[^@]+)(?:@.+)?$/.exec(item.source)?.[1] === packageName
     )
-  if (installed) {
+  // installedPath 由官方包管理器检查实际路径，配置声明不代表文件已安装。
+  if (installed?.installedPath) {
     process.stdout.write(`[Pi Desk][PackageReinstall] 正在卸载插件文件：${source}\n`)
     // remove 不删除配置声明，installAndPersist 由官方实现保留原有对象过滤设置。
     await manager.remove(source)

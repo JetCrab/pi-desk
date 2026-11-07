@@ -8,6 +8,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
 import { createJiti } from 'jiti'
+import { assertPortReleased } from './l4-e2e-server-runtime.mjs'
 
 const execFileAsync = promisify(execFile)
 const require = createRequire(import.meta.url)
@@ -16,13 +17,15 @@ test('官方包管理首次安装、重装保留过滤、失败保留配置和�
   const runId = `official-reinstall-${randomUUID()}`
   const root = resolve('temp/run/pidesk-maintenance', runId)
   const artifacts = resolve('temp/package/pidesk-maintenance', runId)
-  const agentDir = join(root, 'agent')
+  const agentRoot = resolve('temp/pi/pidesk-maintenance', runId)
+  const agentDir = join(agentRoot, 'agent')
   const packageName = 'pidesk-install-fixture'
   const archives = new Map<string, Buffer>()
   const saved = new Map<string, string | undefined>()
   const settingsPath = join(agentDir, 'settings.json')
   const installed = join(agentDir, 'npm', 'node_modules', packageName)
   let succeeded = false
+  let port = 0
   const server = createServer((request, response) => {
     const path = decodeURIComponent((request.url ?? '').split('?')[0])
     const file = archives.get(path)
@@ -86,8 +89,11 @@ test('官方包管理首次安装、重装保留过滤、失败保留配置和�
     await new Promise<void>((resolveListen) => server.once('listening', resolveListen))
     const address = server.address()
     assert.ok(address && typeof address !== 'string')
+    port = address.port
     const npmrc = join(root, 'npmrc')
     await writeFile(npmrc, '')
+    const globalNpmrc = join(root, 'global-npmrc')
+    await writeFile(globalNpmrc, '')
     await writeFile(settingsPath, JSON.stringify({ packages: [] }))
     const environment = {
       PI_DESK_PI_PACKAGE_DIR: resolve('node_modules/@earendil-works/pi-coding-agent'),
@@ -96,6 +102,7 @@ test('官方包管理首次安装、重装保留过滤、失败保留配置和�
       PI_OFFLINE: '1',
       npm_config_registry: `http://127.0.0.1:${address.port}`,
       npm_config_userconfig: npmrc,
+      npm_config_globalconfig: globalNpmrc,
       npm_config_cache: join(root, 'npm-cache'),
       npm_config_audit: 'false',
       npm_config_fund: 'false',
@@ -164,6 +171,17 @@ test('官方包管理首次安装、重装保留过滤、失败保留配置和�
     await assert.rejects(execute(`npm:${packageName}@9.0.0`), /9\.0\.0/)
     await assertSettings(`npm:${packageName}@1.0.0`)
     await execute(`npm:${packageName}@1.0.0`)
+    const npmManifest = join(agentDir, 'npm', 'package.json')
+    const dependencies = JSON.parse(await readFile(npmManifest, 'utf8')).dependencies
+    await rm(installed, { recursive: true })
+    await assert.rejects(execute(`npm:${packageName}@9.0.0`), /9\.0\.0/)
+    assert.deepEqual(
+      JSON.parse(await readFile(npmManifest, 'utf8')).dependencies,
+      dependencies,
+      '配置存在但目录缺失时直接补装，不能先卸载并移除已有依赖声明'
+    )
+    await assertSettings(`npm:${packageName}@1.0.0`)
+    await execute(`npm:${packageName}@1.0.0`)
     assert.equal(await version(), '1.0.0')
     await assertSettings(`npm:${packageName}@1.0.0`)
     await execute(`npm:${packageName}@1.0.0`, 'remove')
@@ -180,9 +198,11 @@ test('官方包管理首次安装、重装保留过滤、失败保留配置和�
       await new Promise<void>((resolveClose, rejectClose) =>
         server.close((error) => (error ? rejectClose(error) : resolveClose()))
       )
+    if (port) await assertPortReleased(port)
     if (succeeded)
       await Promise.all([
         rm(root, { recursive: true, force: true }),
+        rm(agentRoot, { recursive: true, force: true }),
         rm(artifacts, { recursive: true, force: true })
       ])
   }

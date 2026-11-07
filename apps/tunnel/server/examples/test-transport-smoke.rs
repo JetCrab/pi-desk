@@ -380,7 +380,6 @@ async fn run_local_gateway(
             endpoint,
             TunnelRegistryConfig {
                 relay: relay_config,
-                public_host: "127.0.0.1".to_owned(),
             },
         );
         let app = router(AppState {

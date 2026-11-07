@@ -89,12 +89,21 @@ jobs:
   build:
     needs: plan
     if: needs.plan.outputs.changed == 'true' && inputs.phase != 'publish'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     timeout-minutes: 45
     env:
+      IMAGE_ARCH: ${{ matrix.arch }}
       IMAGE_VERSION: ${{ needs.plan.outputs.version }}
-      CARGO_TARGET_DIR: ${{ github.workspace }}/temp/build/tunnel-ci/${{ github.run_id }}-${{ github.run_attempt }}
-      CONTAINER_NAME: pi-desk-tunnel-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}/temp/build/tunnel-ci/${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+      CONTAINER_NAME: pi-desk-tunnel-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -114,11 +123,18 @@ jobs:
           cargo --version
           cargo test --workspace --locked
 
+      - name: 容器入口密钥与进程回收测试
+        run: |
+          if [[ -f apps/tunnel/docker-start.sh ]]; then
+            bash -n apps/tunnel/docker-start.sh
+            python3 -B -m unittest discover -s apps/tunnel/deploy -p 'test_docker_start.py' -v
+          fi
+
       - name: Set up Docker Buildx
         if: ${{ !inputs.check_only }}
         uses: docker/setup-buildx-action@v3
 
-      - name: 构建并加载 linux/amd64 镜像
+      - name: 构建并加载当前架构镜像
         if: ${{ !inputs.check_only }}
         uses: docker/build-push-action@v6
         env:
@@ -126,10 +142,12 @@ jobs:
         with:
           context: apps/tunnel
           file: apps/tunnel/Dockerfile
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.arch }}
           load: true
           push: false
-          tags: ${{ env.IMAGE_REPOSITORY }}:${{ needs.plan.outputs.version }}
+          provenance: false
+          sbom: false
+          tags: ${{ env.IMAGE_REPOSITORY }}:${{ needs.plan.outputs.version }}-${{ matrix.arch }}
           labels: |
             org.opencontainers.image.revision=${{ inputs.source_sha || github.sha }}
 
@@ -138,23 +156,23 @@ jobs:
         run: |
           cargo build --locked --manifest-path apps/tunnel/Cargo.toml -p pi-desk-tunnel-server --example test-transport-smoke
           node .github/scripts/check-tunnel-image.mjs \
-            "$IMAGE_REPOSITORY:$IMAGE_VERSION" \
+            "$IMAGE_REPOSITORY:$IMAGE_VERSION-$IMAGE_ARCH" \
             "$CARGO_TARGET_DIR/debug/examples/test-transport-smoke"
 
       - name: 保存已验证镜像
         if: ${{ !inputs.check_only }}
         run: |
           mkdir -p "$PACKAGE_DIR"
-          docker save "$IMAGE_REPOSITORY:$IMAGE_VERSION" \
-            | gzip > "$PACKAGE_DIR/pi-desk-tunnel-$IMAGE_VERSION-linux-amd64.tar.gz"
+          docker save "$IMAGE_REPOSITORY:$IMAGE_VERSION-$IMAGE_ARCH" \
+            | gzip > "$PACKAGE_DIR/pi-desk-tunnel-$IMAGE_VERSION-linux-$IMAGE_ARCH.tar.gz"
 
       - name: 上传压缩镜像
         if: ${{ !inputs.check_only }}
         uses: actions/upload-artifact@v4
         with:
-          name: tunnel-image-${{ github.run_id }}
+          name: tunnel-image-${{ github.run_id }}-${{ matrix.arch }}
           overwrite: true
-          path: ${{ env.PACKAGE_DIR }}/pi-desk-tunnel-${{ needs.plan.outputs.version }}-linux-amd64.tar.gz
+          path: ${{ env.PACKAGE_DIR }}/pi-desk-tunnel-${{ needs.plan.outputs.version }}-linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
           retention-days: 7
 
@@ -162,7 +180,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: tunnel-smoke-failure-${{ github.run_id }}
+          name: tunnel-smoke-failure-${{ github.run_id }}-${{ matrix.arch }}
           overwrite: true
           path: temp/run/tunnel-image/
           if-no-files-found: ignore
@@ -171,12 +189,14 @@ jobs:
       - name: 清理验收容器
         if: always()
         run: |
-          for role in gateway relay; do
-            name="$CONTAINER_NAME-$role"
-            if docker container inspect "$name" > /dev/null 2>&1; then
-              docker rm --force "$name"
-            fi
-          done
+          name="$CONTAINER_NAME-gateway"
+          if docker container inspect "$name" > /dev/null 2>&1; then
+            docker rm --force "$name"
+          fi
+          volume="$CONTAINER_NAME-data"
+          if docker volume inspect "$volume" > /dev/null 2>&1; then
+            docker volume rm "$volume"
+          fi
 
   publish:
     if: >-
@@ -195,23 +215,31 @@ jobs:
     env:
       IMAGE_VERSION: ${{ needs.plan.outputs.version }}
       SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
-      REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
     steps:
-      - name: 下载已验证镜像
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 下载两个架构的已验证镜像
         uses: actions/download-artifact@v4
         with:
-          name: tunnel-image-${{ github.run_id }}
+          pattern: tunnel-image-${{ github.run_id }}-*
+          merge-multiple: true
           path: ${{ env.PACKAGE_DIR }}
 
-      - name: 加载同一镜像并核对源码
+      - name: 加载两个已验证制品
         run: |
           set -euo pipefail
-          gzip --decompress --stdout "$PACKAGE_DIR/pi-desk-tunnel-$IMAGE_VERSION-linux-amd64.tar.gz" | docker load
-          revision=$(docker image inspect "$IMAGE_REPOSITORY:$IMAGE_VERSION" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
-          if [[ "$revision" != "$SOURCE_SHA" ]]; then
-            echo '::error::已验证镜像的 revision 与本批源码 SHA 不匹配'
-            exit 1
-          fi
+          for arch in amd64 arm64; do
+            gzip --decompress --stdout "$PACKAGE_DIR/pi-desk-tunnel-$IMAGE_VERSION-linux-$arch.tar.gz" | docker load
+          done
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -220,61 +248,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 检查已有版本并核对可复用镜像
-        id: existing
+      - name: 核对固定版本并发布多架构镜像
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          remote_digest=''
-          if gh api --paginate 'users/JetCrab/packages/container/pi-desk-tunnel/versions?per_page=100' \
-            --jq '.[] | {name, tags: .metadata.container.tags}' > "$RUNNER_TEMP/tunnel-versions" 2> "$RUNNER_TEMP/tunnel-versions-error"; then
-            remote_digest=$(jq -sr --arg version "$IMAGE_VERSION" '
-              [.[] | select(.tags | index($version)) | .name] |
-              if length > 1 then error("同一版本标签对应多个镜像摘要")
-              elif length == 0 then ""
-              else .[0] | if type == "string" and length > 0 then . else error("已有版本记录缺少镜像摘要") end
-              end
-            ' "$RUNNER_TEMP/tunnel-versions")
-          elif ! grep -q 'HTTP 404' "$RUNNER_TEMP/tunnel-versions-error"; then
-            echo '::error::无法确认镜像版本状态，停止发布'
-            exit 1
-          fi
-          reused=false
-          if [[ -n "$remote_digest" ]]; then
-            if [[ -z "$REQUESTED_SOURCE_SHA" ]]; then
-              echo "::error::镜像版本已存在，拒绝覆盖：$IMAGE_VERSION"
-              exit 1
-            fi
-            if [[ ! "$remote_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              echo '::error::GHCR 版本记录未提供有效的镜像摘要，拒绝复用'
-              exit 1
-            fi
-            docker pull --platform linux/amd64 "$IMAGE_REPOSITORY:$IMAGE_VERSION"
-            if ! docker image inspect "$IMAGE_REPOSITORY:$IMAGE_VERSION" --format '{{json .RepoDigests}}' \
-              | jq -e --arg expected "$IMAGE_REPOSITORY@$remote_digest" 'index($expected) != null' > /dev/null; then
-              echo '::error::远端版本镜像摘要与 GHCR 版本记录不匹配，拒绝复用'
-              exit 1
-            fi
-            revision=$(docker image inspect "$IMAGE_REPOSITORY@$remote_digest" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
-            if [[ "$revision" != "$SOURCE_SHA" ]]; then
-              echo '::error::远端版本镜像的 revision 与本批源码 SHA 不匹配，拒绝复用'
-              exit 1
-            fi
-            docker tag "$IMAGE_REPOSITORY@$remote_digest" "$IMAGE_REPOSITORY:latest"
-            reused=true
-            echo "已核对远端版本镜像，将复用 $IMAGE_VERSION 并更新 latest。"
-          else
-            docker tag "$IMAGE_REPOSITORY:$IMAGE_VERSION" "$IMAGE_REPOSITORY:latest"
-          fi
-          echo "reused=$reused" >> "$GITHUB_OUTPUT"
-
-      - name: 推送已验证镜像
-        env:
-          REUSED: ${{ steps.existing.outputs.reused }}
-        run: |
-          set -euo pipefail
-          if [[ "$REUSED" != true ]]; then
-            docker push "$IMAGE_REPOSITORY:$IMAGE_VERSION"
-          fi
-          docker push "$IMAGE_REPOSITORY:latest"
+        run: node .github/scripts/release-tunnel.mjs

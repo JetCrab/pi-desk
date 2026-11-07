@@ -415,7 +415,7 @@ export class L2PluginManagement {
     const seen = new Set<string>()
     const snapshot =
       input.action === 'add' || input.action === 'update' ? await this.readSources() : null
-    const mutations: L2PluginMutationInput[] = []
+    const operations: (L2PluginMutationInput | L4PiPluginSourceChange)[] = []
     const items = input.action === 'add' ? input.items : input.sources.map((source) => ({ source }))
     for (const item of items) {
       try {
@@ -427,13 +427,13 @@ export class L2PluginManagement {
         seen.add(identity)
         if (input.action === 'add') {
           const { source: _source, ...options } = item
-          mutations.push(this.acceptMutation('add', source, snapshot!, true, undefined, options))
+          operations.push(this.acceptMutation('add', source, snapshot!, true, undefined, options))
         } else if (input.action === 'update') {
-          mutations.push(this.acceptMutation('update', source, snapshot!))
+          operations.push(this.acceptMutation('update', source, snapshot!))
         } else if (input.action === 'del') {
           await this.del(source)
         } else if (input.action === 'apply') {
-          await this.apply([source])
+          operations.push(...(await this.acceptSourceChanges([source])))
         } else {
           await this.setUpdateTag(source, input.tag)
         }
@@ -442,7 +442,7 @@ export class L2PluginManagement {
         results.push({ source: item.source, error: errorMessage(error).slice(0, 4000) })
       }
     }
-    if (mutations.length > 0) this.enqueueMutations(mutations)
+    if (operations.length > 0) this.enqueueOperations(operations)
     return { snapshot: await this.readSnapshot(false), results }
   }
 
@@ -573,6 +573,14 @@ export class L2PluginManagement {
   }
 
   async apply(sources?: readonly string[]): Promise<L2PluginManagementSnapshot> {
+    const changes = await this.acceptSourceChanges(sources)
+    if (changes.length > 0) this.enqueueOperations(changes)
+    return this.readSnapshot(false)
+  }
+
+  private async acceptSourceChanges(
+    sources?: readonly string[]
+  ): Promise<L4PiPluginSourceChange[]> {
     this.assertOpen()
     if (isL4PiDeskSafeMode())
       throw new L2PluginManagementOperationConflictError('基础模式不加载外部插件')
@@ -633,62 +641,48 @@ export class L2PluginManagement {
         if (stale) this.operations.delete(stale[0])
       }
       this.operations.set(change.source, { action: 'apply', phase: 'queued', message: null })
-      this.enqueueApply(change)
     }
-    this.publish()
-    return this.readSnapshot(false)
+    return accepted
   }
 
-  private enqueueApply(change: L4PiPluginSourceChange): void {
-    void this.runExclusive(async () => {
-      this.activeSource = change.source
+  private async prepareSourceChange(change: L4PiPluginSourceChange): Promise<() => Promise<void>> {
+    this.setOperation(change.source, 'checking', null)
+    let repair = await this.prepareSourceRepair(change)
+    if (!repair) {
       try {
-        this.setOperation(change.source, 'checking', null)
-        let repaired = await this.repairSourceChange(change)
-        if (!repaired) {
-          try {
-            await this.probeSourceChange(change)
-          } catch (error) {
-            if (
-              !/Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND/i.test(
-                errorMessage(error)
-              )
-            )
-              throw error
-            repaired = await this.repairSourceChange(change, true)
-            if (!repaired) throw error
-          }
-        }
-        if (!repaired) {
-          this.assertOpen()
-          this.setOperation(change.source, 'applying', null)
-          await getL4PiGlobalPluginRuntime().applySourceChange(change)
-        }
-        if (!this.deferredMaintenance.has(change.source)) {
-          if (change.current?.path) clearL4PiPluginNativeDiagnostics(change.current.path)
-          if (change.previous?.path) clearL4PiPluginNativeDiagnostics(change.previous.path)
-          this.capabilityCache = null
-          this.operations.delete(change.source)
-        }
+        await this.probeSourceChange(change)
       } catch (error) {
-        this.setOperation(change.source, 'failed', errorMessage(error))
-      } finally {
-        this.activeSource = null
-        this.sourceCache = null
-        this.publish()
+        if (
+          !/Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND/i.test(
+            errorMessage(error)
+          )
+        )
+          throw error
+        repair = await this.prepareSourceRepair(change, true)
+        if (!repair) throw error
       }
-    }).catch((error: unknown) => {
-      if (!this.disposed) this.setOperation(change.source, 'failed', errorMessage(error))
-    })
+    }
+    return async (): Promise<void> => {
+      if (repair) await repair()
+      else {
+        this.setOperation(change.source, 'applying', null)
+        await getL4PiGlobalPluginRuntime().applySourceChange(change)
+      }
+      if (!this.deferredMaintenance.has(change.source)) {
+        if (change.current?.path) clearL4PiPluginNativeDiagnostics(change.current.path)
+        if (change.previous?.path) clearL4PiPluginNativeDiagnostics(change.previous.path)
+        this.capabilityCache = null
+      }
+    }
   }
 
-  private async repairSourceChange(
+  private async prepareSourceRepair(
     change: L4PiPluginSourceChange,
     missingDependency = false
-  ): Promise<boolean> {
+  ): Promise<(() => Promise<void>) | null> {
     const source = change.current
     if (source?.kind !== 'package' || !/^(?:npm:|git:|https?:|git@)/.test(source.source))
-      return false
+      return null
     const npmName = l2PluginNpmName(source.source)
     const metadata = source.path ? await readPackageMetadata(source.path) : null
     const consistency = npmName
@@ -705,7 +699,7 @@ export class L2PluginManagement {
       !consistency &&
       (!npmName || metadata?.version)
     )
-      return false
+      return null
 
     // 配置固定版本优先；未固定但还有本机版本时原版本修复，不沿渠道升级。
     const pinned = /^npm:(?:@[^/]+\/)?[^@]+@v?\d+\./.test(source.source)
@@ -720,12 +714,10 @@ export class L2PluginManagement {
     }
     console.info('[Pi Desk][PluginManagement] 重载修复插件包', { source: change.source, target })
     const prepared = await this.prepareMutation(input)
-    if (prepared) {
-      // 补装保留用户选择的渠道；启停和资源过滤由原有维护流程保留。
-      prepared.updateTag = null
-      await this.executeMutation(input, prepared)
-    }
-    return true
+    if (!prepared) return null
+    // 补装保留用户选择的渠道；启停和资源过滤由原有维护流程保留。
+    prepared.updateTag = null
+    return (): Promise<void> => this.executeMutation(input, prepared)
   }
 
   private async probeSourceChange(change: L4PiPluginSourceChange): Promise<void> {
@@ -831,7 +823,7 @@ export class L2PluginManagement {
       previousSource,
       options
     )
-    this.enqueueMutations([input])
+    this.enqueueOperations([input])
     return this.readSnapshot(false)
   }
 
@@ -891,19 +883,28 @@ export class L2PluginManagement {
     return { mutation, source, operationSource, reinstall, options }
   }
 
-  private enqueueMutations(inputs: readonly L2PluginMutationInput[]): void {
+  private enqueueOperations(
+    inputs: readonly (L2PluginMutationInput | L4PiPluginSourceChange)[]
+  ): void {
     void this.runExclusive(async () => {
       const startedAt = performance.now()
       // 本批全部准备收尾后才写正式目录；错误按项收集，不让早退遗留预检进程。
       const candidates = await Promise.all(
         inputs.map(async (input) => {
+          const source = 'mutation' in input ? input.operationSource : input.source
           try {
-            const prepared = await this.prepareMutation(input)
+            let apply: (() => Promise<void>) | null
+            if ('mutation' in input) {
+              const prepared = await this.prepareMutation(input)
+              apply = prepared ? (): Promise<void> => this.executeMutation(input, prepared) : null
+            } else {
+              apply = await this.prepareSourceChange(input)
+            }
             this.assertOpen()
-            this.setOperation(input.operationSource, 'queued', '候选检查完成，等待应用')
-            return { input, prepared }
+            this.setOperation(source, 'queued', '候选检查完成，等待应用')
+            return { input, apply }
           } catch (error) {
-            this.setOperation(input.operationSource, 'failed', errorMessage(error))
+            this.setOperation(source, 'failed', errorMessage(error))
             return null
           }
         })
@@ -917,19 +918,18 @@ export class L2PluginManagement {
       }
       for (const candidate of candidates) {
         if (!candidate) continue
-        const { input, prepared } = candidate
-        const { source, operationSource } = input
-        this.activeSource = operationSource
+        const { input, apply } = candidate
+        const source = 'mutation' in input ? input.operationSource : input.source
+        this.activeSource = source
         try {
           this.assertOpen()
-          if (prepared) await this.executeMutation(input, prepared)
-          if (!this.deferredMaintenance.has(operationSource))
-            this.operations.delete(operationSource)
+          if (apply) await apply()
+          if (!this.deferredMaintenance.has(source)) this.operations.delete(source)
         } catch (error) {
-          this.setOperation(operationSource, 'failed', errorMessage(error))
+          this.setOperation(source, 'failed', errorMessage(error))
         } finally {
-          this.updates.clear(operationSource)
           this.updates.clear(source)
+          this.updates.clear(input.source)
           this.sourceCache = null
           this.activeSource = null
           this.publish()
@@ -938,7 +938,11 @@ export class L2PluginManagement {
     }).catch((error: unknown) => {
       if (this.disposed) return
       for (const input of inputs)
-        this.setOperation(input.operationSource, 'failed', errorMessage(error))
+        this.setOperation(
+          'mutation' in input ? input.operationSource : input.source,
+          'failed',
+          errorMessage(error)
+        )
     })
     this.publish()
   }

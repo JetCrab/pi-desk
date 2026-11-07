@@ -1,6 +1,6 @@
 # 第三方归属
 
-Pi Desk TCP 隧道使用 [iroh 1.4.1](https://github.com/n0-computer/iroh/tree/v1.4.1) 提供加密端点、可靠双向流、直连和中继能力。自托管中继构建固定于发布提交 `d6c6963b9602d1b8dd2ba53b6519e7eb19cc7940`。
+Pi Desk TCP 隧道从 `Cargo.lock` 固定的 [iroh 1.4.1](https://github.com/n0-computer/iroh/tree/v1.4.1) 与 [iroh-relay 1.4.1](https://crates.io/crates/iroh-relay/1.4.1) 库构建，提供加密端点、可靠双向流、直连和中继能力。
 
 上游采用 MIT OR Apache-2.0 双许可；本项目保留两份原始许可证：
 

@@ -138,6 +138,27 @@ test('共享隧道同步桌面和网关版本，验收示例不消耗产品版�
   assert.deepEqual(readVersions(repo.root, ':'), versions)
 })
 
+test('容器启动入口变更只递增隧道版本', async (t) => {
+  const repo = await repository(t)
+  await repo.save(
+    'apps/tunnel/server/Cargo.toml',
+    '[package]\nname = "pi-desk-tunnel-server"\nversion = "1.1.1"\n'
+  )
+  await repo.save(
+    'apps/tunnel/Cargo.lock',
+    '[[package]]\nname = "pi-desk-tunnel-server"\nversion = "1.1.1"\n'
+  )
+  repo.git('add', '.')
+  repo.git('commit', '-m', 'fixture: 隧道镜像')
+  await repo.save('apps/tunnel/docker-start.sh', '#!/bin/bash\nexit 0\n')
+  repo.git('add', 'apps/tunnel/docker-start.sh')
+  await prepareCommitVersions(repo.root)
+  const versions = readVersions(repo.root, ':')
+  assert.equal(versions.tunnel, '1.1.2')
+  assert.equal(versions['pi-desk'], '1.0.0')
+  assert.match(repo.git('show', ':apps/tunnel/Cargo.lock'), /version = "1\.1\.2"/)
+})
+
 test('代码提交递增所属单元，失败后再次准备不重复递增', async (t) => {
   const repo = await repository(t)
   await repo.save('src/feature.ts', 'export const value = 2\n')

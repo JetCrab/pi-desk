@@ -529,6 +529,7 @@ async function planNative(root, baseline, options = {}) {
       'apps/tunnel/Cargo.toml',
       tunnelLock,
       'apps/tunnel/Dockerfile',
+      'apps/tunnel/docker-start.sh',
       'apps/tunnel/.dockerignore'
     ])
     const version = select('tunnel', current.version, previous, affected)

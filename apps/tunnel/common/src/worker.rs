@@ -287,7 +287,7 @@ async fn run_worker(
     snapshot: SharedSnapshot,
 ) -> Result<(), String> {
     let mut worker = Worker {
-        control: ControlIo::new(&config),
+        control: ControlIo::new(&config).map_err(|error| error.to_string())?,
         config,
         identity,
         provider: Arc::new(tokio::sync::Mutex::new(None)),

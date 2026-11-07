@@ -1,5 +1,6 @@
 **
 !Dockerfile
+!docker-start.sh
 !.dockerignore
 !Cargo.toml
 !Cargo.lock

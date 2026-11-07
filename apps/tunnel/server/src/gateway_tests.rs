@@ -64,7 +64,6 @@ impl Fixture {
             gateway,
             TunnelRegistryConfig {
                 relay: relay_config.clone(),
-                public_host: "127.0.0.1".to_owned(),
             },
         );
         let provider = start_endpoint(TunnelEndpointConfig {
