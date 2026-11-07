@@ -139,7 +139,6 @@ impl WorkerFixture {
             gateway,
             TunnelRegistryConfig {
                 relay: relay_config.clone(),
-                public_host: "127.0.0.1".to_owned(),
             },
         ));
         self.probe = Some(

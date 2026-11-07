@@ -146,7 +146,7 @@ fn publication_addresses_use_control_host_and_published_port() {
             "tunnel.example.com:40333",
         ),
     ] {
-        let control = ControlIo::new(&config(url));
+        let control = ControlIo::new(&config(url)).unwrap();
         assert_eq!(
             control.public_addr(Some(40333)).unwrap().as_deref(),
             Some(expected)
@@ -215,7 +215,7 @@ async fn mode_rebuild_releases_visitor_listener_without_touching_provider() {
     let mut worker = Worker {
         config: cfg.clone(),
         identity: provider.id(),
-        control: ControlIo::new(&cfg),
+        control: ControlIo::new(&cfg).unwrap(),
         provider: Arc::new(tokio::sync::Mutex::new(Some(provider.clone()))),
         visitor: Arc::new(tokio::sync::Mutex::new(Some(visitor))),
         snapshot: snapshot(),
@@ -270,6 +270,7 @@ fn relay() -> TunnelRelayConfig {
 }
 
 struct Call {
+    peer_addr: SocketAddr,
     path: String,
     body: serde_json::Value,
     response: sync_mpsc::Sender<serde_json::Value>,
@@ -284,6 +285,10 @@ struct ControlServer {
 
 impl ControlServer {
     fn start() -> Self {
+        Self::start_with_keep_alive(false)
+    }
+
+    fn start_with_keep_alive(keep_alive: bool) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         listener.set_nonblocking(true).unwrap();
@@ -296,7 +301,7 @@ impl ControlServer {
                 match listener.accept() {
                     Ok((stream, _)) => {
                         let calls = calls.clone();
-                        children.push(std::thread::spawn(move || serve(stream, calls)));
+                        children.push(std::thread::spawn(move || serve(stream, calls, keep_alive)));
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(2));
@@ -338,7 +343,7 @@ impl Drop for ControlServer {
     }
 }
 
-fn serve(mut stream: TcpStream, calls: sync_mpsc::Sender<Call>) {
+fn serve(mut stream: TcpStream, calls: sync_mpsc::Sender<Call>, keep_alive: bool) {
     // Windows accept 可能继承 listener 的非阻塞模式；这里使用带超时的阻塞读取。
     stream.set_nonblocking(false).unwrap();
     stream
@@ -347,46 +352,57 @@ fn serve(mut stream: TcpStream, calls: sync_mpsc::Sender<Call>) {
     stream
         .set_write_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    let mut headers = Vec::new();
-    let mut byte = [0];
-    while !headers.ends_with(b"\r\n\r\n") {
-        stream.read_exact(&mut byte).unwrap();
-        headers.push(byte[0]);
-        assert!(headers.len() < 8192);
+    let peer_addr = stream.peer_addr().unwrap();
+    loop {
+        let mut headers = Vec::new();
+        let mut byte = [0];
+        while !headers.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut byte) {
+                Ok(0) if headers.is_empty() => return,
+                Ok(1) => headers.push(byte[0]),
+                result => panic!("测试控制服务读取请求头失败：{result:?}"),
+            }
+            assert!(headers.len() < 8192);
+        }
+        let headers = String::from_utf8(headers).unwrap();
+        let path = headers.split_whitespace().nth(1).unwrap().to_owned();
+        let length: usize = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse().unwrap())
+            })
+            .unwrap();
+        let mut encrypted = vec![0; length];
+        stream.read_exact(&mut encrypted).unwrap();
+        let crypto = CryptoContext::new([7; 32]);
+        let body = serde_json::from_slice(&crypto.decrypt(&path, &encrypted).unwrap()).unwrap();
+        let (response, receiver) = sync_mpsc::channel();
+        if calls
+            .send(Call {
+                peer_addr,
+                path: path.clone(),
+                body,
+                response,
+            })
+            .is_err()
+        {
+            return;
+        }
+        let Ok(response) = receiver.recv_timeout(Duration::from_secs(5)) else {
+            return;
+        };
+        let body = crypto
+            .encrypt(&path, &serde_json::to_vec(&response).unwrap())
+            .unwrap();
+        let connection = if keep_alive { "keep-alive" } else { "close" };
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: {connection}\r\n\r\n", body.len()).unwrap();
+        stream.write_all(&body).unwrap();
+        if !keep_alive {
+            return;
+        }
     }
-    let headers = String::from_utf8(headers).unwrap();
-    let path = headers.split_whitespace().nth(1).unwrap().to_owned();
-    let length: usize = headers
-        .lines()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse().unwrap())
-        })
-        .unwrap();
-    let mut encrypted = vec![0; length];
-    stream.read_exact(&mut encrypted).unwrap();
-    let crypto = CryptoContext::new([7; 32]);
-    let body = serde_json::from_slice(&crypto.decrypt(&path, &encrypted).unwrap()).unwrap();
-    let (response, receiver) = sync_mpsc::channel();
-    if calls
-        .send(Call {
-            path: path.clone(),
-            body,
-            response,
-        })
-        .is_err()
-    {
-        return;
-    }
-    let Ok(response) = receiver.recv_timeout(Duration::from_secs(5)) else {
-        return;
-    };
-    let body = crypto
-        .encrypt(&path, &serde_json::to_vec(&response).unwrap())
-        .unwrap();
-    write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
-    stream.write_all(&body).unwrap();
 }
 
 fn opened(id: &str) -> serde_json::Value {
@@ -413,7 +429,7 @@ fn control_fixture_waits_for_request_bytes_and_releases_listener() {
     let (started, entered) = sync_mpsc::channel();
     let task = std::thread::spawn(move || {
         started.send(()).unwrap();
-        serve(accepted, calls);
+        serve(accepted, calls, false);
     });
     entered.recv_timeout(Duration::from_secs(5)).unwrap();
     // 没有请求字节时应保持等待，而不是 WSAEWOULDBLOCK 导致请求线程提前退出。
@@ -444,6 +460,109 @@ fn control_fixture_waits_for_request_bytes_and_releases_listener() {
     task.join().unwrap();
     drop(client);
     drop(listener);
+    assert!(TcpListener::bind(addr).is_ok());
+}
+
+#[tokio::test]
+async fn control_address_supplies_omitted_relay_url() {
+    let server = ControlServer::start();
+    let address = server.url.clone();
+    let control = ControlIo::new(&config(&address)).unwrap();
+    let (_item, _worker, cancel) = cancellation();
+    let responder = tokio::task::spawn_blocking(move || {
+        let open = server.next();
+        let mut response = opened("same-origin");
+        response["relay"].as_object_mut().unwrap().remove("url");
+        open.response.send(response).unwrap();
+        let resolve = server.next();
+        resolve
+            .response
+            .send(serde_json::json!({
+                "tunnel_id": "same-origin",
+                "service_token": "test-service-token",
+                "relay": {"auth_token": "test-relay-token", "quic_port": 7842}
+            }))
+            .unwrap();
+        server
+    });
+    let opened = control
+        .open(
+            "same-origin-request".to_owned(),
+            "aa".repeat(32),
+            TunnelPublicationConfig {
+                local_addr: "127.0.0.1:18080".parse().unwrap(),
+                public_port: None,
+            },
+            cancel.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(opened.value.relay.url, address);
+    let resolved = control
+        .resolve("aa".repeat(32), 18080, cancel)
+        .await
+        .unwrap();
+    assert_eq!(resolved.value.relay.url, address);
+    assert_eq!(resolved.value.relay.auth_token, "test-relay-token");
+    drop(control);
+    drop(responder.await.unwrap());
+    let address: SocketAddr = address.strip_prefix("http://").unwrap().parse().unwrap();
+    assert!(TcpListener::bind(address).is_ok());
+}
+
+#[tokio::test]
+async fn consecutive_control_requests_reuse_the_same_tcp_connection() {
+    let server = ControlServer::start_with_keep_alive(true);
+    let control = ControlIo::new(&config(&server.url)).unwrap();
+    let cloned = control.clone();
+    let (_item, _worker, cancel) = cancellation();
+    let responder = tokio::task::spawn_blocking(move || {
+        let open = server.next();
+        open.response.send(opened("pooled-registration")).unwrap();
+        let status = server.next();
+        status
+            .response
+            .send(serde_json::json!({"tunnel_id": "pooled-registration", "status": "ready"}))
+            .unwrap();
+        let close = server.next();
+        close
+            .response
+            .send(serde_json::json!({"success": true}))
+            .unwrap();
+        (server, [open, status, close])
+    });
+    let opened = control
+        .open(
+            "pooled-request".to_owned(),
+            "aa".repeat(32),
+            TunnelPublicationConfig {
+                local_addr: "127.0.0.1:18080".parse().unwrap(),
+                public_port: None,
+            },
+            cancel.clone(),
+        )
+        .await
+        .unwrap();
+    cloned
+        .status(opened.value.tunnel_id.clone(), cancel)
+        .await
+        .unwrap();
+    control.close(opened.value.tunnel_id).await.unwrap();
+    // 先释放客户端连接池，再等待 fixture 收回 keep-alive 请求线程与端口。
+    drop(cloned);
+    drop(control);
+    let (server, calls) = responder.await.unwrap();
+    let addr: SocketAddr = server.url.strip_prefix("http://").unwrap().parse().unwrap();
+    drop(server);
+    assert_eq!(
+        calls.each_ref().map(|call| call.path.as_str()),
+        [OPEN_TUNNEL_PATH, STATUS_TUNNEL_PATH, CLOSE_TUNNEL_PATH]
+    );
+    assert!(
+        calls
+            .iter()
+            .all(|call| call.peer_addr == calls[0].peer_addr)
+    );
     assert!(TcpListener::bind(addr).is_ok());
 }
 
@@ -834,7 +953,7 @@ async fn forward_cleanup_failure_survives_stop_replace_and_mode_rebuild() {
         let mut worker = Worker {
             config: cfg.clone(),
             identity: "bb".repeat(32),
-            control: ControlIo::new(&cfg),
+            control: ControlIo::new(&cfg).unwrap(),
             provider: Arc::new(tokio::sync::Mutex::new(None)),
             visitor: Arc::new(tokio::sync::Mutex::new(None)),
             snapshot: state.clone(),

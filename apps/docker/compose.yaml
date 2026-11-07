@@ -8,8 +8,8 @@ services:
     environment:
       TZ: Asia/Shanghai
     volumes:
-      - ./data/home:/data/home
-      - ./data/workspace:/workspace
+      - pi-desk-home:/data/home
+      - pi-desk-workspace:/workspace
     tmpfs:
       - /tmp:rw,nosuid,size=512m
     stop_grace_period: 30s
@@ -18,3 +18,7 @@ services:
       options:
         max-size: '10m'
         max-file: '3'
+
+volumes:
+  pi-desk-home:
+  pi-desk-workspace:

@@ -140,6 +140,7 @@ jobs:
           tests/l4-release-parallel.test.mjs
           tests/l4-release-queue.test.mjs
           tests/l4-release-docker.test.mjs
+          tests/l4-release-tunnel.test.mjs
 
   web:
     needs: changes

@@ -121,7 +121,12 @@ impl ControlClient {
             serde_json::to_vec(&request).map_err(ControlClientError::RequestSerialization)?,
         )?;
         let plaintext = self.tunnel_plaintext(OPEN_TUNNEL_PATH, response)?;
-        serde_json::from_slice(&plaintext).map_err(ControlClientError::ResponseDeserialization)
+        let mut response: OpenTunnelResponse = serde_json::from_slice(&plaintext)
+            .map_err(ControlClientError::ResponseDeserialization)?;
+        if response.relay.url.is_empty() {
+            response.relay.url.clone_from(&self.base_url);
+        }
+        Ok(response)
     }
 
     pub fn status_tunnel(
@@ -158,7 +163,12 @@ impl ControlClient {
             .map_err(ControlClientError::RequestSerialization)?,
         )?;
         let plaintext = self.tunnel_plaintext(RESOLVE_TUNNEL_PATH, response)?;
-        serde_json::from_slice(&plaintext).map_err(ControlClientError::ResponseDeserialization)
+        let mut response: ResolveTunnelResponse = serde_json::from_slice(&plaintext)
+            .map_err(ControlClientError::ResponseDeserialization)?;
+        if response.relay.url.is_empty() {
+            response.relay.url.clone_from(&self.base_url);
+        }
+        Ok(response)
     }
 
     pub fn close_tunnel(&self, tunnel_id: &str) -> Result<(), ControlClientError> {

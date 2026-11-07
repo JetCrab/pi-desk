@@ -47,28 +47,21 @@ function inspection(id = imageId) {
   }
 }
 
-test('隧道网关和中继共用同一发布镜像及完整程序入口', async () => {
+test('隧道使用单容器默认入口及持久数据卷', async () => {
   const compose = parse(
     await readFile(new URL('../apps/tunnel/docker-compose.yml', import.meta.url), 'utf8')
   )
-  const gateway = compose.services['pi-desk-tunnel-server']
-  const relay = compose.services['iroh-relay']
-  assert.equal(gateway.image, relay.image)
+  const gateway = compose.services['pi-desk-tunnel']
+  assert.equal(Object.keys(compose.services).length, 1)
   assert.ok(gateway.image.includes('PI_DESK_TUNNEL_IMAGE'))
   assert.equal(gateway.build.dockerfile, 'Dockerfile')
-  assert.equal(relay.build.dockerfile, 'Dockerfile')
-  assert.deepEqual(relay.entrypoint, ['iroh-relay'])
-  assert.deepEqual(relay.command, ['--config-path', '/etc/iroh-relay/relay.toml'])
+  assert.equal(gateway.network_mode, 'host')
+  assert.equal(gateway.entrypoint, undefined)
+  assert.ok(gateway.volumes.includes('tunnel-data:/data'))
   const dockerfile = await readFile(new URL('../apps/tunnel/Dockerfile', import.meta.url), 'utf8')
-  for (const name of ['pi-desk-tunnel-server', 'iroh-relay']) {
-    assert.ok(
-      dockerfile
-        .split('\n')
-        .some((line) => line.startsWith('COPY --from=') && line.endsWith(`/usr/local/bin/${name}`)),
-      `正式镜像缺少程序：${name}`
-    )
-  }
-  assert.ok(dockerfile.includes('d6c6963b9602d1b8dd2ba53b6519e7eb19cc7940'))
+  assert.ok(dockerfile.includes('CMD ["pi-desk-tunnel-start"]'))
+  assert.ok(dockerfile.includes('/usr/local/bin/pi-desk-tunnel-server'))
+  assert.ok(!dockerfile.includes('/usr/local/bin/iroh-relay'))
 })
 
 test('镜像使用同批主包和SDK，Pi单独安装并拒绝开发版本', () => {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::State;
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header, uri::Authority};
 use axum::response::Response;
 use axum::routing::{get, post};
 use pi_desk_tunnel_common::protocol::{
@@ -34,7 +34,7 @@ async fn health_handler() -> Response {
     json_response(StatusCode::OK, serde_json::to_vec(&HealthResponse::ok()))
 }
 
-async fn open_handler(State(state): State<AppState>, body: Body) -> Response {
+async fn open_handler(State(state): State<AppState>, headers: HeaderMap, body: Body) -> Response {
     let plaintext = match decrypt_body(&state.crypto, OPEN_TUNNEL_PATH, body).await {
         Ok(plaintext) => plaintext,
         Err(response) => return response,
@@ -50,13 +50,25 @@ async fn open_handler(State(state): State<AppState>, body: Body) -> Response {
             );
         }
     };
+    let public_port = request.public_port;
     match state.tunnels.open(request).await {
-        Ok(response) => encrypted_response(
-            OPEN_TUNNEL_PATH,
-            &state.crypto,
-            StatusCode::OK,
-            serde_json::to_vec(&response),
-        ),
+        Ok(mut response) => {
+            response.public_addr = public_port.and_then(|port| {
+                let authority = headers
+                    .get(header::HOST)?
+                    .to_str()
+                    .ok()?
+                    .parse::<Authority>()
+                    .ok()?;
+                Some(format!("{}:{port}", authority.host()))
+            });
+            encrypted_response(
+                OPEN_TUNNEL_PATH,
+                &state.crypto,
+                StatusCode::OK,
+                serde_json::to_vec(&response),
+            )
+        }
         Err(error) => tunnel_error_response(OPEN_TUNNEL_PATH, &state.crypto, error),
     }
 }
@@ -258,13 +270,7 @@ mod tests {
         .await
         .unwrap();
         let crypto = Arc::new(CryptoContext::new([7; 32]));
-        let tunnels = TunnelRegistry::new(
-            endpoint,
-            TunnelRegistryConfig {
-                relay,
-                public_host: "127.0.0.1".to_owned(),
-            },
-        );
+        let tunnels = TunnelRegistry::new(endpoint, TunnelRegistryConfig { relay });
         (
             router(AppState {
                 crypto: Arc::clone(&crypto),
@@ -371,6 +377,55 @@ mod tests {
             .expect("应得到响应");
         assert_eq!(closed.status(), StatusCode::OK);
         tunnels.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn public_address_follows_each_request_host() {
+        let (app, crypto, tunnels) = test_app().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let public_port = listener.local_addr().unwrap().port();
+        drop(listener);
+        for (host, expected) in [
+            ("203.0.113.10:7001", format!("203.0.113.10:{public_port}")),
+            (
+                "tunnel.example:7001",
+                format!("tunnel.example:{public_port}"),
+            ),
+            ("[2001:db8::1]:7001", format!("[2001:db8::1]:{public_port}")),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(OPEN_TUNNEL_PATH)
+                        .header("Host", host)
+                        .body(encrypted_request(
+                            &crypto,
+                            OPEN_TUNNEL_PATH,
+                            serde_json::json!({
+                                "request_id": "same-registration",
+                                "provider_id": "aa".repeat(32),
+                                "port": 1,
+                                "public_port": public_port
+                            }),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), MAX_REQUEST_BYTES)
+                .await
+                .unwrap();
+            let response: OpenTunnelResponse =
+                serde_json::from_slice(&crypto.decrypt(OPEN_TUNNEL_PATH, &body).unwrap()).unwrap();
+            assert_eq!(response.public_addr, Some(expected));
+        }
+        tunnels.shutdown().await;
+        tokio::net::TcpListener::bind(("0.0.0.0", public_port))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

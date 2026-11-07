@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::{Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,7 +17,6 @@ const PROBE_RETRY: Duration = Duration::from_millis(500);
 #[derive(Clone)]
 pub struct TunnelRegistryConfig {
     pub relay: TunnelRelayConfig,
-    pub public_host: String,
 }
 
 pub struct TunnelRegistry {
@@ -311,9 +310,7 @@ impl RegistryTask {
             service_token: random_hex::<32>().map_err(|_| TunnelError::Internal)?,
             relay: self.config.relay.clone(),
             gateway_id: self.endpoint.id(),
-            public_addr: request
-                .public_port
-                .map(|port| format_public_addr(&self.config.public_host, port)),
+            public_addr: None,
         };
         let target = TunnelTarget {
             provider_id: request.provider_id.clone(),
@@ -403,11 +400,7 @@ impl RegistryTask {
                 probe_started,
             },
         );
-        eprintln!(
-            "隧道已注册 tunnel={} public={}",
-            response.tunnel_id,
-            response.public_addr.as_deref().unwrap_or("仅客户端")
-        );
+        eprintln!("隧道已注册 tunnel={}", response.tunnel_id);
         Ok(OpenResult::Opened(response))
     }
 
@@ -594,14 +587,6 @@ fn normalize_request_id(id: &str) -> Result<String, TunnelError> {
     }
 }
 
-fn format_public_addr(host: &str, port: u16) -> String {
-    if host.parse::<Ipv6Addr>().is_ok() {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    }
-}
-
 #[cfg(test)]
 #[path = "gateway_tests.rs"]
 mod gateway_tests;
@@ -627,13 +612,7 @@ mod tests {
         })
         .await
         .unwrap();
-        TunnelRegistry::new(
-            endpoint,
-            TunnelRegistryConfig {
-                relay,
-                public_host: "2001:db8::1".to_owned(),
-            },
-        )
+        TunnelRegistry::new(endpoint, TunnelRegistryConfig { relay })
     }
 
     fn request(id: &str, port: Option<u16>) -> OpenTunnelRequest {
@@ -670,7 +649,7 @@ mod tests {
         let port = free_port().await;
         let original = request("original", Some(port));
         let opened = registry.open(original.clone()).await.unwrap();
-        assert_eq!(opened.public_addr, Some(format!("[2001:db8::1]:{port}")));
+        assert_eq!(opened.public_addr, None);
         assert_eq!(registry.open(original.clone()).await.unwrap(), opened);
         assert!(TcpListener::bind(("0.0.0.0", port)).await.is_err());
         let mut conflict = original.clone();

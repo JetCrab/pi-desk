@@ -1,5 +1,5 @@
 services:
-  pi-desk-tunnel-server:
+  pi-desk-tunnel:
     build:
       context: .
       dockerfile: Dockerfile
@@ -8,50 +8,15 @@ services:
     network_mode: host
     stop_grace_period: 30s
     environment:
-      TZ: Asia/Shanghai
       RUST_LOG: ${RUST_LOG:-info}
-      PI_DESK_TUNNEL_BIND: ${PI_DESK_TUNNEL_BIND:-0.0.0.0:7001}
-      PI_DESK_TUNNEL_SERVER_KEY: ${PI_DESK_TUNNEL_SERVER_KEY:?必须设置控制密钥}
-      PI_DESK_TUNNEL_PUBLIC_HOST: ${PI_DESK_TUNNEL_PUBLIC_HOST:-127.0.0.1}
-      PI_DESK_TUNNEL_IROH_RELAY_URL: ${PI_DESK_TUNNEL_IROH_RELAY_URL:?必须设置relay地址}
-      PI_DESK_TUNNEL_IROH_RELAY_QUIC_PORT: ${PI_DESK_TUNNEL_IROH_RELAY_QUIC_PORT:-7842}
-      PI_DESK_TUNNEL_IROH_RELAY_TOKEN: ${PI_DESK_TUNNEL_IROH_RELAY_TOKEN:?必须设置relay准入token}
+      PI_DESK_TUNNEL_SERVER_KEY: ${PI_DESK_TUNNEL_SERVER_KEY:-}
+    volumes:
+      - tunnel-data:/data
     logging:
       driver: json-file
       options:
         max-size: 10m
         max-file: '3'
 
-  iroh-relay:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: ${PI_DESK_TUNNEL_IMAGE:-pi-desk-tunnel:local}
-    entrypoint: [iroh-relay]
-    command: [--config-path, /etc/iroh-relay/relay.toml]
-    restart: always
-    network_mode: host
-    stop_grace_period: 30s
-    environment:
-      TZ: Asia/Shanghai
-      RUST_LOG: ${RUST_LOG:-info}
-      IROH_RELAY_ACCESS_TOKEN: ${PI_DESK_TUNNEL_IROH_RELAY_TOKEN:?必须设置relay准入token}
-    # TLS 主机名和本机路由须由部署环境保证，不能仅因使用 host 网络就推断流量不绕公网。
-    volumes:
-      - type: bind
-        source: ${IROH_RELAY_CONFIG_PATH:?必须设置私有relay配置路径}
-        target: /etc/iroh-relay/relay.toml
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ${IROH_RELAY_CERT_DIR:?必须设置relay证书目录}
-        target: /etc/iroh-relay/certs
-        read_only: true
-        bind:
-          create_host_path: false
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-        max-file: '3'
+volumes:
+  tunnel-data:

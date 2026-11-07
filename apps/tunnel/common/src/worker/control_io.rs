@@ -20,17 +20,17 @@ pub(super) struct Timed<T> {
 #[derive(Clone)]
 pub(super) struct ControlIo {
     url: String,
-    key: [u8; 32],
+    client: ControlClient,
     permits: Arc<Semaphore>,
 }
 
 impl ControlIo {
-    pub fn new(config: &TunnelWorkerConfig) -> Self {
-        Self {
+    pub fn new(config: &TunnelWorkerConfig) -> Result<Self, ControlClientError> {
+        Ok(Self {
             url: config.control_server_url.clone(),
-            key: config.control_key,
+            client: ControlClient::new(&config.control_server_url, config.control_key)?,
             permits: Arc::new(Semaphore::new(HTTP_CONCURRENCY)),
-        }
+        })
     }
 
     pub fn public_addr(
@@ -64,11 +64,9 @@ impl ControlIo {
         } else {
             permits.acquire_owned().await.expect("HTTP 限流器保持开放")
         };
-        let url = self.url.clone();
-        let key = self.key;
+        let client = self.client.clone();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let client = ControlClient::new(&url, key)?;
             let started = Instant::now();
             request(client).map(|value| Timed { started, value })
         })
