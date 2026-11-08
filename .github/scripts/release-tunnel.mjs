@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { resolve } from 'node:path'
+import { createHash } from 'node:crypto'
+import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const repository = 'ghcr.io/jetcrab/pi-desk-tunnel'
@@ -15,7 +16,35 @@ function execute(command, args) {
     maxBuffer: 8 * 1024 * 1024,
     timeout: 180_000
   })
-  return (output ?? '').trim()
+  return output ?? ''
+}
+
+export function tunnelArchiveName(version, architecture) {
+  return `pi-desk-tunnel-${version}-linux-${architecture}.tar.gz`
+}
+
+export function readTunnelArchive({ file, version, architecture, source }, run = execute) {
+  const tar = process.platform === 'win32' ? 'tar.exe' : 'tar'
+  file = relative(process.cwd(), file).replaceAll('\\', '/')
+  const entries = JSON.parse(run(tar, ['-xOzf', file, 'manifest.json']))
+  assert.equal(entries.length, 1, '隧道归档必须只包含一个已验证镜像')
+  const [entry] = entries
+  assert.deepEqual(
+    entry.RepoTags,
+    [`${repository}:${version}-${architecture}`],
+    '隧道归档版本或架构标签不匹配'
+  )
+  // 原始 config 字节的摘要不依赖 Docker 镜像存储对 image.Id 的定义。
+  const bytes = run(tar, ['-xOzf', file, entry.Config])
+  const config = JSON.parse(bytes)
+  assert.equal(config.os, 'linux', '已验证镜像不是 Linux 容器')
+  assert.equal(config.architecture, architecture, '已验证镜像架构不匹配')
+  assert.equal(
+    config.config?.Labels?.['org.opencontainers.image.revision'],
+    source,
+    '已验证镜像源码不匹配'
+  )
+  return { configDigest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }
 }
 
 function manifest(reference, run) {
@@ -44,7 +73,7 @@ function assertIndex(reference, images, run) {
     const image = manifest(`${repository}@${entry.digest}`, run)
     assert.equal(
       image.config?.digest,
-      images.get(architecture).Id,
+      images.get(architecture).configDigest,
       '远端镜像与已验证制品不同，拒绝覆盖'
     )
   }
@@ -77,23 +106,23 @@ function findExisting(version, run) {
   return digest
 }
 
-export function publishTunnelImage({ version, source }, run = execute) {
+export function publishTunnelImage({ version, source, directory }, run = execute) {
   assert.match(version, /^\d+\.\d+\.\d+$/)
   assert.match(source, /^[a-f0-9]{40}$/)
   const images = new Map()
   for (const architecture of architectures) {
-    const [image] = JSON.parse(
-      run('docker', ['image', 'inspect', `${repository}:${version}-${architecture}`])
+    images.set(
+      architecture,
+      readTunnelArchive(
+        {
+          file: join(directory, tunnelArchiveName(version, architecture)),
+          version,
+          architecture,
+          source
+        },
+        run
+      )
     )
-    assert.equal(image.Os, 'linux', '已验证镜像不是 Linux 容器')
-    assert.equal(image.Architecture, architecture, '已验证镜像架构不匹配')
-    assert.equal(
-      image.Config?.Labels?.['org.opencontainers.image.revision'],
-      source,
-      '已验证镜像源码不匹配'
-    )
-    assert.match(image.Id, digestPattern)
-    images.set(architecture, image)
   }
 
   let digest = findExisting(version, run)
@@ -103,12 +132,16 @@ export function publishTunnelImage({ version, source }, run = execute) {
   } else {
     const references = []
     for (const [architecture, image] of images) {
-      const tag = `${repository}:${version}-${architecture}-${image.Id.slice(7, 19)}`
+      const tag = `${repository}:${version}-${architecture}-${image.configDigest.slice(7, 19)}`
       run('docker', ['tag', `${repository}:${version}-${architecture}`, tag])
       console.info(`推送已验证的 ${architecture} 镜像。`)
       run('docker', ['push', tag])
       const reference = `${repository}@${manifestDigest(tag, run)}`
-      assert.equal(manifest(reference, run).config?.digest, image.Id, '已推送镜像与验收制品不同')
+      assert.equal(
+        manifest(reference, run).config?.digest,
+        image.configDigest,
+        '已推送镜像与验收制品不同'
+      )
       references.push(reference)
     }
     run('docker', [
@@ -136,5 +169,9 @@ export function publishTunnelImage({ version, source }, run = execute) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  publishTunnelImage({ version: process.env.IMAGE_VERSION, source: process.env.SOURCE_SHA })
+  publishTunnelImage({
+    version: process.env.IMAGE_VERSION,
+    source: process.env.SOURCE_SHA,
+    directory: process.env.PACKAGE_DIR
+  })
 }

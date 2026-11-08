@@ -50,6 +50,7 @@ jobs:
       linux: ${{ steps.plan.outputs.linux }}
       android: ${{ steps.plan.outputs.android }}
       tunnel: ${{ steps.plan.outputs.tunnel }}
+      tunnel_ready: ${{ steps.plan.outputs.tunnel_ready }}
       docker: ${{ steps.plan.outputs.docker }}
     steps:
       - uses: actions/checkout@v4
@@ -139,6 +140,20 @@ jobs:
           name: docker-image-${{ github.run_id }}
           overwrite: true
           path: ${{ env.RELEASE_ROOT }}/restored/docker/
+          retention-days: 7
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tunnel-image-${{ github.run_id }}-amd64
+          overwrite: true
+          path: ${{ env.RELEASE_ROOT }}/restored/tunnel/*-amd64.tar.gz
+          retention-days: 7
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tunnel-image-${{ github.run_id }}-arm64
+          overwrite: true
+          path: ${{ env.RELEASE_ROOT }}/restored/tunnel/*-arm64.tar.gz
           retention-days: 7
           if-no-files-found: ignore
 
@@ -250,7 +265,7 @@ jobs:
 
   tunnel-build:
     needs: prepare
-    if: needs.prepare.outputs.published != 'true' && needs.prepare.outputs.tunnel == 'true'
+    if: needs.prepare.outputs.published != 'true' && needs.prepare.outputs.tunnel == 'true' && needs.prepare.outputs.tunnel_ready != 'true'
     permissions:
       contents: read
       packages: write

@@ -183,8 +183,185 @@ async function dockerInputsFixture(f) {
   return directory
 }
 
+const tunnelFile = (architecture) => `pi-desk-tunnel-1.2.3-linux-${architecture}.tar.gz`
+
+async function tunnelFixture(f, change = () => {}) {
+  f.input.plan.tunnel = true
+  f.input.tunnelVersion = '1.2.3'
+  for (const [index, architecture] of ['amd64', 'arm64'].entries()) {
+    const name = `tunnel-image-11-${architecture}`
+    f.artifacts.push({ ...artifact('tunnel-image'), name })
+    const runner = architecture === 'amd64' ? 'ubuntu-24.04' : 'ubuntu-24.04-arm'
+    f.jobs.push(job(`tunnel-build / build (${architecture}, ${runner})`, 20 + index))
+    const directory = join(f.root, `tunnel-source-${architecture}`)
+    await mkdir(directory)
+    const config = {
+      os: 'linux',
+      architecture,
+      config: { Labels: { 'org.opencontainers.image.revision': f.input.plan.record.source.head } }
+    }
+    const manifest = [
+      {
+        Config: 'config.json',
+        RepoTags: [`ghcr.io/jetcrab/pi-desk-tunnel:1.2.3-${architecture}`],
+        Layers: []
+      }
+    ]
+    change({ config, manifest, architecture })
+    const bytes = Buffer.from(JSON.stringify(config))
+    const file = `${sha256(bytes)}.json`
+    manifest[0].Config = file
+    await writeFile(join(directory, file), bytes)
+    await writeFile(join(directory, 'manifest.json'), JSON.stringify(manifest))
+    await mkdir(join(f.source, name))
+    execFileSync(
+      process.platform === 'win32' ? 'tar.exe' : 'tar',
+      [
+        '-czf',
+        relative(directory, join(f.source, name, tunnelFile(architecture))).replaceAll('\\', '/'),
+        'manifest.json',
+        file
+      ],
+      { cwd: directory, stdio: 'pipe' }
+    )
+  }
+  await writeFile(join(f.source, 'release-plan-11/plan.json'), JSON.stringify(f.input.plan))
+}
+
 const clientPath = (f) => join(f.root, 'clients/client-windows-12/release.json')
 const npmPath = (f) => join(f.root, 'npm/jetcrab-pi-desk-1.1.5.tgz')
+
+test('整批失败但隧道双架构验收成功时恢复原归档字节，重复恢复不覆盖', async (t) => {
+  const f = await fixture(t)
+  await tunnelFixture(f)
+  await restoreReleaseArtifacts(f.input)
+  for (const architecture of ['amd64', 'arm64'])
+    assert.deepEqual(
+      await readFile(join(f.root, 'tunnel', tunnelFile(architecture))),
+      await readFile(join(f.source, `tunnel-image-11-${architecture}`, tunnelFile(architecture)))
+    )
+  const downloads = [...f.calls]
+  await restoreReleaseArtifacts(f.input)
+  assert.deepEqual(
+    f.calls.filter((name) => name.startsWith('tunnel-image-')),
+    downloads.filter((name) => name.startsWith('tunnel-image-'))
+  )
+})
+
+test('prepare转存且隧道构建跳过的归档可再次复用，兼容复制的attempt记录', async (t) => {
+  const f = await fixture(t)
+  await tunnelFixture(f)
+  f.jobs.splice(
+    0,
+    f.jobs.length,
+    job('prepare', 1),
+    {
+      ...job('tunnel-build / build (amd64, ubuntu-24.04)', 2),
+      conclusion: 'skipped'
+    },
+    {
+      ...job('tunnel-build / build (arm64, ubuntu-24.04-arm)', 3),
+      conclusion: 'skipped'
+    }
+  )
+  f.jobs.push(...f.jobs.map((item) => ({ ...item, id: item.id + 100, run_attempt: 2 })))
+  // 本用例只恢复隧道，其他产物不属于准备阶段转存范围。
+  f.input.plan.npm = []
+  f.input.plan.clients = []
+  await writeFile(join(f.source, 'release-plan-11/plan.json'), JSON.stringify(f.input.plan))
+  await restoreReleaseArtifacts(f.input)
+  for (const architecture of ['amd64', 'arm64'])
+    assert.deepEqual(
+      await readFile(join(f.root, 'tunnel', tunnelFile(architecture))),
+      await readFile(join(f.source, `tunnel-image-11-${architecture}`, tunnelFile(architecture)))
+    )
+})
+
+test('同计划隧道归档身份错误时阻断，不留下可冒充完整恢复的文件', async (t) => {
+  for (const fault of ['source', 'architecture', 'version', 'os']) {
+    await t.test(fault, async (context) => {
+      const f = await fixture(context)
+      await tunnelFixture(f, ({ config, manifest, architecture }) => {
+        if (architecture !== 'arm64') return
+        if (fault === 'source')
+          config.config.Labels['org.opencontainers.image.revision'] = 'b'.repeat(40)
+        if (fault === 'architecture') config.architecture = 'amd64'
+        if (fault === 'version')
+          manifest[0].RepoTags = ['ghcr.io/jetcrab/pi-desk-tunnel:1.2.2-arm64']
+        if (fault === 'os') config.os = 'windows'
+      })
+      await assert.rejects(
+        restoreReleaseArtifacts(f.input),
+        {
+          source: /源码不匹配/,
+          architecture: /架构不匹配/,
+          version: /版本或架构标签不匹配/,
+          os: /不是 Linux 容器/
+        }[fault]
+      )
+      assert.equal(existsSync(join(f.root, 'tunnel', tunnelFile('amd64'))), false)
+      assert.equal(existsSync(join(f.root, 'tunnel', tunnelFile('arm64'))), false)
+    })
+  }
+})
+
+test('已存在隧道原附件但不完整、过期或缺对应成功证据时停止，不回落重建', async (t) => {
+  for (const fault of [
+    'missing',
+    'expired',
+    'failed',
+    'timestamp',
+    'attempt',
+    'prepare',
+    'partial-skip'
+  ]) {
+    await t.test(fault, async (context) => {
+      const f = await fixture(context)
+      await tunnelFixture(f)
+      const index = f.artifacts.findIndex((item) => item.name === 'tunnel-image-11-arm64')
+      const writer = f.jobs.find(
+        (item) => item.name === 'tunnel-build / build (arm64, ubuntu-24.04-arm)'
+      )
+      if (fault === 'missing') f.artifacts.splice(index, 1)
+      if (fault === 'expired') f.artifacts[index].expired = true
+      if (fault === 'failed') writer.conclusion = 'failure'
+      if (fault === 'timestamp') delete f.artifacts[index].created_at
+      if (fault === 'attempt') {
+        f.artifacts[index].created_at = timestamp(12)
+        f.jobs.push({ ...job(writer.name, 100, 2, 11, 13), conclusion: 'failure' })
+      }
+      if (fault === 'prepare') {
+        f.jobs.splice(0, f.jobs.length, job('prepare', 1))
+      }
+      if (fault === 'partial-skip') {
+        f.jobs.splice(0, f.jobs.length, job('prepare', 1), {
+          ...job('tunnel-build / build (amd64, ubuntu-24.04)', 2),
+          conclusion: 'skipped'
+        })
+      }
+      await assert.rejects(restoreReleaseArtifacts(f.input), /隧道.*停止重建/)
+      assert.equal(existsSync(join(f.root, 'tunnel', tunnelFile('amd64'))), false)
+    })
+  }
+})
+
+test('同计划没有隧道原归档时保留正常构建路径，不恢复其他计划的归档', async (t) => {
+  const f = await fixture(t)
+  await tunnelFixture(f)
+  await writeFile(
+    join(f.source, 'release-plan-11/plan.json'),
+    JSON.stringify({ ...f.input.plan, tunnel: false })
+  )
+  await restoreReleaseArtifacts(f.input)
+  assert.equal(
+    f.calls.some((name) => name.startsWith('tunnel-image-')),
+    false
+  )
+  f.artifacts.splice(0, f.artifacts.length, artifact('release-plan'))
+  await writeFile(join(f.source, 'release-plan-11/plan.json'), JSON.stringify(f.input.plan))
+  await restoreReleaseArtifacts(f.input)
+  assert.equal(existsSync(join(f.root, 'tunnel')), false)
+})
 
 test('整批失败仍恢复成功平台和已验收npm原字节，不依赖Release草稿', async (t) => {
   const f = await fixture(t)

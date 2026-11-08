@@ -118,6 +118,8 @@ jobs:
           NODE
       - name: 发布流程核心回归
         if: needs.changes.outputs.automation == 'true'
+        env:
+          TUNNEL_DOCKER_SMOKE: '1'
         run: >-
           node --test
           tests/l4-commit-versions.test.mjs
