@@ -662,6 +662,62 @@ test('正式准备只保存固定计划，失败重跑不预建Release或推进�
   assert.deepEqual(retry.plan, next.plan)
 })
 
+test('隧道恢复使用固定源码版本，只有两个原归档完整验证后才跳过构建且仍继续发布', async (t) => {
+  const repo = await fixture(t)
+  const plan = createReleasePlan(repo.root, { head: repo.head, date: 1 })
+  plan.npm = []
+  plan.clients = []
+  await repo.save(
+    'apps/tunnel/server/Cargo.toml',
+    '[package]\nname="pi-desk-tunnel-server"\nversion="9.0.0"\n'
+  )
+  repo.commit()
+  const output = join(repo.root, 'temp/tunnel-restore')
+  const input = { github: githubFixture([]), source: repo.head, plan, output, runId: '12' }
+  const missing = await prepareBatch(repo.root, input)
+  assert.equal(missing.outputs.tunnel_ready, false)
+  assert.equal(missing.outputs.tunnel, true)
+  const archives = join(repo.root, 'archives')
+  await mkdir(archives)
+  await mkdir(join(output, 'restored/tunnel'), { recursive: true })
+  for (const architecture of ['amd64', 'arm64']) {
+    const config = Buffer.from(
+      JSON.stringify({
+        os: 'linux',
+        architecture,
+        config: { Labels: { 'org.opencontainers.image.revision': repo.head } }
+      })
+    )
+    const file = `${sha256(config)}.json`
+    await writeFile(join(archives, file), config)
+    await writeFile(
+      join(archives, 'manifest.json'),
+      JSON.stringify([
+        {
+          Config: file,
+          RepoTags: [`ghcr.io/jetcrab/pi-desk-tunnel:1.0.0-${architecture}`],
+          Layers: []
+        }
+      ])
+    )
+    execFileSync(
+      process.platform === 'win32' ? 'tar.exe' : 'tar',
+      ['-czf', `${architecture}.tar.gz`, 'manifest.json', file],
+      { cwd: archives }
+    )
+    await writeFile(
+      join(output, 'restored/tunnel', `pi-desk-tunnel-1.0.0-linux-${architecture}.tar.gz`),
+      await readFile(join(archives, `${architecture}.tar.gz`))
+    )
+    if (architecture === 'amd64')
+      await assert.rejects(prepareBatch(repo.root, input), /隧道原归档不完整/)
+  }
+  const restored = await prepareBatch(repo.root, input)
+  assert.equal(restored.outputs.tunnel_ready, true)
+  assert.equal(restored.outputs.tunnel, true)
+  assert.deepEqual(restored.plan, plan)
+})
+
 test('新SHA调度与未完成批次使用同版本时，在准备写入前提示resume_tag', async (t) => {
   const repo = await fixture(t)
   const plan = createReleasePlan(repo.root, { head: repo.head, date: 1 })
@@ -947,6 +1003,19 @@ test('工作流只在末端写Release，内部发布包支持失败重试', asyn
   assert.ok(inputs.with.path.endsWith('/restored/docker-inputs/'))
   assert.equal(inputs.with['include-hidden-files'], true)
   assert.equal(inputs.with['retention-days'], 7)
+  assert.equal(workflow.jobs.prepare.outputs.tunnel_ready, '${{ steps.plan.outputs.tunnel_ready }}')
+  assert.ok(
+    workflow.jobs['tunnel-build'].if.includes("needs.prepare.outputs.tunnel_ready != 'true'")
+  )
+  assert.ok(workflow.jobs.tunnel.if.includes("needs.prepare.outputs.tunnel == 'true'"))
+  for (const architecture of ['amd64', 'arm64']) {
+    const archive = workflow.jobs.prepare.steps.find(
+      (step) => step.with?.name === `tunnel-image-\${{ github.run_id }}-${architecture}`
+    )
+    assert.equal(archive.uses, 'actions/upload-artifact@v4')
+    assert.ok(archive.with.path.endsWith(`/restored/tunnel/*-${architecture}.tar.gz`))
+    assert.equal(archive.with.overwrite, true)
+  }
 })
 
 test('无Release草稿也能从Actions固定计划续跑原源码', async (t) => {

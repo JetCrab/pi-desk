@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { validateVersions } from './commit-versions.mjs'
+import { readVersions, validateVersions } from './commit-versions.mjs'
 import { createReleasePlan, git, latestSuccessfulRelease } from './release-plan.mjs'
 import { createGitHubClient, sha256 } from './release-github.mjs'
 import {
@@ -15,6 +15,7 @@ import {
 import { loadReleaseRecord, saveReleaseRecord } from './release-metadata.mjs'
 import { renderReleaseNotes, validateChanges } from './release-notes.mjs'
 import { findReleasePlan, restoreReleaseArtifacts } from './restore-release-artifacts.mjs'
+import { tunnelArchiveName } from './release-tunnel.mjs'
 
 const jsonBytes = (value) => Buffer.from(JSON.stringify(value, null, 2) + '\n')
 const archiveName = (item) => `${item.name.slice(1).replace('/', '-')}-${item.version}.tgz`
@@ -153,6 +154,7 @@ export async function prepareBatch(
   await writeFile(join(output, 'plan.json'), jsonBytes(plan))
   const published = !!release && !release.draft
   const restored = join(output, 'restored')
+  const tunnelVersion = plan.tunnel ? readVersions(root, source).tunnel : null
   let npmVerified = published || !plan.npm.length
   if (!published) {
     await restoreDraft({ github, release, plan, directory: restored, runId })
@@ -160,6 +162,7 @@ export async function prepareBatch(
       const restoration = await restoreReleaseArtifacts({
         github,
         plan,
+        tunnelVersion,
         runId,
         repository,
         directory: restored,
@@ -183,6 +186,11 @@ export async function prepareBatch(
       }),
     notes_ready: published || existsSync(join(restored, 'notes/changes.json')),
     tunnel: !published && plan.tunnel,
+    tunnel_ready:
+      plan.tunnel &&
+      ['amd64', 'arm64'].every((architecture) =>
+        existsSync(join(restored, 'tunnel', tunnelArchiveName(tunnelVersion, architecture)))
+      ),
     docker: !published && plan.npm.includes('pi-desk'),
     ...Object.fromEntries(
       clientPlatforms.map((platform) => [
@@ -263,6 +271,7 @@ export async function prepareWebsiteBatch({ github, tag, source, output }) {
       npm_ready: true,
       notes_ready: true,
       tunnel: false,
+      tunnel_ready: false,
       docker: false,
       windows: false,
       macos: false,

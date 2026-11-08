@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { cp, readFile, readdir, rm } from 'node:fs/promises'
+import { cp, mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isDeepStrictEqual, promisify } from 'node:util'
 import { sha256 } from './release-github.mjs'
@@ -9,6 +9,9 @@ import { validateRecord } from './release-record.mjs'
 import { validateChanges } from './release-notes.mjs'
 import { assertPackedManifest, readNpmArchiveManifest } from './release-npm.mjs'
 import { validateDockerInputs } from './release-docker.mjs'
+import { readTunnelArchive, tunnelArchiveName } from './release-tunnel.mjs'
+
+const tunnelArchitectures = ['amd64', 'arm64']
 
 const execute = promisify(execFile)
 const npmFilename = (item) => `${item.name.slice(1).replace('/', '-')}-${item.version}.tgz`
@@ -93,6 +96,7 @@ export async function findReleasePlan({
 export async function restoreReleaseArtifacts({
   github,
   plan,
+  tunnelVersion,
   runId,
   repository,
   directory,
@@ -111,8 +115,30 @@ export async function restoreReleaseArtifacts({
   const pendingNotes = () => !existsSync(join(directory, 'notes/changes.json'))
   const pendingDocker = () =>
     plan.npm.includes('pi-desk') && !existsSync(join(directory, 'docker/docker-image.json'))
+  const pendingTunnel = () =>
+    plan.tunnel &&
+    tunnelArchitectures.some(
+      (architecture) =>
+        !existsSync(join(directory, 'tunnel', tunnelArchiveName(tunnelVersion, architecture)))
+    )
+  if (plan.tunnel) {
+    for (const architecture of tunnelArchitectures) {
+      const file = join(directory, 'tunnel', tunnelArchiveName(tunnelVersion, architecture))
+      if (existsSync(file))
+        readTunnelArchive({
+          file,
+          version: tunnelVersion,
+          architecture,
+          source: plan.record.source.head
+        })
+    }
+  }
   const pending = () =>
-    pendingClients().length || pendingNpm().length || pendingNotes() || pendingDocker()
+    pendingClients().length ||
+    pendingNpm().length ||
+    pendingNotes() ||
+    pendingDocker() ||
+    pendingTunnel()
   let npmVerified = !pendingNpm().length
   if (!pending()) return { npmVerified }
   const search = join(directory, 'artifact-search')
@@ -136,8 +162,8 @@ export async function restoreReleaseArtifacts({
         if (result.jobs.length < 100) break
       }
       // artifact 没有 run_attempt；以实际上传窗口定位写入它的 job，不能借用旧 attempt 的成功。
-      const owner = (name, jobName) => {
-        const artifact = run.artifacts.find((item) => item.name === `${name}-${run.id}`)
+      const owner = (name, jobName, artifactName = `${name}-${run.id}`) => {
+        const artifact = run.artifacts.find((item) => item.name === artifactName)
         const created = Date.parse(artifact?.created_at)
         const writers = jobs.filter(
           (job) =>
@@ -168,12 +194,13 @@ export async function restoreReleaseArtifacts({
             job.conclusion === 'success' &&
             Date.parse(job.started_at) >= after
         )
-      const restored = (writer, name) =>
+      const restored = (writer, name, child) =>
         writer?.name === 'prepare' &&
         writer.conclusion === 'success' &&
         jobs.some(
           (job) =>
-            (job.name === name || job.name.startsWith(`${name} /`)) &&
+            (job.name === name ||
+              (child ? job.name === child : job.name.startsWith(`${name} /`))) &&
             job.run_attempt === writer.run_attempt &&
             job.conclusion === 'skipped'
         ) &&
@@ -183,9 +210,56 @@ export async function restoreReleaseArtifacts({
             (job.name === name || job.name.startsWith(`${name} /`)) &&
             job.conclusion !== 'skipped'
         )
-      const verified = (artifact, job, parent) => {
-        const writer = owner(artifact, job)
-        return (writer?.name === job && writer.conclusion === 'success') || restored(writer, parent)
+      const verified = (artifact, job, parent, artifactName) => {
+        const writer = owner(artifact, job, artifactName)
+        return (
+          (writer?.name === job && writer.conclusion === 'success') || restored(writer, parent, job)
+        )
+      }
+      if (pendingTunnel()) {
+        const archives = tunnelArchitectures.map((architecture) => ({
+          architecture,
+          artifact: run.artifacts.find(
+            (item) => item.name === `tunnel-image-${run.id}-${architecture}`
+          )
+        }))
+        if (archives.some((item) => item.artifact)) {
+          const tunnel = join(folder, 'tunnel')
+          for (const { architecture, artifact } of archives) {
+            assert.ok(artifact, `隧道原归档不完整，停止重建；运行 ${run.id} 缺少 ${architecture}`)
+            assert.equal(
+              artifact.expired,
+              false,
+              `隧道 ${architecture} 原归档已过期，停止重建；运行 ${run.id}`
+            )
+            const runner = architecture === 'amd64' ? 'ubuntu-24.04' : 'ubuntu-24.04-arm'
+            assert.ok(
+              verified(
+                'tunnel-image',
+                `tunnel-build / build (${architecture}, ${runner})`,
+                'tunnel-build',
+                artifact.name
+              ),
+              `隧道 ${architecture} 原归档缺少对应构建验收成功证据，停止重建；运行 ${run.id}`
+            )
+          }
+          for (const { architecture, artifact } of archives) {
+            await download(run.id, artifact.name, join(tunnel, architecture))
+            readTunnelArchive({
+              file: join(tunnel, architecture, tunnelArchiveName(tunnelVersion, architecture)),
+              version: tunnelVersion,
+              architecture,
+              source: plan.record.source.head
+            })
+          }
+          await mkdir(join(directory, 'tunnel'), { recursive: true })
+          for (const architecture of tunnelArchitectures) {
+            const file = tunnelArchiveName(tunnelVersion, architecture)
+            if (!existsSync(join(directory, 'tunnel', file)))
+              await cp(join(tunnel, architecture, file), join(directory, 'tunnel', file))
+          }
+          console.info(`复用隧道两个已验收架构的原归档：${tunnelVersion}，运行 ${run.id}`)
+        }
       }
       for (const item of pendingClients()) {
         const job = `${item.platform} / ${item.platform}`
@@ -322,6 +396,15 @@ export async function restoreReleaseArtifacts({
           )
       }
       console.info(`复用原镜像安装输入，运行 ${saved.run}；保留固定 host/Pi 安装锁。`)
+    }
+    if (pendingTunnel()) {
+      assert.ok(
+        tunnelArchitectures.every(
+          (architecture) =>
+            !existsSync(join(directory, 'tunnel', tunnelArchiveName(tunnelVersion, architecture)))
+        ),
+        '隧道原归档不完整，停止重建，不能覆盖已恢复架构'
+      )
     }
     console.info(
       `缺少可复用产物：客户端=${
