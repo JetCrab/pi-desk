@@ -1,5 +1,5 @@
 {
-  "checks": "600cd3e4667ba8942040ffd66740d224abac8095",
+  "checks": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
   "units": {
     "windows": {
       "version": "1.1.34",
@@ -27,59 +27,59 @@
       "runId": "42405238811"
     },
     "pi-desk": {
-      "version": "1.1.42",
-      "source": "b0bd90a833b1bce9a1ca5de148db3383ec61fd05",
-      "runId": "42405238811"
+      "version": "1.1.44",
+      "source": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
+      "runId": "42763606496"
     },
     "pi-desk-bg-run": {
-      "version": "1.1.9",
-      "source": "c2e4898d8b1e85abfd7a1b7dc353eaaa0878b1b2",
-      "runId": "40432685481"
+      "version": "1.1.15",
+      "source": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
+      "runId": "42763606496"
     },
     "pi-desk-ctx": {
-      "version": "1.1.10",
-      "source": "c2e4898d8b1e85abfd7a1b7dc353eaaa0878b1b2",
-      "runId": "40432685481"
+      "version": "1.1.16",
+      "source": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
+      "runId": "42763606496"
     },
     "pi-desk-deliverables": {
-      "version": "1.1.11",
-      "source": "c2e4898d8b1e85abfd7a1b7dc353eaaa0878b1b2",
-      "runId": "40432685481"
+      "version": "1.1.17",
+      "source": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
+      "runId": "42763606496"
     },
     "pi-desk-quota-viewer": {
-      "version": "1.1.13",
-      "source": "d9f952223105121c6dbc3c4848f8bdc61322a858",
-      "runId": "41273902091"
+      "version": "1.1.18",
+      "source": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
+      "runId": "42763606496"
     },
     "pi-desk-remote-debug": {
-      "version": "1.1.18",
-      "source": "19bff8b22d1b80841498de76d129d75f64542490",
-      "runId": "42211489663"
+      "version": "1.1.19",
+      "source": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
+      "runId": "42763606496"
     },
     "pi-desk-sdk": {
-      "version": "1.1.9",
-      "source": "c2e4898d8b1e85abfd7a1b7dc353eaaa0878b1b2",
-      "runId": "40432685481"
+      "version": "1.1.15",
+      "source": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
+      "runId": "42763606496"
     },
     "pi-desk-subagent": {
-      "version": "1.1.10",
-      "source": "c2e4898d8b1e85abfd7a1b7dc353eaaa0878b1b2",
-      "runId": "40432685481"
+      "version": "1.1.16",
+      "source": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
+      "runId": "42763606496"
     },
     "pi-desk-tibo-monitor": {
-      "version": "1.1.10",
-      "source": "c2e4898d8b1e85abfd7a1b7dc353eaaa0878b1b2",
-      "runId": "40432685481"
+      "version": "1.1.16",
+      "source": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
+      "runId": "42763606496"
     },
     "pi-desk-tool-reason": {
-      "version": "1.1.1",
-      "source": "799ff540338f87a68b5b13b48d203da609b606be",
-      "runId": "38336605812"
+      "version": "1.1.2",
+      "source": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
+      "runId": "42763606496"
     },
     "pi-desk-usage": {
-      "version": "1.1.11",
-      "source": "c2e4898d8b1e85abfd7a1b7dc353eaaa0878b1b2",
-      "runId": "40432685481"
+      "version": "1.1.17",
+      "source": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
+      "runId": "42763606496"
     },
     "linux": {
       "version": "1.1.34",
@@ -87,14 +87,14 @@
       "runId": "42405238811"
     },
     "pi-desk-workspace": {
-      "version": "1.1.15",
-      "source": "19bff8b22d1b80841498de76d129d75f64542490",
-      "runId": "42211489663"
+      "version": "1.1.16",
+      "source": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
+      "runId": "42763606496"
     },
     "pi-desk-todo": {
-      "version": "1.0.14",
-      "source": "19bff8b22d1b80841498de76d129d75f64542490",
-      "runId": "42211489663"
+      "version": "1.0.15",
+      "source": "a23bd00ecc708ef990c85b1e1f0e0bc65f0098ee",
+      "runId": "42763606496"
     }
   }
 }
