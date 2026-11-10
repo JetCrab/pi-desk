@@ -25,7 +25,8 @@ import {
 } from './l4-e2e-server-runtime.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const taskId = `reasoning-follow-${process.pid}`
+const expandOnly = process.argv.includes('--expand')
+const taskId = `${expandOnly ? 'expand-follow' : 'reasoning-follow'}-${process.pid}`
 const runRoot = join(projectRoot, 'temp/run/chat-follow', taskId)
 const agentRoot = join(projectRoot, 'temp/pi/chat-follow-e2e', taskId)
 const agentDir = join(agentRoot, 'agent')
@@ -57,6 +58,12 @@ function send(delta, finishReason = null) {
 async function fixture(modelPort) {
   await prepareIsolatedPiDirectory(agentDir)
   await mkdir(join(cwd, '.pi'), { recursive: true })
+  if (expandOnly) {
+    await writeFile(
+      join(cwd, 'expand-detail.txt'),
+      Array.from({ length: 120 }, (_, index) => `展开详情第 ${index + 1} 行。`).join('\n')
+    )
+  }
   await mkdir(join(agentDir, 'pi-desk'), { recursive: true })
   process.env.PI_CODING_AGENT_DIR = agentDir
   process.env.PI_CODING_AGENT_SESSION_DIR = join(agentDir, 'sessions')
@@ -155,6 +162,238 @@ async function wheel(client, deltaY) {
     deltaX: 0,
     deltaY
   })
+}
+
+async function clickDisclosure(client, selector, expanded, following, keyboard = false) {
+  await waitFor(
+    client,
+    `document.querySelector(${JSON.stringify(selector)})?.getAttribute('aria-expanded') === '${!expanded}'`,
+    '操作前折叠状态正确'
+  )
+  await settle(client)
+  const point = await evaluate(
+    client,
+    `(() => {
+      const target = document.querySelector(${JSON.stringify(selector)});
+      const rect = target?.getBoundingClientRect();
+      const scroll = document.querySelector('[role="log"]')?.firstElementChild;
+      const viewport = scroll?.getBoundingClientRect();
+      if (!rect || !viewport) return null;
+      if (${keyboard} ? document.activeElement !== target : rect.top < viewport.top || rect.bottom > viewport.bottom) return null;
+      window.__expansionSamples = [];
+      const sample = () => {
+        window.__expansionSamples.push(${metrics});
+        if (window.__expansionSamples.length < 120) {
+          window.__expansionFrame = requestAnimationFrame(() => setTimeout(sample, 0));
+        }
+      };
+      window.__expansionFrame = requestAnimationFrame(() => setTimeout(sample, 0));
+      const x = rect.x + rect.width / 2;
+      const y = rect.y + rect.height / 2;
+      if (!${keyboard} && !target.contains(document.elementFromPoint(x, y))) {
+        throw new Error('展开按钮被遮挡：' + document.elementFromPoint(x, y)?.outerHTML);
+      }
+      return { x, y };
+    })()`
+  )
+  assert.ok(point, `触发器必须可点击或已持有键盘焦点：${selector}`)
+  if (keyboard) {
+    for (const type of ['keyDown', 'keyUp']) {
+      await client.send('Input.dispatchKeyEvent', {
+        type,
+        key: ' ',
+        code: 'Space',
+        windowsVirtualKeyCode: 32
+      })
+    }
+  } else {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await client.send('Input.dispatchMouseEvent', {
+        type,
+        ...point,
+        button: 'left',
+        clickCount: 1
+      })
+    }
+  }
+  await waitFor(
+    client,
+    `document.querySelector(${JSON.stringify(selector)})?.getAttribute('aria-expanded') === '${expanded}'`,
+    expanded ? '主动展开完成' : '主动收起完成'
+  )
+  await settle(client)
+  const result = await evaluate(
+    client,
+    `(() => {
+      cancelAnimationFrame(window.__expansionFrame);
+      return { after: ${metrics}, samples: window.__expansionSamples };
+    })()`
+  )
+  console.log('展开状态检查', {
+    selector,
+    expanded,
+    following,
+    after: result.after,
+    frames: result.samples.length,
+    maxGap: Math.max(...result.samples.map((sample) => sample.gap))
+  })
+  if (following) assert.ok(result.after.gap <= 3, `展开／收起后脱离底部：${JSON.stringify(result)}`)
+  else assert.ok(result.after.gap > 100, `阅读历史被拉回底部：${JSON.stringify(result)}`)
+}
+
+async function checkExpansions(client) {
+  const userToggle = '[data-chat-user-message] button[aria-expanded]'
+  send({ content: '展开回归准备完成。' })
+  await waitFor(
+    client,
+    `document.querySelector('[role="log"]')?.innerText.includes('展开回归准备完成')`,
+    '正文到达'
+  )
+  await waitFor(
+    client,
+    `[...document.querySelectorAll('button')].every(button => !button.textContent.includes('思考过程') || button.getAttribute('aria-expanded') === 'false')`,
+    '思考自动收起后再手动展开'
+  )
+  await settle(client)
+  await waitFor(client, `(${metrics})?.gap <= 3`, '展开前正在跟随底部')
+  for (let repeat = 0; repeat < 2; repeat++) {
+    await clickDisclosure(client, userToggle, true, true)
+    const expanded = await evaluate(client, metrics)
+    assert.ok(expanded.height > expanded.viewport + 200, '展开应真实增加外层滚动高度')
+    await clickDisclosure(client, userToggle, false, true)
+  }
+
+  send({ content: '工具检查前的历史内容。\n\n'.repeat(35) })
+  send(
+    {
+      tool_calls: [
+        {
+          index: 0,
+          id: 'expand-read',
+          type: 'function',
+          function: {
+            name: 'read',
+            arguments: JSON.stringify({
+              path: 'expand-detail.txt',
+              reasoning: '验证展开详情时持续跟随'
+            })
+          }
+        }
+      ]
+    },
+    'tool_calls'
+  )
+  modelResponse.end('data: [DONE]\n\n')
+  await waitFor(
+    client,
+    `document.querySelector('[role="log"]')?.innerText.includes('第 2 次思考')`,
+    '工具结束并开始下一次响应'
+  )
+  send({ content: '工具详情展开检查点。' })
+  await waitFor(
+    client,
+    `document.querySelector('[role="log"]')?.innerText.includes('工具详情展开检查点')`,
+    '第二次正文到达'
+  )
+  await waitFor(
+    client,
+    `[...document.querySelectorAll('button')].every(button => !button.textContent.includes('思考过程') || button.getAttribute('aria-expanded') === 'false')`,
+    '工具下方的思考面板自动收起'
+  )
+  await settle(client)
+  const readToggle = '[data-chat-process-item] button[aria-label*="read"][aria-expanded]'
+  await waitFor(
+    client,
+    `document.querySelector(${JSON.stringify(readToggle)})?.disabled === false`,
+    '工具详情可展开'
+  )
+  await clickDisclosure(client, readToggle, true, true)
+  await waitFor(
+    client,
+    `document.querySelector('[role="region"]')?.textContent.includes('展开详情第 120 行')`,
+    '异步详情加载完成'
+  )
+  await settle(client)
+  assert.ok((await evaluate(client, metrics)).gap <= 3, '详情异步加载后应保持底部')
+  await clickDisclosure(client, readToggle, false, true)
+  await clickDisclosure(client, readToggle, true, true)
+
+  const inside = await evaluate(
+    client,
+    `(() => {
+    const region = [...document.querySelectorAll('[role="region"]')].find(element => element.textContent.includes('展开详情第 120 行'));
+    const rect = region.getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: Math.min(rect.bottom - 10, innerHeight - 250), top: region.scrollTop, height: region.scrollHeight, viewport: region.clientHeight };
+  })()`
+  )
+  assert.ok(inside.height > inside.viewport + 100, '详情必须拥有独立滚动层')
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseWheel',
+    x: inside.x,
+    y: inside.y,
+    deltaX: 0,
+    deltaY: 100
+  })
+  await waitFor(
+    client,
+    `[...document.querySelectorAll('[role="region"]')].some(element => element.textContent.includes('展开详情第 120 行') && element.scrollTop > 0)`,
+    '详情内部滚动'
+  )
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseWheel',
+    x: inside.x,
+    y: inside.y,
+    deltaX: 0,
+    deltaY: -40
+  })
+  await settle(client)
+  send({ content: '\n\n内部滚动后的外层跟随。' })
+  await waitFor(
+    client,
+    `document.querySelector('[role="log"]')?.innerText.includes('内部滚动后的外层跟随')`,
+    '内部滚动后继续输出'
+  )
+  await settle(client)
+  assert.ok((await evaluate(client, metrics)).gap <= 3, '内部滚动不能退出外层跟随')
+
+  await clickDisclosure(client, readToggle, false, true)
+  send({ content: '\n\n阅读准备段落。'.repeat(6) })
+  await waitFor(
+    client,
+    `document.querySelector('[role="log"]')?.innerText.includes('阅读准备段落')`,
+    '准备可见的历史展开入口'
+  )
+  await settle(client)
+  await wheel(client, -160)
+  await waitFor(client, `(${metrics})?.gap > 100`, '主动上翻退出跟随')
+  await settle(client)
+  await clickDisclosure(client, readToggle, true, false)
+  const reading = await evaluate(client, metrics)
+  send({ content: '\n\n阅读期间继续输出。\n\n'.repeat(8) })
+  await waitFor(
+    client,
+    `document.querySelector('[role="log"]')?.innerText.includes('阅读期间继续输出')`,
+    '阅读时增量到达'
+  )
+  await settle(client)
+  assert.ok(
+    Math.abs((await evaluate(client, metrics)).top - reading.top) <= 2,
+    '展开后阅读位置不能被后续输出拉回'
+  )
+  await wheel(client, 100000)
+  await waitFor(client, `(${metrics})?.gap <= 3`, '手动回底恢复跟随')
+  send({ content: '\n\n回底后继续跟随。' }, 'stop')
+  modelResponse.end('data: [DONE]\n\n')
+  await waitFor(
+    client,
+    `document.querySelector('[aria-label="停止当前响应"]') === null`,
+    '本轮结束'
+  )
+  await settle(client)
+  const processToggle = '[data-chat-turn] > [data-slot="collapsible"] > button'
+  await clickDisclosure(client, processToggle, true, true)
+  await clickDisclosure(client, processToggle, false, true, true)
+  assert.equal(modelError, undefined)
 }
 
 async function renderingMetrics(client) {
@@ -364,7 +603,11 @@ async function main() {
       () => serverOutput,
       60_000
     )
-    await client.send('Input.insertText', { text: '检查思考收起之后的滚动跟随。' })
+    await client.send('Input.insertText', {
+      text: expandOnly
+        ? Array.from({ length: 48 }, (_, index) => `长文本第 ${index + 1} 行。`).join('\n')
+        : '检查思考收起之后的滚动跟随。'
+    })
     await waitFor(
       client,
       `document.querySelector('[aria-label="发送消息"]')?.disabled === false`,
@@ -378,6 +621,13 @@ async function main() {
       () => modelError ?? serverOutput
     )
     await settle(client)
+    if (expandOnly) {
+      await checkExpansions(client)
+      await writeFile(join(runRoot, 'expanded-follow.png'), await screenshot(client))
+      success = true
+      console.log(`展开跟随回归通过：${runRoot}`)
+      return
+    }
 
     await evaluate(
       client,
