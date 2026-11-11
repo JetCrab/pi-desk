@@ -38,6 +38,7 @@ export interface RemoteDebugRun {
   endedAt: number | null
   publicUrl: string | null
   localUrl: string | null
+  gatewayPort: number | null
   logPath: string
   failure: { message: string } | null
 }
@@ -219,6 +220,7 @@ export class RemoteDebugRuntime {
       endedAt: null,
       publicUrl: null,
       localUrl: null,
+      gatewayPort: null,
       logPath,
       failure: null
     }
@@ -326,6 +328,7 @@ export class RemoteDebugRuntime {
         return
       }
 
+      active.run.gatewayPort = active.gateway.port
       active.run.activity = `正在开放公网端口 ${active.profile.publicPort}`
       this.publishState()
       active.tunnel = this.dependencies.startTunnel({
@@ -396,6 +399,7 @@ export class RemoteDebugRuntime {
     active.run.endedAt = Date.now()
     active.run.publicUrl = null
     active.run.localUrl = null
+    active.run.gatewayPort = null
     active.run.failure = outcome.failure ? { message: outcome.failure } : null
     this.active.delete(active.run.runId)
     this.pruneRecentRuns()

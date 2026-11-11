@@ -160,6 +160,7 @@ impl WorkerFixture {
             control_key: [31; 32],
             provider_secret_key: None,
             mode: TunnelMode::Auto,
+            discovery_scope: None,
         };
         self.provider = Some(start_tunnel_worker(config.clone())?);
         self.visitor = Some(start_tunnel_worker(config)?);

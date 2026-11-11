@@ -26,6 +26,7 @@ mod service_port;
 #[cfg(test)]
 mod test_support;
 mod tunnel;
+mod tunnels;
 mod window_chrome;
 mod windows;
 
@@ -42,7 +43,10 @@ fn main() {
     if let Some(code) = desktop_tunnel_cli::run_if_requested() {
         std::process::exit(code);
     }
-    let app = reminder::register(window_chrome::register(tauri::Builder::default()))
+    let builder = tunnels::register(reminder::register(window_chrome::register(
+        tauri::Builder::default(),
+    )));
+    let app = builder
         .plugin(tauri_plugin_single_instance::init(|app, arguments, _| {
             if arguments
                 .iter()
@@ -120,6 +124,7 @@ fn main() {
     app.run(|app_handle, event| match event {
         RunEvent::ExitRequested { .. } => {
             if app_handle.try_state::<ShellState>().is_some() {
+                app_handle.state::<tunnels::mappings::Mappings>().shutdown();
                 runtime::shutdown(app_handle);
             }
         }
@@ -162,6 +167,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
         }
     };
     let runtime_info = runtime::load_runtime_info(&runtime_path, &config);
+    app.manage(tunnels::mappings::Mappings::new(log_path.clone())?);
     app.manage(ShellState::new(
         config,
         runtime_info,

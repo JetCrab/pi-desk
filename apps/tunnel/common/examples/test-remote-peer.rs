@@ -46,6 +46,7 @@ fn main() -> Result<(), String> {
         .map_err(|error| error.to_string())?,
         provider_secret_key: None,
         mode: TunnelMode::Auto,
+        discovery_scope: None,
     })?;
     let result = run(&worker, role);
     let cleanup = worker.shutdown();

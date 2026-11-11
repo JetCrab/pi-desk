@@ -82,6 +82,28 @@ pub(super) async fn start_forwarder(
     let listener = TcpListener::bind(bind_addr)
         .await
         .map_err(|error| format!("无法监听TCP端口：{error}"))?;
+    start_forwarder_with_slot(shared, listener, target, slot)
+}
+
+pub(super) fn start_forwarder_listener(
+    shared: Arc<Shared>,
+    listener: TcpListener,
+    target: TunnelTarget,
+) -> RuntimeResult<ForwarderRuntime> {
+    let slot = shared
+        .forwarder_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| "本地映射数量已达上限")?;
+    start_forwarder_with_slot(shared, listener, target, slot)
+}
+
+fn start_forwarder_with_slot(
+    shared: Arc<Shared>,
+    listener: TcpListener,
+    target: TunnelTarget,
+    slot: OwnedSemaphorePermit,
+) -> RuntimeResult<ForwarderRuntime> {
     let local_addr = listener.local_addr().map_err(|_| "无法读取TCP监听地址")?;
     let mapping = Arc::new(Mapping {
         target: Mutex::new(target),

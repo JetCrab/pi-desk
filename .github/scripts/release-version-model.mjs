@@ -235,12 +235,19 @@ async function npmEntries(
   return entries
 }
 
-function dependencyRange(range, target, development) {
+/** @returns {boolean} */
+function followsDependencyVersion(consumer, dependency) {
+  // 宿主交付 SDK 运行时；插件按兼容接口消费，不跟随 SDK 的每次升版。
+  return dependency !== '@jetcrab/pi-desk-sdk' || consumer === '@jetcrab/pi-desk'
+}
+
+function dependencyRange(range, target, development, consumer) {
   const symbolic = /^(?:workspace:)?(?:\*|[~^])$/.test(range)
   if (symbolic) return range
   const retarget =
-    target.manifest.version !== target.currentVersion ||
-    (target.previous !== null && target.manifest.version !== target.previous.version)
+    (development || followsDependencyVersion(consumer, target.manifest.name)) &&
+    (target.manifest.version !== target.currentVersion ||
+      (target.previous !== null && target.manifest.version !== target.previous.version))
   if (!retarget && (development || !range.includes('-dev'))) return range
   const single =
     /^(\s*(?:workspace:)?(?:[~^]|[<>]=?|=)?\s*)(\d+\.\d+\.\d+(?:-dev(?:\.\d+)?)?)(\s*)$/.exec(range)
@@ -306,7 +313,7 @@ function planNpm(entries, { baseline, ...options }) {
       options
     )
   }
-  // 自有依赖的制品版本变化会影响消费者；workspace 范围不需要改写。
+  // 需随依赖交付的消费者同步升版；workspace 范围不需要改写。
   let added
   do {
     added = false
@@ -316,6 +323,7 @@ function planNpm(entries, { baseline, ...options }) {
         Object.keys(entry.manifest[group] ?? {}).some(
           (name) =>
             selected.has(name) &&
+            followsDependencyVersion(entry.manifest.name, name) &&
             (!options.targets ||
               entries.some(
                 (target) =>
@@ -339,7 +347,8 @@ function planNpm(entries, { baseline, ...options }) {
     for (const group of dependencyGroups) {
       for (const [name, range] of Object.entries(entry.manifest[group] ?? {})) {
         const target = byName.get(name)
-        if (target) entry.manifest[group][name] = dependencyRange(range, target, false)
+        if (target)
+          entry.manifest[group][name] = dependencyRange(range, target, false, entry.manifest.name)
       }
     }
     if (!isDeepStrictEqual(json(entry.original, entry.file), entry.manifest)) {
@@ -612,6 +621,7 @@ export async function planVersionChanges(root, baseline, options = {}) {
           Object.keys(entry.manifest[group] ?? {}).some(
             (name) =>
               name.startsWith('@jetcrab/') &&
+              followsDependencyVersion(entry.manifest.name, name) &&
               (affected.has(name.slice('@jetcrab/'.length)) ||
                 changedVersions.has(name.slice('@jetcrab/'.length)))
           )
@@ -761,7 +771,7 @@ export async function prepareDevelopmentVersions(
       for (const [name, range] of Object.entries(entry.manifest[group] ?? {})) {
         const target = byName.get(name)
         if (target && assigned.has(name))
-          entry.manifest[group][name] = dependencyRange(range, target, true)
+          entry.manifest[group][name] = dependencyRange(range, target, true, entry.manifest.name)
       }
     }
     const original = await readOptional(root, entry.file)

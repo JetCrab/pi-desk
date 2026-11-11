@@ -176,18 +176,114 @@ test('代码提交递增所属单元，失败后再次准备不重复递增', as
   assert.equal(await repo.version('pi-desk'), '1.0.2')
 })
 
-test('SDK变更同步实际消费者，不修改独立组件', async (t) => {
+test('仅换依赖下载源不升版，内容摘要变化仍递增实际消费者', async (t) => {
   const repo = await repository(t)
+  const lock = `lockfileVersion: '9.0'
+importers:
+  plugins/pi-desk-usage:
+    dependencies:
+      plugin-lib:
+        specifier: ^1.0.0
+        version: 1.0.0
+packages:
+  plugin-lib@1.0.0:
+    resolution:
+      {
+        integrity: sha512-fixture,
+        tarball: https://mirror.example.test/plugin-lib.tgz
+      }
+snapshots:
+  plugin-lib@1.0.0: {}
+`
+  await repo.manifest('pi-desk-usage', '1.0.0', { 'plugin-lib': '^1.0.0' })
+  await repo.save('pnpm-lock.yaml', lock)
+  repo.git('add', '.')
+  repo.git('commit', '-m', 'fixture: 固定依赖内容')
+  const base = repo.git('rev-parse', 'HEAD')
+  const changed = lock.replace('https://mirror.example.test/', 'https://registry.npmjs.org/')
+  await repo.save('pnpm-lock.yaml', changed)
+  repo.git('add', 'pnpm-lock.yaml')
+  assert.deepEqual((await prepareCommitVersions(repo.root)).selected, [])
+  assert.equal(await repo.version('pi-desk-usage'), '1.0.0')
+  repo.git('commit', '-m', 'chore: 切换下载源')
+  const checked = await validateVersions(repo.root, { base, head: repo.git('rev-parse', 'HEAD') })
+  assert.deepEqual(checked.affected, [])
+  await repo.save('pnpm-lock.yaml', changed.replace('sha512-fixture', 'sha512-changed'))
+  repo.git('add', 'pnpm-lock.yaml')
+  assert.deepEqual((await prepareCommitVersions(repo.root)).selected, ['pi-desk-usage'])
+  assert.equal(await repo.version('pi-desk-usage'), '1.0.1')
+  assert.equal(await repo.version('pi-desk-sdk'), '1.0.0')
+  assert.equal(await repo.version('pi-desk'), '1.0.0')
+  repo.git('commit', '-m', 'fix: 更新实际依赖内容')
+  await validateVersions(repo.root, { base, head: repo.git('rev-parse', 'HEAD') })
+})
+
+test('SDK兼容新增只联动宿主，保留未改插件版本和SDK依赖下限', async (t) => {
+  const repo = await repository(t)
+  await repo.manifest('pi-desk-explicit', '1.0.0', { '@jetcrab/pi-desk-sdk': '^1.0.0' })
   await repo.manifest('pi-desk-independent', '1.0.0')
   repo.git('add', '.')
-  repo.git('commit', '-m', 'fixture: 独立插件')
-  await repo.save('plugins/pi-desk-sdk/src/index.ts', 'export const sdk = 2\n')
+  repo.git('commit', '-m', 'fixture: SDK消费者')
+  const base = repo.git('rev-parse', 'HEAD')
+  await repo.save(
+    'plugins/pi-desk-sdk/src/index.ts',
+    'export const sdk = 1\nexport interface AddedContract { enabled?: boolean }\n'
+  )
   repo.git('add', 'plugins/pi-desk-sdk/src/index.ts')
-  await prepareCommitVersions(repo.root)
+  const result = await prepareCommitVersions(repo.root)
+  assert.deepEqual(result.selected, ['pi-desk-sdk', 'pi-desk'])
   assert.equal(await repo.version('pi-desk-sdk'), '1.0.1')
   assert.equal(await repo.version('pi-desk'), '1.0.1')
-  assert.equal(await repo.version('pi-desk-usage'), '1.0.1')
-  assert.equal(await repo.version('pi-desk-independent'), '1.0.0')
+  for (const name of ['pi-desk-usage', 'pi-desk-explicit', 'pi-desk-independent']) {
+    const file = `plugins/${name}/package.json`
+    assert.equal(repo.git('show', `:${file}`), repo.git('show', `${base}:${file}`))
+  }
+  assert.deepEqual((await prepareCommitVersions(repo.root)).changedFiles, [])
+  repo.git('commit', '-m', 'feat: 兼容SDK接口')
+  const checked = await validateVersions(repo.root, { base, head: repo.git('rev-parse', 'HEAD') })
+  assert.deepEqual(checked.affected.sort(), ['pi-desk', 'pi-desk-sdk'])
+})
+
+for (const change of ['源码', 'SDK依赖要求']) {
+  test(`插件${change}变化仍独立升版，不连带其他插件`, async (t) => {
+    const repo = await repository(t)
+    await repo.manifest('pi-desk-sdk', '1.0.1')
+    await repo.manifest('pi-desk-usage', '1.0.0', { '@jetcrab/pi-desk-sdk': '^1.0.0' })
+    repo.git('add', '.')
+    repo.git('commit', '-m', 'fixture: 兼容SDK')
+    const base = repo.git('rev-parse', 'HEAD')
+    if (change === '源码') {
+      await repo.save('plugins/pi-desk-usage/src/index.ts', 'export const plugin = 2\n')
+    } else {
+      await repo.manifest('pi-desk-usage', '1.0.0', { '@jetcrab/pi-desk-sdk': '^1.0.1' })
+    }
+    repo.git('add', '.')
+    assert.deepEqual((await prepareCommitVersions(repo.root)).selected, ['pi-desk-usage'])
+    assert.equal(await repo.version('pi-desk-usage'), '1.0.1')
+    repo.git('commit', '-m', 'feat: 插件更新')
+    await validateVersions(repo.root, { base, head: repo.git('rev-parse', 'HEAD') })
+  })
+}
+
+test('普通自有运行依赖变化仍联动消费者', async (t) => {
+  const repo = await repository(t)
+  await repo.manifest('pi-desk-library', '1.0.0')
+  await repo.save('plugins/pi-desk-library/src/index.ts', 'export const value = 1\n')
+  await repo.manifest('pi-desk-usage', '1.0.0', { '@jetcrab/pi-desk-library': '^1.0.0' })
+  repo.git('add', '.')
+  repo.git('commit', '-m', 'fixture: 自有运行依赖')
+  const base = repo.git('rev-parse', 'HEAD')
+  await repo.save('plugins/pi-desk-library/src/index.ts', 'export const value = 2\n')
+  repo.git('add', '.')
+  assert.deepEqual((await prepareCommitVersions(repo.root)).selected, [
+    'pi-desk-library',
+    'pi-desk-usage'
+  ])
+  const plugin = JSON.parse(repo.git('show', ':plugins/pi-desk-usage/package.json'))
+  assert.equal(plugin.version, '1.0.1')
+  assert.equal(plugin.dependencies['@jetcrab/pi-desk-library'], '^1.0.1')
+  repo.git('commit', '-m', 'feat: 运行依赖更新')
+  await validateVersions(repo.root, { base, head: repo.git('rev-parse', 'HEAD') })
 })
 
 test('显式更高版本保持不变，文档不消耗代码版本', async (t) => {
@@ -226,6 +322,26 @@ test('CI拒绝绕过Hook的代码变更，但允许准备好的版本', async (t
   repo.git('commit', '-m', 'chore: 准备版本')
   await validateVersions(repo.root, { base: repo.base, head: repo.git('rev-parse', 'HEAD') })
   assert.equal((await readVersions(repo.root, 'HEAD'))['pi-desk'], '1.0.1')
+})
+
+test('CI仍要求SDK与宿主升版，但不要求未改插件升版', async (t) => {
+  const repo = await repository(t)
+  await repo.save(
+    'plugins/pi-desk-sdk/src/index.ts',
+    'export const sdk = 1\nexport interface AddedContract { enabled?: boolean }\n'
+  )
+  await repo.manifest('pi-desk-sdk', '1.0.1')
+  repo.git('add', '.')
+  repo.git('commit', '-m', 'fixture: 缺少宿主升版')
+  await assert.rejects(
+    validateVersions(repo.root, { base: repo.base, head: repo.git('rev-parse', 'HEAD') }),
+    /pi-desk 制品内容变化但版本未递增/
+  )
+  await repo.manifest('pi-desk', '1.0.1', { '@jetcrab/pi-desk-sdk': 'workspace:^' })
+  repo.git('add', '.')
+  repo.git('commit', '-m', 'fixture: 宿主同步SDK')
+  await validateVersions(repo.root, { base: repo.base, head: repo.git('rev-parse', 'HEAD') })
+  assert.equal(await repo.version('pi-desk-usage'), '1.0.0')
 })
 
 test('普通git commit自动执行Hook，源码版本与代码进入同次提交', async (t) => {
@@ -289,6 +405,16 @@ test('旧官网开发后缀可作为迁移基线，新提交清单必须完成�
   assert.equal(readVersions(repo.root, ':').website, '1.0.2')
   repo.git('commit', '-m', 'chore: 迁移官网版本')
   await validateVersions(repo.root, { base, head: repo.git('rev-parse', 'HEAD') })
+})
+
+test('显式选择SDK补丁版本仅联动宿主，不修改插件清单', async (t) => {
+  const repo = await repository(t)
+  const plugin = repo.git('show', 'HEAD:plugins/pi-desk-usage/package.json')
+  const result = await chooseReleaseVersions(repo.root, { targets: ['pi-desk-sdk'], mode: 'patch' })
+  assert.deepEqual(result.selected, ['pi-desk-sdk', 'pi-desk'])
+  assert.equal(result.versions['pi-desk-sdk'], '1.0.1')
+  assert.equal(result.versions['pi-desk'], '1.0.1')
+  assert.equal(repo.git('show', ':plugins/pi-desk-usage/package.json'), plugin)
 })
 
 test('正式版本选择按当前、次版本、补丁准确执行', async (t) => {

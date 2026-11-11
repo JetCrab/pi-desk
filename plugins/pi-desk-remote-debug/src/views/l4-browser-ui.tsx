@@ -57,6 +57,7 @@ export const REMOTE_DEBUG_LAYOUT = `
 .remote-debug-address-row{display:flex;min-width:0;align-items:center;gap:.5rem;flex-wrap:wrap}
 .remote-debug-access-row{display:flex;min-width:0;align-items:center;gap:.5rem}
 .remote-debug-access-row>.remote-debug-caption{flex:none}
+.remote-debug-connection-status{min-width:0;flex:1;font-size:.875rem;line-height:1.5;color:var(--muted-foreground);overflow-wrap:anywhere}
 .remote-debug-access-link{display:flex;min-width:0;flex:1;color:inherit;text-decoration:underline;text-underline-offset:.15rem;font:.875rem/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:nowrap}
 .remote-debug-access-host{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .remote-debug-address-actions{display:flex;align-items:center;flex:none;gap:.5rem;margin-left:auto}
@@ -66,5 +67,6 @@ export const REMOTE_DEBUG_LAYOUT = `
 .remote-debug-log{height:16rem;max-height:45dvh}
 .remote-debug-form{display:grid;min-width:0;gap:1rem}
 .remote-debug-form-width{width:100%;max-width:40rem;min-width:0}
+@container (max-width:25rem){.remote-debug-access-row:has(.remote-debug-path-badge),.remote-debug-access-row:has(.remote-debug-path-badge) .remote-debug-address-actions{gap:.25rem}}
 @container (max-width:40rem){.remote-debug-split>.pi-desk-ui-navigation,.remote-debug-profile-description,.remote-debug-navigation,.remote-debug-project-title{display:none}.remote-debug-mobile-project{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:.5rem}}
 `

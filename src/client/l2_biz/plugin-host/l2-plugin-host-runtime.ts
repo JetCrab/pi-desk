@@ -3,6 +3,7 @@
 import { replaceL4HostSettings } from '@client/l4_foundation/locale/l4-region-store'
 import type { PiDeskBrowserChannel, PluginPushMessage } from '@jetcrab/pi-desk-sdk/browser'
 import { L2ChatSocketContracts } from '@common/l2_biz/chat/l2-chat-websocket-contract'
+import { L4ClientTunnelResolveContract } from '@common/l4_foundation/tunnel/l4-client-tunnel-contract'
 import { L2PluginSocketContracts } from '@common/l2_biz/plugin/l2-plugin-websocket-contract'
 import {
   L2AppBootstrapResponseSchema,
@@ -83,6 +84,8 @@ function createTransport(
 
   return {
     pi,
+    resolveClientTunnel: (remotePort) =>
+      owner.request(L4ClientTunnelResolveContract, { remotePort }),
     listBrowserEntries: async () => {
       if (!canLoadEntries()) return []
       const { entries } = await owner.request(L3PluginBrowserSocketContracts.list, {})

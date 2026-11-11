@@ -1,4 +1,4 @@
-use crate::{logging, reminder, runtime::ShellState, window_chrome};
+use crate::{logging, reminder, runtime::ShellState, tunnels, window_chrome};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -46,6 +46,10 @@ pub(crate) fn window_origin(app: &AppHandle, label: &str) -> Option<url::Origin>
 }
 
 pub(crate) fn reminder_origin(app: &AppHandle, label: &str) -> Option<url::Origin> {
+    workspace_origin(app, label)
+}
+
+pub(crate) fn workspace_origin(app: &AppHandle, label: &str) -> Option<url::Origin> {
     if !label.starts_with("browser-") || label.starts_with("browser-preview-") {
         return None;
     }
@@ -212,6 +216,7 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
                 open_external(&navigate_app, next, "navigation").is_err()
             };
             if accepted {
+                tunnels::invalidate(&navigate_app, &navigate_label);
                 if let Some(window) = navigate_app.get_webview_window(&navigate_label) {
                     window_chrome::restore(&window, "navigation");
                     if !preview {
@@ -252,6 +257,7 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
         })
         .on_page_load(move |window, payload| {
             if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                tunnels::invalidate(window.app_handle(), window.label());
                 window_chrome::restore(&window, "page-started");
                 if !preview {
                     reminder::clear(&window);
@@ -259,6 +265,9 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
             }
             #[cfg(any(windows, target_os = "macos"))]
             if !preview && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                if let Err(error) = tunnels::inject(&window) {
+                    tunnels::failed(window.app_handle(), window.label(), &error);
+                }
                 if let Err(error) = window.eval(&reminder_script) {
                     let state = window.app_handle().state::<ShellState>();
                     logging::write(
@@ -280,6 +289,12 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
                 ),
             );
         });
+    #[cfg(any(windows, target_os = "macos"))]
+    let builder = if preview {
+        builder
+    } else {
+        builder.initialization_script(tunnels::script(&url.origin(), None))
+    };
     #[cfg(windows)]
     let builder = builder.initialization_script(include_str!("window-chrome.js"));
     #[cfg(not(target_os = "macos"))]
@@ -300,6 +315,7 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
     drop(labels);
     if !preview {
         reminder::install(&window)?;
+        tunnels::install(&window)?;
     }
     let app_for_close = app.clone();
     let target = value.to_string();
@@ -320,6 +336,7 @@ fn open_page(app: &AppHandle, value: &str, url: Url, preview: bool) -> Result<()
             }
         }
         if matches!(event, WindowEvent::Destroyed) {
+            tunnels::invalidate(&app_for_close, &label);
             let state = app_for_close.state::<ShellState>();
             if let Ok(mut labels) = state.windows.labels.lock() {
                 if labels.get(&key).map(|registered| &registered.label) == Some(&label) {
@@ -369,6 +386,7 @@ fn remove_matching(app: &AppHandle, matches: impl Fn(&BrowserWindow) -> bool) {
         })
         .unwrap_or_default();
     for label in labels {
+        tunnels::invalidate(app, &label);
         if let Some(window) = app.get_webview_window(&label) {
             if let Err(error) = window.destroy() {
                 logging::write(
@@ -409,6 +427,7 @@ fn watch_process(window: &WebviewWindow, invalid: Option<Arc<AtomicBool>>) -> Re
                                 | COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
                         );
                         if requires_recreation {
+                            tunnels::invalidate(&event_app, &event_label);
                             if let Some(invalid) = &invalid {
                                 invalid.store(true, Ordering::Release);
                             }

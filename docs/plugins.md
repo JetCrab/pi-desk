@@ -337,6 +337,32 @@ try {
 
 业务数据只传递必要的日志摘要和路径，不把日志正文放入 Method 返回、Plugin Push、状态槽位或 Pi JSONL。
 
+## 当前客户端访问后端 TCP 端口
+
+Browser Host 的可选 `host.tunnels` 将当前工作台后端的已发布 TCP 端口映射到访问设备；插件不需要查询提供端身份或传入隧道密钥：
+
+```ts
+const tunnels = host.tunnels
+if (tunnels) {
+  const mapping = tunnels.open({ remotePort: 43191 })
+  const unsubscribe = mapping.subscribe(() => {
+    const state = mapping.getSnapshot()
+    // status 为 ready 后，使用 127.0.0.1:<state.localPort>。
+  })
+  // 业务结束时释放；需要跨弹窗保持时由 Browser Entry 持有句柄。
+  unsubscribe()
+  await mapping.close()
+}
+```
+
+`open()` 同步返回句柄，不表示已连接。快照为 `{ status, localPort, path, error }`：status 为 `connecting / ready / recovering / failed / closed`；localPort 未分配时为 null；path 为 `direct / relay / unknown / null`。unknown 表示尚无真实路径，不能显示成直连；null 表示普通本机访问或无有效路径。`subscribe()` 返回解除观察函数，不关闭连接；`close()` 幂等并等待原生资源释放，失败会拒绝 Promise。旧宿主或远端网页没有原生客户端能力时 `host.tunnels` 缺失。
+
+- 当前工作台使用 `localhost`、IPv4 回环或 `::1` 时直接返回请求端口，不查询发布或建立隧道。
+- 跨电脑访问需要 Windows/macOS 桌面能力及有效隧道配置。宿主经当前认证连接查询后端真实发布，再在访问设备分配回环端口；未发布、旧桌面不支持查询或两端控制服务地址不同会失败，不自动发布目标。
+- 只转发 TCP，自动尝试直连并回退中继，不修改手动隧道模式。HTTP URL、路径和业务认证由插件／目标服务负责。
+- 映射只存当前客户端内存，最多每插件64项、桌面总计128项；同一映射恢复期间保持本地端口，关闭重建不保证同号。不要将访问设备的映射状态写入后端共享状态。
+- 关闭贡献视图只解除视图订阅；插件 Browser Owner 释放、页面导航／销毁、客户端退出时宿主回收映射。旧句柄不能影响新插件实例。该能力不是同源插件之间的安全沙箱，不开放桌面任意命令或密钥读取。
+
 ## 更新生效
 
 插件界面可在用户点击按钮后重载指定会话的 Pi 配置：

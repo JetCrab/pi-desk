@@ -1,15 +1,17 @@
 use std::collections::BTreeMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Semaphore, SemaphorePermit, mpsc, watch};
 use tokio::time::Instant;
 
 use crate::config::{TunnelConfig, normalize_tunnel_config, require_ready};
 use crate::protocol::{LEASE_DURATION, RENEW_INTERVAL};
+use crate::publication_discovery::{DiscoveryListener, ResolvedPublication};
 use crate::runtime::{
     TunnelConnectionRow, TunnelEndpoint, TunnelEndpointConfig, TunnelForwarder, TunnelMode,
     TunnelPath, TunnelServiceConfig, TunnelTarget, generate_secret_key, provider_id,
@@ -28,6 +30,8 @@ const COMMAND_CAPACITY: usize = 64;
 const RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_STATUS_FAILURES: u8 = 3;
+// 同时约束命令队列中、探测中及已启动的自动监听，避免恢复期间累积 socket。
+static AUTO_FORWARD_SLOTS: Semaphore = Semaphore::const_new(128);
 
 type SharedSnapshot = Arc<Mutex<TunnelWorkerSnapshot>>;
 type SharedEndpoint = Arc<tokio::sync::Mutex<Option<TunnelEndpoint>>>;
@@ -38,6 +42,7 @@ pub struct TunnelWorkerConfig {
     pub control_key: [u8; 32],
     pub provider_secret_key: Option<[u8; 32]>,
     pub mode: TunnelMode,
+    pub discovery_scope: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,7 +105,9 @@ enum Command {
     Publish(TunnelPublicationConfig),
     Unpublish(u16),
     Forward(TunnelForwardConfig),
+    ForwardAuto(TunnelForwardConfig, ForwardListener),
     StopForward(u16),
+    StopForwardAndWait(u16, std::sync::mpsc::Sender<Result<(), String>>),
     SetMode(TunnelMode),
 }
 
@@ -136,8 +143,48 @@ impl TunnelWorkerHandle {
         self.submit(Command::Forward(config))
     }
 
+    pub fn forward_auto(&self, provider_id: String, remote_port: u16) -> Result<u16, String> {
+        if remote_port == 0 {
+            return Err("隧道端口必须是 1 到 65535 的有效端口".to_owned());
+        }
+        crate::protocol::parse_key_hex(&provider_id)
+            .map_err(|_| "提供端标识必须是64位十六进制公钥".to_owned())?;
+        let slot = AUTO_FORWARD_SLOTS
+            .try_acquire()
+            .map_err(|_| "自动本地映射数量已达上限".to_owned())?;
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .map_err(|error| format!("无法监听TCP端口：{error}"))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| format!("无法设置TCP监听为非阻塞模式：{error}"))?;
+        let local_port = listener
+            .local_addr()
+            .map_err(|error| format!("无法读取TCP监听地址：{error}"))?
+            .port();
+        self.submit(Command::ForwardAuto(
+            TunnelForwardConfig {
+                provider_id,
+                remote_port,
+                local_port,
+            },
+            ForwardListener {
+                listener,
+                _slot: slot,
+            },
+        ))?;
+        Ok(local_port)
+    }
+
     pub fn stop_forward(&self, local_port: u16) -> Result<(), String> {
         self.submit(Command::StopForward(local_port))
+    }
+
+    pub fn stop_forward_and_wait(&self, local_port: u16) -> Result<(), String> {
+        let (reply, result) = std::sync::mpsc::channel();
+        self.submit(Command::StopForwardAndWait(local_port, reply))?;
+        result
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|_| "等待本地映射释放超时或后台已退出".to_owned())?
     }
 
     pub fn set_mode(&self, mode: TunnelMode) -> Result<(), String> {
@@ -253,14 +300,14 @@ impl Cancellation {
     }
 }
 
-struct Item<C> {
+struct Item<C, T = ()> {
     config: C,
     stop: watch::Sender<bool>,
-    task: tokio::task::JoinHandle<Result<(), String>>,
+    task: tokio::task::JoinHandle<Result<T, String>>,
 }
 
-impl<C> Item<C> {
-    async fn shutdown(self) -> Result<(), String> {
+impl<C, T> Item<C, T> {
+    async fn shutdown(self) -> Result<T, String> {
         self.stop.send_replace(true);
         self.task.await.map_err(|_| "隧道任务意外退出".to_owned())?
     }
@@ -275,7 +322,7 @@ struct Worker {
     snapshot: SharedSnapshot,
     stop: watch::Receiver<bool>,
     publications: BTreeMap<u16, Item<TunnelPublicationConfig>>,
-    forwards: BTreeMap<u16, Item<TunnelForwardConfig>>,
+    forwards: BTreeMap<u16, Item<TunnelForwardConfig, Option<ForwardListener>>>,
     cleanup_error: Option<String>,
 }
 
@@ -341,11 +388,19 @@ impl Worker {
             }
             Command::Forward(config) => {
                 if self.remove_forward(config.local_port).await.is_ok() {
-                    self.spawn_forward(config);
+                    self.spawn_forward(config, None);
+                }
+            }
+            Command::ForwardAuto(config, listener) => {
+                if self.remove_forward(config.local_port).await.is_ok() {
+                    self.spawn_forward(config, Some(listener));
                 }
             }
             Command::StopForward(port) => {
                 let _ = self.remove_forward(port).await;
+            }
+            Command::StopForwardAndWait(port, reply) => {
+                let _ = reply.send(self.remove_forward(port).await);
             }
             Command::SetMode(mode) if mode != self.config.mode => {
                 self.change_mode(mode).await;
@@ -384,6 +439,8 @@ impl Worker {
             config: config.clone(),
             identity: self.identity.clone(),
             secret: self.config.provider_secret_key.unwrap(),
+            discovery_scope: self.config.discovery_scope.clone(),
+            control_server_url: self.config.control_server_url.clone(),
             control: self.control.clone(),
             endpoint: self.provider.clone(),
             snapshot: self.snapshot.clone(),
@@ -394,7 +451,7 @@ impl Worker {
         self.publications.insert(port, Item { config, stop, task });
     }
 
-    fn spawn_forward(&mut self, config: TunnelForwardConfig) {
+    fn spawn_forward(&mut self, config: TunnelForwardConfig, listener: Option<ForwardListener>) {
         let port = config.local_port;
         self.snapshot
             .lock()
@@ -416,6 +473,7 @@ impl Worker {
         let (stop, cancel) = self.cancellation();
         let forward = Forward {
             config: config.clone(),
+            listener,
             mode: self.config.mode,
             control: self.control.clone(),
             endpoint: self.visitor.clone(),
@@ -549,7 +607,7 @@ impl Worker {
         for item in items.into_values() {
             let config = item.config.clone();
             match item.shutdown().await {
-                Ok(()) => configs.push(config),
+                Ok(listener) => configs.push((config, listener)),
                 Err(error) => self.forward_cleanup_failed(config.local_port, &error),
             }
         }
@@ -558,7 +616,7 @@ impl Worker {
             && let Err(error) = endpoint.shutdown().await
         {
             self.record_cleanup(Err(error.clone()));
-            for config in &configs {
+            for (config, _) in &configs {
                 self.forward_cleanup_failed(config.local_port, &error);
             }
             configs.clear();
@@ -572,8 +630,8 @@ impl Worker {
                 .retain(|row| row.phase == TunnelPhase::Failed);
         }
         if !*self.stop.borrow() {
-            for config in configs {
-                self.spawn_forward(config);
+            for (config, listener) in configs {
+                self.spawn_forward(config, listener);
             }
         }
         tracing::info!("隧道访问模式切换已处理，提供端保持运行");
@@ -673,6 +731,8 @@ struct Publication {
     config: TunnelPublicationConfig,
     identity: String,
     secret: [u8; 32],
+    discovery_scope: Option<PathBuf>,
+    control_server_url: String,
     control: ControlIo,
     endpoint: SharedEndpoint,
     snapshot: SharedSnapshot,
@@ -695,6 +755,7 @@ impl Publication {
     }
 
     async fn run(mut self) -> Result<(), String> {
+        let discovery = self.start_discovery();
         let result = self.run_inner().await;
         if let Err(error) = &result {
             self.update(TunnelPhase::Failed, error, None);
@@ -703,7 +764,39 @@ impl Publication {
                 "隧道发布任务停止：{error}"
             );
         }
+        if let Some(discovery) = discovery {
+            discovery.shutdown().await;
+        }
         result.and(self.cleanup_error.take().map_or(Ok(()), Err))
+    }
+
+    fn start_discovery(&self) -> Option<DiscoveryListener> {
+        let scope = self.discovery_scope.as_ref()?;
+        let port = self.config.local_addr.port();
+        let publication = ResolvedPublication {
+            control_server_url: self.control_server_url.clone(),
+            provider_id: self.identity.clone(),
+            remote_port: port,
+        };
+        let snapshot = self.snapshot.clone();
+        let cancel = self.cancel.clone();
+        match DiscoveryListener::start(scope, port, move || {
+            if cancel.is_cancelled() {
+                return None;
+            }
+            let state = snapshot.lock().unwrap();
+            state
+                .publications
+                .iter()
+                .any(|row| row.local_port == port && row.phase == TunnelPhase::Listening)
+                .then(|| publication.clone())
+        }) {
+            Ok(listener) => Some(listener),
+            Err(error) => {
+                tracing::warn!(port, "{error}；公网发布继续运行");
+                None
+            }
+        }
     }
 
     fn record_close(&mut self, result: Result<(), String>) {
@@ -950,8 +1043,14 @@ impl Publication {
     }
 }
 
+struct ForwardListener {
+    listener: TcpListener,
+    _slot: SemaphorePermit<'static>,
+}
+
 struct Forward {
     config: TunnelForwardConfig,
+    listener: Option<ForwardListener>,
     mode: TunnelMode,
     control: ControlIo,
     endpoint: SharedEndpoint,
@@ -975,7 +1074,7 @@ impl Forward {
         }
     }
 
-    async fn run(mut self) -> Result<(), String> {
+    async fn run(mut self) -> Result<Option<ForwardListener>, String> {
         let mut forwarder = None;
         let result = self.maintain(&mut forwarder).await;
         let closed = match forwarder {
@@ -998,7 +1097,12 @@ impl Forward {
         {
             row.path = TunnelPath::Unknown;
         }
-        result
+        result?;
+        if self.cancel.is_cancelled() {
+            Ok(self.listener.take())
+        } else {
+            Ok(None)
+        }
     }
 
     async fn maintain(&mut self, forwarder: &mut Option<TunnelForwarder>) -> Result<(), String> {
@@ -1108,8 +1212,18 @@ impl Forward {
                 continue;
             }
             if forwarder.is_none() {
-                let bind_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, self.config.local_port));
-                match visitor.forward(bind_addr, target).await {
+                let started = match &self.listener {
+                    Some(reserved) => match reserved.listener.try_clone() {
+                        Ok(listener) => visitor.forward_listener(listener, target).await,
+                        Err(error) => Err(format!("无法克隆TCP监听：{error}")),
+                    },
+                    None => {
+                        let bind_addr =
+                            SocketAddr::from((Ipv4Addr::LOCALHOST, self.config.local_port));
+                        visitor.forward(bind_addr, target).await
+                    }
+                };
+                match started {
                     Ok(listener) => *forwarder = Some(listener),
                     Err(error) => {
                         self.update(TunnelPhase::Failed, &error, None);

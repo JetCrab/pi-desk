@@ -42,6 +42,37 @@ test('锁文件变化仅影响实际使用该依赖的包并包含传递依赖',
   assert.equal(lockDependencyContent(lock, 'plugins/missing'), null)
 })
 
+for (const resolution of [
+  '{integrity: sha512-fixture, tarball: https://mirror.example.test/nested.tgz}',
+  '\n      {\n        integrity: sha512-fixture,\n        tarball: https://mirror.example.test/nested.tgz\n      }'
+]) {
+  test(`相同integrity的依赖换源不影响发布内容：${resolution.includes('\n') ? '多行' : '行内'}`, () => {
+    const before = lock.replace('{integrity: nested}', resolution)
+    const after = before.replace('https://mirror.example.test/', 'https://registry.npmjs.org/')
+    const importer = 'plugins/pi-desk-usage'
+    assert.deepEqual(
+      lockDependencyContent(before, importer),
+      lockDependencyContent(after, importer)
+    )
+    assert.notDeepEqual(
+      lockDependencyContent(before, importer),
+      lockDependencyContent(after.replace('sha512-fixture', 'sha512-changed'), importer)
+    )
+  })
+}
+
+test('没有integrity的依赖仍按下载地址变化判定内容变化', () => {
+  const before = lock.replace(
+    '{integrity: nested}',
+    '{tarball: https://mirror.example.test/nested.tgz}'
+  )
+  const after = before.replace('https://mirror.example.test/', 'https://registry.npmjs.org/')
+  assert.notDeepEqual(
+    lockDependencyContent(before, 'plugins/pi-desk-usage'),
+    lockDependencyContent(after, 'plugins/pi-desk-usage')
+  )
+})
+
 test('部分原包及发布结果跨失败保留，但不替代完整构建与安装验收', async () => {
   const npm = await readWorkflow('release-npm')
   const dev = await readWorkflow('release-dev')

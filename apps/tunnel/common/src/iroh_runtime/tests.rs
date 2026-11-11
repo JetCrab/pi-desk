@@ -339,6 +339,39 @@ async fn rejected_forward(fixture: &Fixture, target: TunnelTarget) -> RuntimeRes
 }
 
 #[tokio::test]
+async fn prebound_listener_forwards_tcp_without_rebinding_and_releases_on_shutdown() {
+    let fixture = Fixture::start(TunnelMode::Auto, TunnelMode::RelayOnly)
+        .await
+        .expect("应启动隔离隧道");
+    let result = timeout(Duration::from_secs(30), async {
+        fixture
+            .provider
+            .register_service(fixture.service("reserved"))
+            .await?;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(text)?;
+        let addr = listener.local_addr().map_err(text)?;
+        check(
+            std::net::TcpListener::bind(addr).is_err(),
+            "预绑定期间端口必须保持独占",
+        )?;
+        let mapping = fixture
+            .visitor
+            .forward_listener(listener, fixture.target("reserved"))
+            .await?;
+        check(mapping.local_addr() == addr, "接管监听不能换号")?;
+        let result = payload(&mapping, 4096).await;
+        mapping.shutdown().await?;
+        std::net::TcpListener::bind(addr).map_err(text)?;
+        result
+    })
+    .await;
+    fixture.close().await;
+    result
+        .expect("预绑定转发不应超时")
+        .expect("应保留数据和释放监听");
+}
+
+#[tokio::test]
 async fn auto_endpoint_sends_quic_probe_to_custom_relay_udp_port() {
     let fixture = Fixture::start(TunnelMode::RelayOnly, TunnelMode::RelayOnly)
         .await

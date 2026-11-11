@@ -1,4 +1,4 @@
-import type { BrowserPluginHost, PluginJsonObject } from '@jetcrab/pi-desk-sdk/browser'
+import type { BrowserPluginHost } from '@jetcrab/pi-desk-sdk/browser'
 import {
   remoteDebugRangesSchema,
   remoteDebugSettingsSchema,
@@ -9,6 +9,8 @@ import {
   type RemoteDebugRegistration
 } from './l4-remote-debug-contract.js'
 import type { RemoteDebugProject, RemoteDebugRun } from './runtime.js'
+
+export { readRuns } from './l4-browser-runs.js'
 
 export interface RangeEditor {
   localStart: string
@@ -76,13 +78,6 @@ export async function deleteRegistration(
       tunnelServer: item.tunnelServer
     })
   )
-}
-
-export function readRuns(value: PluginJsonObject | null): RemoteDebugRun[] {
-  if (!value || !Array.isArray(value.runs)) return []
-  return value.runs.filter(
-    (run) => run && typeof run === 'object' && !Array.isArray(run) && typeof run.runId === 'string'
-  ) as unknown as RemoteDebugRun[]
 }
 
 export function isActiveRun(run: RemoteDebugRun): boolean {

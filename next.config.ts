@@ -20,6 +20,7 @@ function resolveVersionUpdatedAt(): string {
 
 const nextConfig: NextConfig = {
   agentRules: false,
+  allowedDevOrigins: process.env.PI_DESK_E2E === '1' ? ['client-tunnel.test'] : undefined,
   typescript: {
     // 开发测试包以实际编译和启动为门禁，main及本机构建仍执行完整类型检查。
     ignoreBuildErrors:

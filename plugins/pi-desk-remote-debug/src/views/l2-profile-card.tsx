@@ -12,6 +12,7 @@ import {
 import type { RemoteDebugProjectProfile, RemoteDebugRun } from '../runtime.js'
 import { formatRemoteDebugTime } from '../browser-time.js'
 import { CopyButton } from './l4-browser-ui.js'
+import type { RemoteDebugTunnelSnapshot } from '../l4-browser-tunnels.js'
 
 function statusPresentation(status: RemoteDebugRun['status'] | undefined): {
   label: string
@@ -28,11 +29,13 @@ function statusPresentation(status: RemoteDebugRun['status'] | undefined): {
 function Address({
   host,
   title,
-  url
+  url,
+  pathLabel
 }: {
   host: BrowserPluginHost
   title: string
   url: string
+  pathLabel?: string | null
 }): React.JSX.Element {
   const address = new URL(url)
   return (
@@ -49,6 +52,9 @@ function Address({
         <span className="remote-debug-access-host">{address.hostname}</span>
         {address.port ? <span>:{address.port}</span> : null}
       </a>
+      {pathLabel ? (
+        <PluginBadge className="remote-debug-path-badge">{pathLabel}</PluginBadge>
+      ) : null}
       <div className="remote-debug-address-actions">
         <CopyButton host={host} value={url} />
         <PluginButton
@@ -70,6 +76,8 @@ export function ProfileCard({
   active,
   pending,
   host,
+  mappingEnabled,
+  tunnel,
   locale,
   timeZone,
   onStart,
@@ -83,6 +91,8 @@ export function ProfileCard({
   active: RemoteDebugRun | null
   pending: string | null
   host: BrowserPluginHost
+  mappingEnabled: boolean
+  tunnel: RemoteDebugTunnelSnapshot | null
   locale: string
   timeZone: string
   onStart(): void
@@ -95,7 +105,29 @@ export function ProfileCard({
   const run = active ?? latest
   const status = statusPresentation(run?.status)
   const restarting = pending === `restart:${cwd}:${profile.name}`
-  const localUrl = active?.status !== 'stopping' ? active?.localUrl : null
+  let localUrl = active?.status !== 'stopping' ? active?.localUrl : null
+  let pathLabel: string | null = null
+  let connectionStatus: string | null = null
+  if (mappingEnabled && active && active.status !== 'stopping') {
+    localUrl = null
+    if (tunnel?.status === 'ready') {
+      if (tunnel.path === null) {
+        localUrl = active.localUrl
+      } else if (tunnel.localPort !== null) {
+        localUrl = `http://127.0.0.1:${tunnel.localPort}`
+        pathLabel = tunnel.path === 'direct' ? '直连' : tunnel.path === 'relay' ? '中继' : '已连接'
+      }
+      if (!localUrl) connectionStatus = '本地连接尚未就绪'
+    } else if (tunnel?.status === 'failed') {
+      connectionStatus = `本地连接失败${tunnel.error ? `：${tunnel.error}` : ''}`
+    } else if (tunnel?.status === 'recovering') {
+      connectionStatus = '正在恢复本地连接…'
+    } else if (tunnel?.status === 'closed') {
+      connectionStatus = '本地连接已关闭'
+    } else {
+      connectionStatus = active.status === 'starting' ? '等待调试入口就绪' : '正在建立本地连接…'
+    }
+  }
   const publicUrl = active?.status === 'running' ? active.publicUrl : null
   return (
     <PluginCard
@@ -154,7 +186,19 @@ export function ProfileCard({
           </PluginButton>
         )}
       </div>
-      {localUrl ? <Address host={host} title="本地" url={localUrl} /> : null}
+      {localUrl ? <Address host={host} title="本地" url={localUrl} pathLabel={pathLabel} /> : null}
+      {connectionStatus ? (
+        <div className="remote-debug-access-row" role="group" aria-label="本地地址">
+          <span className="remote-debug-caption">本地</span>
+          <span
+            className="remote-debug-connection-status"
+            role="status"
+            style={tunnel?.status === 'failed' ? { color: 'var(--destructive)' } : undefined}
+          >
+            {connectionStatus}
+          </span>
+        </div>
+      ) : null}
       {publicUrl ? <Address host={host} title="远程" url={publicUrl} /> : null}
       {details ? (
         <div className="remote-debug-details">

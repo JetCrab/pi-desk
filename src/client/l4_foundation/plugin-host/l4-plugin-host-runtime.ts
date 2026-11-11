@@ -59,6 +59,8 @@ import {
   subscribeL4HostSettings
 } from '@client/l4_foundation/locale/l4-region-store'
 import { L4PluginLogHostRuntime, type L4PluginLogChannel } from './l4-plugin-log-runtime'
+import { L4ClientTunnelHostRuntime } from '@client/l4_foundation/tunnel/l4-client-tunnels'
+import type { L4TunnelPublication } from '@common/l4_foundation/tunnel/l4-client-tunnel-contract'
 import {
   disposeL4PluginResource as disposePluginResource,
   runL4PluginCallback as runPluginCallback
@@ -147,6 +149,7 @@ export interface L4PluginHostTransport {
   subscribePush(listener: (message: PluginPushMessage) => void): () => void
   createPiDeskChannel(pluginName: string): PiDeskBrowserChannel
   createLogChannel(pluginName: string): L4PluginLogChannel
+  resolveClientTunnel?(remotePort: number): Promise<L4TunnelPublication>
 }
 
 export type L4PluginNotificationSink = (pluginName: string, input: BrowserNotificationInput) => void
@@ -1944,7 +1947,19 @@ export class L4PluginHostRuntime {
       this.logHosts.set(pluginName, logs)
     }
 
+    const tunnels = new L4ClientTunnelHostRuntime((remotePort) => {
+      assertActive()
+      const resolve = this.transport.resolveClientTunnel
+      if (!resolve) return Promise.reject(new Error('宿主不支持端口发布查询'))
+      return resolve(remotePort)
+    })
+    owner.subscriptionDisposers.add(() => tunnels.dispose())
+
     return {
+      get tunnels() {
+        assertActive()
+        return tunnels.available() ? tunnels : undefined
+      },
       settings: {
         getSnapshot: () => {
           assertActive()

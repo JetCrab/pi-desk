@@ -138,6 +138,7 @@ test('运行到公网就绪后可显式停止并完整清理', async () => {
   await waitFor(() => runtime.state().runs[0]?.status === 'running')
   assert.equal(runtime.state().runs[0]?.publicUrl, 'http://tunnel.example:43333')
   assert.equal(runtime.state().runs[0]?.localUrl, 'http://127.0.0.1:30333')
+  assert.equal(runtime.state().runs[0]?.gatewayPort, 39123)
   assert.deepEqual(tunnelPorts, { localPort: 39123, publicPort: 43333 })
 
   await runtime.stop(started.runId)
@@ -146,6 +147,7 @@ test('运行到公网就绪后可显式停止并完整清理', async () => {
   assert.equal(run?.status, 'stopped')
   assert.equal(run?.publicUrl, null)
   assert.equal(run?.localUrl, null)
+  assert.equal(run?.gatewayPort, null)
   assert.equal(command.stopCalls(), 1)
   assert.equal(tunnel.stopCalls(), 1)
   assert.equal(gatewayClosed, 1)

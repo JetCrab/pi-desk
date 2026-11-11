@@ -255,6 +255,22 @@ impl EndpointRuntime {
         transfer::start_forwarder(self.shared.clone(), bind_addr, target).await
     }
 
+    pub(crate) async fn forward_listener(
+        &self,
+        listener: std::net::TcpListener,
+        target: TunnelTarget,
+    ) -> RuntimeResult<ForwarderRuntime> {
+        validate_target(&target)?;
+        let _mutation = self.shared.mutations.lock().await;
+        self.shared.running()?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| format!("无法设置TCP监听为非阻塞模式：{error}"))?;
+        let listener = tokio::net::TcpListener::from_std(listener)
+            .map_err(|error| format!("无法接管TCP监听：{error}"))?;
+        transfer::start_forwarder_listener(self.shared.clone(), listener, target)
+    }
+
     pub(crate) fn connections(&self) -> Vec<TunnelConnectionRow> {
         let active = self.shared.active.lock().expect("活动流锁");
         let mut rows: Vec<TunnelConnectionRow> = Vec::new();
