@@ -1,0 +1,50 @@
+{
+  "runId": "42944150099",
+  "source": "4b6ba5e64aa0b88885e4ed6a4ba52ad31e8a7a20",
+  "versions": {
+    "pi-desk": "1.1.45",
+    "pi-desk-bg-run": "1.1.15",
+    "pi-desk-ctx": "1.1.16",
+    "pi-desk-deliverables": "1.1.17",
+    "pi-desk-quota-viewer": "1.1.18",
+    "pi-desk-remote-debug": "1.1.20",
+    "pi-desk-sdk": "1.1.16",
+    "pi-desk-subagent": "1.1.17",
+    "pi-desk-tibo-monitor": "1.1.16",
+    "pi-desk-todo": "1.0.15",
+    "pi-desk-tool-reason": "1.1.2",
+    "pi-desk-usage": "1.1.17",
+    "pi-desk-workspace": "1.1.16",
+    "windows": "1.1.35",
+    "macos": "1.1.35",
+    "linux": "1.1.35",
+    "android": "1.1.3",
+    "ios": "1.1.0",
+    "tunnel": "1.2.4"
+  },
+  "selected": [
+    "pi-desk",
+    "pi-desk-remote-debug",
+    "pi-desk-sdk",
+    "pi-desk-subagent",
+    "windows",
+    "macos",
+    "linux",
+    "tunnel"
+  ],
+  "npmVersions": {
+    "pi-desk-bg-run": "1.1.15-dev",
+    "pi-desk-ctx": "1.1.16-dev",
+    "pi-desk-deliverables": "1.1.17-dev",
+    "pi-desk-quota-viewer": "1.1.18-dev",
+    "pi-desk-tibo-monitor": "1.1.16-dev",
+    "pi-desk-tool-reason": "1.1.2-dev",
+    "pi-desk-usage": "1.1.17-dev",
+    "pi-desk-workspace": "1.1.16-dev",
+    "pi-desk-todo": "1.0.15-dev",
+    "pi-desk": "1.1.45-dev",
+    "pi-desk-remote-debug": "1.1.20-dev",
+    "pi-desk-sdk": "1.1.16-dev",
+    "pi-desk-subagent": "1.1.17-dev"
+  }
+}
