@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -107,6 +108,14 @@ test('Pi Desk npm 包声明正式入口和构建产物', () => {
   }
   const config = readFileSync(path.join(projectRoot, 'next.config.ts'), 'utf8')
   assert.match(config, /'temp\/build\/pi-desk\/release\/\.next'/u)
+})
+
+test('主包与 SDK 从同一路径解析原生密钥环，允许 Next 外置依赖', () => {
+  const rootRequire = createRequire(path.join(projectRoot, 'package.json'))
+  const sdkRequire = createRequire(path.join(projectRoot, 'plugins/pi-desk-sdk/package.json'))
+  const packageJson = rootRequire('./package.json')
+  assert.ok(packageJson.dependencies['@napi-rs/keyring'])
+  assert.equal(rootRequire.resolve('@napi-rs/keyring'), sdkRequire.resolve('@napi-rs/keyring'))
 })
 
 test('生产检查排除测试文件，开发检查仍覆盖根目录和插件测试', async () => {
