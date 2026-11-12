@@ -9,6 +9,7 @@ import { basename, dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import WebSocket from 'ws'
+import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
 import { assertPortReleased } from './l4-e2e-server-runtime.mjs'
 import {
   createCdpPage,
@@ -227,10 +228,9 @@ export async function createPiDeskCommandFixture(root, agentDir) {
         }
       })
     )
-    await writeFile(
-      join(agentDir, 'config', 'pi-desk-plugins.json'),
-      JSON.stringify({ downloadSource: { mode: 'custom', registry } })
-    )
+    await bindConfigStore('pi-desk', 'plugins', { agentDir }).set({
+      downloadSource: { mode: 'custom', registry }
+    })
   } catch (error) {
     server.closeAllConnections()
     await new Promise((done) => server.close(done))
