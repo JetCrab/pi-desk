@@ -4,6 +4,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { parse as parseYaml } from 'yaml'
+import { bindConfigStore, getUnifiedConfigPath } from '@jetcrab/pi-desk-sdk/config'
 import type { PiDeskPluginFacade } from '@jetcrab/pi-desk-sdk/entry'
 
 type ModuleRuntime = {
@@ -17,7 +19,7 @@ type TiboPlugin = {
 
 const moduleRuntime = Module as unknown as ModuleRuntime
 
-test('插件启动只读写最新分离配置，保留全部旧文件', async (context) => {
+test('插件启动使用统一配置与独立业务数据，保留全部旧文件', async (context) => {
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR
   const agentDir = await mkdtemp(join(tmpdir(), 'pi-desk-tibo-migration-'))
   context.after(async () => {
@@ -28,19 +30,15 @@ test('插件启动只读写最新分离配置，保留全部旧文件', async (c
   process.env.PI_CODING_AGENT_DIR = agentDir
 
   const previousPath = join(agentDir, 'pi-super-tibo-monitor.json')
-  const previousContent = JSON.stringify({
-    settings: { enabled: false, intervalSeconds: 60, retentionCount: 100, model: null },
-    records: []
-  })
+  const settings = { enabled: false, intervalSeconds: 60, retentionCount: 100, model: null }
+  const config = bindConfigStore('plugins', 'tibo-monitor', { agentDir })
+  await config.set({ settings })
   const oldContent = '{旧混合配置不应解析}'
   await writeFile(previousPath, oldContent, 'utf8')
   await writeFile(join(agentDir, 'pi-desk-tibo-monitor.json'), oldContent, 'utf8')
   await mkdir(join(agentDir, 'config'), { recursive: true })
   await mkdir(join(agentDir, 'pi-desk'), { recursive: true })
-  await writeFile(
-    join(agentDir, 'config', 'pi-desk-tibo-monitor.json'),
-    JSON.stringify({ settings: JSON.parse(previousContent).settings })
-  )
+  await writeFile(join(agentDir, 'config', 'pi-desk-tibo-monitor.json'), oldContent)
   await writeFile(join(agentDir, 'pi-desk', 'tibo-monitor.json'), JSON.stringify({ records: [] }))
 
   const originalLoad = moduleRuntime._load
@@ -76,6 +74,7 @@ test('插件启动只读写最新分离配置，保留全部旧文件', async (c
   }
 
   const facade = {
+    config,
     host: {
       settings: {
         getSnapshot: () => ({ region: { locale: 'zh-CN', timeZone: 'Asia/Shanghai' } }),
@@ -95,12 +94,12 @@ test('插件启动只读写最新分离配置，保留全部旧文件', async (c
   } as unknown as PiDeskPluginFacade
   const session = await plugin.setup(facade)
   context.after(() => session.dispose())
-  const currentPath = join(agentDir, 'config', 'pi-desk-tibo-monitor.json')
+  const currentPath = getUnifiedConfigPath(agentDir)
   const dataPath = join(agentDir, 'pi-desk', 'tibo-monitor.json')
 
   assert.equal(plugin.name, 'tibo-monitor')
-  assert.deepEqual(JSON.parse(await readFile(currentPath, 'utf8')), {
-    settings: JSON.parse(previousContent).settings
+  assert.deepEqual(parseYaml(await readFile(currentPath, 'utf8')).plugins['tibo-monitor'], {
+    settings
   })
   assert.deepEqual(JSON.parse(await readFile(dataPath, 'utf8')), {
     records: [],
@@ -108,4 +107,8 @@ test('插件启动只读写最新分离配置，保留全部旧文件', async (c
   })
   assert.equal(await readFile(previousPath, 'utf8'), oldContent)
   assert.equal(await readFile(join(agentDir, 'pi-desk-tibo-monitor.json'), 'utf8'), oldContent)
+  assert.equal(
+    await readFile(join(agentDir, 'config', 'pi-desk-tibo-monitor.json'), 'utf8'),
+    oldContent
+  )
 })

@@ -5,6 +5,8 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { parse as parseYaml } from 'yaml'
+import { bindConfigStore, getUnifiedConfigPath } from '@jetcrab/pi-desk-sdk/config'
 
 const require = createRequire(import.meta.url)
 const workspaceNodeModules = join(process.cwd(), 'node_modules')
@@ -30,8 +32,9 @@ const {
   parseContextIgnoreSettings,
   selectContextIgnoreProfile
 } = await jiti.import(new URL('../src/context-settings.ts', import.meta.url).pathname)
-const { defaultContextIgnoreSettingsPath, readContextIgnoreSettings, writeContextIgnoreSettings } =
-  await jiti.import(new URL('../src/context-settings-store.ts', import.meta.url).pathname)
+const { readContextIgnoreSettings, writeContextIgnoreSettings } = await jiti.import(
+  new URL('../src/context-settings-store.ts', import.meta.url).pathname
+)
 
 function settingsFixture() {
   return {
@@ -151,7 +154,7 @@ test('图片设置独立于token开关，关闭时仍保留用户填写的参数
   await mkdir(runs, { recursive: true })
   const root = await mkdtemp(join(runs, 'image-budget-'))
   context.after(() => rm(root, { recursive: true, force: true }))
-  const path = join(root, 'pi-desk-ctx.json')
+  const config = bindConfigStore('plugins', 'context-ignore', { agentDir: root })
   const imageBudget = {
     enabled: true,
     triggerBytes: 16 * 1024 * 1024,
@@ -159,11 +162,11 @@ test('图片设置独立于token开关，关闭时仍保留用户填写的参数
     keepAssistantTurns: 6,
     keepTextTurns: 2
   }
-  await writeContextIgnoreSettings({ ...settingsFixture(), enabled: false, imageBudget }, path)
-  assert.deepEqual((await readContextIgnoreSettings(path)).imageBudget, imageBudget)
+  await writeContextIgnoreSettings({ ...settingsFixture(), enabled: false, imageBudget }, config)
+  assert.deepEqual((await readContextIgnoreSettings(config)).imageBudget, imageBudget)
   const disabled = { ...imageBudget, enabled: false }
-  await writeContextIgnoreSettings({ ...settingsFixture(), imageBudget: disabled }, path)
-  assert.deepEqual((await readContextIgnoreSettings(path)).imageBudget, disabled)
+  await writeContextIgnoreSettings({ ...settingsFixture(), imageBudget: disabled }, config)
+  assert.deepEqual((await readContextIgnoreSettings(config)).imageBudget, disabled)
 })
 
 test('图片设置拒绝负数、非整数、超范围和目标大于触发值', () => {
@@ -190,56 +193,61 @@ test('图片设置拒绝负数、非整数、超范围和目标大于触发值',
   }
 })
 
-test('只使用config配置，旧root与pi-super文件不读取不修改不删除', async (context) => {
-  const originalAgentDir = process.env.PI_CODING_AGENT_DIR
+test('只使用统一配置，旧JSON配置保持原字节', async (context) => {
   const agentDir = await mkdtemp(join(tmpdir(), 'pi-desk-ctx-migration-'))
-  context.after(async () => {
-    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
-    else process.env.PI_CODING_AGENT_DIR = originalAgentDir
-    await rm(agentDir, { recursive: true, force: true })
-  })
-  process.env.PI_CODING_AGENT_DIR = agentDir
+  context.after(() => rm(agentDir, { recursive: true, force: true }))
 
-  const previousPath = join(agentDir, 'pi-super-ctx.json')
-  const rootPath = join(agentDir, 'pi-desk-ctx.json')
+  const previousPaths = [
+    join(agentDir, 'pi-super-ctx.json'),
+    join(agentDir, 'pi-desk-ctx.json'),
+    join(agentDir, 'config', 'pi-desk-ctx.json')
+  ]
   const previousContent = '{旧配置不应解析}'
-  await writeFile(previousPath, previousContent, 'utf8')
-  await writeFile(rootPath, previousContent, 'utf8')
+  await mkdir(join(agentDir, 'config'), { recursive: true })
+  for (const path of previousPaths) await writeFile(path, previousContent, 'utf8')
 
-  const currentPath = defaultContextIgnoreSettingsPath()
-  assert.equal(currentPath, join(agentDir, 'config', 'pi-desk-ctx.json'))
+  const config = bindConfigStore('plugins', 'context-ignore', { agentDir })
+  const currentPath = getUnifiedConfigPath(agentDir)
+  assert.equal(currentPath, join(agentDir, 'config', 'pi-desk.yaml'))
+  const defaults = await readContextIgnoreSettings(config)
+  assert.equal(defaults.enabled, true)
   assert.deepEqual(
-    await readContextIgnoreSettings(currentPath),
-    await readContextIgnoreSettings(join(agentDir, 'missing.json'))
+    defaults.profiles.map((profile) => profile.maxContextTokens),
+    [400_000, 600_000, undefined]
   )
   await assert.rejects(readFile(currentPath), { code: 'ENOENT' })
   const settings = await writeContextIgnoreSettings(
     { ...settingsFixture(), enabled: false },
-    currentPath
+    config
   )
-  assert.deepEqual(await readContextIgnoreSettings(), settings)
-  assert.equal(await readFile(previousPath, 'utf8'), previousContent)
-  assert.equal(await readFile(rootPath, 'utf8'), previousContent)
+  assert.deepEqual(await readContextIgnoreSettings(config), settings)
+  for (const path of previousPaths) {
+    assert.equal(await readFile(path, 'utf8'), previousContent)
+  }
 })
 
 test('配置文件保存实际 Token 并在读取时保持归一化顺序', async (context) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-desk-ctx-settings-'))
   context.after(() => rm(root, { recursive: true, force: true }))
-  const path = join(root, 'pi-desk-ctx.json')
+  const config = bindConfigStore('plugins', 'context-ignore', { agentDir: root })
+  const path = getUnifiedConfigPath(root)
 
-  const written = await writeContextIgnoreSettings(settingsFixture(), path)
-  const restored = await readContextIgnoreSettings(path)
+  const written = await writeContextIgnoreSettings(settingsFixture(), config)
+  const restored = await readContextIgnoreSettings(config)
   assert.deepEqual(restored, written)
   assert.deepEqual(
     restored.profiles.map((profile) => profile.maxContextTokens),
     [400_000, 600_000, undefined]
   )
 
-  const raw = JSON.parse(await readFile(path, 'utf8'))
+  const raw = parseYaml(await readFile(path, 'utf8')).plugins['context-ignore']
   assert.equal(raw.profiles[0].maxContextTokens, 400_000)
   assert.equal(raw.profiles[0].processTokenBudget, 20_000)
 
-  const replaced = await writeContextIgnoreSettings({ ...settingsFixture(), enabled: false }, path)
+  const replaced = await writeContextIgnoreSettings(
+    { ...settingsFixture(), enabled: false },
+    config
+  )
   assert.equal(replaced.enabled, false)
-  assert.equal((await readContextIgnoreSettings(path)).enabled, false)
+  assert.equal((await readContextIgnoreSettings(config)).enabled, false)
 })

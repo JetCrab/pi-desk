@@ -23,7 +23,10 @@ async function writeAgent(
   )
 }
 
-async function writeSettings(directory: string, agents: Record<string, unknown>): Promise<void> {
+async function writeProjectSettings(
+  directory: string,
+  agents: Record<string, unknown>
+): Promise<void> {
   await mkdir(join(directory, 'config'), { recursive: true })
   await writeFile(
     join(directory, 'config', 'pi-desk-subagent.json'),
@@ -96,14 +99,15 @@ test('agents 下的 disabled 会隐藏对应 Agent', async (context) => {
     tools: 'read',
     body: 'Research Prompt'
   })
-  await writeSettings(agentDir, { research: { disabled: true } })
+  const settings = { agents: { research: { disabled: true } } }
   await mkdir(cwd, { recursive: true })
 
   const result = discoverSubagentConfigs({
     cwd,
     projectTrusted: false,
     agentDir,
-    builtinAgentsDir: null
+    builtinAgentsDir: null,
+    settings
   })
 
   assert.deepEqual([...result.configs.keys()], ['explore'])
@@ -129,13 +133,13 @@ test('受信任项目 Agent 覆盖全局同名配置，模型设置按项目优�
     tools: 'external_research, read, grep, find, ls',
     body: '全局 Research Prompt'
   })
-  await writeSettings(agentDir, { research: { model: 'global/research', thinking: 'high' } })
+  const settings = { agents: { research: { model: 'global/research', thinking: 'high' } } }
   await writeAgent(join(projectRoot, '.pi', 'agents', 'explore.md'), {
     description: '项目探索',
     tools: 'read, grep',
     body: '项目 Explore Prompt'
   })
-  await writeSettings(join(projectRoot, '.pi'), {
+  await writeProjectSettings(join(projectRoot, '.pi'), {
     explore: { model: 'project/explore', thinking: 'low' }
   })
   await writeFile(join(agentDir, 'settings.json'), '{旧原生配置不应被解析}')
@@ -148,12 +152,13 @@ test('受信任项目 Agent 覆盖全局同名配置，模型设置按项目优�
     cwd: nestedCwd,
     projectTrusted: false,
     agentDir,
-    builtinAgentsDir: null
+    builtinAgentsDir: null,
+    settings
   })
   assert.equal(beforeTrust.configs.get('explore')?.systemPrompt, '全局 Explore Prompt')
   const projectConfigPath = join(projectRoot, '.pi', 'config', 'pi-desk-subagent.json')
   const projectConfig = await readFile(projectConfigPath, 'utf8')
-  collectSubagentCapabilityOptions([nestedCwd], undefined, agentDir)
+  collectSubagentCapabilityOptions([nestedCwd], undefined, agentDir, settings)
   assert.equal(await readFile(projectNativePath, 'utf8'), projectNative)
   assert.equal(await readFile(projectConfigPath, 'utf8'), projectConfig)
 
@@ -161,7 +166,8 @@ test('受信任项目 Agent 覆盖全局同名配置，模型设置按项目优�
     cwd: nestedCwd,
     projectTrusted: true,
     agentDir,
-    builtinAgentsDir: null
+    builtinAgentsDir: null,
+    settings
   })
   assert.deepEqual([...trusted.configs.keys()], ['explore', 'research'])
   assert.deepEqual(trusted.configs.get('explore'), {
@@ -182,16 +188,16 @@ test('受信任项目 Agent 覆盖全局同名配置，模型设置按项目优�
     cwd: nestedCwd,
     projectTrusted: false,
     agentDir,
-    builtinAgentsDir: null
+    builtinAgentsDir: null,
+    settings
   })
   assert.equal(untrusted.configs.get('explore')?.systemPrompt, '全局 Explore Prompt')
-  const globalSettings = JSON.parse(
-    await readFile(join(agentDir, 'config', 'pi-desk-subagent.json'), 'utf8')
-  )
+  assert.deepEqual(settings, {
+    agents: { research: { model: 'global/research', thinking: 'high' } }
+  })
   const projectSettings = JSON.parse(
     await readFile(join(projectRoot, '.pi', 'config', 'pi-desk-subagent.json'), 'utf8')
   )
-  assert.equal(globalSettings.agents.research.model, 'global/research')
   assert.equal(projectSettings.agents.explore.model, 'project/explore')
   assert.equal(await readFile(projectNativePath, 'utf8'), projectNative)
   assert.equal(await readFile(join(agentDir, 'settings.json'), 'utf8'), '{旧原生配置不应被解析}')
@@ -231,11 +237,13 @@ test('内置、全局和项目 Agent 按优先级覆盖，项目禁用配置覆�
     tools: 'ls',
     body: '项目独有 Prompt'
   })
-  await writeSettings(agentDir, {
-    shared: { model: 'global/model', thinking: 'medium', disabled: true },
-    'global-only': { disabled: true }
-  })
-  await writeSettings(join(projectRoot, '.pi'), {
+  const settings = {
+    agents: {
+      shared: { model: 'global/model', thinking: 'medium', disabled: true },
+      'global-only': { disabled: true }
+    }
+  }
+  await writeProjectSettings(join(projectRoot, '.pi'), {
     shared: { model: 'project/model', thinking: 'high', disabled: false },
     'project-only': { disabled: true }
   })
@@ -245,7 +253,8 @@ test('内置、全局和项目 Agent 按优先级覆盖，项目禁用配置覆�
     cwd,
     projectTrusted: true,
     agentDir,
-    builtinAgentsDir
+    builtinAgentsDir,
+    settings
   })
 
   assert.deepEqual([...result.configs.keys()], ['shared'])

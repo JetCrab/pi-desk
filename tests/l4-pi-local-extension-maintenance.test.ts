@@ -77,10 +77,14 @@ test('本地裸扩展卸载只移除来源入口和精确声明', async (t) => {
         writeFile(business, '{"enabled":true}')
       ])
       const source = await realpath(target)
-      preferences.setL4PiPluginEnabled(source, false, input.agentDir)
-      preferences.setL4PiPluginRegistry(source, 'https://registry.example.test', input.agentDir)
-      preferences.setL4PiPluginUpdateTag(source, 'dev', input.agentDir)
-      preferences.setL4PiPluginEnabled(other, false, input.agentDir)
+      await preferences.setL4PiPluginEnabled(source, false, input.agentDir)
+      await preferences.setL4PiPluginRegistry(
+        source,
+        'https://registry.example.test',
+        input.agentDir
+      )
+      await preferences.setL4PiPluginUpdateTag(source, 'dev', input.agentDir)
+      await preferences.setL4PiPluginEnabled(other, false, input.agentDir)
       await removeL4PiLocalExtension({ ...input, source })
       await assert.rejects(access(target), { code: 'ENOENT' })
       assert.equal(await readFile(other, 'utf8'), 'other')
@@ -211,7 +215,7 @@ test('本地裸扩展卸载只移除来源入口和精确声明', async (t) => {
         input.settingsPath,
         JSON.stringify({ extensions: [canonicalSource, 'extensions/gone/index.ts', 'keep.ts'] })
       )
-      preferences.setL4PiPluginEnabled(canonicalSource, false, input.agentDir)
+      await preferences.setL4PiPluginEnabled(canonicalSource, false, input.agentDir)
       await removeL4PiLocalExtension({ ...input, source: canonicalSource })
       assert.deepEqual(JSON.parse(await readFile(input.settingsPath, 'utf8')).extensions, [
         'keep.ts'

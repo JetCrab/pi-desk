@@ -158,9 +158,9 @@ test(
       const unavailable = 'npm:reload-unavailable@1.0.0'
       const packages = [{ source: enabled, skills: [], prompts: [] }, disabled, unavailable]
       await writeFile(join(agentDir, 'settings.json'), JSON.stringify({ packages }))
-      preferences.setL4PiPluginDownloadSource({ mode: 'custom', registry: origin }, agentDir)
-      preferences.setL4PiPluginUpdateTag(enabled, 'dev', agentDir)
-      preferences.setL4PiPluginEnabled(disabled, false, agentDir)
+      await preferences.setL4PiPluginDownloadSource({ mode: 'custom', registry: origin }, agentDir)
+      await preferences.setL4PiPluginUpdateTag(enabled, 'dev', agentDir)
+      await preferences.setL4PiPluginEnabled(disabled, false, agentDir)
       runtime = new L4PiGlobalPluginRuntime(root, agentDir)
       globalThis.__piDeskGlobalPluginRuntime = runtime
       management = new L2PluginManagement(
