@@ -18,11 +18,15 @@ export function collectedModelKey(provider: string, modelId: string): string {
   return `${provider}\u0000${modelId}`
 }
 
-export function readAccountModelSelections(root: RecordValue): L4AccountModelSelection[] {
-  if (root.modelSelections === undefined) return []
-  if (!Array.isArray(root.modelSelections)) throw new Error('modelSelections 必须是模型引用数组')
+export function readAccountModelSelections(
+  root: RecordValue,
+  preferences: RecordValue
+): L4AccountModelSelection[] {
+  if (preferences.modelSelections === undefined) return []
+  if (!Array.isArray(preferences.modelSelections))
+    throw new Error('modelSelections 必须是模型引用数组')
   const seen = new Set<string>()
-  return root.modelSelections.map((value) => {
+  return preferences.modelSelections.map((value) => {
     const ref = record(value)
     if (
       typeof ref.provider !== 'string' ||
@@ -54,9 +58,11 @@ export function readAccountModelSelections(root: RecordValue): L4AccountModelSel
   })
 }
 
-export function collectedModelKeys(root: RecordValue): Set<string> {
+export function collectedModelKeys(root: RecordValue, preferences: RecordValue): Set<string> {
   const keys = new Set(
-    readAccountModelSelections(root).map((item) => collectedModelKey(item.provider, item.modelId))
+    readAccountModelSelections(root, preferences).map((item) =>
+      collectedModelKey(item.provider, item.modelId)
+    )
   )
   for (const [provider, value] of Object.entries(record(root.providers))) {
     const models = record(value).models
@@ -72,9 +78,10 @@ export function collectedModelKeys(root: RecordValue): Set<string> {
 export function filterCollectedModels(
   models: readonly Model<Api>[],
   runtime: ModelRuntime,
-  root: RecordValue
+  root: RecordValue,
+  preferences: RecordValue
 ): Model<Api>[] {
-  const keys = collectedModelKeys(root)
+  const keys = collectedModelKeys(root, preferences)
   const registered = new Set(runtime.getRegisteredProviderIds())
   return models.filter(
     (model) =>
@@ -88,11 +95,13 @@ export function filterCollectedModels(
 export function applyAccountModelSelections(
   current: RecordValue,
   next: RecordValue,
+  preferences: RecordValue,
+  nextPreferences: RecordValue,
   selections: L4AccountModelSelection[],
   defaults: ModelRuntime
 ): void {
   const previous = new Map(
-    readAccountModelSelections(current).map((item) => [
+    readAccountModelSelections(current, preferences).map((item) => [
       collectedModelKey(item.provider, item.modelId),
       item
     ])
@@ -145,10 +154,10 @@ export function applyAccountModelSelections(
     }
   }
   const refs = selections.map(({ provider, modelId }) => ({ provider, modelId }))
-  const oldRefs = readAccountModelSelections(current).map(({ provider, modelId }) => ({
+  const oldRefs = readAccountModelSelections(current, preferences).map(({ provider, modelId }) => ({
     provider,
     modelId
   }))
-  if (!isDeepStrictEqual(oldRefs, refs)) next.modelSelections = refs
+  if (!isDeepStrictEqual(oldRefs, refs)) nextPreferences.modelSelections = refs
   if (!isDeepStrictEqual(providers, record(next.providers))) next.providers = providers
 }

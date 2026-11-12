@@ -210,8 +210,9 @@ test('真实 createChildSession Child 随父能力回调收紧恢复且保留角
   const agentDir = join(root, 'agent')
   const cwd = join(root, 'project')
   await mkdir(agentDir, { recursive: true })
+  await mkdir(join(agentDir, 'config'), { recursive: true })
   await writeFile(
-    join(agentDir, 'settings.json'),
+    join(agentDir, 'config', 'pi-desk-subagent.json'),
     JSON.stringify({ agents: { explore: { model: `${model.provider}/${model.id}` } } }),
     'utf8'
   )

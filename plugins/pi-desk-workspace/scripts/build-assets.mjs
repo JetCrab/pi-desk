@@ -13,8 +13,10 @@ async function copyDirectory(source, target) {
 
 await copyFile(join('src', 'command-runner.mjs'), join('dist', 'command-runner.mjs'))
 await rm(join('dist', 'browser'), { recursive: true, force: true })
-await rm(join('dist', 'skills'), { recursive: true, force: true })
-await copyDirectory('skills', join('dist', 'skills'))
+for (const directory of ['skills', 'prompts']) {
+  await rm(join('dist', directory), { recursive: true, force: true })
+  await copyDirectory(directory, join('dist', directory))
+}
 
 for (const name of await readdir('dist')) {
   if (

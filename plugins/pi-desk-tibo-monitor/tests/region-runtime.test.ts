@@ -17,7 +17,8 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 
 test('后台分析读取共享地区，改变地区及重启后不误用旧缓存', async (context) => {
   const root = await mkdtemp(join(tmpdir(), 'tibo-shared-region-'))
-  const path = join(root, 'store.json')
+  const path = join(root, 'config', 'pi-desk-tibo-monitor.json')
+  const dataPath = join(root, 'pi-desk', 'tibo-monitor.json')
   context.after(() => rm(root, { recursive: true, force: true }))
   let region: HostRegion = { locale: 'en', timeZone: 'America/New_York' }
   const listeners = new Set<() => void>()
@@ -87,10 +88,11 @@ test('后台分析读取共享地区，改变地区及重启后不误用旧缓�
   assert.deepEqual(regions[1], region)
   await runtime.dispose()
   assert.equal(listeners.size, 0)
-  const stored = JSON.parse(await readFile(path, 'utf8'))
+  const stored = JSON.parse(await readFile(dataPath, 'utf8'))
+  const config = JSON.parse(await readFile(path, 'utf8'))
   assert.deepEqual(stored.analysisRegion, region)
-  assert.equal('locale' in stored.settings, false)
-  assert.equal('timeZone' in stored.settings, false)
+  assert.equal('locale' in config.settings, false)
+  assert.equal('timeZone' in config.settings, false)
   runtime = await TiboRuntime.create(host, options)
   await runtime.translateRecord('post')
   assert.equal(regions.length, 2, '同一地区重启应复用缓存')

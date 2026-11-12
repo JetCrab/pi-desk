@@ -6,7 +6,7 @@
     "url": "git+https://github.com/JetCrab/pi-desk.git",
     "directory": "plugins/pi-desk-subagent"
   },
-  "version": "1.1.15",
+  "version": "1.1.18",
   "license": "Apache-2.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -47,6 +47,22 @@
   },
   "piDesk": {
     "entry": "./dist/pi-desk.js",
+    "environment": {
+      "files": [
+        {
+          "base": "config",
+          "path": "pi-desk-subagent.json",
+          "format": "json",
+          "secretPaths": []
+        },
+        {
+          "base": "project",
+          "path": "config/pi-desk-subagent.json",
+          "format": "json",
+          "secretPaths": []
+        }
+      ]
+    },
     "i18n": {
       "zh-CN": {
         "description": "将任务交给独立子代理执行，并在 Pi Desk 中查看子任务进度与结果。"

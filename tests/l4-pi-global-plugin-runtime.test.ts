@@ -2,6 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
+import type {
+  ChatInputAccepted,
+  PiDeskPluginFacade,
+  PluginWorkSession
+} from '@jetcrab/pi-desk-sdk/entry'
 import type { HostSettings } from '@jetcrab/pi-desk-sdk/settings'
 import {
   L4PiPluginOwnerRuntime,
@@ -10,6 +15,8 @@ import {
 import { L4PiPluginMethodNotFoundError } from '../src/server/l4_foundation/pi/l4-pi-plugin-method-runtime-core'
 
 const testRoot = resolve('temp', 'pi', 'l4-owner-replace', String(process.pid), 'agent')
+process.env.PI_CODING_AGENT_DIR = testRoot
+process.env.PI_CODING_AGENT_SESSION_DIR = join(testRoot, 'sessions')
 let fixtureIndex = 0
 
 test.after(async () => {
@@ -1008,4 +1015,425 @@ test('Server shutdown 中断活动 Global Method 且 disposer 幂等', async (co
   await runtime.dispose()
   assert.equal((globalThis as Record<string, unknown>)[marker], 1)
   delete (globalThis as Record<string, unknown>)[marker]
+})
+
+const eventHostsKey = '__piDeskNodeEventHosts'
+
+async function createEventRuntime(
+  context: test.TestContext,
+  names = ['event-publisher', 'event-subscriber'],
+  settings?: HostSettings
+): Promise<{ runtime: L4PiPluginOwnerRuntime; hosts: Record<string, PiDeskPluginFacade> }> {
+  const hosts: Record<string, PiDeskPluginFacade> = {}
+  Reflect.set(globalThis, eventHostsKey, hosts)
+  context.after(() => {
+    Reflect.deleteProperty(globalThis, eventHostsKey)
+  })
+  const runtime = await createRuntime(
+    context,
+    names.map((name) => ({
+      name,
+      piDesk: { entry: 'entry.js' },
+      files: {
+        'entry.js': `export default {
+          name: '${name}',
+          setup(plugin) {
+            globalThis.${eventHostsKey}[plugin.name] = plugin
+            plugin.registerMethod('emit', async (input) => {
+              plugin.host.events.emit(input.name, input.data)
+              return { ok: true }
+            })
+          }
+        }`
+      }
+    })),
+    settings
+  )
+  await runtime.initialize()
+  return { runtime, hosts }
+}
+
+function nextEventTurn(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
+}
+
+test('Node事件按发布Owner与名称路由，无历史回放，旧Push不公开，回调异常不影响Method', async (context) => {
+  const { runtime, hosts } = await createEventRuntime(context)
+  const a = hosts['event-publisher'].host.events
+  const b = hosts['event-subscriber'].host.events
+  const received: string[] = []
+  const logs = context.mock.method(console, 'warn', () => undefined)
+  const pushes: unknown[] = []
+  runtime.bindPushSender((message) => pushes.push(message))
+  a.emit('changed', { value: 'past' })
+  b.onPlugin('not-loaded', 'changed', () => {
+    received.push('wrong-publisher')
+  })
+  b.onPlugin('event-publisher', 'other', () => {
+    received.push('wrong-event')
+  })
+  b.onPlugin('event-publisher', 'changed', () => {
+    received.push('throw')
+    throw new Error('sync listener failure')
+  })
+  b.onPlugin('event-publisher', 'changed', async () => {
+    received.push('reject')
+    throw new Error('async listener failure')
+  })
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  b.onPlugin('event-publisher', 'changed', () => pending)
+  a.onPlugin('event-publisher', 'changed', (data) => {
+    received.push(`self:${data.value}`)
+  })
+  b.on('chat-input-accepted', () => {
+    received.push('host-event')
+  })
+  assert.deepEqual(received, [])
+  assert.deepEqual(
+    await runtime.invoke('event-publisher', 'emit', {
+      name: 'changed',
+      data: { value: 'current' }
+    }),
+    { ok: true }
+  )
+  await nextEventTurn()
+  assert.deepEqual(received, ['throw', 'reject', 'self:current'])
+  assert.equal(logs.mock.callCount(), 2)
+  for (const call of logs.mock.calls) {
+    assert.match(JSON.stringify(call.arguments), /event-publisher\/changed/)
+    assert.match(JSON.stringify(call.arguments), /event-subscriber/)
+    assert.doesNotMatch(JSON.stringify(call.arguments), /current/)
+  }
+  hosts['event-publisher'].pushGlobal('changed', { value: 'push' })
+  hosts['event-publisher'].pushSession(
+    { workId: 'work', sessionId: 'session', branchId: 'branch' },
+    'changed',
+    {}
+  )
+  b.emit('changed', { value: 'other-publisher' })
+  a.emit('chat-input-accepted', {})
+  assert.equal(pushes.length, 2)
+  assert.deepEqual(received, ['throw', 'reject', 'self:current'])
+  release()
+})
+
+test('Node事件支持迟加载与自身订阅，发布者替换保留订阅，订阅者替换和draining撤销旧权限', async (context) => {
+  const { runtime, hosts } = await createEventRuntime(context)
+  const publisher = hosts['event-publisher']
+  const subscriber = hosts['event-subscriber']
+  const received: number[] = []
+  const listener = (): void => {
+    received.push(1)
+  }
+  const off = subscriber.host.events.onPlugin('event-publisher', 'changed', listener)
+  subscriber.host.events.onPlugin('event-publisher', 'changed', listener)
+  publisher.host.events.emit('changed', {})
+  assert.equal(received.length, 2)
+  off()
+  off()
+  const sources = runtime.readDiagnostics().packages
+  const publisherSource = sources.find((item) => item.pluginName === publisher.name)!.source
+  await runtime.replaceSource(publisherSource, null)
+  subscriber.host.events.onPlugin('event-publisher', 'changed', () => {
+    received.push(2)
+  })
+  await runtime.replaceSource(publisherSource, publisherSource)
+  hosts['event-publisher'].host.events.emit('changed', {})
+  assert.deepEqual(received, [1, 1, 1, 2])
+  assert.throws(() => publisher.host.events.emit('changed', {}), /owner is no longer active/)
+  const subscriberSource = sources.find((item) => item.pluginName === subscriber.name)!.source
+  await runtime.replaceSource(subscriberSource, subscriberSource)
+  off()
+  hosts['event-publisher'].host.events.emit('changed', {})
+  assert.deepEqual(received, [1, 1, 1, 2])
+  const current = hosts['event-subscriber'].host.events
+  current.onPlugin('event-publisher', 'changed', listener)
+  await runtime.prepareReload()
+  assert.throws(() => current.on('settings', () => undefined), /owner is no longer active/)
+  assert.throws(
+    () => hosts['event-publisher'].host.events.emit('changed', {}),
+    /owner is no longer active/
+  )
+  assert.deepEqual(received, [1, 1, 1, 2])
+})
+
+test('Node事件严格拒绝非JSON、循环和超限对象，即使无人订阅；只读分发隔离原数据', async (context) => {
+  const { hosts } = await createEventRuntime(context)
+  const events = hosts['event-publisher'].host.events
+  const invalid: unknown[] = [
+    [],
+    null,
+    { value: undefined },
+    { value: () => undefined },
+    { value: Symbol('x') },
+    { value: BigInt(1) },
+    { value: NaN },
+    { value: Infinity },
+    { value: new Date() },
+    new (class Example {
+      value = 1
+    })(),
+    { value: [, 1] },
+    { value: 'x'.repeat(64 * 1024) },
+    { [Symbol('x')]: 1 },
+    Object.defineProperty({}, 'value', { value: 1, enumerable: false }),
+    {
+      get value() {
+        return 1
+      }
+    }
+  ]
+  const cycle: Record<string, unknown> = {}
+  cycle.self = cycle
+  invalid.push(cycle)
+  for (const value of invalid) {
+    assert.throws(() => events.emit('changed', value as never))
+  }
+  assert.throws(() => events.emit('Invalid', {}))
+  assert.throws(() => events.onPlugin('Invalid', 'changed', () => undefined))
+  assert.throws(() => events.onPlugin('event-publisher', 'Invalid', () => undefined))
+  const seen: unknown[] = []
+  const readonly: boolean[] = []
+  events.onPlugin('event-publisher', 'changed', (data) => {
+    readonly.push(Object.isFrozen(data), Object.isFrozen(data.nested))
+    readonly.push(!Reflect.set(data.nested as object, 'value', 2))
+  })
+  events.onPlugin('event-publisher', 'changed', (data) => {
+    seen.push(data)
+  })
+  const original = { nested: { value: 1 } }
+  events.emit('changed', original)
+  original.nested.value = 3
+  assert.deepEqual(seen, [{ nested: { value: 1 } }])
+  assert.deepEqual(readonly, [true, true, true])
+  let special: unknown
+  events.onPlugin('event-publisher', 'json-keys', (data) => {
+    special = data
+  })
+  const data = JSON.parse('{"__proto__":{"value":1},"constructor":2}')
+  events.emit('json-keys', data)
+  assert.deepEqual(special, data)
+})
+
+test('Node状态等待真实基线，首次只交付最新值，退订与Owner失效阻止迟到回调', async (context) => {
+  const { runtime, hosts } = await createEventRuntime(context)
+  const received: Array<readonly PluginWorkSession[]> = []
+  const events = hosts['event-subscriber'].host.events
+  events.on('work-sessions', (value) => {
+    received.push(value)
+  })
+  await nextEventTurn()
+  assert.equal(received.length, 0)
+  let update!: (sessions: readonly PluginWorkSession[]) => void
+  let accepted!: (event: ChatInputAccepted) => void
+  let releases = 0
+  const bind = (): (() => void) =>
+    runtime.bindSessionEvents({
+      subscribeWorkSessions: (listener) => {
+        update = listener
+        listener([])
+        return () => {
+          releases += 1
+        }
+      },
+      subscribeInputAccepted: (listener) => {
+        accepted = listener
+        return () => {
+          releases += 1
+        }
+      }
+    })
+  const unbind = bind()
+  const sessions: PluginWorkSession[] = [
+    {
+      source: { workId: 'work', sessionId: 'session', branchId: 'branch' },
+      cwd: 'C:/project',
+      status: 'idle'
+    }
+  ]
+  update(sessions)
+  update([{ ...sessions[0], status: 'main_running' }])
+  assert.equal(received.length, 0)
+  await nextEventTurn()
+  assert.deepEqual(
+    received.map((value) => value[0]?.status),
+    ['main_running']
+  )
+  update([{ ...sessions[0], status: 'main_running' }])
+  update(sessions)
+  assert.deepEqual(
+    received.map((value) => value[0]?.status),
+    ['main_running', 'idle']
+  )
+  const actions: ChatInputAccepted[] = []
+  events.on('chat-input-accepted', (event) => {
+    actions.push(event)
+  })
+  accepted({ source: sessions[0].source, tempId: 'accepted' })
+  assert.deepEqual(actions, [{ source: sessions[0].source, tempId: 'accepted' }])
+  let cancelled = 0
+  const off = events.on('work-sessions', () => {
+    cancelled += 1
+  })
+  off()
+  off()
+  const emptyValues: unknown[] = []
+  unbind()
+  events.on('work-sessions', (value) => {
+    emptyValues.push(value)
+  })
+  await nextEventTurn()
+  assert.deepEqual(emptyValues, [])
+  bind()
+  await nextEventTurn()
+  assert.deepEqual(emptyValues, [[]])
+  unbind()
+  assert.equal(releases, 2)
+  events.on('work-sessions', () => {
+    cancelled += 1
+  })
+  await runtime.dispose()
+  update(sessions)
+  accepted({ source: sessions[0].source, tempId: 'late' })
+  await nextEventTurn()
+  assert.equal(cancelled, 0)
+  assert.equal(actions.length, 1)
+  assert.equal(releases, 4)
+})
+
+test('Node设置事件首次在on返回后取最新值，旧subscribe只通知变化且释放无残留', async (context) => {
+  let snapshot = { region: { locale: 'en' as const, timeZone: 'UTC' } }
+  const listeners = new Set<() => void>()
+  const { runtime, hosts } = await createEventRuntime(context, ['event-publisher'], {
+    getSnapshot: () => snapshot,
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    }
+  })
+  const host = hosts['event-publisher'].host
+  const zones: string[] = []
+  const snapshotsAgree: boolean[] = []
+  let releaseListener!: () => void
+  const listenerPending = new Promise<void>((resolve) => {
+    releaseListener = resolve
+  })
+  let legacy = 0
+  host.settings.subscribe(() => {
+    legacy += 1
+  })
+  host.events.on('settings', async (value) => {
+    zones.push(value.region.timeZone)
+    snapshotsAgree.push(JSON.stringify(value) === JSON.stringify(host.settings.getSnapshot()))
+    await listenerPending
+  })
+  assert.deepEqual(zones, [])
+  snapshot = { region: { locale: 'en', timeZone: 'Asia/Shanghai' } }
+  for (const listener of listeners) listener()
+  await nextEventTurn()
+  assert.deepEqual(zones, ['Asia/Shanghai'])
+  assert.equal(legacy, 1)
+  for (const listener of listeners) listener()
+  assert.deepEqual(zones, ['Asia/Shanghai'])
+  snapshot = { region: { locale: 'en', timeZone: 'UTC' } }
+  for (const listener of listeners) listener()
+  assert.deepEqual(zones, ['Asia/Shanghai', 'UTC'])
+  assert.deepEqual(snapshotsAgree, [true, true])
+  releaseListener()
+  host.events.on('settings', () => {
+    throw new Error('late callback')
+  })
+  await runtime.dispose()
+  await nextEventTurn()
+  assert.equal(listeners.size, 0)
+})
+
+test('Node事件运行域独立，相同插件名不串扰，订阅不会加载发布者', async (context) => {
+  const first = await createEventRuntime(context)
+  const second = await createEventRuntime(context)
+  const calls: string[] = []
+  first.hosts['event-subscriber'].host.events.onPlugin('event-publisher', 'changed', () => {
+    calls.push('first')
+  })
+  second.hosts['event-subscriber'].host.events.onPlugin('event-publisher', 'changed', () => {
+    calls.push('second')
+  })
+  first.hosts['event-publisher'].host.events.emit('changed', {})
+  assert.deepEqual(calls, ['first'])
+  second.hosts['event-publisher'].host.events.emit('changed', {})
+  assert.deepEqual(calls, ['first', 'second'])
+  const packages = second.runtime.readDiagnostics().packages.length
+  second.hosts['event-subscriber'].host.events.onPlugin('not-loaded', 'changed', () => undefined)
+  assert.equal(second.runtime.readDiagnostics().packages.length, packages)
+})
+
+test('P2首末订阅控制列表来源，Owner换代与旧off不会释放新连接', async (context) => {
+  const { runtime, hosts } = await createEventRuntime(context)
+  let connections = 0
+  let releases = 0
+  let sourceListener: ((value: readonly PluginWorkSession[]) => void) | undefined
+  const bind = (): (() => void) =>
+    runtime.bindSessionEvents({
+      subscribeWorkSessions: (listener) => {
+        connections += 1
+        sourceListener = listener
+        listener([])
+        return () => {
+          releases += 1
+        }
+      },
+      subscribeInputAccepted: () => () => undefined
+    })
+  const unbind = bind()
+  assert.equal(connections, 0, '绑定组合根不能建立无人消费的列表订阅')
+  const first = hosts['event-publisher'].host.events.on('work-sessions', () => undefined)
+  const second = hosts['event-subscriber'].host.events.on('work-sessions', () => undefined)
+  assert.equal(connections, 1)
+  first()
+  first()
+  assert.equal(releases, 0)
+  second()
+  second()
+  assert.equal(releases, 1)
+  const staleListener = sourceListener!
+  const values: Array<readonly PluginWorkSession[]> = []
+  const oldOff = hosts['event-publisher'].host.events.on('work-sessions', (value) => {
+    values.push(value)
+  })
+  assert.equal(connections, 2)
+  staleListener([
+    {
+      source: { workId: 'stale', sessionId: 'stale', branchId: 'stale' },
+      cwd: 'C:/stale',
+      status: 'idle'
+    }
+  ])
+  await nextEventTurn()
+  assert.deepEqual(values, [[]], '旧来源的迟到更新不能覆盖新连接基线')
+  const source = runtime
+    .readDiagnostics()
+    .packages.find((item) => item.pluginName === 'event-publisher')!.source
+  await runtime.replaceSource(source, source)
+  assert.equal(releases, 2)
+  const currentOff = hosts['event-publisher'].host.events.on('work-sessions', () => undefined)
+  assert.equal(connections, 3)
+  oldOff()
+  assert.equal(releases, 2)
+  const newBinding = bind()
+  assert.equal(releases, 3)
+  assert.equal(connections, 4)
+  unbind()
+  assert.equal(releases, 3)
+  await runtime.prepareReload()
+  assert.equal(releases, 4, 'Owner draining后列表来源应释放')
+  currentOff()
+  newBinding()
+  newBinding()
+  await runtime.dispose()
+  assert.equal(releases, 4)
 })

@@ -13,6 +13,7 @@ export async function register(): Promise<void> {
     { getL4PiGlobalPluginRuntime },
     { executeL2PluginCommand },
     { initializeL2PluginManagement },
+    { initializeL2Environment },
     { initializeL4PiDeskCommands }
   ] = await Promise.all([
     import('@server/l1_entry/node/l1-app-socket-bridge'),
@@ -24,6 +25,7 @@ export async function register(): Promise<void> {
     import('@server/l4_foundation/pi/l4-pi-global-plugin-runtime'),
     import('@server/l2_biz/plugin-management/l2-plugin-commands'),
     import('@server/l2_biz/plugin-management/l2-plugin-management'),
+    import('@server/l2_biz/environment/l2-environment'),
     import('@server/l4_foundation/pidesk/l4-pidesk-runtime')
   ])
 
@@ -35,6 +37,7 @@ export async function register(): Promise<void> {
   initializeL2PluginManagement({
     runPluginRestart: (operation) => manage.runPluginRestart(operation)
   })
+  initializeL2Environment({ runPluginRestart: (operation) => manage.runPluginRestart(operation) })
   registerL1WebAuthRuntime(getL1WebAuthRuntime())
   await initializeL4PiDeskCommands(executeL2PluginCommand)
   const commandsInitializedAt = performance.now()
@@ -56,6 +59,10 @@ export async function register(): Promise<void> {
       cwd: workSession.cwd,
       status: workSession.status
     }))
+  })
+  pluginRuntime.bindSessionEvents({
+    subscribeWorkSessions: (listener) => manage.subscribePluginWorkSessions(listener),
+    subscribeInputAccepted: (listener) => manage.subscribeInputAccepted(listener)
   })
   const appSocketRuntime = getL1AppSocketRuntime()
   pluginRuntime.bindPushSender((message) => appSocketRuntime.pushPlugin(message))

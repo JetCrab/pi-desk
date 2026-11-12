@@ -14,6 +14,7 @@ fn config(url: &str) -> TunnelWorkerConfig {
         control_key: [7; 32],
         provider_secret_key: Some([3; 32]),
         mode: TunnelMode::Auto,
+        discovery_scope: None,
     }
 }
 
@@ -90,6 +91,7 @@ fn stop_bypasses_a_full_command_queue_and_shutdown_joins() {
         commands,
         stop,
         snapshot: snapshot(),
+        visitor: Arc::new(tokio::sync::Mutex::new(None)),
         thread: Some(thread),
     };
     for _ in 0..COMMAND_CAPACITY {
@@ -101,6 +103,28 @@ fn stop_bypasses_a_full_command_queue_and_shutdown_joins() {
     assert!(handle.set_mode(TunnelMode::Auto).is_err());
     release.send(()).unwrap();
     handle.shutdown().unwrap();
+}
+
+#[test]
+fn auto_forward_reserves_distinct_ports_until_stopped_and_releases_on_shutdown() {
+    let worker = start_tunnel_worker(config("http://127.0.0.1:9")).unwrap();
+    let first = worker.forward_auto("aa".repeat(32), 80).unwrap();
+    let second = worker.forward_auto("bb".repeat(32), 81).unwrap();
+    assert_ne!(first, second);
+    assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, first)).is_err());
+    assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, second)).is_err());
+    worker.stop_forward_and_wait(first).unwrap();
+    assert!(
+        worker
+            .snapshot()
+            .forwards
+            .iter()
+            .all(|row| row.local_port != first)
+    );
+    TcpListener::bind((Ipv4Addr::LOCALHOST, first)).expect("停止确认后端口必须已释放");
+    assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, second)).is_err());
+    worker.shutdown().unwrap();
+    TcpListener::bind((Ipv4Addr::LOCALHOST, second)).expect("Worker退出应释放自动映射端口");
 }
 
 #[test]
@@ -209,7 +233,7 @@ async fn mode_rebuild_releases_visitor_listener_without_touching_provider() {
         item_rx.changed().await.unwrap();
         listener.shutdown().await?;
         finished.store(true, Ordering::SeqCst);
-        Ok(())
+        Ok(None)
     });
     let (_worker_stop, stop) = watch::channel(false);
     let mut worker = Worker {

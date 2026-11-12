@@ -6,6 +6,7 @@ import {
   type BrowserEntryFactory,
   type BrowserFilePreviewOptions,
   type BrowserPluginHost,
+  type BrowserSessionHeaderActionContext,
   type BrowserSessionSidebarHeaderAction,
   type BrowserSessionSidebarTabTarget,
   type PiDeskBrowserChannel,
@@ -1854,4 +1855,137 @@ test('同插件重载后日志 Host 可重新订阅，旧 Owner 不清理新 Hos
   })
   assert.equal(handles[1]?.getSnapshot().text, 'v2\\n')
   await runtime.dispose()
+})
+
+for (const invalidation of ['delete', 'replace', 'branch'] as const) {
+  test(`标题 Action 在 Source ${invalidation} 时先失效再分发会话事件，旧退订不影响新 Owner`, async (context) => {
+    const first = entry()
+    const second = entry('fixture-plugin', 'cccccccccccccccccccccccccccccccc')
+    const transport = createTransport([first])
+    const scopes: Array<{
+      context: BrowserSessionHeaderActionContext
+      calls: number
+      off: () => void
+    }> = []
+    const entryOffs: Array<() => void> = []
+    const entryValues: unknown[] = []
+    let hostActions = 0
+    const factory: BrowserEntryFactory = (plugin) => {
+      entryOffs.push(
+        plugin.host.events.on('work-sessions', (value) => {
+          entryValues.push(value)
+        })
+      )
+      const action = {
+        type: 'action' as const,
+        icon: { type: 'builtin' as const, name: 'file' as const },
+        label: '会话信息',
+        onSelect: (actionContext: BrowserSessionHeaderActionContext): void => {
+          const scope = { context: actionContext, calls: 0, off: (): void => undefined }
+          scopes.push(scope)
+          scope.off = actionContext.host.events.on('work-sessions', () => {
+            scope.calls += 1
+            actionContext.host.notify({ level: 'info', title: '会话变化' })
+          })
+        }
+      }
+      plugin.registerSessionHeaderItem('session-info', { inline: action, overflow: action })
+    }
+    const runtime = createL4PluginHostRuntime(
+      transport,
+      createImporter(
+        new Map([
+          [first.url, factory],
+          [second.url, factory]
+        ])
+      ),
+      () => {
+        hostActions += 1
+      }
+    )
+    context.after(() => runtime.dispose())
+    await initialize(runtime, [{ ...source, cwd: '/project', status: 'idle' }])
+    const invoke = (): Promise<void> =>
+      runtime.invokeSessionHeaderAction({
+        pluginName: 'fixture-plugin',
+        contributionName: 'session-info',
+        presentation: 'inline',
+        source,
+        signal: new AbortController().signal
+      })
+    await invoke()
+    await Promise.resolve()
+    const oldScope = scopes[0]
+    assert.equal(oldScope.calls, 1)
+    assert.equal(hostActions, 1)
+    const previousEntryValues = entryValues.length
+    const changedSource =
+      invalidation === 'replace'
+        ? { ...source, sessionId: 'session-replaced' }
+        : { ...source, branchId: 'v1:changed' }
+    runtime.replaceWorkSessions(
+      invalidation === 'delete' ? [] : [{ ...changedSource, cwd: '/project', status: 'idle' }]
+    )
+    assert.equal(oldScope.context.signal.aborted, true)
+    assert.equal(oldScope.calls, 1)
+    assert.equal(hostActions, 1)
+    assert.equal(entryValues.length, previousEntryValues + 1)
+    assert.throws(() => oldScope.context.host.notify({ level: 'info', title: '旧操作' }), /失效/)
+
+    runtime.replaceWorkSessions([{ ...source, cwd: '/project', status: 'idle' }])
+    transport.setEntries([second])
+    await runtime.refreshEntries()
+    await invoke()
+    await Promise.resolve()
+    const newScope = scopes[1]
+    assert.equal(newScope.context.signal.aborted, false)
+    assert.equal(newScope.calls, 1)
+    oldScope.off()
+    entryOffs[0]()
+    const beforeUpdate = entryValues.length
+    runtime.replaceWorkSessions([{ ...source, cwd: '/next', status: 'idle' }])
+    assert.equal(oldScope.calls, 1)
+    assert.equal(newScope.calls, 2)
+    assert.equal(entryValues.length, beforeUpdate + 1)
+    assert.equal(hostActions, 3)
+  })
+}
+
+test('统一主题事件有当前生效值并随媒体更新，旧主题订阅仍只收变化', async (context) => {
+  const descriptor = entry()
+  const transport = createTransport([descriptor])
+  let host: BrowserPluginHost | null = null
+  const factory: BrowserEntryFactory = (plugin) => {
+    host = plugin.host
+  }
+  const runtime = createL4PluginHostRuntime(
+    transport,
+    createImporter(new Map([[descriptor.url, factory]]))
+  )
+  context.after(() => runtime.dispose())
+  const previous = darkTheme
+  context.after(() => {
+    darkTheme = previous
+  })
+  await initialize(runtime)
+  assert.ok(host)
+  const activeHost = host as BrowserPluginHost
+  const initialMode = activeHost.theme.getSnapshot().mode
+  const values: string[] = []
+  let oldCalls = 0
+  activeHost.theme.subscribe(() => {
+    oldCalls += 1
+  })
+  activeHost.events.on('theme', (value) => {
+    values.push(value.mode)
+  })
+  assert.deepEqual(values, [])
+  await Promise.resolve()
+  assert.deepEqual(values, [initialMode])
+  assert.equal(oldCalls, 0)
+  darkTheme = initialMode !== 'dark'
+  for (const listener of [...mediaListeners]) listener()
+  for (const listener of [...mediaListeners]) listener()
+  assert.deepEqual(values, [initialMode, initialMode === 'dark' ? 'light' : 'dark'])
+  assert.equal(oldCalls, 1)
 })

@@ -96,34 +96,10 @@ const THINKING_RENDER_CHARACTER_LIMIT = 5_000
 const MESSAGE_COPY_FEEDBACK_MS = 1500
 const PROCESS_ITEM_BATCH_SIZE = 64
 const TOOL_DETAIL_SCROLL_CLASS = 'max-h-[min(20rem,45dvh)] overflow-auto [scrollbar-gutter:stable]'
-const L3ConversationBeforeExpandContext = createContext<() => void>(() => undefined)
 const L3ConversationFileCwdContext = createContext<string | null>(null)
 const L3ConversationImageContext = createContext<L3ConversationAcquireImage | null>(null)
 const COLLAPSIBLE_PANEL_MOTION_CLASS =
   'h-[var(--collapsible-panel-height)] overflow-hidden transition-[height,opacity] duration-200 ease-out data-starting-style:h-0 data-starting-style:opacity-0 data-ending-style:h-0 data-ending-style:opacity-0 motion-reduce:transition-none'
-
-export function L3ConversationStickToBottomBridge({
-  children
-}: {
-  children: ReactNode
-}): React.JSX.Element {
-  const { isAtBottom, stopScroll } = useStickToBottomContext()
-  const isAtBottomRef = useRef(isAtBottom)
-  const stopScrollRef = useRef(stopScroll)
-  useLayoutEffect(() => {
-    isAtBottomRef.current = isAtBottom
-    stopScrollRef.current = stopScroll
-  }, [isAtBottom, stopScroll])
-  const beforeExpand = useCallback((): void => {
-    if (isAtBottomRef.current) stopScrollRef.current()
-  }, [])
-
-  return (
-    <L3ConversationBeforeExpandContext.Provider value={beforeExpand}>
-      {children}
-    </L3ConversationBeforeExpandContext.Provider>
-  )
-}
 
 function useDetailLoad(
   message: L3ConversationDisplayMessage,
@@ -170,7 +146,6 @@ function useExpandableDetail(
   onLoadDetail: L3ConversationLoadDetail
 ): ExpandableDetailState {
   const [open, setOpen] = useState(false)
-  const beforeExpand = useContext(L3ConversationBeforeExpandContext)
   const { loading, error, load } = useDetailLoad(message, onLoadDetail)
   const expandable =
     !message.temporary &&
@@ -179,10 +154,7 @@ function useExpandableDetail(
 
   const handleOpenChange = (nextOpen: boolean): void => {
     if (!expandable) return
-    if (nextOpen) {
-      beforeExpand()
-      void load()
-    }
+    if (nextOpen) void load()
     setOpen(nextOpen)
   }
 
@@ -508,7 +480,6 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
   const textRef = useRef<HTMLParagraphElement>(null)
   const [expanded, setExpanded] = useState(false)
   const [collapsible, setCollapsible] = useState<boolean | null>(null)
-  const beforeExpand = useContext(L3ConversationBeforeExpandContext)
 
   useLayoutEffect(() => {
     const textElement = textRef.current
@@ -528,9 +499,8 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
   }, [])
 
   const handleToggle = useCallback((): void => {
-    if (!expanded) beforeExpand()
     setExpanded((current) => !current)
-  }, [beforeExpand, expanded])
+  }, [])
 
   return (
     <div className="min-w-0">
@@ -1801,7 +1771,6 @@ function ProcessGroupComponent({
 }): React.JSX.Element | null {
   const { t } = useTranslation('conversation')
   const [manualOpen, setManualOpen] = useState(false)
-  const beforeExpand = useContext(L3ConversationBeforeExpandContext)
   const runtime = useL4PluginHost()
   useL4PluginRegistry()
   // 只有内置助手视图能拆分正文和过程；插件视图及其错误只在最终回复位置展示一次。
@@ -1815,11 +1784,9 @@ function ProcessGroupComponent({
   const handleOpenChange = useCallback(
     (nextOpen: boolean): void => {
       if (turn.running) return
-      // 先退出外层吸底，避免高度动画将展开触发器向上顶出视口。
-      if (nextOpen) beforeExpand()
       setManualOpen(nextOpen)
     },
-    [beforeExpand, turn.running]
+    [turn.running]
   )
 
   if (processItems.length === 0) return null

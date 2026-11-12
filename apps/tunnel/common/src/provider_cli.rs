@@ -1,5 +1,6 @@
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -105,6 +106,7 @@ pub fn run_provider(
     local_addr: SocketAddr,
     public_port: u16,
     stats: bool,
+    discovery_scope: Option<PathBuf>,
 ) -> Result<u8, String> {
     let stop_receiver = monitor_stdin()?;
     let worker = worker::start_tunnel_worker(TunnelWorkerConfig {
@@ -112,6 +114,7 @@ pub fn run_provider(
         control_key,
         provider_secret_key: None,
         mode: TunnelMode::Auto,
+        discovery_scope,
     })?;
     let mut output = Output {
         writer: io::stdout(),

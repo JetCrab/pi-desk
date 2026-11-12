@@ -7,6 +7,25 @@ import ts from 'typescript'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
+test('环境归档分别声明Tibo配置与可选业务历史', async () => {
+  const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+  assert.deepEqual(manifest.piDesk.environment.files, [
+    {
+      base: 'config',
+      path: 'pi-desk-tibo-monitor.json',
+      format: 'json',
+      secretPaths: [],
+      omitPaths: ['/records', '/analysisRegion']
+    },
+    {
+      base: 'data',
+      path: 'tibo-monitor.json',
+      format: 'json',
+      secretPaths: []
+    }
+  ])
+})
+
 // 曾因 TypeScript 允许、但 Host Runtime 未导出的 ReactDOM API 导致通知 Chunk 无法加载。
 test('轻量 Entry 和 Lazy Chunk 只使用真实 Host Runtime 提供的模块与导出', async () => {
   const browser = join(root, 'dist', 'browser')

@@ -37,6 +37,7 @@ fn run() -> Result<u8, String> {
         arguments.local_addr,
         arguments.public_port,
         arguments.stats,
+        Some(arguments.config_path),
     )
 }
 

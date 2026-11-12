@@ -48,6 +48,7 @@ pub enum TunnelRetry {
 
 #[derive(Default)]
 pub struct DesktopTunnel {
+    discovery_scope: Option<std::path::PathBuf>,
     worker: Option<TunnelWorkerHandle>,
     // 首次启动后固定连接设置；即使 worker 异常结束也不能读取新保存值重连。
     captured: Option<TunnelWorkerConfig>,
@@ -57,6 +58,13 @@ pub struct DesktopTunnel {
 }
 
 impl DesktopTunnel {
+    pub fn new(config_path: std::path::PathBuf) -> Self {
+        Self {
+            discovery_scope: Some(config_path),
+            ..Self::default()
+        }
+    }
+
     pub fn reconcile(
         &mut self,
         config: &TunnelConnectionConfig,
@@ -89,6 +97,7 @@ impl DesktopTunnel {
                         control_key: key,
                         provider_secret_key: Some(bytes),
                         mode: config.mode,
+                        discovery_scope: self.discovery_scope.clone(),
                     }
                 }
             };

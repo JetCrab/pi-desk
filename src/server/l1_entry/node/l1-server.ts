@@ -10,6 +10,7 @@ import {
 import { getL1AppSocketRuntimeBridge } from './l1-app-socket-bridge'
 import { getL1WebAuthRuntimeBridge } from './l1-web-auth-bridge'
 import type { L4PiDeskPackageMaintenanceRequest } from '@server/l4_foundation/pi/l4-pi-desk-process-control'
+import type { L4EnvironmentMaintenanceRequest } from '@server/l4_foundation/environment/l4-environment-operations'
 import { WebSocketServer } from 'ws'
 import { startManagedHeartbeat } from '@server/l4_foundation/process/l4-pi-desk-supervisor.js'
 
@@ -166,6 +167,11 @@ async function startServer(): Promise<void> {
   // 安装到 node_modules 后，原生 ESM 加载不会应用 TypeScript 路径别名。
   await import('../../l4_foundation/pi/l4-pi-runtime-register.mjs')
   const startedAt = performance.now()
+  const [{ getAgentDir }, { recoverL4EnvironmentBeforeRuntime }] = await Promise.all([
+    import('@earendil-works/pi-coding-agent'),
+    import('@server/l4_foundation/environment/l4-environment-maintenance')
+  ])
+  await recoverL4EnvironmentBeforeRuntime(getAgentDir())
   const dev = process.argv.includes('--dev')
   const { default: next } = await import('next')
   const port = readPort()
@@ -218,7 +224,8 @@ async function startServer(): Promise<void> {
     | ((
         maintenance?:
           L4PiDeskPackageMaintenanceRequest | readonly L4PiDeskPackageMaintenanceRequest[],
-        mode?: 'normal' | 'basic'
+        mode?: 'normal' | 'basic',
+        environment?: L4EnvironmentMaintenanceRequest
       ) => void)
     | null = null
 
@@ -358,7 +365,21 @@ async function startServer(): Promise<void> {
   }
 
   if (process.env.PI_DESK_MANAGED_RESTART === '1' && process.send) {
-    managedRestartHandler = (maintenance, mode) => {
+    managedRestartHandler = (maintenance, mode, environment) => {
+      if (environment) {
+        // 必须先把维护请求交给存活父进程，再发关闭信号；秘密仅经 IPC。
+        process.send?.(
+          { type: 'pi-desk.environment-maintenance', request: environment },
+          (error) => {
+            if (error) {
+              console.error('[Pi Desk][NodeServer] 环境维护 IPC 提交失败，停止重启')
+              return
+            }
+            shutdown('RESTART')
+          }
+        )
+        return
+      }
       if (mode) process.send?.({ type: 'pi-desk.restart-mode', mode })
       if (maintenance && mode !== 'basic') {
         process.send?.({

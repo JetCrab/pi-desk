@@ -6,7 +6,7 @@
     "url": "git+https://github.com/JetCrab/pi-desk.git",
     "directory": "plugins/pi-desk-quota-viewer"
   },
-  "version": "1.1.17",
+  "version": "1.1.19",
   "license": "Apache-2.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -32,6 +32,20 @@
   ],
   "piDesk": {
     "entry": "./dist/pi-desk.js",
+    "environment": {
+      "files": [
+        {
+          "base": "config",
+          "path": "pi-desk-quota-viewer.json",
+          "format": "json",
+          "secretPaths": [
+            "/sources/*/config/apiKey",
+            "/sources/*/config/managementKey",
+            "/sources/*/config/managementPassword"
+          ]
+        }
+      ]
+    },
     "i18n": {
       "zh-CN": {
         "description": "通过可配置的服务适配器查看账户余额、剩余额度与用量。"

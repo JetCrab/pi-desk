@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { PiDeskPluginFacade, PluginJsonObject } from '@jetcrab/pi-desk-sdk/entry'
 import { PluginMethodError } from '@jetcrab/pi-desk-sdk/session'
+import type { SecretStore } from '@jetcrab/pi-desk-sdk/secrets'
 import { z } from 'zod'
 import { QuotaHttpError } from './adapters/http.js'
 import { quotaAdapters } from './adapters/registry.js'
@@ -22,7 +23,7 @@ import {
   PLUGIN_IDENTIFIER_PATTERN,
   readStoredConfig,
   storedConfigSchema,
-  writeStoredConfig,
+  updateStoredConfig,
   type StoredConfig,
   type StoredSource
 } from './l2-quota-config.js'
@@ -85,6 +86,7 @@ export interface QuotaViewerRuntimeOptions {
   adapters?: readonly QuotaAdapter[]
   fetch?: typeof fetch
   configPath?: string
+  secretStore?: SecretStore
   logger?: RuntimeLogger
 }
 
@@ -157,6 +159,7 @@ export class QuotaViewerRuntime {
   private readonly registry: ReadonlyMap<string, QuotaAdapter>
   private readonly fetchImpl: typeof fetch
   private readonly configPath: string
+  private readonly secretStore?: SecretStore
   private readonly logger: RuntimeLogger
   private readonly states = new Map<string, SourceRuntimeState>()
   private readonly tasks = new Set<Promise<void>>()
@@ -179,6 +182,7 @@ export class QuotaViewerRuntime {
     }
     this.fetchImpl = options.fetch ?? globalThis.fetch
     this.configPath = options.configPath ?? defaultQuotaViewerConfigPath()
+    this.secretStore = options.secretStore
     this.logger = options.logger ?? console
   }
 
@@ -195,6 +199,7 @@ export class QuotaViewerRuntime {
   async settings(): Promise<QuotaSettingsSnapshot> {
     this.assertActive()
     await this.ensureConfig()
+    if (this.configError) throw new PluginMethodError(409, this.configError)
     return this.settingsSnapshot()
   }
 
@@ -207,6 +212,7 @@ export class QuotaViewerRuntime {
   private async saveConfiguration(input: PluginJsonObject): Promise<QuotaSettingsSnapshot> {
     this.assertActive()
     await this.ensureConfig()
+    if (this.configError) throw new PluginMethodError(409, this.configError)
     let parsed: z.infer<typeof saveInputSchema>
     try {
       parsed = saveInputSchema.parse(input)
@@ -214,71 +220,76 @@ export class QuotaViewerRuntime {
       throw inputError(error)
     }
 
-    const sourcesChanged = parsed.sources !== undefined
-    let nextSources = this.config.sources
-    if (parsed.sources !== undefined) {
-      const existingById = new Map(this.config.sources.map((source) => [source.sourceId, source]))
-      const seenIds = new Set<string>()
-      nextSources = []
-      for (const source of parsed.sources) {
-        const adapter = this.registry.get(source.adapter)
-        if (!adapter) throw new PluginMethodError(400, `额度 Adapter 不存在：${source.adapter}`)
-        const existing = source.sourceId ? existingById.get(source.sourceId) : undefined
-        if (source.sourceId && !existing) {
-          throw new PluginMethodError(400, `额度来源不存在：${source.sourceId}`)
-        }
-        if (existing && existing.adapter !== source.adapter) {
-          throw new PluginMethodError(400, '已有额度来源不能切换 Adapter，请删除后重新添加')
-        }
-        if (source.sourceId && seenIds.has(source.sourceId)) {
-          throw new PluginMethodError(400, `额度来源 sourceId 重复：${source.sourceId}`)
-        }
-        if (source.sourceId) seenIds.add(source.sourceId)
+    const nextConfig = await updateStoredConfig(
+      this.configPath,
+      (current) => {
+        let nextSources = current.sources
+        if (parsed.sources !== undefined) {
+          const existingById = new Map(current.sources.map((source) => [source.sourceId, source]))
+          const seenIds = new Set<string>()
+          nextSources = []
+          for (const source of parsed.sources) {
+            const adapter = this.registry.get(source.adapter)
+            if (!adapter) throw new PluginMethodError(400, `额度 Adapter 不存在：${source.adapter}`)
+            const existing = source.sourceId ? existingById.get(source.sourceId) : undefined
+            if (source.sourceId && !existing) {
+              throw new PluginMethodError(400, `额度来源不存在：${source.sourceId}`)
+            }
+            if (existing && existing.adapter !== source.adapter) {
+              throw new PluginMethodError(400, '已有额度来源不能切换 Adapter，请删除后重新添加')
+            }
+            if (source.sourceId && seenIds.has(source.sourceId)) {
+              throw new PluginMethodError(400, `额度来源 sourceId 重复：${source.sourceId}`)
+            }
+            if (source.sourceId) seenIds.add(source.sourceId)
 
-        const fields = new Map(adapter.descriptor.fields.map((field) => [field.key, field]))
-        for (const key of Object.keys(source.values)) {
-          if (!fields.has(key)) throw new PluginMethodError(400, `未知设置字段：${key}`)
-        }
-        const candidate: Record<string, string> = {}
-        for (const field of adapter.descriptor.fields) {
-          const supplied = Object.hasOwn(source.values, field.key)
-            ? source.values[field.key]
-            : field.defaultValue
-          let value = supplied ?? ''
-          if (field.kind === 'textarea') value = normalizedLineText(value)
-          candidate[field.key] = value
+            const fields = new Map(adapter.descriptor.fields.map((field) => [field.key, field]))
+            for (const key of Object.keys(source.values)) {
+              if (!fields.has(key)) throw new PluginMethodError(400, `未知设置字段：${key}`)
+            }
+            const candidate: Record<string, string> = {}
+            for (const field of adapter.descriptor.fields) {
+              const supplied = Object.hasOwn(source.values, field.key)
+                ? source.values[field.key]
+                : field.defaultValue
+              let value = supplied ?? ''
+              if (field.kind === 'textarea') value = normalizedLineText(value)
+              candidate[field.key] = value
+            }
+
+            let config: Record<string, string>
+            try {
+              config = adapter.validateConfig(candidate)
+            } catch (error) {
+              throw inputError(error)
+            }
+            nextSources.push({
+              sourceId: existing?.sourceId ?? randomUUID(),
+              adapter: source.adapter,
+              name: source.name,
+              enabled: source.enabled,
+              config
+            })
+          }
         }
 
-        let config: Record<string, string>
-        try {
-          config = adapter.validateConfig(candidate)
-        } catch (error) {
-          throw inputError(error)
-        }
-        nextSources.push({
-          sourceId: existing?.sourceId ?? randomUUID(),
-          adapter: source.adapter,
-          name: source.name,
-          enabled: source.enabled,
-          config
+        return storedConfigSchema.parse({
+          sources: nextSources,
+          display: {
+            resetTimeFormat: parsed.display?.resetTimeFormat ?? current.display.resetTimeFormat,
+            hiddenItemKeys: normalizeHiddenItems(
+              parsed.display?.hiddenItemKeys ?? current.display.hiddenItemKeys
+            )
+          }
         })
-      }
-    }
-
-    const nextConfig = storedConfigSchema.parse({
-      sources: nextSources,
-      display: {
-        resetTimeFormat: parsed.display?.resetTimeFormat ?? this.config.display.resetTimeFormat,
-        hiddenItemKeys: normalizeHiddenItems(
-          parsed.display?.hiddenItemKeys ?? this.config.display.hiddenItemKeys
-        )
-      }
-    })
-    await writeStoredConfig(this.configPath, nextConfig)
+      },
+      this.registry,
+      this.secretStore
+    )
     this.config = nextConfig
     this.configLoaded = true
     this.configError = null
-    const refreshSourceIds = sourcesChanged ? this.reconcileStates() : []
+    const refreshSourceIds = this.reconcileStates()
     this.publishState()
     for (const sourceId of refreshSourceIds) this.startRefresh(sourceId, true)
     return this.settingsSnapshot()
@@ -315,10 +326,9 @@ export class QuotaViewerRuntime {
   private async ensureConfig(): Promise<void> {
     if (this.configLoaded) return
     try {
-      this.config = await readStoredConfig(this.configPath, this.registry)
+      this.config = await readStoredConfig(this.configPath, this.registry, this.secretStore)
       this.configError = null
     } catch (error) {
-      this.config = { sources: [], display: QuotaDisplaySettingsSchema.parse({}) }
       this.configError = errorMessage(error)
     }
     this.configLoaded = true

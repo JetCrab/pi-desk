@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
 import type { CapabilityOption } from '@jetcrab/pi-desk-sdk/capabilities'
 import { fileURLToPath } from 'node:url'
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
@@ -215,13 +216,23 @@ function loadConfig(params: {
   }
 }
 
+export function subagentSettingsPath(agentDir = getAgentDir()): string {
+  return getConfigPath('pi-desk-subagent.json', agentDir)
+}
+
+function projectSubagentSettingsPath(projectConfigDir: string): string {
+  return join(projectConfigDir, 'config', 'pi-desk-subagent.json')
+}
+
 export function discoverSubagentConfigs(
   options: DiscoverSubagentConfigsOptions
 ): DiscoverSubagentConfigsResult {
   const agentDir = options.agentDir ?? getAgentDir()
   const projectConfigDir = options.projectTrusted ? findProjectConfigDir(options.cwd) : undefined
-  const globalSettingsPath = join(agentDir, 'settings.json')
-  const projectSettingsPath = projectConfigDir ? join(projectConfigDir, 'settings.json') : undefined
+  const globalSettingsPath = subagentSettingsPath(agentDir)
+  const projectSettingsPath = projectConfigDir
+    ? projectSubagentSettingsPath(projectConfigDir)
+    : undefined
   const diagnostics: string[] = []
   const selectedFiles = new Map<string, AgentFile>()
   const builtinAgentsDir =
@@ -276,7 +287,7 @@ export function listGlobalSubagentSettings(agentDir = getAgentDir()): Array<{
     ...listAgentFiles(BUILTIN_AGENTS_DIR, []).keys(),
     ...listAgentFiles(join(agentDir, 'agents'), []).keys()
   ])
-  const settingsPath = join(agentDir, 'settings.json')
+  const settingsPath = subagentSettingsPath(agentDir)
   return [...names].sort().map((name) => {
     const setting = readAgentSetting(settingsPath, name)
     return {

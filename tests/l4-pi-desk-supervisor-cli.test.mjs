@@ -94,6 +94,7 @@ class FixtureChild extends EventEmitter {
     this.kind = kind
     this.options = options
     this.stdout = new PassThrough()
+    this.stdin = new PassThrough()
     this.stderr = new PassThrough()
     this.connected = true
     this.exitCode = null
@@ -126,7 +127,15 @@ class FixtureChild extends EventEmitter {
     if (message !== 'pi-desk.restart') return
     setImmediate(() => {
       const scenario = process.env.PI_DESK_CLI_FIXTURE_SCENARIO
-      if (scenario === 'pending-maintenance-failure' && this.index === 1) {
+      if ((scenario === 'environment-success' || scenario === 'environment-non75') && this.index === 1) {
+        this.emit('message', { type: 'pi-desk.environment-maintenance', request: {
+          id: '12345678-1234-4234-8234-123456789abc', kind: 'export',
+          agentDir: process.env.PI_DESK_CLI_FIXTURE_AGENT_DIR, cwd: process.cwd(),
+          password: 'test-only-ipc-password', includeSessions: true, includePluginData: false
+        } })
+        if (scenario === 'environment-success') this.emit('message', { type: 'pi-desk.shutting-down', source: 'RESTART' })
+        this.finish(scenario === 'environment-success' ? 75 : 1)
+      } else if (scenario === 'pending-maintenance-failure' && this.index === 1) {
         this.emit('message', {
           type: 'pi-desk.plugin-maintenance',
           maintenance: { action: 'install', source: 'npm:must-not-run-fixture' }
@@ -205,6 +214,7 @@ class FixtureChild extends EventEmitter {
   finish(code) {
     if (this.exitCode !== null) return
     this.exitCode = code
+    if (this.kind === 'service' && process.env.PI_DESK_CLI_FIXTURE_SCENARIO.startsWith('environment-')) record({ kind: 'service-exit', index: this.index, code })
     this.connected = false
     this.emit('exit', code, null)
     this.emit('close', code, null)
@@ -216,6 +226,17 @@ childProcess.spawn = function (command, args, options) {
   const argv = Array.isArray(args) ? args : []
   if (argv.some((argument) => String(argument).includes('l1-server.ts'))) {
     return new FixtureChild('service', options)
+  }
+  if (argv.some((argument) => String(argument).includes('l4-environment-maintenance-runner'))) {
+    const child = new FixtureChild('environment', options)
+    let input = ''
+    child.stdin.on('data', (chunk) => { input += chunk.toString() })
+    child.stdin.on('end', () => {
+      const request = JSON.parse(input)
+      record({ kind: 'environment-runner', passwordViaStdin: request.password === 'test-only-ipc-password', passwordInArgv: argv.some((value) => String(value).includes('test-only-ipc-password')) })
+      setImmediate(() => child.finish(0))
+    })
+    return child
   }
   if (argv.some((argument) => String(argument).includes('l4-pi-package-maintenance-runner'))) {
     const action = argv.at(-2)
@@ -253,6 +274,7 @@ childProcess.spawn = function (command, args, options) {
       env: {
         ...process.env,
         PI_DESK_CLI_FIXTURE_LOG: fixtureLog,
+        PI_DESK_CLI_FIXTURE_AGENT_DIR: join(root, 'agent'),
         PI_DESK_CLI_FIXTURE_SCENARIO: scenario,
         PI_DESK_LOG_FILE: managedLog
       },
@@ -648,6 +670,53 @@ test('safe mode故障与未激活standby故障均停止而不循环重启', { ti
     1
   )
 })
+
+test(
+  '环境维护仅在旧服务code75退出后执行，stdin交付秘密后创建新Runtime',
+  { timeout: 25_000 },
+  async (context) => {
+    const success = await startCliFixture('environment-success')
+    const failed = await startCliFixture('environment-non75')
+    const fixtures = [success, failed]
+    context.after(async () => {
+      await Promise.all(fixtures.map(stopCliFixture))
+      if (!preserveFixtures)
+        await Promise.all(
+          fixtures.map((fixture) => rm(fixture.root, { recursive: true, force: true }))
+        )
+    })
+    for (const fixture of fixtures) {
+      await waitFor(
+        async () =>
+          (await readEvents(fixture.fixtureLog)).some((event) => event.kind === 'service-start'),
+        'environment startup'
+      )
+      fixture.child.send('pi-desk.restart')
+      await waitFor(
+        async () =>
+          (await readEvents(fixture.fixtureLog)).filter((event) => event.kind === 'service-start')
+            .length === 2,
+        'environment restart'
+      )
+    }
+    const events = await readEvents(success.fixtureLog)
+    assert.deepEqual(
+      events.map((event) => event.kind),
+      ['service-start', 'service-exit', 'environment-runner', 'service-start']
+    )
+    assert.equal(events[2].passwordViaStdin, true)
+    assert.equal(events[2].passwordInArgv, false)
+    assert.equal(events[3].safeMode, '')
+    assert.equal(
+      (await readEvents(failed.fixtureLog)).some((event) => event.kind === 'environment-runner'),
+      false
+    )
+    assert.equal(
+      (await readFile(success.managedLog, 'utf8')).includes('test-only-ipc-password'),
+      false
+    )
+  }
+)
 
 test.after(async () => {
   if (!preserveFixtures) await rm(testRoot, { recursive: true, force: true })

@@ -59,10 +59,7 @@ function fixtureConfig(): Config {
           }
         ]
       }
-    },
-    modelPresets: [
-      { provider: 'fixture', modelId: 'test-model', thinkingLevel: 'high', color: null }
-    ]
+    }
   }
 }
 
@@ -83,6 +80,15 @@ async function withFixture(
     const path = join(agentDir, 'models.json')
     await writeFile(path, typeof input === 'string' ? input : JSON.stringify(input))
     await writeFile(join(agentDir, 'auth.json'), '{}')
+    await mkdir(join(agentDir, 'config'), { recursive: true })
+    await writeFile(
+      join(agentDir, 'config', 'pi-desk-models.json'),
+      JSON.stringify({
+        modelPresets: [
+          { provider: 'fixture', modelId: 'test-model', thinkingLevel: 'high', color: null }
+        ]
+      })
+    )
     const store = await jiti.import<Store>(
       '../src/server/l4_foundation/model-settings/l4-model-settings-store.ts'
     )
@@ -109,6 +115,62 @@ function providerOf(config: Config): Record<string, unknown> {
 function modelOf(config: Config): Record<string, unknown> {
   return (providerOf(config).models as Record<string, unknown>[])[0]
 }
+
+test('模型偏好：只读config，原生旧偏好字段和注释保持原字节', async () => {
+  const legacy = fixtureConfig()
+  legacy.modelPresets = [
+    { provider: 'fixture', modelId: 'test-model', thinkingLevel: 'high', color: null }
+  ]
+  legacy.modelSelections = [{ provider: 'openai-codex', modelId: 'legacy-only' }]
+  const content = '// native-comment\n' + JSON.stringify(legacy, null, 2)
+  await withFixture(content, async (store, path, agentDir) => {
+    const preferencesPath = join(agentDir, 'config', 'pi-desk-models.json')
+    await writeFile(preferencesPath, JSON.stringify({ customPreference: { keep: true } }))
+    const settings = await store.readL4ModelSettings()
+    assert.deepEqual(settings.nativeConfig, legacy)
+    assert.deepEqual(settings.presets, [])
+    assert.deepEqual(settings.accountModels, [])
+    assert.equal(await readFile(path, 'utf8'), content)
+    const presets = [
+      {
+        provider: 'fixture',
+        modelId: 'test-model',
+        thinkingLevel: 'high' as const,
+        color: '#112233'
+      }
+    ]
+    await store.replaceL4ModelSettings({ presets })
+    const saved = await readConfig(preferencesPath)
+    assert.deepEqual(saved.modelPresets, presets)
+    assert.deepEqual(saved.customPreference, { keep: true })
+    assert.deepEqual((await store.readL4ModelSettings()).presets, presets)
+    assert.equal(await readFile(path, 'utf8'), content)
+  })
+})
+
+test('模型偏好：缺新文件使用空偏好，原生编辑保留旧根字段', async () => {
+  const legacy = fixtureConfig()
+  legacy.modelPresets = [
+    { provider: 'fixture', modelId: 'test-model', thinkingLevel: 'high', color: null }
+  ]
+  legacy.modelSelections = []
+  await withFixture(legacy, async (store, path, agentDir) => {
+    const target = join(agentDir, 'config', 'pi-desk-models.json')
+    await rm(target)
+    const before = await readFile(path, 'utf8')
+    const settings = await store.readL4ModelSettings()
+    assert.deepEqual(settings.presets, [])
+    assert.deepEqual(settings.accountModels, [])
+    assert.equal(await readFile(path, 'utf8'), before)
+    await assert.rejects(readFile(target), { code: 'ENOENT' })
+    const edited = structuredClone(settings.nativeConfig)
+    modelOf(edited).name = '原生编辑保留未知字段'
+    await store.replaceL4ModelSettings({ nativeConfig: edited })
+    assert.deepEqual(await readConfig(path), edited)
+    assert.deepEqual((await readConfig(path)).modelPresets, legacy.modelPresets)
+    await assert.rejects(readFile(target), { code: 'ENOENT' })
+  })
+})
 
 test('模型设置：表单无改动往返不固化默认、不删除 baseten 和高级字段', async () => {
   const initial = fixtureConfig()
@@ -321,8 +383,11 @@ test('账号模型：登录不自动收录，只保存引用并统一过滤聊�
     await store.replaceL4ModelSettings({
       accountModels: [{ provider: 'openai-codex', modelId: first, overrides: {} }]
     })
+    const preferences = await readConfig(join(agentDir, 'config', 'pi-desk-models.json'))
+    assert.deepEqual(preferences.modelSelections, [{ provider: 'openai-codex', modelId: first }])
     const config = await readConfig(path)
-    assert.deepEqual(config.modelSelections, [{ provider: 'openai-codex', modelId: first }])
+    assert.equal(config.modelSelections, undefined)
+    assert.equal(await readFile(path, 'utf8'), before)
     assert.equal((config.providers as Record<string, unknown>)['openai-codex'], undefined)
     assert.equal(await readFile(join(agentDir, 'auth.json'), 'utf8'), auth)
     const saved = await store.readL4ModelSettings()
@@ -364,9 +429,12 @@ test('账号模型：登录不自动收录，只保存引用并统一过滤聊�
 })
 
 test('账号模型：参数覆盖稀疏写入，恢复默认及自定义配置保存不丢失高级字段', async () => {
-  await withAccountFixture(async (store, path, _agentDir, [first]) => {
+  await withAccountFixture(async (store, path, agentDir, [first]) => {
     const config = await readConfig(path)
-    config.modelSelections = [{ provider: 'openai-codex', modelId: first }]
+    const preferencesPath = join(agentDir, 'config', 'pi-desk-models.json')
+    const preferences = await readConfig(preferencesPath)
+    preferences.modelSelections = [{ provider: 'openai-codex', modelId: first }]
+    await writeFile(preferencesPath, JSON.stringify(preferences))
     const providers = config.providers as Record<string, unknown>
     providers['openai-codex'] = {
       modelOverrides: { [first]: { promptCache: { long: 7200 }, cost: { input: 7 } } }
@@ -406,7 +474,7 @@ test('账号模型：参数覆盖稀疏写入，恢复默认及自定义配置�
   })
 })
 
-test('账号模型：移除时自动清理常用组合和已忽略项目默认', async () => {
+test('账号模型：取消收录清理常用组合但保留已忽略项目原生默认', async () => {
   await withAccountFixture(async (store, path, agentDir, [first]) => {
     await store.replaceL4ModelSettings({
       accountModels: [{ provider: 'openai-codex', modelId: first, overrides: {} }]
@@ -435,22 +503,13 @@ test('账号模型：移除时自动清理常用组合和已忽略项目默认',
     const preview = L2ModelSettingsPreviewResponseSchema.parse(
       await store.previewL4ModelSettings({ accountModels: [] })
     )
-    assert.deepEqual(preview.projectDefaults, [
-      {
-        cwd: project.cwd,
-        from: {
-          provider: preset.provider,
-          modelId: preset.modelId,
-          thinkingLevel: preset.thinkingLevel
-        },
-        to: null
-      }
-    ])
+    assert.deepEqual(preview.projectDefaults, [])
     assert.equal(await readFile(path, 'utf8'), before)
     assert.equal(await readFile(project.path, 'utf8'), projectBefore)
 
     await store.replaceL4ModelSettings({ accountModels: [] })
-    assert.deepEqual(await readConfig(project.path), { retained: true })
+    assert.equal(await readFile(project.path, 'utf8'), projectBefore)
+    assert.equal(await readFile(path, 'utf8'), before)
     const saved = await store.readL4ModelSettings()
     assert.deepEqual(saved.presets, settings.presets)
     assert.equal(

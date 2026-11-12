@@ -8,7 +8,15 @@ import type {
 } from './shared.js'
 import type { PluginPushMessage } from './entry.js'
 import type { HostSettings } from './settings.js'
+import type { BrowserHostEventMap, HostEvents } from './events.js'
 export type { HostRegion, HostSettings, HostSettingsSnapshot } from './settings.js'
+export type {
+  BrowserHostEventMap,
+  ChatSubmitResult,
+  HostEventListener,
+  HostEvents,
+  WorkbenchContext
+} from './events.js'
 
 export type {
   BrowserApplicationContext,
@@ -203,8 +211,28 @@ export interface BrowserPluginGlobalStateHost {
   subscribe(listener: () => void): PluginDisposer
 }
 
+export interface BrowserTunnelSnapshot {
+  readonly status: 'connecting' | 'ready' | 'recovering' | 'failed' | 'closed'
+  readonly localPort: number | null
+  readonly path: 'direct' | 'relay' | 'unknown' | null
+  readonly error: string | null
+}
+
+export interface BrowserTunnelHandle {
+  getSnapshot(): BrowserTunnelSnapshot
+  subscribe(listener: () => void): PluginDisposer
+  close(): Promise<void>
+}
+
+export interface BrowserTunnelHost {
+  open(input: { remotePort: number }): BrowserTunnelHandle
+}
+
 export interface BrowserPluginHost {
+  readonly events: HostEvents<BrowserHostEventMap>
   readonly settings: HostSettings
+  /** 映射当前工作台后端的已发布 TCP 端口；旧宿主或无原生能力时不可用。 */
+  readonly tunnels?: BrowserTunnelHost
   notify(input: BrowserNotificationInput): void
   readonly globalState: BrowserPluginGlobalStateHost
   readonly piDesk: PiDeskBrowserChannel

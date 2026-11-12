@@ -170,8 +170,9 @@ test('父工具只暴露 Agent description，不暴露 Research 内部工具', a
     '只用于外部研究。',
     'research_delegate, external_research, read, grep, find, ls'
   )
+  await mkdir(join(agentDir, 'config'), { recursive: true })
   await writeFile(
-    join(agentDir, 'settings.json'),
+    join(agentDir, 'config', 'pi-desk-subagent.json'),
     JSON.stringify({ agents: { dev: { disabled: true } } }),
     'utf8'
   )
@@ -223,6 +224,24 @@ test('父工具只暴露 Agent description，不暴露 Research 内部工具', a
   assert.equal(tools.has('research_delegate'), false)
   const agentTool = tools.get('agent')
   assert.ok(agentTool)
+  assert.match(agentTool.description, /当前可用类型：explore, research。/)
+  assert.match(agentTool.description, /执行：.*读取或搜索资料、修改文件、运行命令、测试和验证/)
+  assert.match(agentTool.description, /派发：将执行任务交给子代理/)
+  assert.match(agentTool.description, /规划：基于已有结论进行分析、决策、拆分任务和安排下一步/)
+  assert.match(
+    agentTool.description,
+    /仍有任一子代理在执行，主代理就只能规划或派发，不能亲自执行任务，即使该任务与子代理的工作互不相关/
+  )
+  assert.match(
+    agentTool.description,
+    /部分子代理返回结果后，主代理可以据此继续规划并派发下一轮任务，不必等待其他子代理全部结束/
+  )
+  assert.match(agentTool.description, /全部子代理结束后，主代理可以亲自执行任务/)
+  assert.match(
+    agentTool.description,
+    /没有需要继续规划或派发的事项时，结束当前轮回复，等待子代理异步通知/
+  )
+  assert.match(agentTool.description, /不要轮询状态，也不要通过 bash\/sleep 等方式等待/)
   const agentSchema = agentTool.parameters as {
     properties: { subagent_type: { enum: string[]; description: string } }
   }

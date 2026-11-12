@@ -1,6 +1,13 @@
 import type { CapabilityDeclarations } from './capabilities.js'
 import type { HostSettings } from './settings.js'
+import type { HostEvents, NodeHostEventMap } from './events.js'
 export type { HostRegion, HostSettings, HostSettingsSnapshot } from './settings.js'
+export type {
+  ChatInputAccepted,
+  HostEventListener,
+  HostEvents,
+  NodeHostEventMap
+} from './events.js'
 import {
   normalizePluginIdentifier,
   type PluginDisposer,
@@ -69,6 +76,7 @@ export interface PiDeskWorkSessionCapability {
 }
 
 export interface PiDeskPluginHost {
+  readonly events: HostEvents<NodeHostEventMap>
   readonly settings: HostSettings
   readonly workSessions: PiDeskWorkSessionCapability
 }

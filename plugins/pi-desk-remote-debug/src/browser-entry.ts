@@ -1,10 +1,20 @@
 import { defineBrowserEntry } from '@jetcrab/pi-desk-sdk/browser'
 import { createRemoteDebugBrowserEvents } from './l4-browser-events.js'
+import {
+  createRemoteDebugBrowserTunnels,
+  type RemoteDebugBrowserTunnels
+} from './l4-browser-tunnels.js'
 
 const loadApplication = () => import('./browser.js')
 
 export default defineBrowserEntry((plugin) => {
   const events = createRemoteDebugBrowserEvents()
+  let tunnels: RemoteDebugBrowserTunnels | null = null
+  const getTunnels = (): RemoteDebugBrowserTunnels => {
+    if (tunnels) tunnels.sync()
+    else tunnels = createRemoteDebugBrowserTunnels(plugin.host)
+    return tunnels
+  }
   const disposePush = plugin.onPush((message) => {
     if (message.target.scope === 'global' && message.event === 'settings-changed') events.changed()
   })
@@ -13,7 +23,8 @@ export default defineBrowserEntry((plugin) => {
     title: '远程调试',
     icon: { type: 'builtin', name: 'globe' },
     chrome: 'host',
-    load: () => loadApplication().then((module) => module.createRemoteDebugApplication(events))
+    load: () =>
+      loadApplication().then((module) => module.createRemoteDebugApplication(events, getTunnels))
   })
   plugin.registerContribution('settings-page', 'remote-debug', {
     label: '远程调试',
@@ -21,8 +32,9 @@ export default defineBrowserEntry((plugin) => {
     load: () =>
       import('./l2-browser-settings.js').then((module) => module.createRemoteDebugSettings(events))
   })
-  return (): void => {
+  return async (): Promise<void> => {
     disposePush()
     events.dispose()
+    await tunnels?.dispose()
   }
 })

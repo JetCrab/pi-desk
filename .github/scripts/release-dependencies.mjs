@@ -57,7 +57,14 @@ export function lockDependencyContent(text, importer) {
     const id = pending.pop()
     if (visited.has(id)) continue
     const content = snapshots.get(id) ?? ''
-    visited.set(id, [content, packages.get(id.split('(')[0]) ?? ''])
+    let resolved = packages.get(id.split('(')[0]) ?? ''
+    // integrity 已固定依赖字节；仅下载地址变化不改变制品输入。
+    if (/\bintegrity:\s*\S/.test(resolved))
+      resolved = resolved.replace(
+        /\btarball:\s*(?:"[^"]*"|'[^']*'|[^\s,}]+)/g,
+        'tarball: <integrity>'
+      )
+    visited.set(id, [content, resolved])
     for (const line of content.split('\n')) {
       const dependency = /^ {6}(\S.*?): (.+)$/.exec(line)
       if (dependency && !/^(?:link:|file:)/.test(unquote(dependency[2]))) {

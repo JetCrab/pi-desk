@@ -39,6 +39,7 @@ fn main() -> Result<(), String> {
                     control_key,
                     provider_secret_key: None,
                     mode: TunnelMode::Auto,
+                    discovery_scope: None,
                 },
             )
         }
@@ -391,6 +392,7 @@ async fn run_local_gateway(
             control_key,
             provider_secret_key: None,
             mode: TunnelMode::Auto,
+            discovery_scope: None,
         };
         let served = match ready.send(Ok(config)) {
             Ok(()) => axum::serve(listener, app)

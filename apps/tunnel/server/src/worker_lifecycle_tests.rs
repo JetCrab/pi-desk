@@ -160,6 +160,7 @@ impl WorkerFixture {
             control_key: [31; 32],
             provider_secret_key: None,
             mode: TunnelMode::Auto,
+            discovery_scope: None,
         };
         self.provider = Some(start_tunnel_worker(config.clone())?);
         self.visitor = Some(start_tunnel_worker(config)?);
@@ -460,6 +461,11 @@ async fn worker_lifecycle_mode_switch_preserves_same_worker_provider_tcp() {
                     && rows[0].active_tcp == 1 && rows[0].path != TunnelPath::Unknown
             })
         }).await?;
+        check(
+            fixture.visitor().visitor_id().as_deref()
+                == Some(fixture.provider().snapshot().connections[0].peer_id.as_str()),
+            "连接端访问身份与被连接端对端统计不一致",
+        )?;
         check(fixture.backends[0].accepts.load(Ordering::SeqCst) == 1, "A后端起始接纳数不是1")?;
         check(fixture.backends[1].accepts.load(Ordering::SeqCst) == 1, "B后端起始接纳数不是1")?;
         let original_registration = fixture.resolve(0).await.map_err(text)?;
@@ -483,6 +489,11 @@ async fn worker_lifecycle_mode_switch_preserves_same_worker_provider_tcp() {
                 && provided.connections[0].active_tcp == 1 && provided.connections[0].path == TunnelPath::Relay
         }).await?;
         exchange(&mut provided_to_b, b"b-to-a-original-tcp-after-a-relay-transfer").await?;
+        check(
+            fixture.provider().visitor_id().as_deref()
+                == Some(fixture.visitor().snapshot().connections[0].peer_id.as_str()),
+            "访问模式重建后的身份与被连接端对端统计不一致",
+        )?;
         check(fixture.backends[0].accepts.load(Ordering::SeqCst) == 1, "A提供端流被断开后重连，后端接纳数增加")?;
         check(fixture.backends[1].accepts.load(Ordering::SeqCst) == 2, "A访问模式重建不是一次旧流关闭加一次新流")?;
         let a_snapshot = fixture.provider().snapshot();

@@ -1,5 +1,6 @@
 'use client'
 
+import { isL2ChatSendResultUnknown } from '@common/l2_biz/chat/l2-chat-send-error'
 import type { L2ChatSource, L2ChatSourceState } from '@common/l2_biz/chat/l2-chat-contract'
 import type { L2ChatSourceEventPush } from '@common/l2_biz/chat/l2-chat-websocket-contract'
 import type { L3PiNativeToolsListResponse } from '@common/l3_modules/plugin-host/l3-plugin-native-pi-contract'
@@ -139,12 +140,6 @@ function storedInput(
 
 function errorMessage(cause: unknown, fallback: string): string {
   return cause instanceof Error && cause.message ? cause.message : fallback
-}
-
-function uncertainSendError(cause: unknown): boolean {
-  const raw = cause instanceof Error && 'rawMessage' in cause ? cause.rawMessage : null
-  const message = typeof raw === 'string' ? raw : errorMessage(cause, '')
-  return /WebSocket.*(?:断开|连接|替换)|请求超时|尚未连接/.test(message)
 }
 
 function inputText(left: string, right: string): string {
@@ -595,7 +590,7 @@ export function createL2WorkbenchChatInputRuntime(
             ...latest,
             outbox: {
               ...latest.outbox,
-              status: uncertainSendError(cause) ? 'unknown' : 'failed',
+              status: isL2ChatSendResultUnknown(cause) ? 'unknown' : 'failed',
               error: errorMessage(cause, workbenchText('sendFailed'))
             }
           })

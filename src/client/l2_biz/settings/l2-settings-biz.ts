@@ -11,6 +11,7 @@ const SettingsSectionSchema = z.union([
     'capability-modes',
     'skills',
     'plugins',
+    'environment',
     'about'
   ]),
   z.templateLiteral(['plugin:', z.string(), ':', z.string()])

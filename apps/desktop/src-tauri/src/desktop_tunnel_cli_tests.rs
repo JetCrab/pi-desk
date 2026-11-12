@@ -80,20 +80,23 @@ fn desktop_tunnel_info_reads_only_server_address() {
         .join(format!("config-info-{}-{suffix}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("config.json");
-    let config = serde_json::json!({"tunnel": {
-        "controlServerUrl":"http://tunnel.example:7001",
-        "controlKey":"ab".repeat(32),
-        "providerSecretKey": {"not": "a CLI identity"},
-        "publications": [{"localPort": 6233}]
-    }});
-    std::fs::write(&path, config.to_string()).unwrap();
+    let config: crate::config::DesktopConfig =
+        serde_json::from_value(serde_json::json!({"targets":[],"tunnel": {
+            "controlServerUrl":"http://tunnel.example:7001",
+            "controlKey":"ab".repeat(32),
+            "providerSecretKey":"cd".repeat(32),
+            "publications": [{"localPort": 6233,"publicPort":null,"enabled":true}]
+        }}))
+        .unwrap();
+    crate::config::save(&path, &config).unwrap();
+    let original = std::fs::read(&path).unwrap();
     assert_eq!(
         inspect_config(&path).unwrap(),
         Some("http://tunnel.example:7001".into())
     );
     assert_eq!(read_config(&path).unwrap().control_key, "ab".repeat(32));
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), config.to_string());
-    std::fs::write(&path, "{}").unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    std::fs::write(&path, r#"{"targets":[],"tunnel":{}}"#).unwrap();
     assert_eq!(inspect_config(&path).unwrap(), None);
     std::fs::remove_dir_all(directory).unwrap();
 }

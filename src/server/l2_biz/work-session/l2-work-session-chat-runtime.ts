@@ -95,6 +95,11 @@ export interface L2PreparedChatSourceSync {
   watermark: number
 }
 
+export type L2WorkSessionChatInputAccepted = L2ChatSendResponse & { source: L2ChatSource }
+type L2WorkSessionInputAcceptedListener = (
+  event: L2WorkSessionChatInputAccepted
+) => void | Promise<void>
+
 type L2WorkSessionChatRuntimeListener = (event: L2WorkSessionChatRuntimeEvent) => void
 type L2WorkSessionChatRecordListener = (
   workId: string,
@@ -170,6 +175,7 @@ export class L2WorkSessionChatRuntime {
   private readonly listeners = new Set<L2WorkSessionChatRuntimeListener>()
   private readonly recordListeners = new Set<L2WorkSessionChatRecordListener>()
   private readonly pluginPushListeners = new Set<L2WorkSessionPluginPushListener>()
+  private readonly inputAcceptedListeners = new Set<L2WorkSessionInputAcceptedListener>()
 
   async initialize(workSessions: readonly WorkSession[]): Promise<void> {
     const records = workSessions.map((workSession) => this.buildRecord(workSession))
@@ -469,8 +475,15 @@ export class L2WorkSessionChatRuntime {
     if (getL4PiWorkSessionRuntime(input.source.sessionId).nativeUi.hasPending) {
       return Promise.reject(new Error('请先处理当前插件问题，或停止当前任务'))
     }
-    const send = (): Promise<L2ChatSendResponse> =>
-      record.workSession.send({ mode: input.mode, text: input.text, images: input.images })
+    const send = async (): Promise<L2ChatSendResponse> => {
+      const result = await record.workSession.send({
+        mode: input.mode,
+        text: input.text,
+        images: input.images
+      })
+      this.publishInputAccepted({ source: record.source, tempId: result.tempId })
+      return result
+    }
     if (!record.compactionStart) return this.enqueueCommand(record, send)
     if (!record.acceptingCommands) {
       return Promise.reject(new L2ChatLifecycleBlockedError(record.source.workId))
@@ -624,6 +637,11 @@ export class L2WorkSessionChatRuntime {
   subscribeRecordChanges(listener: L2WorkSessionChatRecordListener): () => void {
     this.recordListeners.add(listener)
     return () => this.recordListeners.delete(listener)
+  }
+
+  subscribeInputAccepted(listener: L2WorkSessionInputAcceptedListener): () => void {
+    this.inputAcceptedListeners.add(listener)
+    return () => this.inputAcceptedListeners.delete(listener)
   }
 
   subscribePluginPush(listener: L2WorkSessionPluginPushListener): () => void {
@@ -957,6 +975,23 @@ export class L2WorkSessionChatRuntime {
       left.sessionId === right.sessionId &&
       left.branchId === right.branchId
     )
+  }
+
+  private publishInputAccepted(event: L2WorkSessionChatInputAccepted): void {
+    const snapshot = Object.freeze({ ...event, source: Object.freeze({ ...event.source }) })
+    for (const listener of [...this.inputAcceptedListeners]) {
+      const log = (error: unknown): void => {
+        console.error('[Pi Desk][WorkSessionChatRuntime] 输入接管监听器执行失败', {
+          workId: snapshot.source.workId,
+          message: error instanceof Error ? error.message : String(error)
+        })
+      }
+      try {
+        void Promise.resolve(listener(snapshot)).catch(log)
+      } catch (error) {
+        log(error)
+      }
+    }
   }
 
   private publishPluginPush(message: L3PluginPushMessage): void {

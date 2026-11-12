@@ -20,6 +20,7 @@ import {
   PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
 import type { RemoteDebugBrowserEvents } from './l4-browser-events.js'
+import type { RemoteDebugBrowserTunnels } from './l4-browser-tunnels.js'
 import { isActiveRun, readRuns, sendFailureToAi, stopRun } from './l2-browser-biz.js'
 import { useCatalog } from './hooks/l2-use-catalog.js'
 import { useProfileActions } from './hooks/l2-use-profile-actions.js'
@@ -33,13 +34,16 @@ function RemoteDebugApplication({
   target,
   host,
   signal,
-  events
+  events,
+  tunnels
 }: {
   target: BrowserApplicationTarget
   host: BrowserPluginHost
   signal: AbortSignal
   events: RemoteDebugBrowserEvents
+  tunnels: RemoteDebugBrowserTunnels
 }): React.JSX.Element {
+  const tunnelSnapshots = useSyncExternalStore(tunnels.subscribe, tunnels.getSnapshot)
   const catalog = useCatalog(host, signal, events)
   const rawState = useSyncExternalStore(
     (listener) => host.globalState.subscribe(listener),
@@ -155,6 +159,7 @@ function RemoteDebugApplication({
           >
             {selectedProject.profiles.map((profile) => {
               const profileRuns = selectedRuns.filter((run) => run.profile === profile.name)
+              const active = profileRuns.find(isActiveRun) ?? null
               const profileKey = `${selectedProject.cwd}:${profile.name}`
               return (
                 <ProfileCard
@@ -162,9 +167,11 @@ function RemoteDebugApplication({
                   cwd={selectedProject.cwd}
                   profile={profile}
                   latest={profileRuns[0] ?? null}
-                  active={profileRuns.find(isActiveRun) ?? null}
+                  active={active}
                   pending={pending.get(profileKey) ?? null}
                   host={host}
+                  mappingEnabled={host.tunnels !== undefined}
+                  tunnel={tunnelSnapshots.get(active?.runId ?? '') ?? null}
                   locale={region.locale}
                   timeZone={region.timeZone}
                   onStart={() => {
@@ -201,15 +208,23 @@ function RemoteDebugApplication({
 }
 
 export function createRemoteDebugApplication(
-  events: RemoteDebugBrowserEvents
+  events: RemoteDebugBrowserEvents,
+  getTunnels: () => RemoteDebugBrowserTunnels
 ): BrowserApplicationImplementation {
   return {
     mount({ container, target, host, signal }): () => void {
+      const tunnels = getTunnels()
       const root = createRoot(container)
       root.render(
         <PluginErrorBoundary>
           <PluginHostProvider host={host}>
-            <RemoteDebugApplication target={target} host={host} signal={signal} events={events} />
+            <RemoteDebugApplication
+              target={target}
+              host={host}
+              signal={signal}
+              events={events}
+              tunnels={tunnels}
+            />
           </PluginHostProvider>
         </PluginErrorBoundary>
       )

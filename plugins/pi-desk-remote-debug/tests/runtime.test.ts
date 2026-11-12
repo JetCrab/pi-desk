@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -7,6 +8,7 @@ import type { CommandResult, ManagedCommand } from '../src/command.js'
 import type { DebugGatewayHandle } from '../src/gateway.js'
 import type { RunLogger } from '../src/log.js'
 import { RemoteDebugRuntime as Runtime } from '../src/runtime.js'
+import { RemoteDebugSettingsStore } from '../src/l4-remote-debug-settings.js'
 
 class RemoteDebugRuntime extends Runtime {
   constructor(
@@ -42,6 +44,15 @@ function pluginFacade(
       states.push(state)
     },
     host: {
+      events: {
+        on(): () => void {
+          return () => undefined
+        },
+        onPlugin(): () => void {
+          return () => undefined
+        },
+        emit: (): void => undefined
+      },
       settings: {
         getSnapshot: () => ({ region: { locale: 'en', timeZone: 'UTC' } }),
         subscribe: () => () => undefined
@@ -135,9 +146,10 @@ test('运行到公网就绪后可显式停止并完整清理', async () => {
 
   const started = await runtime.start(cwd, 'web')
   assert.ok('runId' in started)
-  await waitFor(() => runtime.state().runs[0]?.status === 'running')
+  await waitFor(() => Boolean(runtime.state().runs[0]?.publicUrl))
   assert.equal(runtime.state().runs[0]?.publicUrl, 'http://tunnel.example:43333')
   assert.equal(runtime.state().runs[0]?.localUrl, 'http://127.0.0.1:30333')
+  assert.equal(runtime.state().runs[0]?.gatewayPort, 39123)
   assert.deepEqual(tunnelPorts, { localPort: 39123, publicPort: 43333 })
 
   await runtime.stop(started.runId)
@@ -146,6 +158,7 @@ test('运行到公网就绪后可显式停止并完整清理', async () => {
   assert.equal(run?.status, 'stopped')
   assert.equal(run?.publicUrl, null)
   assert.equal(run?.localUrl, null)
+  assert.equal(run?.gatewayPort, null)
   assert.equal(command.stopCalls(), 1)
   assert.equal(tunnel.stopCalls(), 1)
   assert.equal(gatewayClosed, 1)
@@ -179,22 +192,38 @@ test('Run 仅按 cwd 启动，不依赖 WorkSession 继续存在', async () => {
   await runtime.dispose()
 })
 
-test('活动 Run 使用相同公网端口时明确拒绝', async () => {
-  const command = deferredCommand()
+test('活动 Run 的公网端口冲突不阻止第二个本地项目启动', async () => {
+  const commands = [deferredCommand(), deferredCommand()]
   const tunnel = deferredTunnel('tunnel.example:43333')
+  let starts = 0
+  let tunnelStarts = 0
   const runtime = new RemoteDebugRuntime(pluginFacade([]), {
-    startCommand: () => command.handle,
+    startCommand: () => commands[starts++].handle,
     waitForPort: async () => undefined,
-    startGateway: async () => ({ port: 39125, close: async () => undefined }),
-    startTunnel: () => tunnel.handle
+    startGateway: async () => ({ port: 39125 + starts, close: async () => undefined }),
+    startTunnel: () => {
+      if (tunnelStarts++ > 0) throw new Error('公网端口 43333 已被占用')
+      return tunnel.handle
+    }
   })
-
-  const started = await runtime.start(cwd, 'web')
-  assert.ok('runId' in started)
-  await waitFor(() => runtime.state().runs[0]?.status === 'running')
-  await assert.rejects(runtime.start(cwd, 'api'), /公网端口 43333 正在被 web 使用/)
-  await runtime.stop(started.runId)
-  await runtime.dispose()
+  try {
+    await runtime.start(cwd, 'web')
+    await waitFor(() => Boolean(runtime.state().runs[0]?.publicUrl))
+    const second = await runtime.start(cwd, 'api')
+    assert.ok('runId' in second)
+    await waitFor(() => Boolean(runtime.state().runs[1]?.failure))
+    const [web, api] = runtime.state().runs
+    assert.equal(web.status, 'running')
+    assert.equal(web.publicUrl, 'http://tunnel.example:43333')
+    assert.equal(api.status, 'running')
+    assert.equal(api.localUrl, 'http://127.0.0.1:30334')
+    assert.equal(api.publicUrl, null)
+    assert.match(api.failure?.message ?? '', /43333.*占用.*本地访问仍可用/)
+    assert.equal(commands[0].stopCalls(), 0)
+    assert.equal(commands[1].stopCalls(), 0)
+  } finally {
+    await runtime.dispose()
+  }
 })
 
 test('项目命令在入口就绪前退出时收敛失败且不启动 Gateway', async () => {
@@ -253,7 +282,7 @@ test('Owner失效后dispose仍等待活动Run释放命令、Gateway、Tunnel和l
   })
 
   await runtime.start(cwd, 'web')
-  await waitFor(() => runtime.state().runs[0]?.status === 'running')
+  await waitFor(() => Boolean(runtime.state().runs[0]?.publicUrl))
   const publishedStateCount = states.length
   ownerActive = false
   await runtime.dispose()
@@ -451,7 +480,7 @@ test('隧道停止返回失败时仍清理Gateway和命令，Run不能报告已�
   try {
     const started = await runtime.start(cwd, 'web')
     assert.ok('runId' in started)
-    await waitFor(() => runtime.state().runs[0]?.status === 'running')
+    await waitFor(() => Boolean(runtime.state().runs[0]?.publicUrl))
     const run = await runtime.stop(started.runId)
     assert.equal(run.status, 'failed')
     assert.match(run.failure?.message ?? '', /Tunnel 清理失败：未确认资源释放/)
@@ -459,6 +488,235 @@ test('隧道停止返回失败时仍清理Gateway和命令，Run不能报告已�
   } finally {
     await runtime.dispose()
   }
+})
+
+test('本地就绪不等待 Gateway，Gateway 失败后仍运行且可停止', async () => {
+  const command = deferredCommand()
+  const gateway = deferredValue<DebugGatewayHandle>()
+  let gatewayRequested = false
+  const runtime = new RemoteDebugRuntime(pluginFacade([]), {
+    startCommand: () => command.handle,
+    waitForPort: async () => undefined,
+    startGateway: () => {
+      gatewayRequested = true
+      return gateway.promise
+    }
+  })
+  try {
+    const started = await runtime.start(cwd, 'web')
+    assert.ok('runId' in started)
+    await waitFor(() => gatewayRequested)
+    const run = runtime.state().runs[0]
+    assert.equal(run.status, 'running')
+    assert.equal(run.localUrl, 'http://127.0.0.1:30333')
+    assert.equal(run.publicUrl, null)
+    assert.equal(run.gatewayPort, null)
+    gateway.reject(new Error('Gateway 无法监听'))
+    await waitFor(() => Boolean(runtime.state().runs[0]?.failure))
+    assert.equal(runtime.state().runs[0]?.status, 'running')
+    assert.equal(command.stopCalls(), 0)
+    assert.equal((await runtime.stop(started.runId)).status, 'stopped')
+    assert.equal(command.stopCalls(), 1)
+  } finally {
+    gateway.reject(new Error('取消 Gateway'))
+    await runtime.dispose()
+  }
+})
+
+test('停止期间迟到的 Gateway 会关闭且不会再申请公网端口', async () => {
+  const command = deferredCommand()
+  const gateway = deferredValue<DebugGatewayHandle>()
+  let gatewayRequested = false
+  let gatewayClosed = 0
+  let tunnelStarts = 0
+  const runtime = new RemoteDebugRuntime(pluginFacade([]), {
+    startCommand: () => command.handle,
+    waitForPort: async () => undefined,
+    startGateway: () => {
+      gatewayRequested = true
+      return gateway.promise
+    },
+    startTunnel: () => {
+      tunnelStarts += 1
+      return deferredTunnel('unused').handle
+    }
+  })
+  try {
+    const started = await runtime.start(cwd, 'web')
+    assert.ok('runId' in started)
+    await waitFor(() => gatewayRequested)
+    const stopping = runtime.stop(started.runId)
+    gateway.resolve({
+      port: 39133,
+      close: async () => {
+        gatewayClosed += 1
+      }
+    })
+    assert.equal((await stopping).status, 'stopped')
+    assert.equal(gatewayClosed, 1)
+    assert.equal(tunnelStarts, 0)
+    assert.equal(command.stopCalls(), 1)
+    assert.equal(runtime.state().runs[0]?.localUrl, null)
+    assert.equal(runtime.state().runs[0]?.publicUrl, null)
+  } finally {
+    gateway.resolve({ port: 39133, close: async () => undefined })
+    await runtime.dispose()
+  }
+})
+
+test('隧道迟迟未就绪不阻塞本地运行，停止仍释放所有资源', async () => {
+  const command = deferredCommand()
+  const tunnel = deferredTunnel('tunnel.example:43333')
+  let tunnelStarted = false
+  let gatewayClosed = 0
+  const runtime = new RemoteDebugRuntime(pluginFacade([]), {
+    startCommand: () => command.handle,
+    waitForPort: async () => undefined,
+    startGateway: async () => ({
+      port: 39130,
+      close: async () => {
+        gatewayClosed += 1
+      }
+    }),
+    startTunnel: () => {
+      tunnelStarted = true
+      return { ...tunnel.handle, ready: new Promise<string>(() => undefined) }
+    }
+  })
+  try {
+    const started = await runtime.start(cwd, 'web')
+    assert.ok('runId' in started)
+    await waitFor(() => tunnelStarted)
+    assert.equal(runtime.state().runs[0]?.status, 'running')
+    assert.equal(runtime.state().runs[0]?.localUrl, 'http://127.0.0.1:30333')
+    assert.equal(runtime.state().runs[0]?.publicUrl, null)
+    assert.equal(command.stopCalls(), 0)
+    assert.equal((await runtime.stop(started.runId)).status, 'stopped')
+    assert.equal(tunnel.stopCalls(), 1)
+    assert.equal(gatewayClosed, 1)
+    assert.equal(command.stopCalls(), 1)
+  } finally {
+    await runtime.dispose()
+  }
+})
+
+test('公网运行后隧道退出仅撤下公网地址，本地继续运行', async () => {
+  const command = deferredCommand()
+  const tunnel = deferredTunnel('tunnel.example:43333')
+  const runtime = new RemoteDebugRuntime(pluginFacade([]), {
+    startCommand: () => command.handle,
+    waitForPort: async () => undefined,
+    startGateway: async () => ({ port: 39131, close: async () => undefined }),
+    startTunnel: () => tunnel.handle
+  })
+  try {
+    await runtime.start(cwd, 'web')
+    await waitFor(() => Boolean(runtime.state().runs[0]?.publicUrl))
+    tunnel.resolve({ failed: true, detail: '控制服务已断开', exitCode: 1 })
+    await waitFor(() => Boolean(runtime.state().runs[0]?.failure))
+    assert.equal(runtime.state().runs[0]?.status, 'running')
+    assert.equal(runtime.state().runs[0]?.localUrl, 'http://127.0.0.1:30333')
+    assert.equal(runtime.state().runs[0]?.publicUrl, null)
+    assert.match(runtime.state().runs[0]?.failure?.message ?? '', /控制服务已断开/)
+    assert.equal(command.stopCalls(), 0)
+    await waitFor(() => tunnel.stopCalls() === 1)
+  } finally {
+    await runtime.dispose()
+  }
+})
+
+test('端口登记等待或失败均不阻塞配置发现及本地启动', async (context) => {
+  context.mock.method(console, 'warn', () => undefined)
+  const registration = deferredValue<void>()
+  let syncRequested = false
+  const settingsStore = new RemoteDebugSettingsStore()
+  context.mock.method(settingsStore, 'syncProject', () => {
+    syncRequested = true
+    return registration.promise
+  })
+  context.mock.method(settingsStore, 'get', async () => {
+    throw new Error('启动不应查询公网设置')
+  })
+  const command = deferredCommand()
+  const tunnel = deferredTunnel('tunnel.example:43333')
+  const runtime = new RemoteDebugRuntime(pluginFacade([]), {
+    settingsStore,
+    startCommand: () => command.handle,
+    waitForPort: async () => undefined,
+    startGateway: async () => ({ port: 39132, close: async () => undefined }),
+    startTunnel: () => tunnel.handle
+  })
+  try {
+    const projects = await runtime.catalog()
+    assert.equal(projects[0]?.status, 'ready')
+    assert.equal(syncRequested, true)
+    await runtime.start(cwd, 'web')
+    await waitFor(() => Boolean(runtime.state().runs[0]?.publicUrl))
+    registration.reject(new Error('登记文件无法写入'))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.equal(runtime.state().runs[0]?.status, 'running')
+    assert.equal(command.stopCalls(), 0)
+  } finally {
+    registration.resolve()
+    await runtime.dispose()
+  }
+})
+
+test('公网端口拒绝后真实项目 HTTP 与 Gateway 仍可访问，停止后端口释放', async () => {
+  const directory = join(root, 'local-first-http')
+  await mkdir(join(directory, '.pi'), { recursive: true })
+  const reservation = createServer()
+  await new Promise<void>((resolve, reject) => {
+    reservation.once('error', reject)
+    reservation.listen(0, '127.0.0.1', resolve)
+  })
+  const address = reservation.address()
+  assert.ok(address && typeof address !== 'string')
+  const port = address.port
+  await new Promise<void>((resolve) => reservation.close(() => resolve()))
+  const script = join(directory, 'server.mjs')
+  await writeFile(
+    script,
+    `import { createServer } from 'node:http'\ncreateServer((_req, res) => res.end('local-ready')).listen(${port}, '127.0.0.1')\n`
+  )
+  await writeFile(
+    join(directory, '.pi', 'remote_debug.yaml'),
+    `version: 1\nprofiles:\n  web:\n    command: node "${script.replaceAll('\\', '/')}"\n    entryPort: ${port}\n    publicPort: 43333\n`
+  )
+  const tunnel = deferredTunnel('unused')
+  const runtime = new RemoteDebugRuntime(pluginFacade([]), {
+    startTunnel: () => ({
+      ...tunnel.handle,
+      ready: Promise.reject(new Error('公网端口 43333 已被占用'))
+    })
+  })
+  let localUrl = ''
+  let gatewayUrl = ''
+  try {
+    const started = await runtime.start(directory, 'web')
+    assert.ok('runId' in started)
+    await waitFor(() => Boolean(runtime.state().runs[0]?.failure))
+    const run = runtime.state().runs[0]
+    assert.equal(run.status, 'running')
+    assert.equal(run.publicUrl, null)
+    assert.equal(run.endedAt, null)
+    localUrl = run.localUrl!
+    gatewayUrl = `http://127.0.0.1:${run.gatewayPort}`
+    assert.equal(
+      await (await fetch(localUrl, { signal: AbortSignal.timeout(3000) })).text(),
+      'local-ready'
+    )
+    assert.equal(
+      await (await fetch(gatewayUrl, { signal: AbortSignal.timeout(3000) })).text(),
+      'local-ready'
+    )
+    await waitFor(() => tunnel.stopCalls() === 1)
+    assert.equal((await runtime.stop(started.runId)).status, 'stopped')
+  } finally {
+    await runtime.dispose()
+  }
+  await assert.rejects(fetch(localUrl, { signal: AbortSignal.timeout(3000) }))
+  await assert.rejects(fetch(gatewayUrl, { signal: AbortSignal.timeout(3000) }))
 })
 
 function deferredCommand(): {
@@ -511,6 +769,7 @@ function testLogger(onClose: () => void): RunLogger {
 
 function deferredTunnel(publicAddr: string): {
   handle: ManagedTunnelClient
+  resolve(result: TunnelClientResult): void
   stopCalls(): number
 } {
   let resolveCompletion!: (result: TunnelClientResult) => void
@@ -529,6 +788,7 @@ function deferredTunnel(publicAddr: string): {
         return result
       }
     },
+    resolve: resolveCompletion,
     stopCalls: () => stopped
   }
 }

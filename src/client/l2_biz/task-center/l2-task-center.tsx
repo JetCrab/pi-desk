@@ -44,10 +44,7 @@ import {
 } from '@client/l3_modules/conversation/l3-conversation-display'
 import { L3ConversationNavigation } from '@client/l3_modules/conversation/l3-conversation-navigation'
 import { L3ConversationProgressiveWindow } from '@client/l3_modules/conversation/l3-conversation-progressive-window'
-import {
-  L3ConversationStickToBottomBridge,
-  L3ConversationTurnView
-} from '@client/l3_modules/conversation/l3-conversation-messages'
+import { L3ConversationTurnView } from '@client/l3_modules/conversation/l3-conversation-messages'
 import { L3ConversationTailSpacerObserver } from '@client/l3_modules/conversation/l3-conversation-viewport'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
 import type { L2TaskCenterRuntime } from './l2-task-center-runtime'
@@ -220,33 +217,31 @@ function TaskConversation({
         {(turnWindow) => (
           <>
             <L3ConversationTailSpacerObserver />
-            <L3ConversationStickToBottomBridge>
-              <ConversationContent
-                scrollClassName="pi-desk-chat-scrollbar"
-                className="mx-auto min-h-full w-full max-w-3xl gap-6 px-4 pt-3 pb-6 sm:px-6"
-              >
-                {turns.length > 0 ? (
-                  turnWindow.visibleTurns.map((turn, index) => {
-                    const turnIndex = turnWindow.startIndex + index
-                    return (
-                      <L3ConversationTurnView
-                        key={turn.identity}
-                        turn={turn}
-                        cwd={cwd}
-                        logicalTail={turnWindow.containsTail && turnIndex === turns.length - 1}
-                        onLoadDetail={runtime.loadMessageDetail}
-                        onAcquireImage={runtime.acquireImage}
-                      />
-                    )
-                  })
-                ) : (
-                  <div className="grid min-h-48 place-items-center text-sm text-muted-foreground">
-                    {t('noMessages')}
-                  </div>
-                )}
-                <div className="h-4 shrink-0" aria-hidden="true" />
-              </ConversationContent>
-            </L3ConversationStickToBottomBridge>
+            <ConversationContent
+              scrollClassName="pi-desk-chat-scrollbar"
+              className="mx-auto min-h-full w-full max-w-3xl gap-6 px-4 pt-3 pb-6 sm:px-6"
+            >
+              {turns.length > 0 ? (
+                turnWindow.visibleTurns.map((turn, index) => {
+                  const turnIndex = turnWindow.startIndex + index
+                  return (
+                    <L3ConversationTurnView
+                      key={turn.identity}
+                      turn={turn}
+                      cwd={cwd}
+                      logicalTail={turnWindow.containsTail && turnIndex === turns.length - 1}
+                      onLoadDetail={runtime.loadMessageDetail}
+                      onAcquireImage={runtime.acquireImage}
+                    />
+                  )
+                })
+              ) : (
+                <div className="grid min-h-48 place-items-center text-sm text-muted-foreground">
+                  {t('noMessages')}
+                </div>
+              )}
+              <div className="h-4 shrink-0" aria-hidden="true" />
+            </ConversationContent>
             <L3ConversationNavigation turns={turns} window={turnWindow} />
           </>
         )}

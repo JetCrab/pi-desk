@@ -15,6 +15,7 @@ import { L2PluginSessionSidebarTab } from '@client/l2_biz/plugin-host/l2-plugin-
 import { L2PluginSettingsPage } from '@client/l2_biz/plugin-host/l2-plugin-settings-page'
 import { L2PluginWidgets } from '@client/l2_biz/plugin-host/l2-plugin-widgets'
 import { L2PluginSessionHeader } from '@client/l2_biz/plugin-host/l2-plugin-session-header'
+import { L2EnvironmentSettings } from '@client/l2_biz/environment/l2-environment-settings'
 import { L2Settings } from '@client/l2_biz/settings/l2-settings'
 import { L2PiSettings } from '@client/l2_biz/pi-settings/l2-pi-settings'
 import { createL2TaskCenterBiz } from '@client/l2_biz/task-center/l2-task-center-biz'
@@ -151,6 +152,7 @@ export function L1HomePage(): React.JSX.Element {
         onOpenChange={input.onOpenChange}
         onBeforeReload={input.onBeforeReload}
         renderPluginSettingsPage={renderPluginSettingsPage}
+        renderEnvironmentSettings={() => <L2EnvironmentSettings clientId={clientId} />}
         renderMcpSettings={({ onBeforeLeaveChange }) => (
           <L2PiSettings
             projects={input.workSessions}
@@ -175,7 +177,7 @@ export function L1HomePage(): React.JSX.Element {
         )}
       />
     ),
-    [pluginManagementBiz]
+    [clientId, pluginManagementBiz]
   )
 
   return (

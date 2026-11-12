@@ -120,6 +120,16 @@ impl TunnelEndpoint {
         })
     }
 
+    pub async fn forward_listener(
+        &self,
+        listener: std::net::TcpListener,
+        target: TunnelTarget,
+    ) -> Result<TunnelForwarder, String> {
+        Ok(TunnelForwarder {
+            runtime: self.runtime.forward_listener(listener, target).await?,
+        })
+    }
+
     pub fn connections(&self) -> Vec<TunnelConnectionRow> {
         self.runtime.connections()
     }

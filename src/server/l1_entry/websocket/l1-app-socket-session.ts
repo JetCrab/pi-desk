@@ -17,6 +17,7 @@ import type { WebSocket } from 'ws'
 import type { L1AppSocketRoute } from './l1-app-socket-route'
 import { L1AppRuntimeSocketController } from './l1-app-runtime-socket-controller'
 import { L1ChatSocketController } from './l1-chat-socket-controller'
+import { L1ClientTunnelSocketController } from './l1-client-tunnel-socket-controller'
 import { L1PluginLogSocketController } from './l1-plugin-log-socket-controller'
 import { L1NativeUiSocketController } from './l1-native-ui-socket-controller'
 import { L1ModelAuthSocketController } from './l1-model-auth-socket-controller'
@@ -32,6 +33,7 @@ export class L1AppSocketSession {
   private readonly workSessions: L1WorkSessionSocketController
   private readonly appRuntime: L1AppRuntimeSocketController
   private readonly chat: L1ChatSocketController
+  private readonly clientTunnels: L1ClientTunnelSocketController
   private readonly plugins: L1PluginSocketController
   private readonly nativeUi: L1NativeUiSocketController
   private readonly modelAuth: L1ModelAuthSocketController
@@ -54,6 +56,7 @@ export class L1AppSocketSession {
     this.workSessions = new L1WorkSessionSocketController(this.connection, manage, appRuntime)
     this.appRuntime = new L1AppRuntimeSocketController(this.connection, appRuntime)
     this.chat = new L1ChatSocketController(this.connection, manage)
+    this.clientTunnels = new L1ClientTunnelSocketController(this.connection)
     this.plugins = new L1PluginSocketController(this.connection, manage, () =>
       this.workSessions.isReady()
     )
@@ -67,6 +70,7 @@ export class L1AppSocketSession {
     this.registerRoutes(this.workSessions.routes)
     this.registerRoutes(this.appRuntime.routes)
     this.registerRoutes(this.chat.routes)
+    this.registerRoutes(this.clientTunnels.routes)
     this.registerRoutes(this.plugins.routes)
     this.registerRoutes(this.nativeUi.routes)
     this.registerRoutes(this.modelAuth.routes)
@@ -157,6 +161,7 @@ export class L1AppSocketSession {
     this.taskCenter.dispose()
     this.terminals.dispose()
     this.chat.dispose()
+    this.clientTunnels.dispose()
     this.appRuntime.dispose()
     this.workSessions.dispose()
   }

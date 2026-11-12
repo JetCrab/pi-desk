@@ -429,6 +429,11 @@ body:has(.pi-desk-workbench) {
   background: transparent;
 }
 
+.pi-desk-chat-scrollbar::-webkit-scrollbar-corner,
+.pi-desk-chat-scrollbar *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 .pi-desk-chat-scrollbar::-webkit-scrollbar-button,
 .pi-desk-chat-scrollbar *::-webkit-scrollbar-button {
   width: 0;

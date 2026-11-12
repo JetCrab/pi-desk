@@ -195,9 +195,9 @@ test('运行中的父会话刷新可用类型并在下次启动读取最新模�
   const root = mkdtempSync(join(tmpdir(), 'pi-desk-subagent-refresh-'))
   const agentDir = join(root, 'agent')
   const cwd = join(root, 'project')
-  mkdirSync(agentDir, { recursive: true })
+  mkdirSync(join(agentDir, 'config'), { recursive: true })
   mkdirSync(cwd, { recursive: true })
-  const settingsPath = join(agentDir, 'settings.json')
+  const settingsPath = join(agentDir, 'config', 'pi-desk-subagent.json')
   writeFileSync(
     settingsPath,
     JSON.stringify({
@@ -514,11 +514,10 @@ test('agent、steer、stop、list 和 resume 复用同一 child Session 身份',
   assert.match(startedText, /子代理已在后台启动。/)
   assert.match(startedText, new RegExp(`Agent ID: ${launch.taskId}`))
   assert.match(startedText, /子代理结束后会异步主动通知结果并唤醒主代理。/)
-  assert.match(
-    startedText,
-    /不要为等待结果调用 agent_list 查询状态，也不要通过 bash\/sleep 等方式等待。/
-  )
-  assert.match(startedText, /可以继续独立工作；没有独立工作时结束当前轮，等待通知。/)
+  assert.match(startedText, /不要为等待结果调用 agent_list，也不要通过 bash\/sleep 等方式等待。/)
+  assert.match(startedText, /仍有子代理执行期间，主代理只做规划或派发/)
+  assert.match(startedText, /没有需要继续规划或派发的事项时，结束当前轮回复并等待通知。/)
+  assert.doesNotMatch(startedText, /可以继续独立工作/)
   assert.doesNotMatch(startedText, /调查任务中心/)
   assert.deepEqual(
     { ...launch, startedAt: typeof launch.startedAt },
@@ -637,11 +636,10 @@ test('agent、steer、stop、list 和 resume 复用同一 child Session 身份',
   assert.match(resumedText, /子代理已恢复运行。/)
   assert.match(resumedText, new RegExp(`Agent ID: ${launch.taskId}`))
   assert.match(resumedText, /子代理结束后会异步主动通知结果并唤醒主代理。/)
-  assert.match(
-    resumedText,
-    /不要为等待结果调用 agent_list 查询状态，也不要通过 bash\/sleep 等方式等待。/
-  )
-  assert.match(resumedText, /可以继续独立工作；没有独立工作时结束当前轮，等待通知。/)
+  assert.match(resumedText, /不要为等待结果调用 agent_list，也不要通过 bash\/sleep 等方式等待。/)
+  assert.match(resumedText, /仍有子代理执行期间，主代理只做规划或派发/)
+  assert.match(resumedText, /没有需要继续规划或派发的事项时，结束当前轮回复并等待通知。/)
+  assert.doesNotMatch(resumedText, /可以继续独立工作/)
   assert.deepEqual(
     { ...resumedDetails, startedAt: typeof resumedDetails.startedAt },
     {

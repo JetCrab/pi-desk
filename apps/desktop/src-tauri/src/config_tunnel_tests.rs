@@ -16,68 +16,41 @@ fn directory(name: &str) -> PathBuf {
 }
 
 #[test]
-fn migrates_legacy_publications_and_removes_url_tunnel_and_device_id() {
-    let directory = directory("config-migration");
-    let path = directory.join("config.json");
-    fs::write(&path, serde_json::to_vec(&serde_json::json!({
-        "targets": [
-            {"url": "http://127.0.0.1:30333/a", "tunnel": {"publicPort": 41001, "enabled": true}},
-            {"url": "http://localhost:30333/b", "tunnel": {"publicPort": 41001, "enabled": true}},
-            {"url": "https://localhost/", "tunnel": {"publicPort": 41002, "enabled": false}},
-            {"url": "https://example.test/bookmark"}
-        ],
-        "tunnel": {"deviceId": "old-device", "controlServerUrl": "http://control.example:7001", "controlKey": "ab".repeat(32)}
-    })).unwrap()).unwrap();
-    let config = load(&path).unwrap();
-    assert_eq!(config.targets.len(), 4);
-    assert_eq!(
-        config.tunnel.publications,
-        vec![
-            TunnelPublication {
-                local_port: 30333,
-                public_port: Some(41001),
-                enabled: true
-            },
-            TunnelPublication {
-                local_port: 443,
-                public_port: Some(41002),
-                enabled: false
-            },
-        ]
-    );
+fn current_publications_and_sensitive_fields_roundtrip_without_touching_other_files() {
+    let directory = directory("current-config");
+    let path = directory.join("desktop.json");
+    let source = directory.join("config.json");
+    fs::write(&source, b"unread old source").unwrap();
+    let config: DesktopConfig = serde_json::from_value(serde_json::json!({
+        "targets":[{"url":"https://example.test/bookmark"}],
+        "tunnel":{"controlServerUrl":"http://control.example:7001","controlKey":"ab".repeat(32),"providerSecretKey":"cd".repeat(32),"publications":[{"localPort":30333,"publicPort":41001,"enabled":true}]}
+    })).unwrap();
     save(&path, &config).unwrap();
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    assert!(saved["targets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|target| target.get("tunnel").is_none()));
-    assert!(saved["tunnel"].get("deviceId").is_none());
-    assert_eq!(saved["tunnel"]["controlKey"], "ab".repeat(32));
+    assert_eq!(
+        saved["tunnel"]["controlKey"],
+        "desktop-secret://control-key"
+    );
+    assert_eq!(load(&path).unwrap().tunnel.control_key, "ab".repeat(32));
     assert_eq!(
         load(&path).unwrap().tunnel.publications,
         config.tunnel.publications
     );
+    assert_eq!(fs::read(source).unwrap(), b"unread old source");
     fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
-fn refuses_conflicting_migration_and_corrupt_files_without_rewriting() {
-    let directory = directory("migration-conflict");
-    let path = directory.join("config.json");
+fn refuses_invalid_current_documents_without_rewriting() {
+    let directory = directory("invalid-current-config");
+    let path = directory.join("desktop.json");
     for content in [
-        r#"{"targets":[{"url":"http://localhost:30333/a","tunnel":{"publicPort":41001,"enabled":true}},{"url":"http://localhost:30333/b","tunnel":{"publicPort":41002,"enabled":true}}]}"#,
-        r#"{"targets":[{"url":"http://localhost:30333/a","tunnel":{"publicPort":41001,"enabled":true}}],"tunnel":{"publications":[{"localPort":30333,"publicPort":41001,"enabled":false}]}}"#,
+        r#"{"targets":[{"url":"https://same.test"},{"url":"https://same.test/"}]}"#,
+        r#"{"targets":[],"tunnel":{"controlKey":"desktop-secret://control-key"}}"#,
         "{broken",
     ] {
         fs::write(&path, content).unwrap();
-        let error = load(&path).unwrap_err();
-        if content != "{broken" {
-            assert!(
-                error.contains("迁移冲突") && error.contains("30333"),
-                "{error}"
-            );
-        }
+        assert!(load(&path).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), content);
     }
     fs::remove_dir_all(directory).unwrap();

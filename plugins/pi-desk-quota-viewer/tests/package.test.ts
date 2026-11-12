@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile, readdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
+import { quotaAdapterRegistry } from '../src/adapters/registry.js'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type {
   BrowserContributionDefinitionMap,
@@ -13,6 +14,29 @@ const artifactRoot = process.env.QUOTA_PLUGIN_ARTIFACT
   ? resolve(process.env.QUOTA_PLUGIN_ARTIFACT)
   : packageRoot
 const browserRoot = join(artifactRoot, 'dist', 'browser')
+
+test('环境归档仅声明额度配置文件', async () => {
+  const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
+  const secretPaths = [
+    ...new Set(
+      [...quotaAdapterRegistry.values()].flatMap((adapter) =>
+        adapter.descriptor.fields
+          .filter((field) => field.kind === 'secret')
+          .map(
+            (field) => `/sources/*/config/${field.key.replaceAll('~', '~0').replaceAll('/', '~1')}`
+          )
+      )
+    )
+  ].sort()
+  assert.deepEqual(manifest.piDesk.environment.files, [
+    {
+      base: 'config',
+      path: 'pi-desk-quota-viewer.json',
+      format: 'json',
+      secretPaths
+    }
+  ])
+})
 
 async function browserSources(): Promise<string[]> {
   const paths = await readdir(browserRoot, { recursive: true })

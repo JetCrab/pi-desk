@@ -1,12 +1,13 @@
+use crate::desktop_storage;
 use pi_desk_tunnel_common::runtime::{provider_id, TunnelMode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use url::Url;
 
-const MAX_CONFIG_BYTES: u64 = 256 * 1024;
+const MAX_CONFIG_BYTES: u64 = crate::desktop_storage::MAX_BYTES as u64;
 const MAX_URL_LENGTH: usize = 2048;
 const MAX_COMMAND_LENGTH: usize = 8192;
 const DEFAULT_LOCAL_URL: &str = "http://127.0.0.1:30333";
@@ -63,7 +64,7 @@ pub enum ReleaseChannel {
 #[serde(rename_all = "camelCase")]
 pub struct PackageConfig {
     pub name: String,
-    // 仅供 npm 操作注入统一源，旧服务配置中的 registry 不再读取或写入。
+    // 仅供 npm 操作注入统一源，不属于持久配置。
     #[serde(skip)]
     pub registry: Option<String>,
     #[serde(default)]
@@ -335,119 +336,43 @@ pub fn load(path: &Path) -> Result<DesktopConfig, String> {
     let content = fs::read_to_string(path).map_err(|error| format!("读取桌面配置失败：{error}"))?;
     let value: serde_json::Value =
         serde_json::from_str(&content).map_err(|error| format!("桌面配置格式无效：{error}"))?;
-    if value.get("targets").is_none() {
-        return normalize(DesktopConfig::default());
-    }
-
-    let config = decode_config(value)?;
-    normalize(config)
+    decode_value(desktop_storage::decrypt(path, value)?)
 }
 
-fn decode_config(mut value: serde_json::Value) -> Result<DesktopConfig, String> {
-    let mut legacy = Vec::new();
-    if let Some(targets) = value
-        .get_mut("targets")
-        .and_then(serde_json::Value::as_array_mut)
-    {
-        for target in targets {
-            if let Some(old) = target
-                .as_object_mut()
-                .and_then(|target| target.remove("tunnel"))
-            {
-                if old.is_null() {
-                    continue;
-                }
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct LegacyPublication {
-                    #[serde(default)]
-                    enabled: bool,
-                    public_port: u16,
-                }
-                let old: LegacyPublication = serde_json::from_value(old)
-                    .map_err(|error| format!("旧隧道配置无效：{error}"))?;
-                let url = target
-                    .get("url")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or("旧隧道网址缺失")?;
-                legacy.push((
-                    url.to_string(),
-                    TunnelPublication {
-                        local_port: target_port(url)?,
-                        public_port: Some(old.public_port),
-                        enabled: old.enabled,
-                    },
-                ));
-            }
-        }
+pub(crate) fn initialize(path: &Path) -> Result<(), String> {
+    let _lock = desktop_storage::lock(path)?;
+    if desktop_storage::read_value(path)?.is_none() {
+        let mut value = serde_json::to_value(normalize(DesktopConfig::default())?)
+            .map_err(|_| "生成默认桌面配置失败")?;
+        value["preferences"] =
+            serde_json::to_value(crate::desktop_environment::Preferences::default())
+                .map_err(|_| "生成默认桌面偏好失败")?;
+        desktop_storage::write_value(path, &value)?;
     }
-    let mut config: DesktopConfig =
-        serde_json::from_value(value).map_err(|error| format!("桌面配置格式无效：{error}"))?;
-    for (url, publication) in legacy {
-        if let Some(previous) = config
-            .tunnel
-            .publications
-            .iter()
-            .find(|item| item.local_port == publication.local_port)
-        {
-            if previous != &publication {
-                return Err(format!(
-                    "旧隧道迁移冲突：网址 {url} 的本机端口 {} 与已有发布设置不一致，原文件未修改",
-                    publication.local_port
-                ));
-            }
-        } else {
-            config.tunnel.publications.push(publication);
-        }
-    }
-    Ok(config)
+    Ok(())
+}
+
+pub(crate) fn decode_value(value: serde_json::Value) -> Result<DesktopConfig, String> {
+    let config = serde_json::from_value(value).map_err(|_| "桌面配置格式无效")?;
+    normalize(config)
 }
 
 pub fn save(path: &Path, config: &DesktopConfig) -> Result<(), String> {
     let config = normalize(config.clone())?;
-    if let Ok(metadata) = fs::symlink_metadata(path) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err("桌面配置必须是普通文件".to_string());
-        }
-    }
-
-    let parent = path
-        .parent()
-        .ok_or_else(|| "桌面配置目录无效".to_string())?;
-    fs::create_dir_all(parent).map_err(|error| format!("创建桌面配置目录失败：{error}"))?;
-    let content = serde_json::to_string_pretty(&config)
-        .map_err(|error| format!("生成桌面配置失败：{error}"))?;
-    if content.len() as u64 > MAX_CONFIG_BYTES {
-        return Err("桌面配置内容过大".to_string());
-    }
-    let temporary = temporary_path(path);
-    fs::write(&temporary, format!("{content}\n"))
-        .map_err(|error| format!("写入桌面配置失败：{error}"))?;
-
-    let result: Result<(), String> = match fs::rename(&temporary, path) {
-        Ok(()) => Ok(()),
-        Err(rename_error) => {
-            if !path.exists() {
-                Err(format!("保存桌面配置失败：{rename_error}"))
-            } else {
-                fs::remove_file(path)
-                    .and_then(|()| fs::rename(&temporary, path))
-                    .map_err(|error| format!("替换桌面配置失败：{error}"))
-            }
-        }
-    };
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("config.json");
-    path.with_file_name(format!("{name}.{}.tmp", std::process::id()))
+    let _lock = desktop_storage::lock(path)?;
+    let mut value = desktop_storage::read_value(path)?
+        .map(|value| {
+            let plain = desktop_storage::decrypt(path, value)?;
+            decode_value(plain.clone())?;
+            Ok::<_, String>(plain)
+        })
+        .transpose()?
+        .unwrap_or_else(|| serde_json::json!({}));
+    let normalized = serde_json::to_value(&config).map_err(|_| "生成桌面配置失败")?;
+    value["targets"] = normalized["targets"].clone();
+    value["tunnel"] = normalized["tunnel"].clone();
+    let encrypted = desktop_storage::encrypt(path, value)?;
+    desktop_storage::write_value(path, &encrypted)
 }
 
 #[cfg(test)]
@@ -595,7 +520,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_legacy_config_without_rewriting_it() {
+    fn rejects_documents_without_current_targets_without_rewriting_them() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -613,22 +538,7 @@ mod tests {
             r#"{"visit":null,"server":false,"tunnel":"ignored"}"#,
         ] {
             fs::write(&path, content).unwrap();
-            let loaded = load(&path).expect("旧配置应被忽略而不报错");
-            assert_eq!(loaded.targets.len(), 1);
-            assert_eq!(loaded.targets[0].url, "http://127.0.0.1:30333/");
-            assert!(loaded.tunnel.publications.is_empty());
-            let package = loaded.targets[0]
-                .server
-                .as_ref()
-                .unwrap()
-                .package
-                .as_ref()
-                .unwrap();
-            assert_eq!(package.name, "@jetcrab/pi-desk");
-            assert_eq!(package.startup_update, UpdatePolicy::Check);
-            assert_eq!(package.periodic_update, UpdatePolicy::None);
-            assert_eq!(package.channel, ReleaseChannel::Stable);
-            assert!(loaded.tunnel.control_server_url.is_empty());
+            assert!(load(&path).is_err());
             assert_eq!(fs::read_to_string(&path).unwrap(), content);
         }
         fs::remove_dir_all(directory).unwrap();
@@ -640,15 +550,14 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let directory = std::env::temp_dir().join(format!(
-            "jetcrab-desktop-legacy-config-test-{}-{suffix}",
-            std::process::id()
-        ));
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../temp/tests/desktop-config")
+            .join(format!("current-package-{}-{suffix}", std::process::id()));
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("config.json");
         fs::write(
             &path,
-            r#"{"targets":[{"url":"http://127.0.0.1:30333","server":{"startCommand":"node_modules\\.bin\\pi-super.cmd start -H 127.0.0.1 -p {port} --no-open","readyPath":"/api/health","package":{"name":"@jetcrab/pi-super","registry":"https://registry.example.com","autoUpdateOnStart":true,"periodicUpdateCheck":false}}}],"tunnel":{}}"#,
+            r#"{"targets":[{"url":"http://127.0.0.1:30333","server":{"startCommand":"node_modules\\.bin\\pi-super.cmd start -H 127.0.0.1 -p {port} --no-open","readyPath":"/api/health","package":{"name":"@jetcrab/pi-super","startupUpdate":"none","periodicUpdate":"none","channel":"stable"}}}],"tunnel":{}}"#,
         )
         .unwrap();
 

@@ -2,8 +2,8 @@ import 'server-only'
 
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { getAgentDir } from '@earendil-works/pi-coding-agent'
+import { dirname } from 'node:path'
+import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
 import {
   HostSettingsSchema,
   type HostRegion,
@@ -26,7 +26,7 @@ export class L4HostSettingsStore {
   private tail: Promise<void> = Promise.resolve()
 
   constructor(
-    private readonly path = join(getAgentDir(), 'pi-desk-settings.json'),
+    private readonly path = getConfigPath('pi-desk-settings.json'),
     private readonly defaults: () => HostSettingsSnapshot = initialSettings
   ) {}
 

@@ -10,6 +10,15 @@ function facade(registrations: {
   return {
     name: 'quota-viewer',
     host: {
+      events: {
+        on(): () => void {
+          return () => undefined
+        },
+        onPlugin(): () => void {
+          return () => undefined
+        },
+        emit: (): void => undefined
+      },
       settings: {
         getSnapshot: () => ({ region: { locale: 'en', timeZone: 'UTC' } }),
         subscribe: () => () => undefined

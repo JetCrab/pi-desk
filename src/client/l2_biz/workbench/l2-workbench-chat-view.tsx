@@ -13,7 +13,6 @@ import { L3ConversationProgressiveWindow } from '@client/l3_modules/conversation
 import { L3ConversationTailSpacerObserver } from '@client/l3_modules/conversation/l3-conversation-viewport'
 import {
   L3ConversationPresentationProvider,
-  L3ConversationStickToBottomBridge,
   L3ConversationTurnView,
   type L3ConversationAcquireImage,
   type L3ConversationLoadDetail
@@ -160,29 +159,27 @@ function L2WorkbenchChatViewComponent({
         >
           {(turnWindow) => (
             <>
-              <L3ConversationStickToBottomBridge>
-                <ConversationContent
-                  scrollClassName="pi-desk-chat-scrollbar pi-desk-chat-conversation-scroll overflow-auto"
-                  className="mx-auto min-h-full w-full max-w-3xl gap-6 px-3 pt-3 pb-4 sm:px-5"
-                >
-                  {turnWindow.visibleTurns.map((turn, index) => {
-                    const turnIndex = turnWindow.startIndex + index
-                    return (
-                      <L3ConversationTurnView
-                        key={turn.identity}
-                        turn={turn}
-                        cwd={workSession.cwd}
-                        logicalTail={turnWindow.containsTail && turnIndex === turns.length - 1}
-                        onLoadDetail={loadDetail}
-                        onAcquireImage={acquireImage}
-                        onPreviewFile={previewFile}
-                        onResend={resend}
-                        resendDisabled={resendDisabled || state.syncStatus !== 'ready'}
-                      />
-                    )
-                  })}
-                </ConversationContent>
-              </L3ConversationStickToBottomBridge>
+              <ConversationContent
+                scrollClassName="pi-desk-chat-scrollbar pi-desk-chat-conversation-scroll overflow-auto"
+                className="mx-auto min-h-full w-full max-w-3xl gap-6 px-3 pt-3 pb-4 sm:px-5"
+              >
+                {turnWindow.visibleTurns.map((turn, index) => {
+                  const turnIndex = turnWindow.startIndex + index
+                  return (
+                    <L3ConversationTurnView
+                      key={turn.identity}
+                      turn={turn}
+                      cwd={workSession.cwd}
+                      logicalTail={turnWindow.containsTail && turnIndex === turns.length - 1}
+                      onLoadDetail={loadDetail}
+                      onAcquireImage={acquireImage}
+                      onPreviewFile={previewFile}
+                      onResend={resend}
+                      resendDisabled={resendDisabled || state.syncStatus !== 'ready'}
+                    />
+                  )
+                })}
+              </ConversationContent>
               {/* 内容先挂载，确保视口管理器的布局 effect 能取得滚动节点。 */}
               <L2WorkbenchChatViewportManager
                 key={`viewport:${source.sessionId}:${source.branchId}`}

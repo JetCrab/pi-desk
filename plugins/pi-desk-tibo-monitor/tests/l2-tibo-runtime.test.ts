@@ -68,7 +68,7 @@ function createHost(): {
 
 async function tempPath(): Promise<{ path: string; root: string }> {
   const root = await mkdtemp(join(tmpdir(), 'tibo-runtime-'))
-  return { path: join(root, 'state.json'), root }
+  return { path: join(root, 'config', 'pi-desk-tibo-monitor.json'), root }
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {

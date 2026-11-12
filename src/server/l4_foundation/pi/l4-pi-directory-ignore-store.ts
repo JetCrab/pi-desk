@@ -1,15 +1,12 @@
 import 'server-only'
 
-import { getL4PiDeskDataDir } from './l4-pi-desk-data-dir'
-
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
-
-const IGNORED_PI_DIRECTORIES_FILE_NAME = 'ignored-pi-directories.json'
+import { dirname, resolve } from 'node:path'
+import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
 
 function storePath(): string {
-  return join(getL4PiDeskDataDir(), IGNORED_PI_DIRECTORIES_FILE_NAME)
+  return getConfigPath('pi-desk-ignored-directories.json')
 }
 
 export function getL4PiDirectoryKey(cwd: string): string {

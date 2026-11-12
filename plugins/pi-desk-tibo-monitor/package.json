@@ -6,7 +6,7 @@
     "url": "git+https://github.com/JetCrab/pi-desk.git",
     "directory": "plugins/pi-desk-tibo-monitor"
   },
-  "version": "1.1.15",
+  "version": "1.1.17",
   "license": "Apache-2.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -32,6 +32,26 @@
   ],
   "piDesk": {
     "entry": "./dist/l2-tibo-entry.js",
+    "environment": {
+      "files": [
+        {
+          "base": "config",
+          "path": "pi-desk-tibo-monitor.json",
+          "format": "json",
+          "secretPaths": [],
+          "omitPaths": [
+            "/records",
+            "/analysisRegion"
+          ]
+        },
+        {
+          "base": "data",
+          "path": "tibo-monitor.json",
+          "format": "json",
+          "secretPaths": []
+        }
+      ]
+    },
     "i18n": {
       "zh-CN": {
         "description": "监控 Tibo 的 X 动态，按界面语言翻译，并提醒 Codex 限额重置。"

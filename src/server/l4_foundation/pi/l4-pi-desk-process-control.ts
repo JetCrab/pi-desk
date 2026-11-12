@@ -1,5 +1,7 @@
 import 'server-only'
 
+import type { L4EnvironmentMaintenanceRequest } from '@server/l4_foundation/environment/l4-environment-operations'
+
 export interface L4PiDeskPackageMaintenanceRequest {
   action: 'install' | 'update' | 'remove' | 'reinstall'
   source: string
@@ -8,7 +10,8 @@ export interface L4PiDeskPackageMaintenanceRequest {
 
 type L4PiDeskRestartHandler = (
   maintenance?: L4PiDeskPackageMaintenanceRequest | readonly L4PiDeskPackageMaintenanceRequest[],
-  mode?: 'normal' | 'basic'
+  mode?: 'normal' | 'basic',
+  environment?: L4EnvironmentMaintenanceRequest
 ) => void
 
 const L4_PI_DESK_RESTART_DELAY_MS = 150
@@ -28,6 +31,18 @@ export function scheduleL4PiDeskRestart(
   const handler = restartHandler()
   if (!handler) throw new Error('当前启动方式不支持自动重启 Pi Desk')
   const timer = setTimeout(() => handler(maintenance, mode), L4_PI_DESK_RESTART_DELAY_MS)
+  timer.unref()
+}
+
+export function scheduleL4PiDeskEnvironmentMaintenance(
+  request: L4EnvironmentMaintenanceRequest
+): void {
+  const handler = restartHandler()
+  if (!handler) throw new Error('当前启动方式不支持自动重启 Pi Desk')
+  const timer = setTimeout(
+    () => handler(undefined, undefined, request),
+    L4_PI_DESK_RESTART_DELAY_MS
+  )
   timer.unref()
 }
 

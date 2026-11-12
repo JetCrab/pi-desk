@@ -11,6 +11,24 @@ import type {
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const browserRoot = join(packageRoot, 'dist', 'browser')
 
+test('环境归档声明全局及项目子代理配置且不搬迁资源目录', async () => {
+  const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
+  assert.deepEqual(manifest.piDesk.environment.files, [
+    {
+      base: 'config',
+      path: 'pi-desk-subagent.json',
+      format: 'json',
+      secretPaths: []
+    },
+    {
+      base: 'project',
+      path: 'config/pi-desk-subagent.json',
+      format: 'json',
+      secretPaths: []
+    }
+  ])
+})
+
 async function browserSources(): Promise<string[]> {
   const paths = await readdir(browserRoot, { recursive: true })
   return Promise.all(

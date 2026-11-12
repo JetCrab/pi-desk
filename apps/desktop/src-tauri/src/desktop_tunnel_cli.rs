@@ -1,6 +1,5 @@
 use pi_desk_tunnel_common::config::{normalize_tunnel_config, require_ready, TunnelConfig};
 use pi_desk_tunnel_common::provider_cli;
-use serde::Deserialize;
 use std::fs;
 use std::io::{self, Write};
 use std::net::SocketAddr;
@@ -8,6 +7,9 @@ use std::path::{Path, PathBuf};
 
 pub(crate) enum Request {
     Info,
+    Resolve {
+        port: u16,
+    },
     Client {
         local_addr: String,
         public_port: u16,
@@ -18,6 +20,17 @@ pub(crate) enum Request {
 pub(crate) fn parse_request(args: &[String]) -> Result<Request, String> {
     if args.len() == 1 && args[0] == "--tunnel-info" {
         return Ok(Request::Info);
+    }
+    if args.first().map(String::as_str) == Some("--tunnel-resolve") {
+        if args.len() != 3 || args[1] != "--port" {
+            return Err("查询本机隧道发布需要 --tunnel-resolve --port <端口>".into());
+        }
+        let port = args[2]
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port != 0)
+            .ok_or("port 必须是 1 到 65535 的端口")?;
+        return Ok(Request::Resolve { port });
     }
     if args.first().map(String::as_str) != Some("--tunnel-client") {
         return Err("隧道命令参数无效".into());
@@ -61,10 +74,12 @@ pub(crate) fn parse_request(args: &[String]) -> Result<Request, String> {
 
 pub(crate) fn run_if_requested() -> Option<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if !args
-        .iter()
-        .any(|value| value == "--tunnel-info" || value == "--tunnel-client")
-    {
+    if !args.iter().any(|value| {
+        matches!(
+            value.as_str(),
+            "--tunnel-info" | "--tunnel-client" | "--tunnel-resolve"
+        )
+    }) {
         return None;
     }
     Some(match run(&args) {
@@ -73,7 +88,7 @@ pub(crate) fn run_if_requested() -> Option<i32> {
             if args.iter().any(|value| value == "--tunnel-client") {
                 provider_cli::emit_failed(&error);
             } else {
-                eprintln!("[pi-desk-desktop] stage=tunnel-info-error error={error}");
+                eprintln!("[pi-desk-desktop] 隧道命令失败：{error}");
             }
             1
         }
@@ -98,6 +113,18 @@ fn run(args: &[String]) -> Result<i32, String> {
                 .map_err(|error| format!("输出隧道信息失败：{error}"))?;
             Ok(0)
         }
+        Request::Resolve { port } => {
+            let publication =
+                pi_desk_tunnel_common::publication_discovery::resolve_publication(&path, port)?;
+            let mut stdout = io::stdout().lock();
+            serde_json::to_writer(&mut stdout, &publication)
+                .map_err(|error| format!("输出本机发布信息失败：{error}"))?;
+            stdout
+                .write_all(b"\n")
+                .and_then(|()| stdout.flush())
+                .map_err(|error| format!("输出本机发布信息失败：{error}"))?;
+            Ok(0)
+        }
         Request::Client {
             local_addr,
             public_port,
@@ -106,27 +133,21 @@ fn run(args: &[String]) -> Result<i32, String> {
     }
 }
 
-#[derive(Deserialize)]
-struct DesktopConfig {
-    #[serde(default)]
-    tunnel: DesktopTunnelConfig,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct DesktopTunnelConfig {
-    #[serde(default)]
     control_server_url: String,
-    #[serde(default)]
     control_key: String,
 }
 
 fn read_config(path: &Path) -> Result<DesktopTunnelConfig, String> {
     let content =
         fs::read_to_string(path).map_err(|error| format!("读取桌面隧道配置失败：{error}"))?;
-    let desktop: DesktopConfig =
-        serde_json::from_str(&content).map_err(|_| "桌面隧道配置格式无效".to_string())?;
-    Ok(desktop.tunnel)
+    let value = serde_json::from_str(&content).map_err(|_| "桌面隧道配置格式无效".to_string())?;
+    let value = crate::desktop_storage::decrypt(path, value)?;
+    let desktop = crate::config::decode_value(value)?;
+    Ok(DesktopTunnelConfig {
+        control_server_url: desktop.tunnel.control_server_url,
+        control_key: desktop.tunnel.control_key,
+    })
 }
 
 pub(crate) fn inspect_config(path: &Path) -> Result<Option<String>, String> {
@@ -165,6 +186,7 @@ fn run_client(
         local_addr,
         public_port,
         stats,
+        Some(path.to_owned()),
     )
     .map(i32::from)
 }

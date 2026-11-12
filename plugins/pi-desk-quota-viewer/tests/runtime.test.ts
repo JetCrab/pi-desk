@@ -7,7 +7,28 @@ import type { PluginJsonObject } from '@jetcrab/pi-desk-sdk/entry'
 import { PluginMethodError } from '@jetcrab/pi-desk-sdk/session'
 import type { QuotaAdapter, QuotaAdapterLoadResult } from '../src/adapters/types.js'
 import { account, balance } from './fixtures.js'
-import { defaultQuotaViewerConfigPath, QuotaViewerRuntime } from '../src/runtime.js'
+import { createSecretStore } from '@jetcrab/pi-desk-sdk/secrets'
+import { readStoredConfig } from '../src/l2-quota-config.js'
+import {
+  defaultQuotaViewerConfigPath,
+  QuotaViewerRuntime as Runtime,
+  type QuotaViewerRuntimeOptions
+} from '../src/runtime.js'
+
+class QuotaViewerRuntime extends Runtime {
+  constructor(
+    plugin: ConstructorParameters<typeof Runtime>[0],
+    options: QuotaViewerRuntimeOptions
+  ) {
+    super(plugin, {
+      ...options,
+      secretStore: createSecretStore({
+        agentDir: dirname(options.configPath!),
+        keyProvider: async () => new Uint8Array(32).fill(7)
+      })
+    })
+  }
+}
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 let directoryIndex = 0
@@ -97,7 +118,7 @@ function createAdapter(input?: {
 
 const logger = { info() {}, warn() {} }
 
-test('旧配置文件首次访问复制到 Pi Desk 路径并保留原文件', async (context) => {
+test('默认只读最新config路径，旧配置不读取不修改不删除', async (context) => {
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR
   const agentDir = testRoot('legacy-path')
   context.after(async () => {
@@ -109,21 +130,24 @@ test('旧配置文件首次访问复制到 Pi Desk 路径并保留原文件', as
   process.env.PI_CODING_AGENT_DIR = agentDir
 
   const previousPath = join(agentDir, 'pi-super-quota-viewer.json')
-  const previousContent = '{"sources":[]}'
+  const previousContent = '{旧配置不应解析}'
+  const rootPath = join(agentDir, 'pi-desk-quota-viewer.json')
   await writeFile(previousPath, previousContent, 'utf8')
+  await writeFile(rootPath, previousContent, 'utf8')
 
   const currentPath = defaultQuotaViewerConfigPath()
-  assert.equal(currentPath, join(agentDir, 'pi-desk-quota-viewer.json'))
-  assert.equal(await readFile(currentPath, 'utf8'), previousContent)
+  assert.equal(currentPath, join(agentDir, 'config', 'pi-desk-quota-viewer.json'))
+  await readStoredConfig(
+    currentPath,
+    new Map(),
+    createSecretStore({ agentDir, keyProvider: async () => new Uint8Array(32).fill(7) })
+  )
   assert.equal(await readFile(previousPath, 'utf8'), previousContent)
-
-  const currentContent = '{"sources":[],"hiddenResourceKeys":[]}'
-  await writeFile(currentPath, currentContent, 'utf8')
-  assert.equal(defaultQuotaViewerConfigPath(), currentPath)
-  assert.equal(await readFile(currentPath, 'utf8'), currentContent)
+  assert.equal(await readFile(rootPath, 'utf8'), previousContent)
+  await assert.rejects(readFile(currentPath), { code: 'ENOENT' })
 })
 
-test('旧版账号级显示偏好重设，来源与密钥保持不变', async () => {
+test('最新文件含秘密明文时查询及保存均失败且不自动改写', async (context) => {
   const root = testRoot('legacy-config')
   const configPath = join(root, 'config.json')
   const sourceId = '11111111-1111-4111-8111-111111111111'
@@ -135,12 +159,11 @@ test('旧版账号级显示偏好重设，来源与密钥保持不变', async ()
         {
           sourceId,
           adapter: 'fixture',
-          name: '旧配置来源',
+          name: '当前配置来源',
           enabled: false,
-          config: { endpoint: 'legacy', token: 'legacy-token' }
+          config: { endpoint: 'endpoint', token: 'test-only-plaintext' }
         }
-      ],
-      hiddenResourceKeys: [`${sourceId}:balance`]
+      ]
     })
   )
   const runtime = new QuotaViewerRuntime(plugin([]), {
@@ -149,16 +172,17 @@ test('旧版账号级显示偏好重设，来源与密钥保持不变', async ()
     logger,
     fetch: async () => new Response('{}')
   })
-  const settings = await runtime.settings()
-  assert.deepEqual(settings.display, { resetTimeFormat: 'countdown', hiddenItemKeys: [] })
-  assert.equal(settings.sources[0]?.sourceId, sourceId)
-  assert.equal(settings.sources[0]?.values.token, 'legacy-token')
-  await runtime.saveSettings(jsonObject({ display: { resetTimeFormat: 'absolute' } }))
-  const persisted = JSON.parse(await readFile(configPath, 'utf8'))
-  assert.equal(persisted.hiddenResourceKeys, undefined)
-  assert.equal(persisted.sources[0]?.config.token, 'legacy-token')
-  await runtime.dispose()
-  await rm(root, { recursive: true, force: true })
+  context.after(async () => {
+    await runtime.dispose()
+    await rm(root, { recursive: true, force: true })
+  })
+  const original = await readFile(configPath, 'utf8')
+  await assert.rejects(runtime.settings(), /敏感字段必须为凭据引用/)
+  await assert.rejects(
+    runtime.saveSettings({ display: { resetTimeFormat: 'absolute' } }),
+    /敏感字段必须为凭据引用/
+  )
+  assert.equal(await readFile(configPath, 'utf8'), original)
 })
 
 test('settings-save 分配 sourceId 并返回可直接编辑的密钥原值', async () => {
@@ -206,10 +230,131 @@ test('settings-save 分配 sourceId 并返回可直接编辑的密钥原值', as
   const stored = JSON.parse(await readFile(configPath, 'utf8')) as {
     sources: Array<{ config: Record<string, string> }>
   }
-  assert.equal(stored.sources[0]?.config.token, 'next-secret-token')
+  assert.match(stored.sources[0]?.config.token ?? '', /^secret:\/\//)
+  assert.equal((await readFile(configPath, 'utf8')).includes('next-secret-token'), false)
   assert.equal(updated.sources[0]?.values.token, 'next-secret-token')
   await runtime.dispose()
   await rm(root, { recursive: true, force: true })
+})
+
+for (const action of ['change-key', 'delete-source'] as const) {
+  test(`display-only保存基于磁盘当前配置，保留其他Runtime的${action === 'change-key' ? '新密钥' : '来源删除'}`, async (context) => {
+    const root = testRoot(`display-only-${action}`)
+    const configPath = join(root, 'config.json')
+    const options = { configPath, logger, fetch: async () => new Response('{}') }
+    const first = new QuotaViewerRuntime(plugin([]), { ...options, adapters: [createAdapter()] })
+    const secondTokens: string[] = []
+    const second = new QuotaViewerRuntime(plugin([]), {
+      ...options,
+      adapters: [
+        createAdapter({
+          load: async ({ config }) => {
+            secondTokens.push(config.token)
+            return balanceResult(1)
+          }
+        })
+      ]
+    })
+    context.after(async () => {
+      await Promise.all([first.dispose(), second.dispose()])
+      await rm(root, { recursive: true, force: true })
+    })
+    const initial = await first.saveSettings(
+      jsonObject({
+        sources: [
+          {
+            adapter: 'fixture',
+            name: '共享来源',
+            enabled: true,
+            values: { endpoint: 'endpoint', token: 'initial-key' }
+          }
+        ]
+      })
+    )
+    await second.query(true)
+    await waitFor(() => second.snapshot().sources[0]?.refreshing === false)
+    assert.equal((await second.settings()).sources[0]?.values.token, 'initial-key')
+    const hiddenKey = 'fixture:["balance","余额","",""]'
+    await first.saveSettings(
+      jsonObject({
+        sources:
+          action === 'delete-source'
+            ? []
+            : [
+                {
+                  ...initial.sources[0],
+                  values: { endpoint: 'endpoint', token: 'updated-key' }
+                }
+              ],
+        display: { hiddenItemKeys: [hiddenKey] }
+      })
+    )
+    const currentSources = JSON.parse(await readFile(configPath, 'utf8')).sources
+    const saved = await second.saveSettings({ display: { resetTimeFormat: 'absolute' } })
+    const disk = JSON.parse(await readFile(configPath, 'utf8'))
+    assert.deepEqual(disk.sources, currentSources)
+    assert.deepEqual(saved.display, { resetTimeFormat: 'absolute', hiddenItemKeys: [hiddenKey] })
+    assert.deepEqual((await second.settings()).sources, saved.sources)
+    if (action === 'change-key') {
+      assert.equal(saved.sources[0]?.values.token, 'updated-key')
+      await waitFor(() => second.snapshot().sources[0]?.refreshing === false)
+      assert.deepEqual(secondTokens, ['initial-key', 'updated-key'])
+    } else {
+      assert.deepEqual(saved.sources, [])
+      assert.deepEqual(second.snapshot().sources, [])
+    }
+  })
+}
+
+test('显式提交完整sources仍整体替换，未提交display保留其他Runtime当前设置', async (context) => {
+  const root = testRoot('explicit-source-replacement')
+  const configPath = join(root, 'config.json')
+  const options = {
+    adapters: [createAdapter()],
+    configPath,
+    logger,
+    fetch: async () => new Response('{}')
+  }
+  const first = new QuotaViewerRuntime(plugin([]), options)
+  const second = new QuotaViewerRuntime(plugin([]), options)
+  context.after(async () => {
+    await Promise.all([first.dispose(), second.dispose()])
+    await rm(root, { recursive: true, force: true })
+  })
+  const initial = await first.saveSettings(
+    jsonObject({
+      sources: [
+        {
+          adapter: 'fixture',
+          name: '来源一',
+          enabled: false,
+          values: { endpoint: 'first', token: 'initial-key' }
+        },
+        {
+          adapter: 'fixture',
+          name: '来源二',
+          enabled: false,
+          values: { endpoint: 'second', token: 'another-key' }
+        }
+      ]
+    })
+  )
+  const cached = await second.settings()
+  await first.saveSettings(
+    jsonObject({
+      sources: initial.sources.map((source) => ({
+        ...source,
+        values: { ...source.values, token: 'updated-key' }
+      })),
+      display: { resetTimeFormat: 'absolute' }
+    })
+  )
+  const saved = await second.saveSettings(jsonObject({ sources: [cached.sources[0]] }))
+  assert.equal(saved.sources.length, 1)
+  assert.equal(saved.sources[0]?.sourceId, cached.sources[0]?.sourceId)
+  assert.equal(saved.sources[0]?.values.token, 'initial-key')
+  assert.equal(saved.display.resetTimeFormat, 'absolute')
+  assert.equal(JSON.parse(await readFile(configPath, 'utf8')).sources.length, 1)
 })
 
 test('settings-save 独立保存显示项和时间格式时保留来源、资源、密钥及另一项设置', async () => {
@@ -263,7 +408,8 @@ test('settings-save 独立保存显示项和时间格式时保留来源、资源
   }
   assert.equal(stored.sources[0]?.sourceId, sourceId)
   assert.equal(stored.sources[0]?.config.endpoint, 'endpoint')
-  assert.equal(stored.sources[0]?.config.token, 'original-token')
+  assert.match(stored.sources[0]?.config.token ?? '', /^secret:\/\//)
+  assert.equal(saved.sources[0]?.values.token, 'original-token')
   assert.deepEqual(stored.display, { resetTimeFormat: 'absolute', hiddenItemKeys: [hiddenKey] })
   const latestPush = pushes.at(-1)
   assert.ok(latestPush)
@@ -370,7 +516,7 @@ test('settings-save 拒绝空对象、格式无效和超过上限的隐藏项', 
   }
   const tooManyKeys = Array.from(
     { length: 501 },
-    (_, index) => `fixture:["balance","resource-${index}",""]`
+    (_, index) => `fixture:["balance","resource-${index}","",""]`
   )
   await assert.rejects(
     runtime.saveSettings(jsonObject({ display: { hiddenItemKeys: tooManyKeys } })),

@@ -6,6 +6,7 @@ pub mod config;
 pub mod control;
 pub mod protocol;
 pub mod provider_cli;
+pub mod publication_discovery;
 pub mod runtime;
 pub mod worker;
 

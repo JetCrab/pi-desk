@@ -47,31 +47,45 @@ export function startTunnelClient(input: {
   if (!existsSync(host.executable)) {
     throw new Error(`桌面隧道程序不存在：${host.executable}`)
   }
-  const child = spawn(
-    host.executable,
-    [
-      '--tunnel-client',
-      '--local',
-      `127.0.0.1:${input.localPort}`,
-      '--public-port',
-      String(input.publicPort),
-      '--stats'
-    ],
-    {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-      detached: process.platform !== 'win32',
-      env: { ...process.env, PI_DESK_DESKTOP_CONFIG: host.configPath }
-    }
-  )
+  const ports = `localPort=${input.localPort} publicPort=${input.publicPort}`
+  let child: ChildProcessWithoutNullStreams
+  try {
+    child = spawn(
+      host.executable,
+      [
+        '--tunnel-client',
+        '--local',
+        `127.0.0.1:${input.localPort}`,
+        '--public-port',
+        String(input.publicPort),
+        '--stats'
+      ],
+      {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+        detached: process.platform !== 'win32',
+        env: { ...process.env, PI_DESK_DESKTOP_CONFIG: host.configPath }
+      }
+    )
+  } catch (error) {
+    input.logger.line(
+      'tunnel:error',
+      `CLI 启动失败 ${ports} reason=${error instanceof Error ? error.message : String(error)}`
+    )
+    throw error
+  }
   const pid = child.pid
   if (!pid) {
+    input.logger.line('tunnel:error', `CLI 启动失败 pid=null ${ports} reason=未取得进程 PID`)
     // 创建失败仍会异步发出 error；同步拒绝前先接住，避免变成宿主未处理异常。
     child.once('error', (error) => {
+      input.logger.line('tunnel:error', `CLI 启动失败 pid=null ${ports} reason=${error.message}`)
       console.error(`[pi-desk-remote-debug] 隧道程序启动失败：${error.message}`)
     })
     throw new Error('无法启动桌面隧道程序')
   }
+  const context = `pid=${pid} ${ports}`
+  input.logger.line('tunnel', `CLI 已启动 ${context}`)
 
   let readySettled = false
   let resolveReady!: (publicAddr: string) => void
@@ -163,11 +177,12 @@ export function startTunnelClient(input: {
     }
   })
   child.once('error', (error) => {
+    input.logger.line('tunnel:error', `CLI 进程错误 ${context} reason=${error.message}`)
     failureDetail = error.message
     failReady(error.message)
     finish({ failed: true, detail: error.message, exitCode: null })
   })
-  child.once('close', (exitCode) => {
+  child.once('close', (exitCode, signal) => {
     lines.close()
     const detail =
       failureDetail ??
@@ -176,6 +191,10 @@ export function startTunnelClient(input: {
         : !stopped
           ? 'Tunnel Client 未确认资源释放即退出'
           : null)
+    input.logger.line(
+      'tunnel',
+      `CLI 已退出 ${context} exitCode=${exitCode ?? 'null'} signal=${signal ?? 'null'} reason=${detail ?? '已确认资源释放'}`
+    )
     finish({ failed: detail !== null, detail, exitCode })
   })
 
@@ -186,6 +205,7 @@ export function startTunnelClient(input: {
     stop(): Promise<TunnelClientResult> {
       if (completionSettled) return completion
       if (stopPromise) return stopPromise
+      input.logger.line('tunnel', `请求停止 CLI ${context} reason=运行资源清理`)
       stopPromise = stopTunnelChild(child, pid, completion, input.logger)
       return stopPromise
     }

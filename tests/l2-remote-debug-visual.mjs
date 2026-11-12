@@ -61,7 +61,9 @@ const originalDesktopEnvironment = desktopEnvironmentKeys.map((key) => process.e
 let passed = false
 const registryOnly = process.env.REMOTE_DEBUG_VISUAL_SCOPE === 'registry'
 const settingsOnly = registryOnly || process.env.REMOTE_DEBUG_VISUAL_SCOPE === 'settings'
-const launchOnly = process.env.REMOTE_DEBUG_VISUAL_SCOPE === 'launch'
+const tunnelOnly = process.env.REMOTE_DEBUG_VISUAL_SCOPE === 'tunnels'
+const launchOnly = tunnelOnly || process.env.REMOTE_DEBUG_VISUAL_SCOPE === 'launch'
+const pageHost = tunnelOnly ? 'client-tunnel.test' : '127.0.0.1'
 const portConflictOnly = process.env.REMOTE_DEBUG_VISUAL_SCOPE === 'port-conflict'
 let occupyingRuntime
 const captures = []
@@ -87,6 +89,11 @@ use std::io::{self, Read, Write};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    if args.iter().any(|value| value == "--tunnel-resolve") {
+        let port = args.windows(2).find(|pair| pair[0] == "--port").unwrap()[1].clone();
+        println!("{{\\\"controlServerUrl\\\":\\\"http://tunnel.example.test:7001\\\",\\\"providerId\\\":\\\"{}\\\",\\\"remotePort\\\":{}}}", "ab".repeat(32), port);
+        return;
+    }
     if args.iter().any(|value| value == "--tunnel-info") {
         println!("{{\\\"controlServerUrl\\\":\\\"http://tunnel.example.test:7001\\\"}}");
         return;
@@ -288,7 +295,15 @@ async function main() {
       'Pi Desk',
       () => serverOutput
     )
-    browserProcess = spawnEdge(edgePath, cdpPort, join(testRoot, 'edge-profile'))
+    browserProcess = spawnEdge(
+      edgePath,
+      cdpPort,
+      join(testRoot, 'edge-profile'),
+      '1440,900',
+      tunnelOnly
+        ? ['--host-resolver-rules=MAP client-tunnel.test 127.0.0.1', '--no-proxy-server']
+        : []
+    )
     await waitForHttp(
       `http://127.0.0.1:${cdpPort}/json/version`,
       20_000,
@@ -296,7 +311,21 @@ async function main() {
       () => serverOutput
     )
     client = await createCdpPage(cdpPort)
-    await navigate(client, `http://127.0.0.1:${appPort}/login`)
+    if (tunnelOnly) {
+      await client.send('Page.addScriptToEvaluateOnNewDocument', {
+        source: `
+        window.__tunnelFixture = { path: 'direct', status: 'ready', opens: [], closes: [] };
+        window.__PI_DESK_TUNNELS__ = { async invoke(request) {
+          const state = window.__tunnelFixture;
+          if (request.action === 'status') return { ready: true, error: null };
+          if (request.action === 'close') { state.closes.push(request.id); return null; }
+          if (request.action === 'open') state.opens.push(request);
+          return { status: state.status, localPort: state.status === 'ready' ? 53191 : null, path: state.path, error: state.status === 'failed' ? '测试提供端暂不可用' : null };
+        }};
+      `
+      })
+    }
+    await navigate(client, `http://${pageHost}:${appPort}/login`)
     const login = await evaluate(
       client,
       `fetch('/api/auth/login', {
@@ -307,7 +336,7 @@ async function main() {
     )
     assert.equal(login.ok, true, login.body?.msg)
 
-    await navigate(client, `http://127.0.0.1:${appPort}/`)
+    await navigate(client, `http://${pageHost}:${appPort}/`)
     await setViewport(client, 1440, 900, false)
     await waitFor(
       client,
@@ -529,6 +558,98 @@ async function main() {
         '远程调试运行中',
         () => serverOutput
       )
+      if (tunnelOnly) {
+        const card = `document.querySelector('[data-remote-debug-profile="Web开发"]')`
+        await waitFor(
+          client,
+          `${card}?.innerText.includes('直连') && Boolean(${card}.querySelector('a[href="http://127.0.0.1:53191"]'))`,
+          'SDK本地映射就绪',
+          () => serverOutput
+        )
+        const requests = await evaluate(client, 'window.__tunnelFixture.opens')
+        assert.equal(requests.length, 1)
+        assert.notEqual(requests[0].remotePort, entryPort, '映射必须使用Gateway实际端口')
+        captures.push([join(testRoot, 'tunnel-direct.png'), await screenshot(client)])
+        await clickAriaLabel(client, '关闭 远程调试')
+        assert.equal(await evaluate(client, 'window.__tunnelFixture.closes.length'), 0)
+        await clickText(client, '远程调试')
+        await waitFor(
+          client,
+          `${card}?.innerText.includes('直连')`,
+          '重开保留映射',
+          () => serverOutput
+        )
+        assert.equal(await evaluate(client, 'window.__tunnelFixture.opens.length'), 1)
+        await evaluate(client, `window.__tunnelFixture.path = 'relay'`)
+        await waitFor(
+          client,
+          `${card}?.innerText.includes('中继')`,
+          '真实路径状态更新',
+          () => serverOutput
+        )
+        captures.push([join(testRoot, 'tunnel-relay.png'), await screenshot(client)])
+        await setViewport(client, 390, 844, true)
+        await waitFor(
+          client,
+          `${card}?.innerText.includes('中继')`,
+          '窄屏映射展示',
+          () => serverOutput
+        )
+        assert.equal(
+          await evaluate(client, 'document.documentElement.scrollWidth > innerWidth'),
+          false
+        )
+        assert.equal(
+          await evaluate(
+            client,
+            `(() => { const host = ${card}.querySelector('[aria-label="本地地址"] .remote-debug-access-host'); return host.scrollWidth <= host.clientWidth; })()`
+          ),
+          true,
+          '短本地IP不能被路径标签挤压截断'
+        )
+        captures.push([join(testRoot, 'tunnel-mobile.png'), await screenshot(client)])
+        await setViewport(client, 1440, 900, false)
+        await evaluate(client, `window.__tunnelFixture.status = 'failed'`)
+        await waitFor(
+          client,
+          `${card}?.innerText.includes('本地连接失败')`,
+          '本地失败独立呈现',
+          () => serverOutput
+        )
+        assert.equal(
+          await evaluate(
+            client,
+            `Boolean(${card}.querySelector('a[href="http://tunnel.example.test:43333"]'))`
+          ),
+          true
+        )
+        assert.equal(
+          await evaluate(
+            client,
+            `Boolean(${card}.querySelector('a[href="http://127.0.0.1:53191"]'))`
+          ),
+          false
+        )
+        captures.push([join(testRoot, 'tunnel-failed.png'), await screenshot(client)])
+        await clickProfileAction('Web开发', '停止')
+        await waitFor(
+          client,
+          `${card}?.innerText.includes('已停止')`,
+          '停止调试释放映射',
+          () => serverOutput
+        )
+        await waitFor(
+          client,
+          'window.__tunnelFixture.closes.length === 1',
+          '原生映射释放',
+          () => serverOutput
+        )
+        await assertPortReleased(entryPort)
+        await publishScreenshots(captures)
+        for (const [path] of captures) console.log(`screenshot=${path}`)
+        passed = true
+        return
+      }
       assert.equal(
         await evaluate(
           client,

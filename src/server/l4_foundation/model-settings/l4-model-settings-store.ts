@@ -43,6 +43,12 @@ import {
   readAccountModelSelections
 } from './l4-model-collection'
 
+import {
+  modelPreferencesPath,
+  readL4ModelPreferences,
+  readModelJsonRecord as readJsonRecord
+} from './l4-model-preferences-store'
+
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/
 
@@ -73,31 +79,6 @@ function stringRecord(value: unknown): Record<string, string> {
 
 function modelsPath(): string {
   return join(getAgentDir(), 'models.json')
-}
-
-function readJsonRecord(path: string): JsonRecord {
-  if (!existsSync(path)) return {}
-  const content = readFileSync(path, 'utf8')
-  let value: unknown
-  try {
-    // Pi 的解析器未公开导出；保持相同的单行注释/尾逗号语法，匹配时保留字符串。
-    const json = (content.charCodeAt(0) === 0xfeff ? content.slice(1) : content)
-      .replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, (match) => (match[0] === '"' ? match : ''))
-      .replace(
-        /"(?:\\.|[^"\\])*"|,(\s*[}\]])/g,
-        (match, tail: string | undefined) => tail ?? (match[0] === '"' ? match : '')
-      )
-    value = JSON.parse(json)
-  } catch (cause) {
-    throw new Error(
-      `配置文件 ${path} 解析失败：${cause instanceof Error ? cause.message : String(cause)}`,
-      {
-        cause
-      }
-    )
-  }
-  if (!isRecord(value)) throw new Error(`${path} 必须是 JSON 对象`)
-  return value
 }
 
 function writeTextAtomic(path: string, content: string): void {
@@ -286,7 +267,8 @@ function toModelOption(model: Model<Api>): L4ModelOption {
 async function availableModelOptions(
   runtime: ModelRuntime,
   cwd?: string,
-  root = readJsonRecord(modelsPath())
+  root = readJsonRecord(modelsPath()),
+  preferences = readL4ModelPreferences()
 ): Promise<L4ModelOption[]> {
   // 调用方均使用已完成初始化刷新的 Runtime，不重复检查全部供应商凭据。
   let models = [...runtime.getAvailableSnapshot()]
@@ -301,7 +283,7 @@ async function availableModelOptions(
   }
 
   const unique = new Map<string, Model<Api>>()
-  for (const model of filterCollectedModels(models, runtime, root)) {
+  for (const model of filterCollectedModels(models, runtime, root, preferences)) {
     unique.set(modelKey(model.provider, model.id), model)
   }
   return [...unique.values()].map(toModelOption)
@@ -489,6 +471,8 @@ function applyProvider(
 
 function mergeModelsRoot(
   current: JsonRecord,
+  preferences: JsonRecord,
+  nextPreferences: JsonRecord,
   input: L4ModelSettingsReplaceInput,
   runtime: ModelRuntime,
   defaults: ModelRuntime
@@ -514,10 +498,17 @@ function mergeModelsRoot(
     ])
   }
   if (input.accountModels !== undefined) {
-    applyAccountModelSelections(current, next, input.accountModels, defaults)
+    applyAccountModelSelections(
+      current,
+      next,
+      preferences,
+      nextPreferences,
+      input.accountModels,
+      defaults
+    )
   }
-  if (input.presets && !isDeepStrictEqual(input.presets, normalizePresets(current))) {
-    next.modelPresets = input.presets
+  if (input.presets && !isDeepStrictEqual(input.presets, normalizePresets(preferences))) {
+    nextPreferences.modelPresets = input.presets
   }
   return next
 }
@@ -570,7 +561,8 @@ export function filterL4CollectedModels(
   models: readonly Model<Api>[],
   runtime: ModelRuntime
 ): Model<Api>[] {
-  return filterCollectedModels(models, runtime, readJsonRecord(modelsPath()))
+  const preferences = readL4ModelPreferences()
+  return filterCollectedModels(models, runtime, readJsonRecord(modelsPath()), preferences)
 }
 
 async function readAccounts(
@@ -626,6 +618,7 @@ async function assertConnectionCredentials(
 async function prepareProjectDefaultChanges(
   removed: Set<string>,
   candidate: JsonRecord,
+  preferences: JsonRecord,
   input: L4ModelSettingsReplaceInput,
   runtime: ModelRuntime,
   models: L4ModelOption[]
@@ -633,7 +626,7 @@ async function prepareProjectDefaultChanges(
   projectDefaults: L4ModelSettingsPreview['projectDefaults']
   files: Array<{ path: string; value: JsonRecord }>
 }> {
-  const nextKeys = collectedModelKeys(candidate)
+  const nextKeys = collectedModelKeys(candidate, preferences)
   const replacements = new Map<string, L4ModelOption>()
   for (const { from, to } of input.modelReplacements ?? []) {
     const fromKey = collectedModelKey(from.provider, from.modelId)
@@ -687,7 +680,7 @@ async function prepareProjectDefaultChanges(
       result.files.push({ path, value })
       continue
     }
-    const projectModels = await availableModelOptions(runtime, cwd, candidate)
+    const projectModels = await availableModelOptions(runtime, cwd, candidate, preferences)
     if (
       !projectModels.some(
         (model) => model.provider === target.provider && model.modelId === target.modelId
@@ -728,15 +721,16 @@ export async function readL4ModelSettings(): Promise<{
   accounts: L4ModelAccount[]
 }> {
   const started = performance.now()
+  const preferences = readL4ModelPreferences()
   const rawRoot = readJsonRecord(modelsPath())
   const runtime = await ModelRuntime.create({ allowModelNetwork: false })
   const defaults = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
-  const accountModels = readAccountModelSelections(rawRoot)
+  const accountModels = readAccountModelSelections(rawRoot, preferences)
   const runtimeReady = performance.now()
   const result = {
     providers: normalizeProviders(rawRoot, runtime),
-    presets: normalizePresets(rawRoot),
-    models: await availableModelOptions(runtime, undefined, rawRoot),
+    presets: normalizePresets(preferences),
+    models: await availableModelOptions(runtime, undefined, rawRoot, preferences),
     nativeConfig: rawRoot as L4ModelNativeConfig,
     accountModels,
     accounts: await readAccounts(defaults, accountModels)
@@ -759,6 +753,7 @@ async function prepareModelSettings(input: L4ModelSettingsReplaceInput): Promise
   files: Array<{ path: string; value: JsonRecord }>
 }> {
   const path = modelsPath()
+  let unreadableNative = false
   let current: JsonRecord
   try {
     current = readJsonRecord(path)
@@ -766,7 +761,10 @@ async function prepareModelSettings(input: L4ModelSettingsReplaceInput): Promise
     if (input.nativeConfig === undefined) throw error
     // 原生编辑是损坏配置的修复入口，不能要求旧文件先成功解析。
     current = {}
+    unreadableNative = true
   }
+  const preferences = readL4ModelPreferences()
+  const nextPreferences = { ...preferences }
   let candidate: JsonRecord
   if (input.nativeConfig !== undefined) {
     candidate = input.nativeConfig
@@ -778,28 +776,50 @@ async function prepareModelSettings(input: L4ModelSettingsReplaceInput): Promise
       input.accountModels === undefined
         ? currentRuntime
         : await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
-    candidate = mergeModelsRoot(current, input, currentRuntime, defaults)
+    candidate = mergeModelsRoot(
+      current,
+      preferences,
+      nextPreferences,
+      input,
+      currentRuntime,
+      defaults
+    )
   }
-  const nextKeys = collectedModelKeys(candidate)
-  const removed = new Set([...collectedModelKeys(current)].filter((key) => !nextKeys.has(key)))
-  if (removed.size && Array.isArray(candidate.modelPresets)) {
-    candidate = {
-      ...candidate,
-      modelPresets: candidate.modelPresets.filter(
-        (preset) =>
-          !isRecord(preset) ||
-          typeof preset.provider !== 'string' ||
-          typeof preset.modelId !== 'string' ||
-          !removed.has(collectedModelKey(preset.provider, preset.modelId))
-      )
-    }
+  const nextKeys = collectedModelKeys(candidate, nextPreferences)
+  const removed = new Set(
+    [...collectedModelKeys(current, preferences)].filter((key) => !nextKeys.has(key))
+  )
+  if (removed.size && Array.isArray(nextPreferences.modelPresets)) {
+    nextPreferences.modelPresets = nextPreferences.modelPresets.filter(
+      (preset) =>
+        !isRecord(preset) ||
+        typeof preset.provider !== 'string' ||
+        typeof preset.modelId !== 'string' ||
+        !removed.has(collectedModelKey(preset.provider, preset.modelId))
+    )
   }
   const runtime = await validateModelsRoot(candidate)
-  const models = await availableModelOptions(runtime, undefined, candidate)
+  const models = await availableModelOptions(runtime, undefined, candidate, nextPreferences)
   await assertConnectionCredentials(current, candidate, runtime)
-  assertPresetsValid(normalizePresets(candidate), models, normalizePresets(current))
-  const result = await prepareProjectDefaultChanges(removed, candidate, input, runtime, models)
-  result.files.push({ path, value: candidate })
+  assertPresetsValid(normalizePresets(nextPreferences), models, normalizePresets(preferences))
+  // 取消收录不等于删除原生模型，不触及项目默认值。
+  const nextNativeKeys = collectedModelKeys(candidate, {})
+  const removedNative = new Set(
+    [...collectedModelKeys(current, {})].filter((key) => !nextNativeKeys.has(key))
+  )
+  const result = await prepareProjectDefaultChanges(
+    removedNative,
+    candidate,
+    nextPreferences,
+    input,
+    runtime,
+    models
+  )
+  if (unreadableNative || !isDeepStrictEqual(current, candidate))
+    result.files.push({ path, value: candidate })
+  if (!isDeepStrictEqual(preferences, nextPreferences)) {
+    result.files.push({ path: modelPreferencesPath(), value: nextPreferences })
+  }
   return result
 }
 

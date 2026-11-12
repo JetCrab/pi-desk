@@ -1,8 +1,7 @@
 import { randomBytes } from 'node:crypto'
-import { copyFileSync, existsSync } from 'node:fs'
+import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-import { getAgentDir } from '@earendil-works/pi-coding-agent'
+import { dirname } from 'node:path'
 import {
   defaultContextIgnoreSettings,
   parseContextIgnoreSettings,
@@ -12,11 +11,7 @@ import {
 const MAX_CONFIG_BYTES = 128 * 1024
 
 export function defaultContextIgnoreSettingsPath(): string {
-  const agentDir = getAgentDir()
-  const path = join(agentDir, 'pi-desk-ctx.json')
-  const previous = join(agentDir, 'pi-super-ctx.json')
-  if (!existsSync(path) && existsSync(previous)) copyFileSync(previous, path)
-  return path
+  return getConfigPath('pi-desk-ctx.json')
 }
 
 export async function readContextIgnoreSettings(

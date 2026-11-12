@@ -32,6 +32,7 @@ import { packageClient } from '../.github/scripts/pack-client.mjs'
 import { readPublishedVersions } from '../.github/scripts/prepare-dev-release.mjs'
 import { prepareCommitVersions, validateVersions } from '../.github/scripts/commit-versions.mjs'
 import { readWorkflow } from './fixtures/l4-workflow-test-runtime.mjs'
+import { selectDevUnits } from '../.github/scripts/release-dev-state.mjs'
 
 async function fixture(t) {
   const parent = resolve('temp/tests/release-main/batch-regression')
@@ -247,14 +248,16 @@ test('历史三平台记录可读取，下一批补建Linux且不重建未变化
   assert.equal(plan.clients.find((client) => client.platform === 'linux').version, '1.0.0')
 })
 
-test('正式源码清单不得仍引用自有SDK开发版本', async (t) => {
-  const repo = await fixture(t)
-  await repo.pkg('pi-desk', '1.2.0', {
-    dependencies: { '@jetcrab/pi-desk-sdk': '^1.1.0-dev.4', example: '2.0.0-dev.9' }
+for (const name of ['pi-desk', 'pi-desk-usage']) {
+  test(`正式源码清单不得仍引用自有SDK开发版本：${name}`, async (t) => {
+    const repo = await fixture(t)
+    await repo.pkg(name, '1.2.0', {
+      dependencies: { '@jetcrab/pi-desk-sdk': '^1.1.0-dev.4', example: '2.0.0-dev.9' }
+    })
+    await repo.pkg('pi-desk-sdk', '1.1.0')
+    await assert.rejects(validateVersions(repo.root, { base: null, head: repo.commit() }), /未同步/)
   })
-  await repo.pkg('pi-desk-sdk', '1.1.0')
-  await assert.rejects(validateVersions(repo.root, { base: null, head: repo.commit() }), /未同步/)
-})
+}
 
 test('dev仅给已提交的新版本附加固定后缀，纯文档推送不发npm包', async (t) => {
   const repo = await fixture(t)
@@ -488,6 +491,53 @@ test('首次发布选择全部，后续按成功批次比较并复用未变化�
   assert.equal(next.record.source.base, repo.head)
   assert.ok(next.clients.every((item) => !item.build && item.reuse.tag === previous.tag))
   assert.equal(next.tunnel, false)
+})
+
+test('SDK兼容升级在dev与正式渠道只发布SDK和宿主', async (t) => {
+  const repo = await fixture(t)
+  repo.git('switch', '-c', 'dev')
+  await repo.pkg('pi-desk', '1.0.0', { dependencies: { '@jetcrab/pi-desk-sdk': 'workspace:^' } })
+  await repo.pkg('pi-desk-usage', '1.0.0', { dependencies: { '@jetcrab/pi-desk-sdk': '^1.0.0' } })
+  await repo.save('plugins/pi-desk-sdk/src/feature.ts', 'export const ready = true\n')
+  const before = repo.commit()
+  const previous = completed(createReleasePlan(repo.root, { head: before }).record)
+  const pluginFile = 'plugins/pi-desk-usage/package.json'
+  const plugin = await readFile(join(repo.root, pluginFile), 'utf8')
+  await repo.save(
+    'plugins/pi-desk-sdk/src/feature.ts',
+    'export const ready = true\nexport interface AddedContract { enabled?: boolean }\n'
+  )
+  repo.git('add', '.')
+  await prepareCommitVersions(repo.root)
+  const head = repo.commit()
+  await validateVersions(repo.root, { base: before, head })
+
+  const stable = createReleasePlan(repo.root, { head, previous })
+  assert.deepEqual(stable.npm, ['pi-desk-sdk', 'pi-desk'])
+  assert.ok(stable.clients.every((item) => !item.build))
+  assert.equal(stable.tunnel, false)
+  const selected = selectDevUnits(
+    Object.fromEntries(
+      stable.record.packages.map((item) => [item.name.slice('@jetcrab/'.length), item.version])
+    ),
+    {
+      checks: before,
+      units: Object.fromEntries(
+        previous.packages.map((item) => [
+          item.name.slice('@jetcrab/'.length),
+          { version: item.version, source: before, runId: '1' }
+        ])
+      )
+    }
+  )
+  assert.deepEqual(selected, ['pi-desk-sdk', 'pi-desk'])
+  const development = await prepareDevelopmentVersions(repo.root, {
+    before,
+    selected,
+    readVersions: async () => ['1.0.0']
+  })
+  assert.deepEqual(development.selected, ['pi-desk-sdk', 'pi-desk'])
+  assert.equal(await readFile(join(repo.root, pluginFile), 'utf8'), plugin)
 })
 
 test('Docker运行配方属于主包版本，文档不单独升版', async (t) => {

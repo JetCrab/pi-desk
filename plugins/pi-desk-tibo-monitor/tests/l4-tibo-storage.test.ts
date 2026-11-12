@@ -1,10 +1,25 @@
 import assert from 'node:assert/strict'
-import { lstat, mkdtemp, readFile, readdir, rm, stat, truncate, writeFile } from 'node:fs/promises'
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  truncate,
+  writeFile
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { defaultSettings, type TiboRecord, type TiboStored } from '../src/l4-tibo-protocol.js'
-import { readStore, retainRecords, writeStore } from '../src/l4-tibo-storage.js'
+import {
+  defaultTiboStorePaths,
+  readStore,
+  retainRecords,
+  writeStore
+} from '../src/l4-tibo-storage.js'
 
 function record(id: string, publishedAt: number): TiboRecord {
   return {
@@ -20,8 +35,59 @@ function record(id: string, publishedAt: number): TiboRecord {
 async function tempFile(context: test.TestContext): Promise<{ root: string; path: string }> {
   const root = await mkdtemp(join(tmpdir(), 'tibo-storage-'))
   context.after(() => rm(root, { recursive: true, force: true }))
-  return { root, path: join(root, 'state.json') }
+  await mkdir(join(root, 'config'), { recursive: true })
+  return { root, path: join(root, 'config', 'pi-desk-tibo-monitor.json') }
 }
+
+test('只读写最新分离文件且旧混合配置保持原字节', async (context) => {
+  const { root } = await tempFile(context)
+  const previous = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = root
+  context.after(() => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = previous
+  })
+  const legacy = join(root, 'pi-desk-tibo-monitor.json')
+  const original: TiboStored = {
+    settings: defaultSettings(),
+    records: [record('kept', 10)],
+    analysisRegion: { locale: 'en', timeZone: 'UTC' }
+  }
+  const older = join(root, 'pi-super-tibo-monitor.json')
+  const oldContent = '{旧混合配置不应解析}'
+  await writeFile(legacy, oldContent)
+  await writeFile(older, oldContent)
+  const { path, dataPath } = defaultTiboStorePaths()
+  assert.deepEqual(await readStore(path, dataPath), { settings: defaultSettings(), records: [] })
+  await writeStore(path, original, dataPath)
+  assert.equal(path, join(root, 'config', 'pi-desk-tibo-monitor.json'))
+  assert.equal(dataPath, join(root, 'pi-desk', 'tibo-monitor.json'))
+  assert.deepEqual(await readStore(path, dataPath), original)
+  assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { settings: original.settings })
+  const data = JSON.parse(await readFile(dataPath, 'utf8'))
+  assert.equal(data.settings, undefined)
+  assert.deepEqual(data.records, original.records)
+  assert.equal(await readFile(legacy, 'utf8'), oldContent)
+  assert.equal(await readFile(older, 'utf8'), oldContent)
+  const next = { ...original, settings: { ...original.settings, intervalSeconds: 120 } }
+  await writeStore(path, next, dataPath)
+  defaultTiboStorePaths()
+  assert.deepEqual(await readStore(path, dataPath), next)
+})
+
+test('最新设置和业务文件拒绝混合字段且读取不改写', async (context) => {
+  const { root, path } = await tempFile(context)
+  const mixed = JSON.stringify({ settings: defaultSettings(), records: [] })
+  await writeFile(path, mixed)
+  await assert.rejects(readStore(path), /Unrecognized key/)
+  assert.equal(await readFile(path, 'utf8'), mixed)
+  await writeFile(path, JSON.stringify({ settings: defaultSettings() }))
+  const dataPath = join(root, 'pi-desk', 'tibo-monitor.json')
+  await mkdir(join(root, 'pi-desk'), { recursive: true })
+  await writeFile(dataPath, mixed)
+  await assert.rejects(readStore(path), /Unrecognized key/)
+  assert.equal(await readFile(dataPath, 'utf8'), mixed)
+})
 
 test('retainRecords按ID去重、发布时间倒序并应用保留上限', () => {
   const records = [record('old', 1), record('new', 3), record('new', 2), record('middle', 2)]

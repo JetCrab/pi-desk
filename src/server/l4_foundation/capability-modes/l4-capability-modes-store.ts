@@ -1,36 +1,21 @@
 import 'server-only'
 
 import { randomUUID } from 'node:crypto'
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync
-} from 'node:fs'
-import { dirname, join } from 'node:path'
-import { getAgentDir } from '@earendil-works/pi-coding-agent'
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import { existsSync } from 'node:fs'
 import {
   CapabilityModesSchema as L3CapabilityModesSchema,
   type CapabilityModes as L3CapabilityModes
 } from '@jetcrab/pi-desk-sdk/capabilities'
-
-function defaultModesPath(): string {
-  const agentDir = getAgentDir()
-  const path = join(agentDir, 'pi-desk-capability-modes.json')
-  const previous = join(agentDir, 'pi-super-capability-modes.json')
-  if (!existsSync(path) && existsSync(previous)) copyFileSync(previous, path)
-  return path
-}
 
 export class L4CapabilityModesStore {
   private modes: L3CapabilityModes | null = null
   private readonly listeners = new Set<() => void>()
   private tail: Promise<void> = Promise.resolve()
 
-  constructor(private readonly path = defaultModesPath()) {}
+  constructor(private readonly path = getConfigPath('pi-desk-capability-modes.json')) {}
 
   read(): L3CapabilityModes {
     if (this.modes === null) {

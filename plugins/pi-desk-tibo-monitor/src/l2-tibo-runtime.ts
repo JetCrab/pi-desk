@@ -19,6 +19,7 @@ import {
 type RuntimeHost = Pick<PiDeskPluginFacade, 'setState' | 'notifications'>
 export interface TiboRuntimeOptions {
   path: string
+  dataPath?: string
   settings?: HostSettings
   fetchFeed?: (signal: AbortSignal) => Promise<FeedResult>
   fetchQuote?: (
@@ -64,7 +65,7 @@ export class TiboRuntime {
   }
 
   static async create(host: RuntimeHost, options: TiboRuntimeOptions): Promise<TiboRuntime> {
-    const runtime = new TiboRuntime(host, options, await readStore(options.path))
+    const runtime = new TiboRuntime(host, options, await readStore(options.path, options.dataPath))
     await runtime.invalidateAnalysis(runtime.region)
     runtime.settingsOff = options.settings?.subscribe(() => runtime.regionChanged()) ?? null
     // 读取存储期间地区可能已更新；订阅建立后再次核对共享源。
@@ -255,7 +256,7 @@ export class TiboRuntime {
   private mutate(update: (current: TiboStored) => TiboStored): Promise<void> {
     const operation = this.writeTail.then(async () => {
       const next = update(this.data)
-      await writeStore(this.options.path, next)
+      await writeStore(this.options.path, next, this.options.dataPath)
       this.data = next
     })
     this.writeTail = operation.catch(() => undefined)

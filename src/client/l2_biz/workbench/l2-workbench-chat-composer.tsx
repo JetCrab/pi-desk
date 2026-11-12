@@ -953,7 +953,7 @@ function L2WorkbenchChatComposerComponent({
                 current={currentModel}
                 label={modelLabel}
                 title={modelTooltip}
-                disabled={!chatReady || workSessionRunning || idleSending || actionPending}
+                disabled={!chatReady || mainRunning || idleSending || actionPending}
                 triggerClassName={styles.modelTrigger}
                 detailsClassName={styles.modelTriggerDetails}
                 onOpenSettings={onOpenSettings}
