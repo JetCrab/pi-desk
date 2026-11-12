@@ -1,6 +1,7 @@
 export * from './capabilities.ts'
 export * from './shared.ts'
 export * from './settings.ts'
+export type * from './events.js'
 export * from './errors.ts'
 export * from './entry.ts'
 export * from './session.ts'

@@ -10,6 +10,15 @@ function facade(registrations: {
   return {
     name: 'usage',
     host: {
+      events: {
+        on(): () => void {
+          return () => undefined
+        },
+        onPlugin(): () => void {
+          return () => undefined
+        },
+        emit: (): void => undefined
+      },
       settings: {
         getSnapshot: () => ({ region: { locale: 'en', timeZone: 'UTC' } }),
         subscribe: () => () => undefined

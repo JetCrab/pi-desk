@@ -1073,6 +1073,10 @@ test('compact 开始后 send 可提前返回，但不会早于 compact 开始', 
 
   try {
     const compactPromise = fixture.chatRuntime.compact(fixture.source)
+    const accepted: unknown[] = []
+    fixture.chatRuntime.subscribeInputAccepted((event) => {
+      accepted.push(event)
+    })
     await compactStarted.promise
     assert.equal(compactCompleted, false)
 
@@ -1086,8 +1090,10 @@ test('compact 开始后 send 可提前返回，但不会早于 compact 开始', 
     assert.equal(sendCalls, 1)
     assert.equal(compactCompleted, false)
 
+    assert.deepEqual(accepted, [])
     releaseSend.resolve({ tempId: 'temp-1' })
     assert.deepEqual(await sendPromise, { tempId: 'temp-1' })
+    assert.deepEqual(accepted, [{ source: fixture.source, tempId: 'temp-1' }])
     assert.equal(compactCompleted, false)
 
     let compactSettled = false
@@ -1194,6 +1200,10 @@ test('普通 send 保持 commandTail 串行，acceptingCommands=false 不绕过�
     }
   })
 
+  const accepted: unknown[] = []
+  fixture.chatRuntime.subscribeInputAccepted((event) => {
+    accepted.push(event)
+  })
   try {
     const firstSend = fixture.chatRuntime.send({
       source: fixture.source,
@@ -1217,6 +1227,10 @@ test('普通 send 保持 commandTail 串行，acceptingCommands=false 不绕过�
     releaseSecondSend.resolve({ tempId: 'second' })
     assert.deepEqual(await firstSend, { tempId: 'first' })
     assert.deepEqual(await secondSend, { tempId: 'second' })
+    assert.deepEqual(accepted, [
+      { source: fixture.source, tempId: 'first' },
+      { source: fixture.source, tempId: 'second' }
+    ])
 
     await fixture.chatRuntime.pauseWorkSession(fixture.workSession.workId)
     await assert.rejects(
@@ -1230,9 +1244,60 @@ test('普通 send 保持 commandTail 串行，acceptingCommands=false 不绕过�
       /Chat commands are blocked by WorkSession lifecycle/
     )
     fixture.chatRuntime.resumeWorkSession(fixture.workSession.workId)
+    assert.equal(accepted.length, 2)
   } finally {
     releaseFirstSend.resolve({ tempId: 'cleanup-first' })
     releaseSecondSend.resolve({ tempId: 'cleanup-second' })
+    await fixture.dispose()
+  }
+})
+
+test('接管只在send成功后通知，拒绝与失效Source不发布，同步异步监听失败不改变响应', async (context) => {
+  let rejectSend = true
+  let calls = 0
+  const fixture = await createFixture({
+    send: async () => {
+      calls += 1
+      if (rejectSend) throw new Error('Worker rejected')
+      return { tempId: 'worker-accepted' }
+    },
+    compact: async () => undefined
+  })
+  const accepted: unknown[] = []
+  const errors = context.mock.method(console, 'error', () => undefined)
+  const off = fixture.chatRuntime.subscribeInputAccepted((event) => {
+    accepted.push(event)
+  })
+  fixture.chatRuntime.subscribeInputAccepted(() => {
+    throw new Error('sync failure')
+  })
+  fixture.chatRuntime.subscribeInputAccepted(async () => {
+    throw new Error('async failure')
+  })
+  const input = { source: fixture.source, mode: 'auto' as const, text: 'input', images: [] }
+  try {
+    assert.throws(
+      () =>
+        fixture.chatRuntime.send({
+          ...input,
+          source: { ...fixture.source, branchId: 'invalid' }
+        }),
+      /Chat source is not current/
+    )
+    assert.equal(calls, 0)
+    await assert.rejects(fixture.chatRuntime.send(input), /Worker rejected/)
+    assert.deepEqual(accepted, [])
+    rejectSend = false
+    assert.deepEqual(await fixture.chatRuntime.send(input), { tempId: 'worker-accepted' })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.deepEqual(accepted, [{ source: fixture.source, tempId: 'worker-accepted' }])
+    assert.equal(errors.mock.callCount(), 2)
+    off()
+    off()
+    await fixture.chatRuntime.send(input)
+    assert.equal(accepted.length, 1)
+  } finally {
+    off()
     await fixture.dispose()
   }
 })

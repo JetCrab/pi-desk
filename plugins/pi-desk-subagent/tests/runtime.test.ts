@@ -195,9 +195,9 @@ test('运行中的父会话刷新可用类型并在下次启动读取最新模�
   const root = mkdtempSync(join(tmpdir(), 'pi-desk-subagent-refresh-'))
   const agentDir = join(root, 'agent')
   const cwd = join(root, 'project')
-  mkdirSync(agentDir, { recursive: true })
+  mkdirSync(join(agentDir, 'config'), { recursive: true })
   mkdirSync(cwd, { recursive: true })
-  const settingsPath = join(agentDir, 'settings.json')
+  const settingsPath = join(agentDir, 'config', 'pi-desk-subagent.json')
   writeFileSync(
     settingsPath,
     JSON.stringify({

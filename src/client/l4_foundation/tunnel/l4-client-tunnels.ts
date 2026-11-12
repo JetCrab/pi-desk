@@ -149,6 +149,7 @@ class Mapping implements BrowserTunnelHandle {
   }
 
   start(): void {
+    this.log('发起本地端口映射', { local: this.local, ...this.snapshot })
     if (!this.local) this.initializing = this.initialize()
   }
 
@@ -179,31 +180,41 @@ class Mapping implements BrowserTunnelHandle {
       if (next.status === 'failed' || next.status === 'closed') await this.closeNative()
     } catch (cause) {
       this.fail(cause)
-      await this.closeNative().catch((error: unknown) => this.logCleanup(error))
+      await this.closeNative().catch(() => {})
     }
   }
 
   close(): Promise<void> {
     if (this.closing) return this.closing
+    this.log('本地映射关闭开始')
     this.closed = true
     this.update({ status: 'closed', localPort: null, path: null, error: null })
     this.listeners.clear()
     this.release()
-    this.closing = this.initializing.then(() => this.closeNative())
+    this.closing = this.initializing
+      .then(() => this.closeNative())
+      .then(() => {
+        this.log('本地映射关闭完成')
+      })
     return this.closing
   }
 
   private async initialize(): Promise<void> {
     try {
+      this.log('桌面能力检查开始', { bridgeAvailable: Boolean(this.bridge) })
       if (!this.bridge) throw new Error('当前浏览器不支持客户端 TCP 映射')
       const status = StatusSchema.parse(await this.bridge.invoke({ action: 'status' }))
       if (this.closed) return
+      this.log('桌面能力检查完成', status)
       if (!status.ready) throw new Error(status.error ?? '当前客户端隧道尚未配置')
+      this.log('查询端口发布开始')
       const target = L4TunnelPublicationSchema.parse(await this.resolve(this.remotePort))
       if (this.closed) return
       if (target.remotePort !== this.remotePort) throw new Error('后端发布端口与请求不一致')
+      this.log('端口发布目标已解析', target)
       // 先记住操作归属；请求超时也要关闭可能已创建的原生资源，不自动重发 open。
       this.nativeStarted = true
+      this.log('提交原生映射 open', target)
       const next = SnapshotSchema.parse(
         await this.bridge.invoke({ action: 'open', id: this.id, ...target })
       )
@@ -213,7 +224,7 @@ class Mapping implements BrowserTunnelHandle {
       this.fail(cause)
     } finally {
       if (this.closed || this.snapshot.status === 'failed') {
-        await this.closeNative().catch((cause: unknown) => this.logCleanup(cause))
+        await this.closeNative().catch(() => {})
       }
     }
   }
@@ -221,8 +232,15 @@ class Mapping implements BrowserTunnelHandle {
   private closeNative(): Promise<void> {
     if (!this.nativeStarted) return Promise.resolve()
     if (!this.nativeClosing) {
+      this.log('原生映射关闭开始')
       this.nativeClosing = this.bridge!.invoke({ action: 'close', id: this.id }).then(
-        () => undefined
+        () => {
+          this.log('原生映射关闭完成')
+        },
+        (cause: unknown) => {
+          this.log('原生映射关闭失败', { error: message(cause) }, 'error')
+          throw cause
+        }
       )
     }
     return this.nativeClosing
@@ -231,28 +249,32 @@ class Mapping implements BrowserTunnelHandle {
   private fail(cause: unknown): void {
     if (this.closed) return
     this.update({ status: 'failed', localPort: null, path: null, error: message(cause) })
-    console.warn('[Pi Desk][ClientTunnel] 本地端口映射失败', {
-      remotePort: this.remotePort,
-      message: message(cause)
-    })
+    this.log('本地端口映射失败', { error: message(cause) }, 'warn')
   }
 
   private update(snapshot: BrowserTunnelSnapshot): void {
     if (JSON.stringify(this.snapshot) === JSON.stringify(snapshot)) return
     this.snapshot = Object.freeze({ ...snapshot })
+    this.log('连接状态变化', { ...snapshot })
     for (const listener of this.listeners) {
       try {
         listener()
       } catch (cause) {
-        console.error('[Pi Desk][ClientTunnel] 连接状态订阅失败', cause)
+        this.log('连接状态订阅失败', { error: message(cause) }, 'error')
       }
     }
   }
 
-  private logCleanup(cause: unknown): void {
-    console.error('[Pi Desk][ClientTunnel] 本地映射释放失败', {
+  private log(
+    event: string,
+    details: Record<string, unknown> = {},
+    level: 'info' | 'warn' | 'error' = 'info'
+  ): void {
+    console[level](`[Pi Desk][ClientTunnel] ${event}`, {
+      time: new Date().toISOString(),
+      id: this.id,
       remotePort: this.remotePort,
-      message: message(cause)
+      ...details
     })
   }
 }

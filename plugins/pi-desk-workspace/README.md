@@ -22,7 +22,21 @@ pi install npm:@jetcrab/pi-desk-workspace
 
 只有当前项目已受信任、且存在有效的 `.pi/workspace.yml` 时，插件才向模型注册 `workspace` 工具。新增或修改配置后需要重载当前会话；Pi 中使用 `/reload`，Pi Desk 中使用 `session reload`。
 
+## 首次配置项目
+
+在尚无 `.pi/workspace.yml` 的项目会话中输入：
+
+```text
+/init-workspace
+```
+
+提示词随插件加载，不要求项目先有工作区配置，也不接收具体需求参数。AI 调查项目的仓库、工具链和运行方式，与用户确认共享/隔离边界，生成工作区定义及项目命令实现。配置规范要求 `provision`、`reset`、`remove`；依赖准备、分支、构建和测试命令按项目需要提供，需要托管服务时成组提供 `start/status/stop`。
+
+已有配置时结束初始化，不覆盖或迁移。此入口不分配工作区、不创建需求分支、不启动服务；配置与语法检查、重载后的命令识别和另行授权的运行验收分别报告。配置完成后，通过 `workspace` 操作项目命令，正常使用不需要读取 Handler。
+
 ## 最小示例
+
+下面演示插件协议的最小调用；项目接入时按 `/init-workspace` 的命令规范补齐生命周期。
 
 在项目中创建 `.pi/workspace.yml`：
 
@@ -104,7 +118,7 @@ Handler 返回明确的 `{ success: true, summary? }` 或 `{ success: false, err
 
 除删除整个工作区的命令外，Handler 必须保留 `.pi-workspace/`，不得修改其中的 `workspace.json`。项目的清理和 Git 忽略规则也应保留这份插件元数据。
 
-完整配置和 Handler 合同由随包的 `workspace-config-authoring` Skill 提供，日常调用见 `workspace-usage` Skill。源码位于 `skills/`，npm 包中位于 `dist/skills/`；配置 Schema 说明位于配置 Skill 的 `references/schema.md`。
+完整的项目命令设计流程、配置与 Handler 合同包含在 `/init-workspace` 提示词中；源码为 `prompts/init-workspace.md`，npm 包中为 `dist/prompts/init-workspace.md`，无需读取插件源码或额外配置附件。日常调用仍由 `workspace-usage` Skill 提供指导，源码位于 `skills/`，npm 包中位于 `dist/skills/`。
 
 ## Pi Desk 侧栏
 

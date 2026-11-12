@@ -20,6 +20,7 @@ function resolveVersionUpdatedAt(): string {
 
 const nextConfig: NextConfig = {
   agentRules: false,
+  devIndicators: process.env.PI_DESK_E2E === '1' ? false : undefined,
   allowedDevOrigins: process.env.PI_DESK_E2E === '1' ? ['client-tunnel.test'] : undefined,
   typescript: {
     // 开发测试包以实际编译和启动为门禁，main及本机构建仍执行完整类型检查。
@@ -43,6 +44,7 @@ const nextConfig: NextConfig = {
         ? 'temp/next-dev'
         : 'temp/build/pi-desk/release/.next',
   serverExternalPackages: [
+    '@napi-rs/keyring',
     '@vscode/ripgrep',
     '@earendil-works/pi-coding-agent',
     '@earendil-works/pi-agent-core',

@@ -1,5 +1,6 @@
 import 'server-only'
 
+import type { PluginWorkSession } from '@jetcrab/pi-desk-sdk/entry'
 import { getL4PiDeskDataDir } from '@server/l4_foundation/pi/l4-pi-desk-data-dir'
 
 import { randomUUID } from 'node:crypto'
@@ -118,6 +119,7 @@ import {
 import {
   L2ChatSourceBindingError,
   L2WorkSessionChatRuntime,
+  type L2WorkSessionChatInputAccepted,
   type L2WorkSessionChatMetadata,
   type L2WorkSessionChatRuntimeEvent
 } from './l2-work-session-chat-runtime'
@@ -223,12 +225,17 @@ export function isWorkSessionDirectoryInvalidError(error: unknown): boolean {
 }
 
 type WorkSessionUpdateListener = (update: L2WorkSessionsUpdate) => void
+type PluginListListener = (
+  update: L2WorkSessionsUpdate,
+  snapshot?: L2WorkSessionListResponse
+) => void
 type WorkSessionMessageListener = (event: L2WorkSessionChatRuntimeEvent) => void
 type WorkSessionPluginPushListener = (message: L3PluginPushMessage) => void
 
 export class WorkSessionManage {
   private readonly workSessionsById = new Map<string, WorkSession>()
   private readonly updateListeners = new Set<WorkSessionUpdateListener>()
+  private readonly pluginListListeners = new Set<PluginListListener>()
   private readonly chat = new L2WorkSessionChatRuntime()
   private readonly restoredRecords: L2WorkSessionRecord[]
   private pinnedCount: number
@@ -288,6 +295,71 @@ export class WorkSessionManage {
   subscribeUpdates(listener: WorkSessionUpdateListener): () => void {
     this.updateListeners.add(listener)
     return () => this.updateListeners.delete(listener)
+  }
+
+  subscribePluginWorkSessions(
+    listener: (sessions: readonly PluginWorkSession[]) => void
+  ): () => void {
+    let active = true
+    let sessions: PluginWorkSession[] | null = null
+    const consume: PluginListListener = (update, snapshot) => {
+      if (!active) return
+      if (sessions === null && snapshot) update = { type: 'snapshot', ...snapshot }
+      if (update.type === 'snapshot') {
+        sessions = update.workSessions.map(({ workId, sessionId, branchId, cwd, status }) => ({
+          source: { workId, sessionId, branchId },
+          cwd,
+          status
+        }))
+      } else {
+        if (sessions === null) return
+        if (update.type === 'delete') {
+          sessions = sessions.filter((session) => session.source.workId !== update.workId)
+        } else {
+          const { changes } = update
+          if (
+            !['cwd', 'sessionId', 'branchId', 'status'].some((key) => Object.hasOwn(changes, key))
+          )
+            return
+          sessions = sessions.map((session) =>
+            session.source.workId === update.workId
+              ? {
+                  source: {
+                    workId: session.source.workId,
+                    sessionId: changes.sessionId ?? session.source.sessionId,
+                    branchId: changes.branchId ?? session.source.branchId
+                  },
+                  cwd: changes.cwd ?? session.cwd,
+                  status: changes.status ?? session.status
+                }
+              : session
+          )
+        }
+      }
+      listener(sessions)
+    }
+    this.pluginListListeners.add(consume)
+    if (this.hydrated) {
+      // 生命周期操作提交后才读首份基线；之后只应用已发布事实，不再遍历ChatRecord。
+      void this.runExclusive(async () => {
+        if (active && sessions === null) consume({ type: 'snapshot', ...this.createSnapshot() })
+      }).catch((error: unknown) => {
+        console.error('[Pi Desk][WorkSessionManage] 插件列表基线读取失败', {
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
+    }
+    return (): void => {
+      active = false
+      sessions = null
+      this.pluginListListeners.delete(consume)
+    }
+  }
+
+  subscribeInputAccepted(
+    listener: (event: L2WorkSessionChatInputAccepted) => void | Promise<void>
+  ): () => void {
+    return this.chat.subscribeInputAccepted(listener)
   }
 
   subscribeMessageEvents(listener: WorkSessionMessageListener): () => void {
@@ -640,7 +712,7 @@ export class WorkSessionManage {
       const item = this.toListItem(next)
       const snapshot = this.createSnapshot()
       const changes = this.toChanges(previousItem, item)
-      if (changes) this.publishUpdate({ type: 'update', workId, changes })
+      if (changes) this.publishUpdate({ type: 'update', workId, changes }, snapshot)
       console.info('[Pi Desk][WorkSessionManage] 已替换 Pi 会话', {
         workId,
         replacementType: historySession ? 'history' : 'empty',
@@ -838,6 +910,9 @@ export class WorkSessionManage {
       this.workSessionsById.set(workSession.workId, workSession)
     }
     this.hydrated = true
+    if (this.pluginListListeners.size > 0) {
+      this.publishPluginList({ type: 'snapshot', ...this.createSnapshot() })
+    }
     if (this.rewriteLegacyStore) {
       this.persist()
       this.rewriteLegacyStore = false
@@ -970,7 +1045,25 @@ export class WorkSessionManage {
     if (changes) this.publishUpdate({ type: 'update', workId, changes })
   }
 
-  private publishUpdate(updateInput: L2WorkSessionsUpdate): void {
+  private publishPluginList(
+    update: L2WorkSessionsUpdate,
+    snapshot?: L2WorkSessionListResponse
+  ): void {
+    for (const listener of [...this.pluginListListeners]) {
+      try {
+        listener(update, snapshot)
+      } catch (error) {
+        console.error('[Pi Desk][WorkSessionManage] 插件列表监听失败', {
+          message: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
+  }
+
+  private publishUpdate(
+    updateInput: L2WorkSessionsUpdate,
+    snapshot?: L2WorkSessionListResponse
+  ): void {
     const update = L2WorkSessionsUpdateSchema.parse(updateInput)
     for (const listener of [...this.updateListeners]) {
       try {
@@ -982,6 +1075,7 @@ export class WorkSessionManage {
         })
       }
     }
+    this.publishPluginList(update, snapshot)
   }
 
   private readPersistedState(): RestoredWorkSessionState {

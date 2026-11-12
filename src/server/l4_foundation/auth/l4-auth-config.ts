@@ -5,17 +5,16 @@ import { getL4PiDeskDataDir } from '@server/l4_foundation/pi/l4-pi-desk-data-dir
 import { createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { z } from 'zod'
+import type { z } from 'zod'
+import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import {
+  L4AuthConfigSchema as AuthConfigSchema,
+  L4AuthConfigError,
+  initializeL4AuthSessionKey,
+  readL4AuthSessionKey
+} from './l4-auth-storage'
 
-const AuthConfigSchema = z
-  .object({
-    passwordHash: z.string().regex(/^scrypt:[a-f0-9]{32}:[a-f0-9]{128}$/)
-  })
-  .strict()
-
-const ReadAuthConfigSchema = AuthConfigSchema.extend({
-  username: z.string().trim().min(1).max(64).optional()
-})
+export { L4AuthConfigError, restoreL4AuthSessionKey } from './l4-auth-storage'
 
 type AuthConfig = z.infer<typeof AuthConfigSchema>
 
@@ -32,15 +31,8 @@ export interface L4AuthCredentials extends AuthConfig {
   sessionSecret: string
 }
 
-export class L4AuthConfigError extends Error {
-  constructor() {
-    super('登录保护配置无法读取，请修复配置或删除 auth.json 后重新设置')
-    this.name = 'L4AuthConfigError'
-  }
-}
-
 export function getL4AuthConfigPath(): string {
-  return join(getL4PiDeskDataDir(), 'auth.json')
+  return getConfigPath('pi-desk-auth.json')
 }
 
 function sessionKeyPath(): string {
@@ -49,12 +41,6 @@ function sessionKeyPath(): string {
 
 function isMissing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
-}
-
-function readSessionKey(): string {
-  const key = readFileSync(sessionKeyPath(), 'utf8').trim()
-  if (!/^[a-f0-9]{64}$/.test(key)) throw new L4AuthConfigError()
-  return key
 }
 
 export function readL4AuthCredentials(): L4AuthCredentials | null {
@@ -67,13 +53,10 @@ export function readL4AuthCredentials(): L4AuthCredentials | null {
   }
 
   try {
-    const config = ReadAuthConfigSchema.parse(JSON.parse(content) as unknown)
-    // 旧配置沿用原签名材料，保存为仅密码配置后使旧 Cookie 失效。
-    const sessionMaterial =
-      config.username === undefined ? [config.passwordHash] : [config.username, config.passwordHash]
+    const config = AuthConfigSchema.parse(JSON.parse(content) as unknown)
     // 摘要只参与凭据绑定；Cookie 的签名能力来自另一个文件中的随机密钥。
-    const sessionSecret = createHmac('sha256', readSessionKey())
-      .update(JSON.stringify(sessionMaterial))
+    const sessionSecret = createHmac('sha256', readL4AuthSessionKey(sessionKeyPath()))
+      .update(JSON.stringify([config.passwordHash]))
       .digest('hex')
     return { passwordHash: config.passwordHash, sessionSecret }
   } catch {
@@ -132,9 +115,9 @@ export function writeL4AuthConfig(config: AuthConfig | null): void {
   const parsed = AuthConfigSchema.parse(config)
   mkdirSync(dirname(path), { recursive: true })
   if (readL4AuthCredentials() === null) {
-    writeFileSync(sessionKeyPath(), `${randomBytes(32).toString('hex')}\n`, { mode: 0o600 })
+    initializeL4AuthSessionKey(sessionKeyPath())
   }
-  readSessionKey()
+  readL4AuthSessionKey(sessionKeyPath())
   // mode 只约束新建文件；恢复时可能复用权限较宽的旧密钥文件。
   chmodSync(sessionKeyPath(), 0o600)
 

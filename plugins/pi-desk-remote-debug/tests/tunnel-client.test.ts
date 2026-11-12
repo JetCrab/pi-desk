@@ -40,14 +40,20 @@ test('隧道进程创建失败后仍消费异步错误，避免影响宿主', (c
     context.mock.restoreAll()
     syncBuiltinESMExports()
   })
+  const logLines: string[] = []
   const logger = {
-    line(): void {
-      return
+    line(_scope: string, text: string): void {
+      logLines.push(text)
     }
   } as unknown as RunLogger
   assert.throws(() => startTunnelClient({ localPort: 39123, publicPort: 43333, logger }))
   assert.doesNotThrow(() => fake.emit('error', new Error('spawn EACCES')))
   assert.ok(messages.some((message) => message.includes('spawn EACCES')))
+  assert.ok(
+    logLines.some(
+      (line) => line.includes('localPort=39123 publicPort=43333') && line.includes('spawn EACCES')
+    )
+  )
 })
 
 for (const failed of [false, true]) {
@@ -124,6 +130,19 @@ for (const failed of [false, true]) {
       assert.equal((await client.stop()).failed, false)
       assert.ok(fake.stdin.writableEnded)
     }
-    assert.ok(messages.length > 0)
+    assert.ok(
+      messages.some((line) =>
+        line.includes(`CLI 已启动 pid=${fake.pid} localPort=39123 publicPort=43333`)
+      )
+    )
+    assert.ok(
+      messages.some(
+        (line) =>
+          line.includes(`CLI 已退出 pid=${fake.pid}`) &&
+          line.includes(`exitCode=${failed ? 1 : 0} signal=null`) &&
+          line.includes(`reason=${failed ? '配置未就绪' : '已确认资源释放'}`)
+      )
+    )
+    if (!failed) assert.ok(messages.some((line) => line.includes(`请求停止 CLI pid=${fake.pid}`)))
   })
 }

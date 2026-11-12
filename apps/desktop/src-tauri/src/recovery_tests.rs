@@ -1,7 +1,7 @@
 #![cfg(windows)]
 
 use super::{
-    control_state, execute_operation, load_runtime_info, package_directory,
+    control_state, execute_operation, load_runtime_info_with_preferences, package_directory,
     record_operation_failure, stop_active_child, Operation, RuntimeInfo, ShellState,
     TargetRuntimeInfo,
 };
@@ -246,7 +246,9 @@ fn stopped_update_then_failed_start_restores_previous_install_after_reload() {
     )
     .unwrap();
     let runtime_path = fixture.root.join("runtime.json");
-    let info = load_runtime_info(&runtime_path, &config);
+    let info =
+        load_runtime_info_with_preferences(&runtime_path, &config, &fixture.state.config_path)
+            .unwrap();
     assert_eq!(
         info.targets[&fixture.url].last_version.as_deref(),
         Some("2.0.0")

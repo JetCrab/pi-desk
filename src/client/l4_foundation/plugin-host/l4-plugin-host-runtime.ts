@@ -2,6 +2,9 @@
 
 import {
   BrowserPluginError,
+  type BrowserHostEventMap,
+  type ChatSubmitResult,
+  type WorkbenchContext,
   type BrowserApplicationContributionDefinition,
   type BrowserApplicationTarget,
   type BrowserComposerPanelContributionDefinition,
@@ -58,6 +61,7 @@ import {
   readL4HostSettings,
   subscribeL4HostSettings
 } from '@client/l4_foundation/locale/l4-region-store'
+import { L4PluginHostEvents } from './l4-plugin-host-events'
 import { L4PluginLogHostRuntime, type L4PluginLogChannel } from './l4-plugin-log-runtime'
 import { L4ClientTunnelHostRuntime } from '@client/l4_foundation/tunnel/l4-client-tunnels'
 import type { L4TunnelPublication } from '@common/l4_foundation/tunnel/l4-client-tunnel-contract'
@@ -478,6 +482,15 @@ export class L4PluginHostRuntime {
   private readonly workSessionListeners = new Set<() => void>()
   private readonly connectionListeners = new Set<() => void>()
   private readonly themeListeners = new Set<() => void>()
+  private workSessionsReady = false
+  private globalStatesReady = false
+  private settingsReady = false
+  private workbenchContext: WorkbenchContext | undefined
+  private readonly events = new L4PluginHostEvents(
+    (name, pluginName) => this.readEventState(name, pluginName),
+    () => this.disposed
+  )
+  private readonly unsubscribeSettings: () => void
   private globalPluginStates: L4PluginGlobalStates = {}
   private workSessions: readonly PluginWorkSession[] = []
   private workSessionCreate: L4PluginHostWorkSessionCreate | null = null
@@ -511,10 +524,12 @@ export class L4PluginHostRuntime {
     private readonly notifyPlugin: L4PluginNotificationSink = () => undefined
   ) {
     this.unsubscribePush = transport.subscribePush((message) => this.dispatchPush(message))
+    this.unsubscribeSettings = subscribeL4HostSettings(() => this.events.publishState('settings'))
     const updateTheme = (): void => {
       const next = resolvedTheme()
       if (next.mode === this.themeSnapshot.mode) return
       this.themeSnapshot = next
+      this.events.publishState('theme')
       this.notify(this.themeListeners)
     }
     this.themeSnapshot = resolvedTheme()
@@ -695,9 +710,15 @@ export class L4PluginHostRuntime {
         JSON.stringify(this.globalPluginStates[pluginName] ?? null) !==
         JSON.stringify(next[pluginName] ?? null)
     )
-    if (changedPluginNames.length === 0) return
+    const first = !this.globalStatesReady
+    this.globalStatesReady = true
+    if (changedPluginNames.length === 0) {
+      if (first) this.events.publishState('plugin-state')
+      return
+    }
 
     this.globalPluginStates = next
+    this.events.publishState('plugin-state')
     for (const pluginName of changedPluginNames) {
       const owner = this.ownersByPlugin.get(pluginName)
       if (owner) this.notify(owner.globalStateListeners)
@@ -734,11 +755,50 @@ export class L4PluginHostRuntime {
     if (!owner.active) throw new Error('Browser Entry 已失效')
   }
 
+  replaceWorkbenchContext(context: WorkbenchContext): void {
+    if (this.disposed) return
+    if (JSON.stringify(context) === JSON.stringify(this.workbenchContext)) return
+    this.workbenchContext = freezeSnapshot(structuredClone(context))
+    this.events.publishState('workbench-context')
+  }
+
+  publishChatSubmitResult(result: ChatSubmitResult): void {
+    if (!this.disposed) this.events.publishChatSubmitResult(result)
+  }
+
+  private readEventState<K extends Exclude<keyof BrowserHostEventMap, 'chat-submit-result'>>(
+    name: K,
+    pluginName: string
+  ): BrowserHostEventMap[K] | undefined {
+    const states: {
+      [Name in Exclude<keyof BrowserHostEventMap, 'chat-submit-result'>]:
+        BrowserHostEventMap[Name] | undefined
+    } = {
+      'workbench-context': this.workbenchContext,
+      'work-sessions': this.workSessionsReady ? this.workSessions : undefined,
+      connection: this.connectionSnapshot,
+      settings: this.settingsReady
+        ? freezeSnapshot(structuredClone(readL4HostSettings()))
+        : undefined,
+      theme: this.themeSnapshot,
+      'plugin-state': this.globalStatesReady
+        ? (this.globalPluginStates[pluginName] ?? null)
+        : undefined
+    }
+    return states[name]
+  }
+
   replaceWorkSessions(workSessions: readonly L4PluginHostWorkSessionInput[]): void {
     const next = freezeSnapshot(toPluginWorkSessions(workSessions))
-    if (sameWorkSessions(this.workSessions, next)) return
+    const first = !this.workSessionsReady
+    this.workSessionsReady = true
+    if (sameWorkSessions(this.workSessions, next)) {
+      if (first) this.events.publishState('work-sessions')
+      return
+    }
     this.workSessions = next
     this.notify(this.workSessionListeners)
+    this.events.publishState('work-sessions')
     if (this.entriesInitialized) this.scheduleApplicationResolution()
   }
 
@@ -747,6 +807,8 @@ export class L4PluginHostRuntime {
   }
 
   markReady(): void {
+    this.settingsReady = true
+    this.events.publishState('settings')
     this.replaceConnection({ status: 'ready', error: null })
   }
 
@@ -1085,6 +1147,8 @@ export class L4PluginHostRuntime {
     this.applicationResolveController?.abort()
     this.applicationResolveController = null
     this.unsubscribePush()
+    this.unsubscribeSettings()
+    this.events.dispose()
     this.unsubscribeTheme()
     this.removeSystemThemeListener()
 
@@ -1956,6 +2020,7 @@ export class L4PluginHostRuntime {
     owner.subscriptionDisposers.add(() => tunnels.dispose())
 
     return {
+      events: this.events.createHost(owner),
       get tunnels() {
         assertActive()
         return tunnels.available() ? tunnels : undefined
@@ -2105,6 +2170,7 @@ export class L4PluginHostRuntime {
       return
     }
     this.connectionSnapshot = Object.freeze({ ...next })
+    this.events.publishState('connection')
     this.notify(this.connectionListeners)
   }
 

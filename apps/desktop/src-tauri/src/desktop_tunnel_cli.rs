@@ -1,6 +1,5 @@
 use pi_desk_tunnel_common::config::{normalize_tunnel_config, require_ready, TunnelConfig};
 use pi_desk_tunnel_common::provider_cli;
-use serde::Deserialize;
 use std::fs;
 use std::io::{self, Write};
 use std::net::SocketAddr;
@@ -134,27 +133,21 @@ fn run(args: &[String]) -> Result<i32, String> {
     }
 }
 
-#[derive(Deserialize)]
-struct DesktopConfig {
-    #[serde(default)]
-    tunnel: DesktopTunnelConfig,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct DesktopTunnelConfig {
-    #[serde(default)]
     control_server_url: String,
-    #[serde(default)]
     control_key: String,
 }
 
 fn read_config(path: &Path) -> Result<DesktopTunnelConfig, String> {
     let content =
         fs::read_to_string(path).map_err(|error| format!("读取桌面隧道配置失败：{error}"))?;
-    let desktop: DesktopConfig =
-        serde_json::from_str(&content).map_err(|_| "桌面隧道配置格式无效".to_string())?;
-    Ok(desktop.tunnel)
+    let value = serde_json::from_str(&content).map_err(|_| "桌面隧道配置格式无效".to_string())?;
+    let value = crate::desktop_storage::decrypt(path, value)?;
+    let desktop = crate::config::decode_value(value)?;
+    Ok(DesktopTunnelConfig {
+        control_server_url: desktop.tunnel.control_server_url,
+        control_key: desktop.tunnel.control_key,
+    })
 }
 
 pub(crate) fn inspect_config(path: &Path) -> Result<Option<String>, String> {

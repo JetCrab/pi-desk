@@ -15,6 +15,15 @@ test('Pi Desk Entry 注册远程调试和配置方法及唯一 Browser Entry', a
     },
     setState: () => undefined,
     host: {
+      events: {
+        on(): () => void {
+          return () => undefined
+        },
+        onPlugin(): () => void {
+          return () => undefined
+        },
+        emit: (): void => undefined
+      },
       settings: {
         getSnapshot: () => ({ region: { locale: 'en', timeZone: 'UTC' } }),
         subscribe: () => () => undefined

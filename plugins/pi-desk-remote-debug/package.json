@@ -1,7 +1,7 @@
 {
   "name": "@jetcrab/pi-desk-remote-debug",
   "homepage": "https://pidesk.dev/docs/remote-debug/",
-  "version": "1.1.20",
+  "version": "1.1.21",
   "license": "Apache-2.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -39,6 +39,25 @@
   },
   "piDesk": {
     "entry": "./dist/pi-desk.js",
+    "environment": {
+      "files": [
+        {
+          "base": "config",
+          "path": "pi-desk-remote-debug-ports.json",
+          "format": "json",
+          "secretPaths": [],
+          "omitPaths": [
+            "/registrations"
+          ]
+        },
+        {
+          "base": "project",
+          "path": "remote_debug.yaml",
+          "format": "yaml",
+          "secretPaths": []
+        }
+      ]
+    },
     "i18n": {
       "zh-CN": {
         "description": "统一管理远程调试入口和隧道，在 Pi Desk 中访问开发服务。"

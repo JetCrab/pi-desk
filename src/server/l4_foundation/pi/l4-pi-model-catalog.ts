@@ -1,6 +1,5 @@
 import 'server-only'
 
-import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   getAgentDir,
@@ -9,7 +8,10 @@ import {
   resolveModelScopeWithDiagnostics,
   type AgentSession
 } from '@earendil-works/pi-coding-agent'
-import { filterL4CollectedModels } from '@server/l4_foundation/model-settings/l4-model-settings'
+import {
+  filterL4CollectedModels,
+  readL4ModelPreferences
+} from '@server/l4_foundation/model-settings/l4-model-settings'
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
 import { getSupportedThinkingLevels, type Api, type Model } from '@earendil-works/pi-ai'
 
@@ -57,18 +59,8 @@ function modelKey(provider: string, modelId: string): string {
 }
 
 function readRawPresets(): RawPreset[] {
-  const path = join(getAgentDir(), 'models.json')
-  if (!existsSync(path)) return []
-  try {
-    const value = JSON.parse(readFileSync(path, 'utf8')) as { modelPresets?: unknown }
-    return Array.isArray(value.modelPresets) ? value.modelPresets : []
-  } catch (error) {
-    console.warn('[Pi Desk][PiModelCatalog] models.json 读取失败', {
-      path,
-      errorName: error instanceof Error ? error.name : 'UnknownError'
-    })
-    return []
-  }
+  const value = readL4ModelPreferences()
+  return Array.isArray(value.modelPresets) ? value.modelPresets : []
 }
 
 function toOption(model: Model<Api>, runtime: ModelRuntime): L4PiModelOption {

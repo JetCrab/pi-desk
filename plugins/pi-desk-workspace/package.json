@@ -1,7 +1,7 @@
 {
   "name": "@jetcrab/pi-desk-workspace",
   "homepage": "https://pidesk.dev/docs/workspace/",
-  "version": "1.1.16",
+  "version": "1.1.17",
   "description": "Reusable isolated workspace pool for Pi sessions with a Pi Desk sidebar",
   "license": "Apache-2.0",
   "repository": {
@@ -33,12 +33,30 @@
       "./dist/index.js"
     ],
     "skills": [
-      "./dist/skills/workspace-config-authoring",
       "./dist/skills/workspace-usage"
+    ],
+    "prompts": [
+      "./dist/prompts/init-workspace.md"
     ]
   },
   "piDesk": {
-    "entry": "./dist/pi-desk.js"
+    "entry": "./dist/pi-desk.js",
+    "environment": {
+      "files": [
+        {
+          "base": "project",
+          "path": "workspace.yml",
+          "format": "yaml",
+          "secretPaths": []
+        },
+        {
+          "base": "project",
+          "path": "workspace",
+          "format": "binary",
+          "secretPaths": []
+        }
+      ]
+    }
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

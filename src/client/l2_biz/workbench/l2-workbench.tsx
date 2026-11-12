@@ -478,14 +478,35 @@ export function L2Workbench({
   const activePluginWorkId = activeWorkSession?.workId ?? null
   const activePluginSessionId = activeWorkSession?.sessionId ?? null
   const activePluginBranchId = activeWorkSession?.branchId ?? null
-  const activePluginSource =
-    activePluginWorkId && activePluginSessionId && activePluginBranchId
-      ? {
-          workId: activePluginWorkId,
-          sessionId: activePluginSessionId,
-          branchId: activePluginBranchId
-        }
-      : null
+  const activePluginSource = useMemo(
+    () =>
+      activePluginWorkId && activePluginSessionId && activePluginBranchId
+        ? {
+            workId: activePluginWorkId,
+            sessionId: activePluginSessionId,
+            branchId: activePluginBranchId
+          }
+        : null,
+    [activePluginWorkId, activePluginSessionId, activePluginBranchId]
+  )
+  useEffect(() => {
+    if (!layoutLoaded || !workSessionsInitializedRef.current) return
+    // 本地布局尚待恢复焦点时不把中间 null 当作真实工作上下文。
+    if (focusedWorkId === null && allowDefaultSelectionRef.current && layout.primaryWorkId) return
+    pluginHost.replaceWorkbenchContext(
+      activePluginSource && activeCwd !== null
+        ? { source: activePluginSource, cwd: activeCwd }
+        : null
+    )
+  }, [
+    activeCwd,
+    activePluginSource,
+    focusedWorkId,
+    layout.primaryWorkId,
+    layoutLoaded,
+    loading,
+    pluginHost
+  ])
   const pluginSidebarTargetKey = JSON.stringify([
     sidebarMode,
     activePluginWorkId,

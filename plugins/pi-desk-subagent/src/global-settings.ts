@@ -1,9 +1,9 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
-import { getAgentDir, ModelRuntime, withFileMutationQueue } from '@earendil-works/pi-coding-agent'
+import { ModelRuntime, withFileMutationQueue } from '@earendil-works/pi-coding-agent'
 import { PluginMethodError } from '@jetcrab/pi-desk-sdk/session'
-import { listGlobalSubagentSettings } from './agent-config.js'
+import { listGlobalSubagentSettings, subagentSettingsPath } from './agent-config.js'
 
 const levels = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
@@ -70,9 +70,14 @@ export async function saveGlobalSubagentSettings(
       throw new PluginMethodError(400, `模型当前不可用：${item.model}`)
     }
   }
-  const path = join(getAgentDir(), 'settings.json')
+  const path = subagentSettingsPath()
   await withFileMutationQueue(path, async () => {
-    const settings = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+    const settings = await readFile(path, 'utf8')
+      .then((content) => JSON.parse(content) as Record<string, unknown>)
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return {} as Record<string, unknown>
+        throw error
+      })
     const agents = settings.agents
     if (agents !== undefined && (!agents || typeof agents !== 'object' || Array.isArray(agents))) {
       throw new Error('全局 agents 配置不是对象')
@@ -97,6 +102,7 @@ export async function saveGlobalSubagentSettings(
     settings.agents = next
     const temporary = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`
     try {
+      await mkdir(dirname(path), { recursive: true })
       await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
       await rename(temporary, path)
     } catch (error) {

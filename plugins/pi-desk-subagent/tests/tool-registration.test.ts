@@ -170,8 +170,9 @@ test('父工具只暴露 Agent description，不暴露 Research 内部工具', a
     '只用于外部研究。',
     'research_delegate, external_research, read, grep, find, ls'
   )
+  await mkdir(join(agentDir, 'config'), { recursive: true })
   await writeFile(
-    join(agentDir, 'settings.json'),
+    join(agentDir, 'config', 'pi-desk-subagent.json'),
     JSON.stringify({ agents: { dev: { disabled: true } } }),
     'utf8'
   )

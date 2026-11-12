@@ -1,5 +1,6 @@
 import 'server-only'
 
+export { readL4ModelPreferences } from './l4-model-preferences-store'
 export { listL4ModelCatalog } from './l4-model-catalog-store'
 export {
   readL4ModelSettings,

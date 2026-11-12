@@ -6,7 +6,7 @@
     "url": "git+https://github.com/JetCrab/pi-desk.git",
     "directory": "plugins/pi-desk-ctx"
   },
-  "version": "1.1.16",
+  "version": "1.1.17",
   "license": "Apache-2.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -58,6 +58,16 @@
   },
   "piDesk": {
     "entry": "./dist/pi-desk.js",
+    "environment": {
+      "files": [
+        {
+          "base": "config",
+          "path": "pi-desk-ctx.json",
+          "format": "json",
+          "secretPaths": []
+        }
+      ]
+    },
     "i18n": {
       "zh-CN": {
         "description": "管理会话上下文，查看占用并按需忽略消息，减少不必要的上下文消耗。"

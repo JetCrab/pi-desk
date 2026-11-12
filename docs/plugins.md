@@ -27,6 +27,7 @@ Session 精确绑定 `{ workId, sessionId, branchId }`。Source 来自 Target �
 | `/browser`                              | `dist/browser.d.ts`                                                      | Browser Factory、Contribution 定义、mount Target、Host 通信        |
 | `/react/base`                           | `dist/react-base.d.ts`，继续读其导出的 `react-ui.d.ts`、`react-log.d.ts` | 公共组件、Host Provider、ErrorBoundary、Hooks                      |
 | `/react/markdown`                       | `dist/react-markdown.d.ts`                                               | Markdown 消息界面                                                  |
+| `/config`、`/secrets`                   | 对应 `dist/config.d.ts`、`dist/secrets.d.ts`                             | Node 配置目录、串行读改写、加密凭据存取                            |
 | `/errors`、`/settings`、`/capabilities` | 对应 `dist/*.d.ts`                                                       | 方法错误、共享地区设置、能力规则                                   |
 
 SDK 不重复定义原生 Pi Tool。只导入 Node 类型可用 `import type`，宿主 Jiti 会剥除类型；实际运行时导入 SDK 或其他 Node 包时，在该插件声明运行依赖，不借用另一插件的依赖。类型检查所需 SDK 可放开发依赖。
@@ -68,6 +69,81 @@ plugin.push('changed', {})
 此处 `/session` 是运行时导入，插件需声明 SDK 运行依赖。Session State 仅当前会话内存，`setState()` 整体替换自身槽位，`null` 删除；不写 Pi JSONL。树导航从当前 `getBranch()` 重建分支数据，不重复注册会话方法。Task 用于报告真实后台任务，停止能力由任务 Owner 提供。
 
 Node `plugin.setState()` 则整体替换自身全局状态；Browser 通过 `host.globalState.getSnapshot()/subscribe()` 只读。两者不是同一槽位，均不得读写其他插件状态。宿主地区设置由 `host.settings.getSnapshot()/subscribe()` 只读，不另存权威副本。
+
+### 配置与凭据（Node）
+
+原生 Pi 扩展和 Pi Desk Node 业务都可直接使用 `/config`、`/secrets`，不需要常驻 Global Host。这两个子入口仅供 Node 使用，不从 SDK 根入口导出，也不在 Browser Entry 或 View 中导入。
+
+```ts
+import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import { createSecretStore, isSecretReference } from '@jetcrab/pi-desk-sdk/secrets'
+
+const configPath = getConfigPath('example-plugin.json')
+const secrets = createSecretStore()
+```
+
+用户级自有配置位于 `<AgentDir>/config/`；默认 AgentDir 由 Pi 的 `getAgentDir()` 决定，支持 `PI_CODING_AGENT_DIR`。Pi 原生 `settings.json`、`models.json`、`auth.json`、`mcp.json` 保持原格式和位置，不接管其凭据加密。项目配置仍由插件定义。
+
+新版只读取当前路径和格式，启动及读取配置时不会搬迁旧文件、回退读取旧路径、删除旧字段，或把明文凭据自动改成引用。升级前须另行将需要保留的旧配置准备为当前格式；不要依赖首次启动完成转换。
+
+| `/config` 方法                                                         | 用途与边界                                                                                                         |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `getConfigDirectory(agentDir?)` / `getConfigPath(filename, agentDir?)` | 返回目录或单个文件路径，不创建目录；`filename` 只能是文件名，不能含子目录。                                        |
+| `withConfigTransaction<T>(targetPath, operation)`                      | 跨进程串行执行同一目标的异步读改写，返回回调结果 `Promise<T>`；不自动回滚。                                        |
+| `writeConfigTextAtomic(path, content)`                                 | 同步持久化 UTF-8 文本，原子发布并回读验证；自身不重复加锁。                                                        |
+
+配置 Schema、读取和显式保存由插件维护；路径函数不执行这些工作。配置读改写放在 `withConfigTransaction()` 回调内，使用 `writeConfigTextAtomic()` 写入；不能在回调内嵌套获取同一目标锁。事务和原子写入拒绝符号链接及非普通配置文件。敏感值在显式保存时通过 `SecretStore.put()` 创建引用，读取配置只解析已保存的引用，不转换或回写文件。
+
+`withConfigTransaction()` 只提供同目标串行，不提供配置与保险库之间的跨文件原子提交；回调报错不会撤销已完成的写入。`writeConfigTextAtomic()` 持久化、发布和回读验证成功后，临时文件清理失败只告警；锁释放失败也只告警，不把成功结果改为失败。
+
+| `/secrets` 方法                        | 用法与结果                                                                                                       |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `put(value, reference?)`               | `await secrets.put(value)` 生成 `secret://UUID`；传入引用时写入该引用对应的值。配置只保存返回的引用。            |
+| `get(reference)` / `delete(reference)` | 读取明文或删除对应值；不存在时分别返回 `null` 或直接完成。                                                       |
+| `export(references)`                   | 返回指定引用到明文的对象；任一引用缺失时报错。结果不是加密备份，调用方须置于受控加密流程中。                     |
+| `import(values)`                       | 导入引用到明文的对象，始终生成新引用，返回旧引用到新引用的映射；调用方用映射更新导入的配置，不覆盖目标已有凭据。 |
+| `isSecretReference(value)`             | 只判断引用格式，不证明凭据存在；只在插件明确的敏感字段中解释引用。                                               |
+
+`get/put/delete/export/import` 均返回 Promise。读取敏感字段时，用 `isSecretReference()` 判断后调用 `get()`；不要把缺失引用当成明文继续使用。设置页可通过插件自己的 Method 获取真实值并支持显示，不从 Browser 直接读取保险库。保险库没有长期连接，不需要 `dispose()`。
+
+已发布的旧引用可能被其他配置文件共享，不自动回收；显式 `delete()` 前，调用方须确认没有任何消费者。只有已确认未提交到任何配置的新引用才可在失败后回收；写入报错本身不能证明配置从未发布，提交成功后的清理告警也不能作为回收依据。
+
+保险库最多保存 4096 条记录，完整密文上限为 8 MiB。写入或导入超限时明确报错，保留原密文，不自动清空或淘汰凭据。
+
+保险库固定为 `<AgentDir>/config/credentials.enc`，使用 AES-256-GCM 整体认证加密并串行、原子写入。主密钥默认由 Windows 凭据管理器、macOS Keychain 或 Linux Secret Service 持久保存；Linux 显式使用 `secret-service`。系统钥匙串不可用时明确失败，不静默回退；已有密文而主密钥丢失时拒绝重建覆盖。
+
+无桌面环境可用 `PI_DESK_SECRET_KEY_FILE` 指定部署方持有的外部密钥文件。内容必须是**原始 32 字节**，不是 Hex 或 Base64 文本；SDK 只读，不创建或改写该文件。`createSecretStore({ agentDir?, keyProvider? })` 的 `keyProvider` 仅用于隔离自测或明确自定义密钥后端，返回 32 字节密钥，不作为生产默认或钥匙串失败时的自动兜底。
+
+协议和 Browser 子入口不加载上述 Node 能力。SDK 的 `proper-lockfile` 用于跨进程配置/凭据锁，`@napi-rs/keyring` 用于默认系统密钥存储，均属于这些 Node 能力的运行依赖；协议 Schema 使用 Zod。插件运行时导入这些子入口时声明 SDK 运行依赖，公共 React/UI 仍由宿主提供。
+
+### 静态环境文件声明
+
+插件可在 `package.json` 的 `piDesk.environment.files` 声明自有持久文件，供宿主导出接入读取；无需执行插件代码或启动 Global Host。声明本身不执行备份或恢复，不保证所用宿主已提供完整环境备份功能。
+
+```json
+{
+  "piDesk": {
+    "environment": {
+      "files": [
+        {
+          "base": "config",
+          "path": "example-plugin.json",
+          "format": "json",
+          "localPaths": ["/workspaces/*/directory"],
+          "omitPaths": ["/lastPort"],
+          "secretPaths": ["/apiKey"]
+        }
+      ]
+    }
+  }
+}
+```
+
+- `base`：`config` 相对 `<AgentDir>/config/`，`data` 相对 `<AgentDir>/pi-desk/`，`project` 相对 `<项目>/.pi/`。`path` 是该基准内的规范相对路径，不写绝对路径或 `..`，不是 Glob。
+- `format`：`json`、`yaml` 或 `binary`；结构化格式只能声明文件。`binary` 可声明文件或配套资源目录，目录递归收集普通文件，排除符号链接、依赖安装目录及缓存；不执行字段转换，三个字段声明数组只能省略或为空。
+- 可选 `localPaths`、`omitPaths`、`secretPaths` 均为 JSON Pointer 字符串数组；用 `~0`、`~1` 转义 `~`、`/`，`*` 段匹配当前层的所有对象键或数组元素，不使用空指针选择根对象。
+- `localPaths` 只标记用户本地路径字段，SSH 远端路径不声明；相对路径保留其原有基准。`omitPaths` 标记导出副本中应剔除的缓存、端口登记或旧机器执行路径，不删除源配置。
+- `secretPaths` 只标记当前格式中保存凭据引用的敏感字段，供导出收集及导入引用重映射使用，不把明文自动转换为引用。声明的项目结构化配置须显式提供此字段；没有敏感字段时填 `[]`。静态声明只描述当前文件，不声明旧路径或历史格式。
 
 ### 会话预览目录
 
@@ -206,6 +282,84 @@ target.setHeaderActions?.([
 `onSelect` 可返回 `Promise<void>`；同一按钮回调尚未完成时不重复执行，异常由宿主记录并在当前挂载仍有效时提示。插件负责业务加载状态和结果展示；请求已经产生的副作用不因 Tab 关闭而回滚。
 
 按钮只属于当前挂载，切换 Tab、关闭侧栏／移动抽屉、Source 或 CWD 变化、挂载失败及插件重载时自动清空；旧按钮、迟到更新和旧 disposer 均不能操作新挂载。旧宿主可能没有此方法，使用可选调用，不自行访问宿主 DOM。`PluginPanelHeader.actions` 仍只作用于插件内容区标题，不是此顶栏入口。
+
+## 统一事件
+
+Browser Entry 和 Node Global 从 `plugin.host.events` 使用统一事件；Lazy View 使用 mount 参数的 `host.events`。下面是两个虚构插件的调用与释放。
+
+`plugin-b` 的 Browser Entry 订阅宿主状态和 `plugin-a` 的自定义事件：
+
+```js
+export default function setup(plugin) {
+  const host = plugin.host
+  const offContext = host.events.on('workbench-context', (context) => {
+    console.info('当前工作目录', context?.cwd ?? null)
+  })
+  const offPlugin = host.events.onPlugin('plugin-a', 'changed', (data) => {
+    if (typeof data.label === 'string') {
+      console.info('plugin-a 通知', data.label)
+    }
+  })
+
+  return () => {
+    offContext()
+    offPlugin()
+  }
+}
+```
+
+`plugin-a` 在业务动作中发布，`host` 来自它自己的 `plugin.host`：
+
+```js
+host.events.emit('changed', { label: '示例内容已变化' })
+```
+
+| 方法                                  | 用途                                                                            |
+| ------------------------------------- | ------------------------------------------------------------------------------- |
+| `on(name, handler)`                   | 订阅 SDK 类型化的宿主状态或动作；Browser 与 Node Global 的事件表不同            |
+| `onPlugin(pluginName, name, handler)` | 按 Pi Desk 注册名和事件名订阅插件自定义 JSON 事件；不是 npm 包名                |
+| `emit(name, data)`                    | 发布当前插件自己的事件，同步返回 `void`；发布身份由宿主绑定，不能指定其他发布者 |
+
+两种订阅都同步返回幂等 `off()`。精确类型以 SDK 为准：Browser 的 `HostEvents`、`BrowserHostEventMap` 从 `/browser` 导出，Node 的 `HostEvents`、`NodeHostEventMap` 从 `/entry` 导出；不需要新增运行时 import 或 Browser 白名单项。
+
+### 宿主事件
+
+| 事件名                | Browser | Node Global | 数据与含义                                                                                |
+| --------------------- | ------- | ----------- | ----------------------------------------------------------------------------------------- |
+| `workbench-context`   | 状态    | —           | `WorkbenchContext`：当前聚焦工作会话的 `{ source, cwd }`，没有有效焦点时为 `null`         |
+| `work-sessions`       | 状态    | 状态        | `readonly PluginWorkSession[]`：现有公开会话列表投影，包含 Source、cwd、status 及列表顺序 |
+| `connection`          | 状态    | —           | `BrowserConnectionSnapshot`：当前页面连接快照                                             |
+| `settings`            | 状态    | 状态        | `HostSettingsSnapshot`：生效的宿主共享地区设置                                            |
+| `theme`               | 状态    | —           | `BrowserThemeSnapshot`：生效主题                                                          |
+| `plugin-state`        | 状态    | —           | `PluginJsonObject \| null`：仅订阅插件自己的全局状态槽，不是 Session State                |
+| `chat-submit-result`  | 动作    | —           | `ChatSubmitResult`：当前页面聊天提交的接管响应、明确拒绝或结果未知                        |
+| `chat-input-accepted` | —       | 动作        | `ChatInputAccepted`：`{ source, tempId }`，Worker 已返回接管结果                          |
+
+状态事件在 `on()` 返回后交付当前完整真实值，晚加载的插件也能取得当前状态。Owner 尚未就绪时等待真实基线，不用空数组或 `null` 冒充未初始化；首次交付时取最新值，不回放初始化期间的中间状态。基线建立后，先更新快照再按实际变化顺序通知，相同值不重复通知。
+
+工作上下文只表示聚焦工作会话的 Source 和 CWD，不是预览目录或 Workspace 插件选中的隔离空间。切到同 cwd 的另一个会话、当前 Source 或 cwd 改变时都会通知；再次选择同一有效上下文不通知。点击侧栏、弹窗等不自动清空工作上下文。它与会话侧栏使用同一份最终上下文；现有侧栏仍按 Source/CWD 变化重挂，不需要再订阅事件重复恢复。
+
+`work-sessions` 只表达既有 SDK 列表投影的变化，不额外提供标题、`pinnedCount` 或原始 Pi 消息。
+
+`chat-submit-result` 的每个结果都含完整 `source`。`status: 'accepted'` 时带 `tempId`；`status: 'failed' | 'unknown'` 时带 `message`，不带 `tempId`。它覆盖输入区和 `host.pi.prompt()` 共用的提交通道；进入通道前的空内容、附件和草稿等本地校验失败不发布。已取得接管结果后，本地清理失败不再发布一次发送失败，其他页面也不接收本页面的结果。
+
+`chat-input-accepted` 包含 Worker 在压缩期间接管的排队输入；拒绝、未接管和原生 Pi 自行产生的消息不发布。两种聊天动作都不携带正文或图片。接管成功不表示 Pi 已开始运行、模型已完成或消息已 durable；结果未知不自动重发，也不猜测后续消息与请求的关联。
+
+### 分发与释放
+
+- 动作和自定义事件只交付给发布时已存在、交付时仍有效的订阅，不补发历史。宿主事件和插件事件是独立命名空间，同名不互相触发。
+- 自定义事件只在当前 Browser 页面内，或当前 Node 服务进程的 Global 插件之间分发；不跨端、跨页面或跨设备，不进入 Session Facade 或 Pi EventBus。可以订阅尚未加载的发布者，不会因此加载它；没有消费者也允许发布。
+- 事件名与插件名使用 1～64 字符小写 kebab-case。自定义数据只能是最大 64KB 的 JSON Object，业务结构由发布者约定、订阅者解析。宿主在分发前隔离发布对象，以只读数据交付；订阅者不得修改收到的数据。名称、数据无效或 Owner 已失效时，调用在边界报错。
+- 回调按注册顺序调用，可返回 `void | Promise<void>`；宿主不等待 Promise，隔离同步异常与异步拒绝并记录诊断，不改变发送或其他业务操作的结果。异步处理完成顺序没有保证，同步耗时回调仍占用当前 JS 线程。回调返回值不能拦截操作。
+- 每次注册独立，重复注册分别调用；发布者订阅自己的事件也会接收。`off()` 后不再调用，包括尚未交付的首次状态值。已经开始的异步业务由插件自行收尾，不回滚已产生的副作用。
+- Browser Entry 的订阅不依赖任何 UI 是否打开。仅供 View 使用的订阅须在该 mount 的 disposer 中调用 `off()`，不能等页面 Owner 释放才清理。
+- 插件停用、卸载、重载、页面退出或服务关闭时，宿主释放对应 Owner 的订阅并使旧 Host 失效。发布者重载不删除其他插件按稳定插件名建立的订阅，新实例继续发布；重载期间的事件不回放。自定义事件不保存历史或待处理 Promise 列表，最后一条订阅退出时释放对应路由。
+
+### 兼容与能力边界
+
+新事件能力需要同时支持它的宿主和 SDK，**只升级 SDK 不会让旧宿主具备 `host.events`**。需要兼容旧宿主的插件可在独立兼容边界检测 `host.events`，缺失时禁用依赖功能，不访问宿主 Store 或 DOM 代替。
+
+既有 `workSessions/connection/settings/theme/globalState` 的 `getSnapshot()/subscribe()` 继续可用；旧 `subscribe()` 仍不提供首次回调，与新事件共用状态源。既有 `plugin.onPush()`、`pushGlobal/pushSession` 只用于自身插件通信，不向其他插件开放。通知点击、离开守卫、能力规则应用、Task interrupt 和资源句柄保留各自合同，不作为普通事件广播；原生 Pi 事件继续使用 Pi API。宿主通知与插件自定义通知的扩展统一走 `host.events`，不另加零散通知回调；破坏性事件数据变化使用新事件名。
 
 ## 通信、通知与后台
 

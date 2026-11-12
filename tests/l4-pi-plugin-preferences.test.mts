@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import test from 'node:test'
 import { createJiti } from 'jiti'
@@ -52,13 +52,32 @@ test('禁用跟随包身份而不是版本，切换公共下载源保留私有�
   assert.ok(readL4PiPluginPreferences(root).disabled.includes('C:/plugins/local'))
   removeL4PiPluginPreference('npm:@fixture/plugin@2.0.0', root)
   assert.deepEqual(readL4PiPluginPreferences(root).registries, {})
-  const saved = JSON.parse(await readFile(join(root, 'pi-desk-plugins.json'), 'utf8'))
+  const saved = JSON.parse(await readFile(join(root, 'config', 'pi-desk-plugins.json'), 'utf8'))
   assert.deepEqual(Object.keys(saved).sort(), [
     'disabled',
     'downloadSource',
     'registries',
     'updateTags'
   ])
+})
+
+test('插件偏好只使用config，旧根文件不读取和修改', async (context) => {
+  const root = resolve('temp/run/plugin-management', `preferences-migration-${randomUUID()}`)
+  await mkdir(root, { recursive: true })
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const legacy = join(root, 'pi-desk-plugins.json')
+  const target = join(root, 'config', 'pi-desk-plugins.json')
+  const content = JSON.stringify({ disabled: ['npm:@fixture/plugin'] })
+  await writeFile(legacy, content)
+  assert.deepEqual(readL4PiPluginPreferences(root).disabled, [])
+  await assert.rejects(readFile(target), { code: 'ENOENT' })
+  setL4PiPluginEnabled('npm:@fixture/current', false, root)
+  assert.deepEqual(readL4PiPluginPreferences(root).disabled, ['npm:@fixture/current'])
+  assert.deepEqual(JSON.parse(await readFile(target, 'utf8')).disabled, ['npm:@fixture/current'])
+  assert.equal(await readFile(legacy, 'utf8'), content)
+  await writeFile(legacy, '{broken')
+  assert.deepEqual(readL4PiPluginPreferences(root).disabled, ['npm:@fixture/current'])
+  assert.equal(await readFile(legacy, 'utf8'), '{broken')
 })
 
 test('更新渠道按包身份保存，指定版本不改变渠道，卸载清理偏好', async (context) => {

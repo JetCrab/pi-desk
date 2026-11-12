@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
+import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
 import { z } from 'zod'
 import {
   L4PluginDownloadSourceSchema,
@@ -23,15 +24,19 @@ const PreferencesSchema = z
   .strict()
 type Preferences = z.infer<typeof PreferencesSchema>
 
+function preferencesPath(agentDir: string): string {
+  return getConfigPath('pi-desk-plugins.json', agentDir)
+}
+
 export function readL4PiPluginPreferences(agentDir = getAgentDir()): Preferences {
-  const path = join(agentDir, 'pi-desk-plugins.json')
+  const path = preferencesPath(agentDir)
   return existsSync(path)
     ? PreferencesSchema.parse(JSON.parse(readFileSync(path, 'utf8')))
     : PreferencesSchema.parse({})
 }
 
 function updatePreferences(agentDir: string, update: (current: Preferences) => Preferences): void {
-  const path = join(agentDir, 'pi-desk-plugins.json')
+  const path = preferencesPath(agentDir)
   const next = PreferencesSchema.parse(update(readL4PiPluginPreferences(agentDir)))
   mkdirSync(dirname(path), { recursive: true })
   const temporary = `${path}.${randomUUID()}.tmp`

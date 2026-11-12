@@ -11,6 +11,20 @@ import type {
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const browserRoot = join(packageRoot, 'dist', 'browser')
 
+test('环境归档声明端口范围和项目配置且不包含机器登记', async () => {
+  const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
+  assert.deepEqual(manifest.piDesk.environment.files, [
+    {
+      base: 'config',
+      path: 'pi-desk-remote-debug-ports.json',
+      format: 'json',
+      secretPaths: [],
+      omitPaths: ['/registrations']
+    },
+    { base: 'project', path: 'remote_debug.yaml', format: 'yaml', secretPaths: [] }
+  ])
+})
+
 test('Manifest 声明配置 Skill 与Pi Desk Entry，不再携带原生客户端', async () => {
   const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
   assert.deepEqual(manifest.pi.skills, ['./skills'])

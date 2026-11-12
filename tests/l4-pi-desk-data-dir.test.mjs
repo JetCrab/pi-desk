@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import Module from 'node:module'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { randomUUID } from 'node:crypto'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
@@ -19,9 +19,10 @@ const { getL4PiDeskDataDir } = await import(
 )
 Module._load = originalLoad
 
-test('首次访问时复制旧 Pi Super 应用数据并保留旧目录', async (context) => {
+test('数据目录只返回pi-desk，不读取或复制旧pi-super目录', async (context) => {
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR
-  const agentDir = await mkdtemp(join(tmpdir(), 'pi-desk-data-migration-'))
+  const root = resolve('temp/pi/l4-pi-desk-data-dir', `latest-path-${randomUUID()}`)
+  const agentDir = join(root, 'agent')
   const legacyDir = join(agentDir, 'pi-super')
   const legacyFile = join(legacyDir, 'plugins', 'settings.json')
   await mkdir(join(legacyDir, 'plugins'), { recursive: true })
@@ -31,17 +32,16 @@ test('首次访问时复制旧 Pi Super 应用数据并保留旧目录', async (
   context.after(async () => {
     if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir
-    await rm(agentDir, { recursive: true, force: true })
+    await rm(root, { recursive: true, force: true })
   })
 
   const dataDir = getL4PiDeskDataDir()
   assert.equal(dataDir, join(agentDir, 'pi-desk'))
-  assert.equal(
-    await readFile(join(dataDir, 'plugins', 'settings.json'), 'utf8'),
-    '{"enabled":true}'
-  )
+  await assert.rejects(readFile(join(dataDir, 'plugins', 'settings.json')), { code: 'ENOENT' })
+  await assert.rejects(readFile(dataDir), { code: 'ENOENT' })
   assert.equal(await readFile(legacyFile, 'utf8'), '{"enabled":true}')
 
+  await mkdir(dataDir)
   await writeFile(join(dataDir, 'host-state.json'), '{"initialized":true}', 'utf8')
   assert.equal(getL4PiDeskDataDir(), dataDir)
   assert.equal(await readFile(join(dataDir, 'host-state.json'), 'utf8'), '{"initialized":true}')

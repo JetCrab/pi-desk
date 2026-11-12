@@ -65,10 +65,21 @@ export async function startDebugGateway(input: {
     close(): Promise<void> {
       if (closePromise) return closePromise
       closePromise = new Promise<void>((resolveClose) => {
-        for (const socket of sockets) socket.destroy()
+        const socketsClosed = Promise.all(
+          [...sockets].map(
+            (socket) =>
+              new Promise<void>((resolveSocket) => {
+                socket.once('close', resolveSocket)
+                socket.destroy()
+              })
+          )
+        )
+        // server.close 回调可能早于 socket close，需等关闭日志写入后再释放 RunLogger。
         server.close(() => {
-          input.logger.line('gateway', '已停止')
-          resolveClose()
+          void socketsClosed.then(() => {
+            input.logger.line('gateway', '已停止')
+            resolveClose()
+          })
         })
       })
       return closePromise
@@ -91,6 +102,22 @@ function proxyHttpRequest(
   targetPort: number,
   logger: RunLogger
 ): void {
+  const startedAt = performance.now()
+  const description = `${request.method ?? 'GET'} ${request.url ?? '/'} -> 127.0.0.1:${targetPort}`
+  let logged = false
+  const finish = (reason: string): void => {
+    if (logged) return
+    logged = true
+    logger.line(
+      'gateway:http',
+      `${description} ${reason} status=${response.headersSent ? response.statusCode : '未发送'} durationMs=${Math.round(performance.now() - startedAt)}`
+    )
+  }
+  logger.line('gateway:http', `${description} 开始`)
+  response.once('finish', () => finish('完成'))
+  response.once('close', () => {
+    if (!response.writableFinished) finish('未完成：响应提前关闭')
+  })
   const upstream = requestHttp({
     hostname: '127.0.0.1',
     port: targetPort,
@@ -107,9 +134,12 @@ function proxyHttpRequest(
     upstreamResponse.pipe(response)
   })
   upstream.once('error', (error) => {
-    handleHttpProxyError(error, request, response, logger)
+    handleHttpProxyError(error, description, response, logger)
   })
-  request.once('aborted', () => upstream.destroy())
+  request.once('aborted', () => {
+    finish('未完成：请求提前断开')
+    upstream.destroy()
+  })
   response.once('close', () => {
     if (!response.writableEnded) upstream.destroy()
   })
@@ -124,23 +154,36 @@ function proxyWebSocket(
   sockets: Set<Duplex>,
   logger: RunLogger
 ): void {
+  const startedAt = performance.now()
+  const description = `${request.method ?? 'GET'} ${request.url ?? '/'} -> 127.0.0.1:${targetPort}`
+  logger.line('gateway:ws', `${description} 升级发起`)
   socket.pause()
   const upstream = connect({ host: '127.0.0.1', port: targetPort })
   trackSocket(sockets, upstream)
   upstream.once('connect', () => {
+    logger.line('gateway:ws', `${description} 上游 TCP 已接通`)
     upstream.write(serializeUpgradeRequest(request, targetPort))
     if (head.length > 0) upstream.write(head)
     socket.pipe(upstream).pipe(socket)
     socket.resume()
   })
   upstream.once('error', (error) => {
-    logger.line('gateway:error', `${request.url ?? '/'}: ${error.message}`)
+    logger.line('gateway:error', `WebSocket ${description}: ${error.message}`)
     if (!socket.destroyed) {
       socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n')
     }
   })
-  socket.once('error', () => upstream.destroy())
-  socket.once('close', () => upstream.destroy())
+  socket.once('error', (error) => {
+    logger.line('gateway:error', `WebSocket ${description}: ${error.message}`)
+    upstream.destroy()
+  })
+  socket.once('close', () => {
+    logger.line(
+      'gateway:ws',
+      `${description} 已关闭 durationMs=${Math.round(performance.now() - startedAt)}`
+    )
+    upstream.destroy()
+  })
   upstream.once('close', () => {
     if (!upstream.readableEnded) socket.destroy()
   })
@@ -181,11 +224,11 @@ function matchesRoute(path: string, prefix: string): boolean {
 
 function handleHttpProxyError(
   error: Error,
-  request: IncomingMessage,
+  description: string,
   response: ServerResponse,
   logger: RunLogger
 ): void {
-  logger.line('gateway:error', `${request.url ?? '/'}: ${error.message}`)
+  logger.line('gateway:error', `HTTP ${description}: ${error.message}`)
   if (response.headersSent) {
     response.destroy(error)
     return

@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import {
+  DefaultResourceLoader,
+  SettingsManager,
+  stripFrontmatter,
+  type ExtensionAPI,
+  type ExtensionContext
+} from '@earendil-works/pi-coding-agent'
 import { COMMAND_RESULT_SCHEMA, type Exec } from '../src/core.js'
 import workspaceExtension from '../src/index.js'
 import { WorkspaceRuntime } from '../src/runtime.js'
@@ -30,15 +36,49 @@ test('包 manifest 的 Skills 路径各自对应唯一且可读的构建资源',
   }
   const skillPaths = manifest.pi?.skills ?? []
 
-  assert.deepEqual(skillPaths, [
-    './dist/skills/workspace-config-authoring',
-    './dist/skills/workspace-usage'
-  ])
+  assert.deepEqual(skillPaths, ['./dist/skills/workspace-usage'])
   assert.equal(new Set(skillPaths).size, skillPaths.length)
   for (const skillPath of skillPaths) {
     const directory = join(packageRoot, skillPath)
     assert.equal(existsSync(directory), true, `${skillPath} must exist in build output`)
     assert.match(await readFile(join(directory, 'SKILL.md'), 'utf8'), /^(---|#)/)
+  }
+})
+
+test('未配置的新项目通过包声明加载无参数 init-workspace 提示词', async () => {
+  const packageRoot = resolve(process.cwd())
+  const root = resolve(packageRoot, '../../temp/pi/workspace/init-prompt-discovery')
+  const project = join(root, 'project')
+  await mkdir(project, { recursive: true })
+  try {
+    const loader = new DefaultResourceLoader({
+      cwd: project,
+      agentDir: join(root, 'agent'),
+      settingsManager: SettingsManager.inMemory({ packages: [packageRoot] }),
+      noExtensions: true,
+      noSkills: true,
+      noThemes: true,
+      noContextFiles: true
+    })
+    await loader.reload()
+    const { prompts, diagnostics } = loader.getPrompts()
+    assert.deepEqual(diagnostics, [])
+    assert.deepEqual(
+      prompts.map((prompt) => prompt.name),
+      ['init-workspace']
+    )
+    assert.equal(prompts[0]?.argumentHint, undefined)
+    assert.ok(prompts[0]?.description)
+    assert.equal(
+      prompts[0]?.content,
+      stripFrontmatter(
+        await readFile(join(packageRoot, 'prompts/init-workspace.md'), 'utf8')
+      ).trim()
+    )
+    assert.equal(existsSync(join(project, '.pi/workspace.yml')), false)
+    assert.deepEqual(await readdir(project), [])
+  } finally {
+    await rm(root, { recursive: true, force: true })
   }
 })
 

@@ -316,6 +316,30 @@ fn pi_rejects_old_node_without_blocking_generic_services() {
 }
 
 #[test]
+fn local_choices_ignore_unmanaged_download_and_preserve_unknown_fields_on_save() {
+    let directory = TestDirectory::new("current-choice-owner");
+    let path = directory.0.join("environment.json");
+    let original = serde_json::json!({"node":"C:/kept/node.exe","pi":"C:/kept/pi","bash":"C:/kept/bash.exe","download":{"unmanaged":"kept"},"downloadSource":"kept","unknown":{"nested":true}});
+    fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+    let state = directory.state();
+    let mut choices = state.data.lock().unwrap().choices.clone();
+    assert_eq!(choices.node, Some(PathBuf::from("C:/kept/node.exe")));
+    assert_eq!(choices.pi, Some(PathBuf::from("C:/kept/pi")));
+    assert_eq!(choices.bash, Some(PathBuf::from("C:/kept/bash.exe")));
+    assert!(choices.download_source.is_none());
+    choices.node = Some(PathBuf::from("C:/new/node.exe"));
+    choices.pi = None;
+    state.save_choices(&choices).unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["node"], "C:/new/node.exe");
+    assert!(saved["pi"].is_null());
+    assert_eq!(saved["bash"], original["bash"]);
+    for field in ["download", "downloadSource", "unknown"] {
+        assert_eq!(saved[field], original[field]);
+    }
+}
+
+#[test]
 fn chosen_runtime_is_injected_only_into_child_environment() {
     let directory = TestDirectory::new("child-environment");
     let state = directory.state();

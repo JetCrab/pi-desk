@@ -1,9 +1,7 @@
-import { copyFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
-import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import { definePiDeskPlugin, type PluginJsonObject } from '@jetcrab/pi-desk-sdk/entry'
 import { PluginMethodError } from '@jetcrab/pi-desk-sdk/session'
 import { z } from 'zod'
+import { defaultTiboStorePaths } from './l4-tibo-storage.js'
 import { TiboModels } from './l4-tibo-model.js'
 import { TiboRuntime } from './l2-tibo-runtime.js'
 import { tiboText } from './l4-tibo-locale.js'
@@ -25,11 +23,8 @@ export default definePiDeskPlugin({
   name: 'tibo-monitor',
   async setup(plugin) {
     const models = new TiboModels()
-    const path = join(getAgentDir(), 'pi-desk-tibo-monitor.json')
-    const previous = join(getAgentDir(), 'pi-super-tibo-monitor.json')
-    if (!existsSync(path) && existsSync(previous)) copyFileSync(previous, path)
     const runtime = await TiboRuntime.create(plugin, {
-      path,
+      ...defaultTiboStorePaths(),
       settings: plugin.host.settings,
       translate: (post, model, signal, region) => models.translate(post, model, signal, region)
     })

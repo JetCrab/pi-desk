@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod desktop_environment;
+mod desktop_storage;
 mod desktop_tunnel_cli;
 mod environment;
 mod environment_arch;
@@ -40,6 +42,9 @@ const EXIT_FOR_UPDATE_ARG: &str = "--exit-for-update";
 
 fn main() {
     let exit_for_update = std::env::args().any(|argument| argument == EXIT_FOR_UPDATE_ARG);
+    if let Some(code) = desktop_environment::run_if_requested() {
+        std::process::exit(code);
+    }
     if let Some(code) = desktop_tunnel_cli::run_if_requested() {
         std::process::exit(code);
     }
@@ -141,7 +146,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
     let config_root = isolated_root
         .clone()
         .unwrap_or(app.path().app_config_dir()?);
-    let config_path = config_root.join("config.json");
+    let config_path = desktop_storage::config_path()?;
     let runtime_path = config_root.join("runtime.json");
     let log_root = match isolated_root {
         Some(root) => root.join("logs"),
@@ -159,6 +164,13 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
             config_path.display()
         ),
     );
+    // pending 属于当前恢复事务，必须在任何配置 Owner 内存或服务创建前处理。
+    let prepared = desktop_environment::apply_pending(&config_path)
+        .and_then(|()| config::initialize(&config_path));
+    if let Err(error) = prepared {
+        logging::write(&log_path, "desktop-config-prepare-error", &error);
+        return Err(error.into());
+    }
     let config = match config::load(&config_path) {
         Ok(config) => config,
         Err(error) => {
@@ -166,7 +178,8 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
             return Err(error.into());
         }
     };
-    let runtime_info = runtime::load_runtime_info(&runtime_path, &config);
+    let runtime_info =
+        runtime::load_runtime_info_with_preferences(&runtime_path, &config, &config_path)?;
     app.manage(tunnels::mappings::Mappings::new(log_path.clone())?);
     app.manage(ShellState::new(
         config,

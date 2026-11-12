@@ -21,13 +21,15 @@ import type {
   PluginMessageDeclaration,
   PluginPushMessage,
   PluginSource,
-  PluginWorkSession
+  PluginWorkSession,
+  ChatInputAccepted
 } from '@jetcrab/pi-desk-sdk/entry'
 import { z } from 'zod'
 import {
   CapabilityDeclarationsSchema,
   type CapabilityDeclarations
 } from '@jetcrab/pi-desk-sdk/capabilities'
+import { L4PiPluginEvents } from './l4-pi-plugin-events'
 import { clearL4PiPluginCodeCache, loadL4PiDeskPluginEntry } from './l4-pi-plugin-module-loader'
 import {
   captureL4PiBrowserModules,
@@ -85,6 +87,11 @@ export interface L4PiMessageDeclarationRegistration {
 
 export type L4PiPluginPushSender = (message: PluginPushMessage) => void
 export type L4PiWorkSessionProvider = () => Promise<readonly PluginWorkSession[]>
+
+export interface L4PiPluginSessionEvents {
+  subscribeWorkSessions(listener: (sessions: readonly PluginWorkSession[]) => void): () => void
+  subscribeInputAccepted(listener: (event: ChatInputAccepted) => void): () => void
+}
 
 export interface L4PiPluginAppRuntimeSink {
   setState(pluginName: string, state: PluginJsonObject | null): void
@@ -338,11 +345,15 @@ export class L4PiPluginOwnerRuntime {
   private workSessionProvider: L4PiWorkSessionProvider | null = null
   private pushSender: L4PiPluginPushSender | null = null
   private appRuntimeSink: L4PiPluginAppRuntimeSink | null = null
+  private readonly events: L4PiPluginEvents
+  private unbindSessionEvents: (() => void) | null = null
 
   constructor(
     private readonly packageProvider: L4PiPluginPackageProvider,
     private readonly hostSettings?: HostSettings
-  ) {}
+  ) {
+    this.events = new L4PiPluginEvents(hostSettings)
+  }
 
   initialize(): Promise<void> {
     if (this.disposed) return Promise.reject(new Error('Global plugin runtime has been disposed'))
@@ -520,7 +531,10 @@ export class L4PiPluginOwnerRuntime {
 
     this.acceptingCalls = false
     for (const source of this.recoveries.keys()) this.cancelRecovery(source)
-    for (const owner of this.owners) owner.draining = true
+    for (const owner of this.owners) {
+      owner.draining = true
+      this.events.releaseOwner(owner.subscriptions)
+    }
     await Promise.all(
       [...this.owners].reverse().map(async (owner) => {
         const beforeReload = owner.beforeReload
@@ -543,6 +557,29 @@ export class L4PiPluginOwnerRuntime {
     return (): void => {
       if (this.workSessionProvider === provider) this.workSessionProvider = null
     }
+  }
+
+  bindSessionEvents(source: L4PiPluginSessionEvents): () => void {
+    if (this.disposed) throw new Error('Global plugin runtime has been disposed')
+    this.unbindSessionEvents?.()
+    let active = true
+    const unsubscribeSessions = this.events.bindWorkSessions((listener) =>
+      source.subscribeWorkSessions(listener)
+    )
+    const unsubscribeAccepted = source.subscribeInputAccepted((event) => {
+      if (active) this.events.inputAccepted(event)
+    })
+    const unbind = (): void => {
+      if (!active) return
+      active = false
+      unsubscribeSessions()
+      unsubscribeAccepted()
+      if (this.unbindSessionEvents === unbind) {
+        this.unbindSessionEvents = null
+      }
+    }
+    this.unbindSessionEvents = unbind
+    return unbind
   }
 
   bindPushSender(sender: L4PiPluginPushSender): () => void {
@@ -685,6 +722,8 @@ export class L4PiPluginOwnerRuntime {
     this.acceptingCalls = false
     this.changeListeners.clear()
     this.workSessionProvider = null
+    this.unbindSessionEvents?.()
+    this.events.dispose()
     this.pushSender = null
 
     const owners = [...new Set([...this.owners, ...this.loadingOwners])].reverse()
@@ -1004,6 +1043,12 @@ export class L4PiPluginOwnerRuntime {
     packageRoot: string
   ): PiDeskPluginFacade {
     const host: PiDeskPluginHost = {
+      events: this.events.createHost({
+        pluginName,
+        ensureActive: () => this.ensureOwnerActive(owner),
+        isActive: () => owner.active && !owner.draining && !this.disposed,
+        subscriptions: owner.subscriptions
+      }),
       settings: {
         getSnapshot: () => {
           this.ensureOwnerActive(owner)
@@ -1244,6 +1289,7 @@ export class L4PiPluginOwnerRuntime {
     owner.subscriptions.clear()
     if (owner.active) {
       owner.active = false
+      this.events.releaseOwner(owner.subscriptions)
       for (const controller of owner.activeCalls) controller.abort()
       owner.activeCalls.clear()
       const index = this.owners.indexOf(owner)

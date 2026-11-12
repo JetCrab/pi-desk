@@ -71,6 +71,52 @@ async function existingConfig(cwd: string, entryPort: number, publicPort: number
   )
 }
 
+test('最新范围与登记独立读写且旧混合文件不读取不修改不删除', async () => {
+  const { store, agentDir, cwd } = await fixture()
+  await mkdir(agentDir, { recursive: true })
+  const registration = {
+    cwd,
+    profile: 'web',
+    entryPort: 43001,
+    routePorts: [43002],
+    publicPort: 11001,
+    tunnelServer: 'http://tunnel.example:7001'
+  }
+  const ranges = {
+    localRange: { start: 43000, end: 43999 },
+    publicRange: { start: 11000, end: 11999 }
+  }
+  const legacy = join(agentDir, 'pi-desk-remote-debug-ports.json')
+  const oldContent = '{旧混合文件不应解析}'
+  await writeFile(legacy, oldContent)
+  assert.deepEqual((await store.get()).registrations, [])
+  const path = join(agentDir, 'config', 'pi-desk-remote-debug-ports.json')
+  const dataPath = join(agentDir, 'pi-desk', 'remote-debug-registrations.json')
+  await mkdir(join(agentDir, 'config'), { recursive: true })
+  await mkdir(join(agentDir, 'pi-desk'), { recursive: true })
+  await writeFile(path, JSON.stringify(ranges))
+  await writeFile(dataPath, JSON.stringify({ registrations: [registration] }))
+  const initial = await store.get()
+  assert.deepEqual(initial.registrations, [registration])
+  assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), ranges)
+  assert.deepEqual(JSON.parse(await readFile(dataPath, 'utf8')), { registrations: [registration] })
+  assert.equal(await readFile(legacy, 'utf8'), oldContent)
+  const saved = await store.saveRanges({ ...ranges, localRange: { start: 44000, end: 44999 } })
+  assert.deepEqual(saved.registrations, [registration])
+  assert.equal(JSON.parse(await readFile(path, 'utf8')).registrations, undefined)
+  assert.deepEqual((await store.get()).registrations, [registration])
+  const current = await readFile(path, 'utf8')
+  const mixed = JSON.stringify({ ...ranges, registrations: [registration] })
+  await writeFile(path, mixed)
+  await assert.rejects(store.get(), /Unrecognized key/)
+  assert.equal(await readFile(path, 'utf8'), mixed)
+  await writeFile(path, current)
+  await writeFile(dataPath, '{broken')
+  await assert.rejects(store.saveRanges(ranges))
+  assert.equal(await readFile(dataPath, 'utf8'), '{broken')
+  assert.equal(await readFile(legacy, 'utf8'), oldContent)
+})
+
 test('已有项目在空全局表补登记，去重路由端口且不修改项目文件', async () => {
   const { store, cwd } = await fixture()
   await existingConfig(cwd, 6240, 11004)
@@ -89,6 +135,35 @@ test('已有项目在空全局表补登记，去重路由端口且不修改项�
   assert.equal(resolve(registration.cwd), resolve(cwd))
   assert.deepEqual(settings.localRange, { start: 43000, end: 43999 })
   assert.equal((await readRemoteDebugConfig(cwd))?.profiles.web?.description, '')
+})
+
+test('后台同步等待隧道设置时仍可立即读取本机项目清单', async () => {
+  const { store, cwd, agentDir } = await fixture()
+  await existingConfig(cwd, 43000, 11001)
+  await store.syncProject(cwd)
+  let resolveServer!: (server: string) => void
+  let requested!: () => void
+  const serverRequested = new Promise<void>((resolve) => {
+    requested = resolve
+  })
+  const server = new Promise<string>((resolve) => {
+    resolveServer = resolve
+  })
+  const waitingStore = new RemoteDebugSettingsStore({
+    agentDir,
+    readTunnelServer: () => {
+      requested()
+      return server
+    }
+  })
+  const sync = waitingStore.syncProject(cwd)
+  try {
+    await serverRequested
+    assert.deepEqual(await waitingStore.projectCwds(), [cwd])
+  } finally {
+    resolveServer('http://tunnel.example:7001')
+    await sync
+  }
 })
 
 test('新建配置按范围递增，显式端口先预留，同批自动分配不重复', async () => {
@@ -219,8 +294,8 @@ test('非法范围与路由不修改现有文件，损坏登记不被当作空�
     store.saveProject({ cwd, profiles: [draft({ routes: [{ path: '/', targetPort: 44000 }] })] })
   )
   assert.equal(await readFile(join(cwd, '.pi', 'remote_debug.yaml'), 'utf8'), original)
-  await mkdir(agentDir, { recursive: true })
-  const registry = join(agentDir, 'pi-desk-remote-debug-ports.json')
+  await mkdir(join(agentDir, 'config'), { recursive: true })
+  const registry = join(agentDir, 'config', 'pi-desk-remote-debug-ports.json')
   await writeFile(registry, '{broken')
   await assert.rejects(store.get())
   await assert.rejects(store.syncProject(cwd))

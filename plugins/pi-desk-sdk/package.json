@@ -5,7 +5,7 @@
     "url": "git+https://github.com/JetCrab/pi-desk.git",
     "directory": "plugins/pi-desk-sdk"
   },
-  "version": "1.1.16",
+  "version": "1.1.17",
   "license": "Apache-2.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -17,6 +17,20 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "node": {
+        "import": "./dist/config.js",
+        "default": "./dist/config.js"
+      }
+    },
+    "./secrets": {
+      "types": "./dist/secrets.d.ts",
+      "node": {
+        "import": "./dist/secrets.js",
+        "default": "./dist/secrets.js"
+      }
     },
     "./settings": {
       "types": "./dist/settings.d.ts",
@@ -72,10 +86,13 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-host-runtime.mjs",
+    "typecheck:isolated": "tsc -p tsconfig.json --noEmit --isolatedModules",
     "prepack": "pnpm run build",
     "test": "pnpm run build && node --test tests/*.test.mjs"
   },
   "dependencies": {
+    "@napi-rs/keyring": "2.1.2",
+    "proper-lockfile": "^4.1.2",
     "zod": "^4.4.3"
   },
   "peerDependencies": {
@@ -115,6 +132,7 @@
     }
   },
   "devDependencies": {
+    "@types/proper-lockfile": "^4.1.4",
     "@base-ui/react": "^1.7.0",
     "@streamdown/cjk": "^1.0.3",
     "@streamdown/code": "^1.1.1",

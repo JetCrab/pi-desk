@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
+import { getAgentDir } from '@earendil-works/pi-coding-agent'
+import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
 import {
   defaultSettings,
   storedSchema,
@@ -28,9 +30,28 @@ async function assertFile(path: string): Promise<boolean> {
   }
 }
 
-export async function readStore(path: string): Promise<TiboStored> {
-  if (!(await assertFile(path))) return { settings: defaultSettings(), records: [] }
-  const value = storedSchema.parse(JSON.parse(await readFile(path, 'utf8')))
+export function defaultTiboStorePaths(): { path: string; dataPath: string } {
+  const agentDir = getAgentDir()
+  return {
+    path: getConfigPath('pi-desk-tibo-monitor.json', agentDir),
+    dataPath: join(agentDir, 'pi-desk', 'tibo-monitor.json')
+  }
+}
+
+export async function readStore(
+  path: string,
+  dataPath = join(dirname(dirname(path)), 'pi-desk', 'tibo-monitor.json')
+): Promise<TiboStored> {
+  const settings = (await assertFile(path))
+    ? JSON.parse(await readFile(path, 'utf8'))
+    : { settings: defaultSettings() }
+  const data = (await assertFile(dataPath))
+    ? JSON.parse(await readFile(dataPath, 'utf8'))
+    : { records: [] }
+  const value = storedSchema.parse({
+    ...storedSchema.pick({ settings: true }).parse(settings),
+    ...storedSchema.omit({ settings: true }).parse(data)
+  })
   return {
     settings: value.settings,
     ...(value.analysisRegion ? { analysisRegion: value.analysisRegion } : {}),
@@ -38,13 +59,23 @@ export async function readStore(path: string): Promise<TiboStored> {
   }
 }
 
-export async function writeStore(path: string, value: TiboStored): Promise<void> {
+export async function writeStore(
+  path: string,
+  value: TiboStored,
+  dataPath = join(dirname(dirname(path)), 'pi-desk', 'tibo-monitor.json')
+): Promise<void> {
   const stored = storedSchema.parse({
     settings: value.settings,
     ...(value.analysisRegion ? { analysisRegion: value.analysisRegion } : {}),
     records: retainRecords(value.records, value.settings.retentionCount)
   })
-  const content = `${JSON.stringify(stored)}\n`
+  const { settings, ...data } = stored
+  await writeJson(dataPath, data)
+  await writeJson(path, { settings })
+}
+
+async function writeJson(path: string, value: unknown): Promise<void> {
+  const content = `${JSON.stringify(value)}\n`
   if (Buffer.byteLength(content) > MAX_STORE_BYTES) throw new Error('Tibo 数据超过容量限制')
   await mkdir(dirname(path), { recursive: true })
   await assertFile(path)

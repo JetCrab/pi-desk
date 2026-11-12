@@ -1,6 +1,6 @@
 use pi_desk_tunnel_common::runtime::{TunnelMode, TunnelPath};
 use pi_desk_tunnel_common::worker::{
-    start_tunnel_worker, TunnelPhase, TunnelWorkerConfig, TunnelWorkerHandle,
+    start_tunnel_worker, TunnelForwardSnapshot, TunnelPhase, TunnelWorkerConfig, TunnelWorkerHandle,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -46,6 +46,7 @@ pub(crate) struct Owner {
 struct Entry {
     owner: Owner,
     snapshot: Snapshot,
+    observed: Option<(Option<String>, TunnelPhase, TunnelPath, String)>,
 }
 
 #[derive(Default)]
@@ -158,6 +159,7 @@ impl Mappings {
             Entry {
                 owner: owner.clone(),
                 snapshot: snapshot.clone(),
+                observed: None,
             },
         );
         if self
@@ -270,6 +272,10 @@ impl Actor {
                     provider_id,
                     remote_port,
                 }) => {
+                    self.log(&format!(
+                        "创建插件映射：窗口={} 映射={id} controlServerUrl={} targetProviderId={provider_id} remotePort={remote_port}",
+                        owner.label, config.control_server_url
+                    ));
                     if self.state.lock().unwrap().documents.get(&owner.label)
                         != Some(&owner.document)
                     {
@@ -277,6 +283,10 @@ impl Actor {
                     }
                     match self.open(config, provider_id, remote_port) {
                         Ok(port) => {
+                            self.log(&format!(
+                                "本地端口已分配：窗口={} 映射={id} localPort={port}",
+                                owner.label
+                            ));
                             self.ports.insert(id, port);
                         }
                         Err(error) => self.fail(&id, error),
@@ -299,7 +309,13 @@ impl Actor {
                             }
                         })
                     };
-                    let result = result.and_then(|()| self.close(&id));
+                    let result = result.and_then(|()| self.close(&id, "主动关闭"));
+                    if let Err(error) = &result {
+                        self.log(&format!(
+                            "插件映射关闭失败：窗口={} 映射={id} error={error}",
+                            owner.label
+                        ));
+                    }
                     let _ = reply.send(result);
                 }
                 Ok(Command::Release(owner)) => {
@@ -313,7 +329,7 @@ impl Actor {
                         .map(|(id, _)| id.clone())
                         .collect();
                     for id in ids {
-                        if let Err(error) = self.close(&id) {
+                        if let Err(error) = self.close(&id, "文档释放") {
                             self.fail(&id, error);
                         }
                     }
@@ -334,17 +350,28 @@ impl Actor {
                     .collect()
             };
             for id in orphaned {
-                if let Err(error) = self.close(&id) {
+                if let Err(error) = self.close(&id, "文档失效") {
                     self.fail(&id, error);
                 }
             }
         }
-        if let Some(worker) = self.worker.take() {
-            if let Err(error) = worker.shutdown() {
-                self.log(&format!("插件映射后台清理失败：{error}"));
-            }
+        let cleanup = self
+            .worker
+            .take()
+            .map(|worker| worker.shutdown())
+            .unwrap_or(Ok(()));
+        if let Err(error) = &cleanup {
+            self.log(&format!("插件映射后台清理失败：{error}"));
         }
-        self.state.lock().unwrap().entries.clear();
+        for (id, entry) in self.state.lock().unwrap().entries.drain() {
+            self.log(&format!(
+                "插件映射关闭{}：窗口={} 映射={id} localPort={:?} 原因=程序退出 error={:?}",
+                if cleanup.is_ok() { "完成" } else { "失败" },
+                entry.owner.label,
+                self.ports.get(&id),
+                cleanup.as_ref().err()
+            ));
+        }
     }
 
     fn open(
@@ -370,15 +397,21 @@ impl Actor {
             .forward_auto(provider_id, remote_port)
     }
 
-    fn close(&mut self, id: &str) -> Result<(), String> {
-        if let Some(port) = self.ports.get(id) {
+    fn close(&mut self, id: &str, reason: &str) -> Result<(), String> {
+        let port = self.ports.get(id).copied();
+        if let Some(port) = port {
             let worker = self.worker.as_ref().unwrap();
             if !worker.is_finished() {
-                worker.stop_forward_and_wait(*port)?;
+                worker.stop_forward_and_wait(port)?;
             }
             self.ports.remove(id);
         }
-        self.state.lock().unwrap().entries.remove(id);
+        if let Some(entry) = self.state.lock().unwrap().entries.remove(id) {
+            self.log(&format!(
+                "插件映射关闭完成：窗口={} 映射={id} localPort={port:?} 原因={reason}",
+                entry.owner.label
+            ));
+        }
         Ok(())
     }
 
@@ -387,6 +420,7 @@ impl Actor {
             return;
         };
         let snapshot = worker.snapshot();
+        let visitor_id = worker.visitor_id();
         let finished = worker.is_finished();
         let ports: Vec<_> = self
             .ports
@@ -395,6 +429,9 @@ impl Actor {
             .collect();
         for (id, port) in ports {
             let row = snapshot.forwards.iter().find(|row| row.local_port == port);
+            if let Some(row) = row {
+                self.log_forward(&id, visitor_id.as_deref(), row);
+            }
             let failure = if finished {
                 Some("插件映射后台已结束".into())
             } else {
@@ -428,6 +465,35 @@ impl Actor {
                 }
             }
         }
+    }
+
+    fn log_forward(&self, id: &str, visitor_id: Option<&str>, row: &TunnelForwardSnapshot) {
+        let mut state = self.state.lock().unwrap();
+        let Some(entry) = state.entries.get_mut(id) else {
+            return;
+        };
+        if entry
+            .observed
+            .as_ref()
+            .is_some_and(|(visitor, phase, path, detail)| {
+                visitor.as_deref() == visitor_id
+                    && *phase == row.phase
+                    && *path == row.path
+                    && detail == &row.detail
+            })
+        {
+            return;
+        }
+        self.log(&format!(
+            "插件映射状态变化：窗口={} 映射={id} visitorId={visitor_id:?} targetProviderId={} localPort={} remotePort={} phase={:?} path={:?} detail={}",
+            entry.owner.label, row.provider_id, row.local_port, row.remote_port, row.phase, row.path, row.detail
+        ));
+        entry.observed = Some((
+            visitor_id.map(str::to_owned),
+            row.phase,
+            row.path,
+            row.detail.clone(),
+        ));
     }
 
     fn fail(&self, id: &str, error: String) {
@@ -467,9 +533,66 @@ mod tests {
     }
 
     #[test]
+    fn mapping_logs_only_changes_and_releases_log_state_on_close() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../../temp/run/desktop-tunnels/mapping-log-changes-{}",
+            std::process::id()
+        ));
+        let state = Arc::new(Mutex::new(State::default()));
+        state.lock().unwrap().entries.insert(
+            "mapping-log".into(),
+            Entry {
+                owner: Owner {
+                    label: "browser-log".into(),
+                    document: "private-document".into(),
+                },
+                snapshot: Snapshot::connecting(),
+                observed: None,
+            },
+        );
+        let mut actor = Actor::new(state.clone(), root.join("desktop.log"));
+        let local_provider = "dd".repeat(32);
+        let mut row = TunnelForwardSnapshot {
+            provider_id: "ee".repeat(32),
+            remote_port: 43191,
+            local_port: 53191,
+            phase: TunnelPhase::Listening,
+            path: TunnelPath::Unknown,
+            detail: "监听就绪".into(),
+        };
+        actor.log_forward("mapping-log", None, &row);
+        actor.log_forward("mapping-log", None, &row);
+        actor.log_forward("mapping-log", Some(&local_provider), &row);
+        row.path = TunnelPath::Direct;
+        actor.log_forward("mapping-log", Some(&local_provider), &row);
+        row.detail = "直连已建立".into();
+        actor.log_forward("mapping-log", Some(&local_provider), &row);
+        row.phase = TunnelPhase::Recovering;
+        actor.log_forward("mapping-log", Some(&local_provider), &row);
+        actor.log_forward("mapping-log", Some(&local_provider), &row);
+        actor.fail("mapping-log", "测试失败".into());
+        actor.fail("mapping-log", "测试失败".into());
+        actor.close("mapping-log", "主动关闭").unwrap();
+        actor.close("mapping-log", "主动关闭").unwrap();
+        actor.log_forward("mapping-log", Some(&local_provider), &row);
+        let log = std::fs::read_to_string(root.join("desktop.log")).unwrap();
+        assert_eq!(log.matches("插件映射状态变化").count(), 5);
+        assert_eq!(log.matches("插件映射失败").count(), 1);
+        assert_eq!(log.matches("插件映射关闭完成").count(), 1);
+        assert!(log.contains(&format!("visitorId=Some(\"{local_provider}\")")));
+        assert!(log.contains(&format!("targetProviderId={}", row.provider_id)));
+        assert!(log.contains("localPort=53191 remotePort=43191"));
+        assert!(log.contains("phase=Listening path=Unknown"));
+        assert!(log.contains("phase=Recovering path=Direct detail=直连已建立"));
+        assert!(state.lock().unwrap().entries.is_empty());
+        assert!(!log.contains("private-document"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn mapping_ownership_navigation_and_close_release_actual_listeners() {
-        let root = std::env::current_dir().unwrap().join(format!(
-            "temp/run/desktop-tunnels/owner-{}",
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../../temp/run/desktop-tunnels/mapping-owner-{}",
             std::process::id()
         ));
         let mappings = Mappings::new(root.join("desktop.log")).unwrap();
@@ -543,6 +666,28 @@ mod tests {
         mappings.shutdown();
         TcpListener::bind(("127.0.0.1", replacement_port)).expect("退出必须释放所有映射");
         drop(mappings);
+        let log = std::fs::read_to_string(root.join("desktop.log")).unwrap();
+        assert!(log.contains("[plugin-tunnels] 创建插件映射：窗口=browser-one 映射=first"));
+        assert!(log.contains("controlServerUrl=http://127.0.0.1:9"));
+        assert!(log.contains(&format!(
+            "targetProviderId={} remotePort=80",
+            "aa".repeat(32)
+        )));
+        assert!(log.contains(&format!("映射=first localPort={first_port}")));
+        assert!(log.lines().any(|line| line.contains("插件映射状态变化")
+            && line.contains("映射=first ")
+            && line.contains(&format!("localPort={first_port}"))));
+        assert!(log.contains("映射=first localPort=Some(") && log.contains("原因=主动关闭"));
+        assert!(log.lines().any(|line| line.contains("插件映射关闭完成")
+            && line.contains("映射=second ")
+            && (line.contains("原因=文档释放") || line.contains("原因=文档失效"))));
+        assert!(log.lines().any(|line| line.contains("插件映射关闭完成")
+            && line.contains("映射=replacement ")
+            && line.contains("原因=程序退出")));
+        assert_eq!(log.matches("插件映射关闭完成").count(), 3);
+        assert!(!log.contains(&first.document));
+        assert!(!log.contains(&replacement.document));
+        assert!(!log.contains(&"07".repeat(32)));
         if root.exists() {
             std::fs::remove_dir_all(root).unwrap();
         }

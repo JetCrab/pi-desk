@@ -128,7 +128,7 @@ fn default_auto_start() -> bool {
 struct TargetRuntimeInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_version: Option<String>,
-    #[serde(default = "default_auto_start")]
+    #[serde(skip, default = "default_auto_start")]
     auto_start: bool,
 }
 
@@ -146,11 +146,11 @@ impl Default for TargetRuntimeInfo {
 pub(crate) struct RuntimeInfo {
     #[serde(default)]
     targets: BTreeMap<String, TargetRuntimeInfo>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     hide_on_startup: Option<bool>,
-    #[serde(default = "default_auto_start")]
+    #[serde(skip, default = "default_auto_start")]
     hide_on_open: bool,
-    #[serde(default = "default_auto_start")]
+    #[serde(skip, default = "default_auto_start")]
     show_on_close: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_opened_url: Option<String>,
@@ -166,15 +166,6 @@ impl Default for RuntimeInfo {
             last_opened_url: None,
         }
     }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LegacyRuntimeInfo {
-    #[serde(default)]
-    last_version: Option<String>,
-    #[serde(default = "default_auto_start")]
-    auto_start: bool,
 }
 
 pub struct ShellState {
@@ -209,7 +200,7 @@ impl ShellState {
             .unwrap_or(Path::new("."))
             .join("browser-data-v2");
         #[cfg(unix)]
-        let environment_root = config_path
+        let environment_root = runtime_path
             .parent()
             .unwrap_or(Path::new("."))
             .join("environment");
@@ -219,9 +210,13 @@ impl ShellState {
             .and_then(Path::parent)
             .unwrap_or(Path::new("."))
             .join("environment");
-        let choices_path = config_path.with_file_name("environment.json");
+        let choices_path = runtime_path.with_file_name("environment.json");
         Self {
-            environment: EnvironmentState::new(environment_root, choices_path),
+            environment: EnvironmentState::new_with_owner(
+                environment_root,
+                choices_path,
+                config_path.clone(),
+            ),
             environment_operation: Mutex::new(None),
             environment_worker: Mutex::new(None),
             config: Mutex::new(config),
@@ -251,37 +246,36 @@ fn write_shell_log(state: &ShellState, stage: &str, detail: &str) {
     logging::write(&state.log_path, stage, detail);
 }
 
-pub fn load_runtime_info(path: &Path, config: &DesktopConfig) -> RuntimeInfo {
-    fs::read_to_string(path)
+pub(crate) fn load_runtime_info_with_preferences(
+    path: &Path,
+    config: &DesktopConfig,
+    config_path: &Path,
+) -> Result<RuntimeInfo, String> {
+    let mut info = fs::read_to_string(path)
         .ok()
         .and_then(|content| parse_runtime_info(&content, config))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let prefs = crate::desktop_environment::load_preferences(config_path)?;
+    info.hide_on_startup = prefs.hide_on_startup;
+    info.hide_on_open = prefs.hide_on_open;
+    info.show_on_close = prefs.show_on_close;
+    for (url, enabled) in prefs.auto_start {
+        if config.target(&url).is_some() {
+            info.targets.entry(url).or_default().auto_start = enabled;
+        }
+    }
+    Ok(info)
 }
 
 fn parse_runtime_info(content: &str, config: &DesktopConfig) -> Option<RuntimeInfo> {
-    let value: serde_json::Value = serde_json::from_str(content).ok()?;
-    if value.get("targets").is_some() {
-        let mut info: RuntimeInfo = serde_json::from_value(value).ok()?;
-        info.targets.retain(|url, _| config.target(url).is_some());
-        if info
-            .last_opened_url
-            .as_ref()
-            .is_some_and(|url| config.target(url).is_none())
-        {
-            info.last_opened_url = None;
-        }
-        return Some(info);
-    }
-    let legacy: LegacyRuntimeInfo = serde_json::from_value(value).ok()?;
-    let mut info = RuntimeInfo::default();
-    if let Some(target) = config.targets.iter().find(|target| target.server.is_some()) {
-        info.targets.insert(
-            target.url.clone(),
-            TargetRuntimeInfo {
-                last_version: legacy.last_version,
-                auto_start: legacy.auto_start,
-            },
-        );
+    let mut info: RuntimeInfo = serde_json::from_str(content).ok()?;
+    info.targets.retain(|url, _| config.target(url).is_some());
+    if info
+        .last_opened_url
+        .as_ref()
+        .is_some_and(|url| config.target(url).is_none())
+    {
+        info.last_opened_url = None;
     }
     Some(info)
 }
@@ -299,11 +293,40 @@ fn mutate_runtime_info(
     if let Some(parent) = state.runtime_path.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("创建运行记录目录失败：{error}"))?;
     }
-    let content = serde_json::to_vec(&next).map_err(|error| error.to_string())?;
-    let temporary = state.runtime_path.with_extension("json.tmp");
-    fs::write(&temporary, content)
-        .and_then(|()| fs::rename(&temporary, &state.runtime_path))
-        .map_err(|error| format!("保存运行记录失败：{error}"))?;
+    crate::desktop_environment::update_preferences(&state.config_path, |current| {
+        current.hide_on_startup = next.hide_on_startup;
+        current.hide_on_open = next.hide_on_open;
+        current.show_on_close = next.show_on_close;
+        current.auto_start = next
+            .targets
+            .iter()
+            .map(|(url, target)| (url.clone(), target.auto_start))
+            .collect();
+    })?;
+    let mut targets = crate::desktop_storage::read_value(&state.runtime_path)?
+        .and_then(|value| {
+            value
+                .get("targets")
+                .and_then(serde_json::Value::as_object)
+                .cloned()
+        })
+        .unwrap_or_default();
+    targets.retain(|_, value| value.is_object());
+    for (url, value) in &mut targets {
+        *value = serde_json::json!({"lastVersion":next.targets.get(url).and_then(|target| target.last_version.as_ref())});
+    }
+    for (url, target) in &next.targets {
+        targets.insert(
+            url.clone(),
+            serde_json::json!({"lastVersion":target.last_version}),
+        );
+    }
+    crate::desktop_storage::update_fields(
+        &state.runtime_path,
+        serde_json::json!({
+            "targets": targets, "lastOpenedUrl": next.last_opened_url,
+        }),
+    )?;
     *info = next;
     Ok(())
 }
@@ -2072,6 +2095,7 @@ fn launch_service(
         "PI_DESK_DESKTOP_CONFIG".into(),
         state.config_path.as_os_str().to_owned(),
     ));
+    environment.push(("PI_DESK_DESKTOP_ENVIRONMENT_VERSION".into(), "1".into()));
     let mut child =
         process::spawn_with_environment(&command, directory.as_deref(), &log, &environment)?;
     let started = Instant::now();
@@ -2807,9 +2831,7 @@ mod tests {
         apply_tunnel_connection, auto_start, check_health, parse_runtime_info, RuntimeInfo,
         ShellState, PACKAGE_UPDATE_INTERVAL,
     };
-    use crate::config::{
-        default_server_config, DesktopConfig, TargetConfig, TunnelConnectionConfig,
-    };
+    use crate::config::{default_server_config, DesktopConfig};
     use std::fs;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -2830,6 +2852,106 @@ mod tests {
     }
 
     #[test]
+    fn managed_service_receives_environment_capability_without_persisting_it() {
+        struct Fixture {
+            directory: PathBuf,
+            state: ShellState,
+            url: String,
+            port: u16,
+        }
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let stopped = super::stop_active_child(&self.state, &self.url);
+                if !std::thread::panicking() {
+                    stopped.unwrap();
+                    assert!(TcpListener::bind(("127.0.0.1", self.port)).is_ok());
+                    fs::remove_dir_all(&self.directory).unwrap();
+                }
+            }
+        }
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../temp/run/desktop-capability")
+            .join(format!("managed-service-{}-{suffix}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("service.cjs"), r#"
+const fs = require('node:fs');
+const http = require('node:http');
+fs.writeFileSync('capability.json', JSON.stringify({
+  version: process.env.PI_DESK_DESKTOP_ENVIRONMENT_VERSION,
+  executable: process.env.PI_DESK_DESKTOP_EXECUTABLE,
+  config: process.env.PI_DESK_DESKTOP_CONFIG,
+}));
+http.createServer((req, res) => res.writeHead(204).end()).listen(Number(process.argv[2]), '127.0.0.1');
+"#).unwrap();
+        let port = TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let url = format!("http://127.0.0.1:{port}/");
+        let server = crate::config::ServerConfig {
+            start_command: "node service.cjs {port}".into(),
+            ready_path: "/health".into(),
+            package: None,
+        };
+        let mut config = DesktopConfig::default();
+        config.tunnel.control_key = "ab".repeat(32);
+        config.tunnel.provider_secret_key = "cd".repeat(32);
+        let fixture = Fixture {
+            state: ShellState::new(
+                config,
+                RuntimeInfo::default(),
+                directory.join("agent/config/desktop.json"),
+                directory.join("runtime.json"),
+                directory.join("logs/desktop.log"),
+            ),
+            directory,
+            url,
+            port,
+        };
+        let parent_marker = std::env::var_os("PI_DESK_DESKTOP_ENVIRONMENT_VERSION");
+        let preparation = fixture.state.environment.child_environment();
+        assert!(!preparation
+            .iter()
+            .any(|(name, _)| name == "PI_DESK_DESKTOP_ENVIRONMENT_VERSION"));
+        super::launch_service(
+            &fixture.state,
+            &fixture.url,
+            &server,
+            None,
+            Some(fixture.directory.clone()),
+            &|| false,
+        )
+        .unwrap();
+        let bytes = fs::read(fixture.directory.join("capability.json")).unwrap();
+        let capability: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(capability["version"], "1");
+        assert_eq!(
+            capability["executable"],
+            std::env::current_exe().unwrap().to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            capability["config"],
+            fixture.state.config_path.to_string_lossy().as_ref()
+        );
+        let output = String::from_utf8(bytes).unwrap();
+        assert!(!output.contains(&"ab".repeat(32)) && !output.contains(&"cd".repeat(32)));
+        assert_eq!(
+            std::env::var_os("PI_DESK_DESKTOP_ENVIRONMENT_VERSION"),
+            parent_marker
+        );
+        assert!(
+            !fixture.directory.join("agent").exists(),
+            "不能写 Pi 设置或 JSONL"
+        );
+        assert!(!fixture.state.runtime_path.exists());
+    }
+
+    #[test]
     fn saved_source_applies_to_next_operation_without_rewriting_services() {
         use super::{package_with_source, save_download_source};
         use crate::environment_source::DownloadSource;
@@ -2837,7 +2959,8 @@ mod tests {
         let config_path = directory.join("config.json");
         let config = DesktopConfig::default();
         crate::config::save(&config_path, &config).unwrap();
-        let original = fs::read(&config_path).unwrap();
+        let original: serde_json::Value =
+            serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
         let state = ShellState::new(
             config,
             RuntimeInfo::default(),
@@ -2857,66 +2980,81 @@ mod tests {
                 package_with_source(&state, &package).registry.as_deref(),
                 Some(expected.as_str())
             );
-            assert_eq!(fs::read(&config_path).unwrap(), original);
+            let saved: serde_json::Value =
+                serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+            assert_eq!(saved["targets"], original["targets"]);
+            assert_eq!(saved["tunnel"], original["tunnel"]);
         }
         fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
-    fn migrates_legacy_runtime_to_the_first_server_target() {
-        let config = DesktopConfig {
-            targets: vec![
-                TargetConfig {
-                    url: "https://example.com/".into(),
-                    server: None,
-                },
-                TargetConfig {
-                    url: "http://127.0.0.1:30333/".into(),
-                    server: Some(default_server_config()),
-                },
-            ],
-            tunnel: TunnelConnectionConfig::default(),
-        };
-        let info = parse_runtime_info(r#"{"lastVersion":"0.1.66","autoStart":false}"#, &config)
-            .expect("旧运行记录应迁移");
-        let target = info
-            .targets
-            .get("http://127.0.0.1:30333/")
-            .expect("旧记录应绑定本机服务网址");
-
-        assert_eq!(target.last_version.as_deref(), Some("0.1.66"));
-        assert!(!target.auto_start);
+    fn runtime_does_not_project_unmanaged_root_fields_into_targets_or_preferences() {
+        let config = crate::config::normalize(DesktopConfig::default()).unwrap();
+        let info = parse_runtime_info(r#"{"lastVersion":"0.1.66","autoStart":false,"hideOnStartup":true,"hideOnOpen":false,"showOnClose":false}"#, &config).unwrap();
+        assert!(info.targets.is_empty());
+        assert_eq!(info.hide_on_startup, None);
+        assert!(info.hide_on_open && info.show_on_close);
     }
 
     #[test]
-    fn desktop_window_preferences_roundtrip_and_preserve_legacy_defaults() {
-        let directory = test_directory("window-preferences");
-        let config = crate::config::DesktopConfig::default();
-        let legacy =
-            parse_runtime_info(r#"{"lastVersion":"1.2.3","autoStart":false}"#, &config).unwrap();
-        assert_eq!(legacy.hide_on_startup, None);
-        assert!(legacy.hide_on_open && legacy.show_on_close);
+    fn current_preferences_and_local_runtime_updates_preserve_all_unmanaged_fields() {
+        let directory = test_directory("current-runtime-owner");
+        let config = crate::config::normalize(DesktopConfig::default()).unwrap();
+        let owner = directory.join("agent/config/desktop.json");
+        crate::config::initialize(&owner).unwrap();
+        let runtime = directory.join("runtime.json");
+        let url = config.targets[0].url.clone();
+        let original = serde_json::json!({"targets":{url.clone():{"lastVersion":"1.2.3","autoStart":false,"unknown":{"keep":true}}},"lastOpenedUrl":url,"lastVersion":"unmanaged-root","autoStart":false,"hideOnStartup":true,"hideOnOpen":false,"showOnClose":false,"unknown":[1,2]});
+        crate::desktop_storage::write_value(&runtime, &original).unwrap();
+        let info = super::load_runtime_info_with_preferences(&runtime, &config, &owner).unwrap();
+        assert_eq!(info.targets[&url].last_version.as_deref(), Some("1.2.3"));
+        assert!(info.targets[&url].auto_start);
+        assert_eq!(info.hide_on_startup, None);
+        assert!(info.hide_on_open && info.show_on_close);
+        assert_eq!(info.last_opened_url.as_deref(), Some(url.as_str()));
         let state = ShellState::new(
             config.clone(),
-            legacy,
-            directory.join("config.json"),
-            directory.join("runtime.json"),
-            directory.join("desktop.log"),
+            info,
+            owner,
+            runtime,
+            directory.join("logs/desktop.log"),
         );
-        super::set_startup_preference(&state, Some(true), Some(false), None).unwrap();
-        super::set_startup_preference(&state, None, None, Some(false)).unwrap();
-        let saved = super::load_runtime_info(&state.runtime_path, &config);
-        assert_eq!(saved.hide_on_startup, Some(true));
-        assert!(!saved.hide_on_open && !saved.show_on_close);
-        assert!(!saved.targets.values().next().unwrap().auto_start);
-        let stale = parse_runtime_info(
-            r#"{"targets":{},"hideOnStartup":false,"lastOpenedUrl":"https://removed.example/"}"#,
+        super::set_startup_preference(&state, Some(false), Some(true), Some(true)).unwrap();
+        super::set_auto_start(&state, &url, false).unwrap();
+        super::set_cached_version(&state, &url, "2.0.0".into()).unwrap();
+        let saved = super::load_runtime_info_with_preferences(
+            &state.runtime_path,
             &config,
+            &state.config_path,
         )
         .unwrap();
-        assert_eq!(stale.hide_on_startup, Some(false));
-        assert_eq!(stale.last_opened_url, None);
-        assert!(stale.hide_on_open && stale.show_on_close);
+        assert_eq!(saved.hide_on_startup, Some(false));
+        assert!(saved.hide_on_open && saved.show_on_close);
+        assert!(!saved.targets[&url].auto_start);
+        assert_eq!(saved.targets[&url].last_version.as_deref(), Some("2.0.0"));
+        let local = crate::desktop_storage::read_value(&state.runtime_path)
+            .unwrap()
+            .unwrap();
+        for field in [
+            "lastVersion",
+            "autoStart",
+            "hideOnStartup",
+            "hideOnOpen",
+            "showOnClose",
+            "unknown",
+        ] {
+            assert_eq!(local[field], original[field]);
+        }
+        assert_eq!(
+            local["targets"][&url]["autoStart"],
+            original["targets"][&url]["autoStart"]
+        );
+        assert_eq!(
+            local["targets"][&url]["unknown"],
+            original["targets"][&url]["unknown"]
+        );
+        assert_eq!(local["targets"][&url]["lastVersion"], "2.0.0");
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -2961,8 +3099,10 @@ mod tests {
             }),
         )
         .unwrap();
-        let saved: DesktopConfig =
-            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        let saved = crate::config::load(&config_path).unwrap();
+        assert!(!fs::read_to_string(&config_path)
+            .unwrap()
+            .contains(&"cd".repeat(32)));
         assert_eq!(
             saved.tunnel.control_server_url,
             "http://tunnel.example:7001"

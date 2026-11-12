@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
 import { z } from 'zod'
 import {
   normalizeRoutePath,
@@ -26,9 +26,10 @@ import {
 import { isLocalPortAvailable } from './l4-remote-debug-ports.js'
 import { readDesktopTunnelServer } from './desktop-tunnel-host.js'
 
-const persistedSettingsSchema = remoteDebugRangesSchema.extend({
+const registrationsSchema = z.strictObject({
   registrations: z.array(remoteDebugRegistrationSchema)
 })
+const persistedSettingsSchema = remoteDebugRangesSchema.extend(registrationsSchema.shape)
 type PersistedSettings = z.infer<typeof persistedSettingsSchema>
 
 interface SettingsStoreOptions {
@@ -39,15 +40,15 @@ interface SettingsStoreOptions {
 
 export class RemoteDebugSettingsStore {
   private readonly path: string
+  private readonly registrationsPath: string
   private readonly queryTunnelServer: () => Promise<string | null>
   private readonly isPortAvailable: (port: number) => Promise<boolean>
   private queue: Promise<void> = Promise.resolve()
 
   constructor(options: SettingsStoreOptions = {}) {
-    const agentDir =
-      options.agentDir ??
-      (process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), '.pi', 'agent'))
-    this.path = join(agentDir, 'pi-desk-remote-debug-ports.json')
+    this.path = getConfigPath('pi-desk-remote-debug-ports.json', options.agentDir)
+    const agentDir = dirname(dirname(this.path))
+    this.registrationsPath = join(agentDir, 'pi-desk', 'remote-debug-registrations.json')
     this.queryTunnelServer = options.readTunnelServer ?? readDesktopTunnelServer
     this.isPortAvailable = options.isPortAvailable ?? isLocalPortAvailable
   }
@@ -82,7 +83,7 @@ export class RemoteDebugSettingsStore {
   }
 
   async projectCwds(): Promise<string[]> {
-    const settings = await this.get()
+    const settings = await this.read()
     const cwds = new Map<string, string>()
     for (const registration of settings.registrations) {
       cwds.set(cwdKey(registration.cwd), registration.cwd)
@@ -216,41 +217,50 @@ export class RemoteDebugSettingsStore {
   }
 
   private async read(): Promise<PersistedSettings> {
-    const metadata = await lstat(this.path).catch((error: NodeJS.ErrnoException) => {
+    const ranges = await this.readJson(this.path)
+    const registrations = await this.readJson(this.registrationsPath)
+    return persistedSettingsSchema.parse({
+      ...remoteDebugRangesSchema.parse(ranges ?? structuredClone(DEFAULT_REMOTE_DEBUG_RANGES)),
+      registrations:
+        registrations === undefined ? [] : registrationsSchema.parse(registrations).registrations
+    })
+  }
+
+  private async readJson(path: string): Promise<Record<string, unknown> | undefined> {
+    const metadata = await lstat(path).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return undefined
       throw error
     })
-    if (!metadata) return { ...structuredClone(DEFAULT_REMOTE_DEBUG_RANGES), registrations: [] }
+    if (!metadata) return undefined
     if (metadata.isSymbolicLink() || !metadata.isFile()) {
-      throw new Error(`端口登记必须是非符号链接普通文件：${this.path}`)
+      throw new Error(`端口配置必须是非符号链接普通文件：${path}`)
     }
-    const content = await readFile(this.path, 'utf8')
-    try {
-      return persistedSettingsSchema.parse(JSON.parse(content))
-    } catch (error) {
-      throw new Error(
-        `端口登记文件无效：${this.path}；${error instanceof Error ? error.message : String(error)}`
-      )
-    }
+    return JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
   }
 
   private async persist(settings: PersistedSettings): Promise<void> {
-    const directory = resolve(this.path, '..')
+    const { registrations, ...ranges } = persistedSettingsSchema.parse(settings)
+    await this.persistJson(this.registrationsPath, { registrations })
+    await this.persistJson(this.path, ranges)
+  }
+
+  private async persistJson(path: string, value: unknown): Promise<void> {
+    const directory = resolve(path, '..')
     await mkdir(directory, { recursive: true })
-    const metadata = await lstat(this.path).catch((error: NodeJS.ErrnoException) => {
+    const metadata = await lstat(path).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return undefined
       throw error
     })
     if (metadata && (metadata.isSymbolicLink() || !metadata.isFile())) {
-      throw new Error(`端口登记必须是非符号链接普通文件：${this.path}`)
+      throw new Error(`端口登记必须是非符号链接普通文件：${path}`)
     }
-    const temporary = `${this.path}.${randomBytes(6).toString('hex')}.tmp`
+    const temporary = `${path}.${randomBytes(6).toString('hex')}.tmp`
     try {
-      await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
+      await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
         encoding: 'utf8',
         flag: 'wx'
       })
-      await rename(temporary, this.path)
+      await rename(temporary, path)
     } finally {
       await rm(temporary, { force: true })
     }

@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  ArchiveIcon,
   BotIcon,
   ChevronDownIcon,
   FolderTreeIcon,
@@ -77,6 +78,7 @@ interface L2SettingsProps {
   focusedCwd: string | null
   pluginAttention: L2SettingsPluginAttention
   renderPluginManagement: () => ReactNode
+  renderEnvironmentSettings: () => ReactNode
   renderMcpSettings: (input: {
     onBeforeLeaveChange: (handler: BrowserBeforeLeaveHandler | null) => void
   }) => ReactNode
@@ -118,6 +120,7 @@ const SETTINGS_SECTIONS: readonly SettingsSectionOption[] = [
   { id: 'capability-modes', label: 'capabilityModes', icon: ListFilterIcon },
   { id: 'skills', label: 'skills', icon: FolderTreeIcon },
   { id: 'plugins', label: 'plugins', icon: PlugIcon },
+  { id: 'environment', label: 'environmentBackup', icon: ArchiveIcon },
   { id: 'auth', label: 'loginProtection', icon: ShieldCheckIcon },
   { id: 'about', label: 'about', icon: InfoIcon }
 ]
@@ -191,6 +194,7 @@ export function L2Settings({
   focusedCwd,
   pluginAttention,
   renderPluginManagement,
+  renderEnvironmentSettings,
   renderMcpSettings,
   renderCapabilityModesSettings,
   renderPluginSettingsPage,
@@ -518,6 +522,8 @@ export function L2Settings({
                   <L2AppearanceSettings />
                 ) : effectiveSection === 'habits' ? (
                   <L2HabitSettings />
+                ) : effectiveSection === 'environment' ? (
+                  open && renderEnvironmentSettings()
                 ) : effectiveSection === 'auth' ? (
                   open && <L2AuthSettings />
                 ) : effectiveSection === 'region' ? (

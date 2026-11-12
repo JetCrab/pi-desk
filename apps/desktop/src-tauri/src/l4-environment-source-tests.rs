@@ -120,11 +120,15 @@ fn runtime() -> tokio::runtime::Runtime {
 
 #[test]
 fn saved_domestic_choice_uses_tencent_npm_without_changing_binary_mirrors() {
-    let directory = Directory::new("domestic-source-compatibility");
+    let directory = Directory::new("domestic-source-owner");
     fs::write(
         directory.0.join("environment.json"),
-        r#"{"node":"C:/selected/node.exe","download":{"mode":"domestic"}}"#,
+        r#"{"node":"C:/selected/node.exe","download":{"mode":"official"}}"#,
     )
+    .unwrap();
+    crate::desktop_environment::update_preferences(&directory.0.join("desktop.json"), |prefs| {
+        prefs.download = Some(DownloadSource::Domestic);
+    })
     .unwrap();
     let state = directory.state();
     let source = runtime().block_on(state.download_source(
@@ -236,9 +240,12 @@ fn recommendation_is_cached_but_only_accepted_source_is_persisted() {
         .save_download_source(DownloadSource::Official)
         .unwrap();
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&choices).unwrap()).unwrap();
+    assert_eq!(saved, serde_json::json!({ "node": "C:/selected/node.exe" }));
     assert_eq!(
-        saved,
-        serde_json::json!({ "node": "C:/selected/node.exe", "download": {"mode":"official"} })
+        crate::desktop_environment::load_preferences(&directory.0.join("desktop.json"))
+            .unwrap()
+            .download,
+        Some(DownloadSource::Official)
     );
     let reloaded = directory.state();
     assert_eq!(
@@ -272,8 +279,13 @@ fn old_source_is_ignored_without_losing_environment_paths() {
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&choices).unwrap()).unwrap();
     assert_eq!(saved["node"], "C:/kept/node.exe");
     assert_eq!(saved["pi"], "C:/kept/pi");
-    assert!(saved.get("downloadSource").is_none());
-    assert_eq!(saved["download"]["mode"], "custom");
+    assert_eq!(fs::read_to_string(&choices).unwrap(), original);
+    assert_eq!(
+        crate::desktop_environment::load_preferences(&directory.0.join("desktop.json"))
+            .unwrap()
+            .download,
+        Some(DownloadSource::Custom("https://example.test/npm".into()))
+    );
     assert_eq!(
         runtime().block_on(directory.state().download_source(
             "http://127.0.0.1:1/must-not-query",
@@ -290,7 +302,7 @@ fn invalid_custom_source_does_not_replace_saved_choice() {
     state
         .save_download_source(DownloadSource::Domestic)
         .unwrap();
-    let before = fs::read(directory.0.join("environment.json")).unwrap();
+    let before = fs::read(directory.0.join("desktop.json")).unwrap();
     for value in [
         "",
         "file:///registry",
@@ -301,10 +313,7 @@ fn invalid_custom_source_does_not_replace_saved_choice() {
         assert!(state
             .save_download_source(DownloadSource::Custom(value.into()))
             .is_err());
-        assert_eq!(
-            fs::read(directory.0.join("environment.json")).unwrap(),
-            before
-        );
+        assert_eq!(fs::read(directory.0.join("desktop.json")).unwrap(), before);
     }
 }
 

@@ -5,6 +5,9 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { createJiti } from 'jiti'
+import type { PluginWorkSession } from '@jetcrab/pi-desk-sdk/entry'
+import { L4PiPluginOwnerRuntime } from '../src/server/l4_foundation/pi/l4-pi-plugin-owner-runtime'
+import type { L2WorkSessionListResponse } from '../src/common/l2_biz/work-session/l2-work-session-contract'
 import type { L2WorkSessionsUpdate } from '../src/common/l2_biz/work-session/l2-work-session-realtime-contract'
 import type { L4PiChatWorkerEvent } from '../src/server/l4_foundation/pi/l4-pi-chat-worker'
 
@@ -25,7 +28,10 @@ const modulesPromise: Promise<[ManageModule, PiRuntimeModule]> = Promise.all([
   jiti.import<PiRuntimeModule>('../src/server/l4_foundation/pi/l4-pi-work-session-runtime.ts')
 ])
 
-async function createFixture(context: TestContext): Promise<{
+async function createFixture(
+  context: TestContext,
+  beforeInitialize?: (manage: InstanceType<ManageModule['WorkSessionManage']>) => void
+): Promise<{
   manage: InstanceType<ManageModule['WorkSessionManage']>
   workId: string
   updates: L2WorkSessionsUpdate[]
@@ -62,6 +68,7 @@ async function createFixture(context: TestContext): Promise<{
     await runtime.dispose()
     await rm(root, { recursive: true, force: true })
   })
+  beforeInitialize?.(manage)
   await manage.initialize()
   assert.ok(listener, '恢复的会话必须已建立 Worker 事件订阅')
   return {
@@ -205,4 +212,277 @@ test('后台任务集合改变但展示状态不变时不推送', async (context
     { type: 'update', workId, changes: { status: 'main_running' } },
     { type: 'update', workId, changes: { status: 'idle' } }
   ])
+})
+
+test('hydrate快照驱动Node列表状态，创建替换排序删除和状态同步，内部元数据变化不重复通知', async (context) => {
+  await mkdir(runRoot, { recursive: true })
+  const pluginRoot = await mkdtemp(join(runRoot, 'event-owner-'))
+  await writeFile(
+    join(pluginRoot, 'package.json'),
+    JSON.stringify({
+      name: 'session-events',
+      type: 'module',
+      piDesk: { entry: 'entry.js' }
+    })
+  )
+  const states: Array<readonly PluginWorkSession[]> = []
+  const accepted: unknown[] = []
+  Reflect.set(globalThis, '__piDeskManageEventStates', states)
+  Reflect.set(globalThis, '__piDeskManageAccepted', accepted)
+  await writeFile(
+    join(pluginRoot, 'entry.js'),
+    `export default {
+    name: 'session-events',
+    setup(plugin) {
+      plugin.host.events.on('work-sessions', (value) => globalThis.__piDeskManageEventStates.push(value))
+      plugin.host.events.on('chat-input-accepted', (value) => globalThis.__piDeskManageAccepted.push(value))
+      plugin.host.events.on('chat-input-accepted', () => { throw new Error('listener failure') })
+    }
+  }`
+  )
+  const runtime = new L4PiPluginOwnerRuntime(async () => [
+    { source: pluginRoot, installedPath: pluginRoot }
+  ])
+  context.after(async () => {
+    await runtime.dispose()
+    Reflect.deleteProperty(globalThis, '__piDeskManageEventStates')
+    Reflect.deleteProperty(globalThis, '__piDeskManageAccepted')
+    await rm(pluginRoot, { recursive: true, force: true })
+  })
+  await runtime.initialize()
+  await Promise.resolve()
+  assert.equal(states.length, 0)
+  const { manage, workId, emit } = await createFixture(context, (manage) => {
+    runtime.bindSessionEvents({
+      subscribeWorkSessions: (listener) => manage.subscribePluginWorkSessions(listener),
+      subscribeInputAccepted: (listener) => manage.subscribeInputAccepted(listener)
+    })
+  })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(states.length, 1)
+  const initial = states[0][0]
+  assert.equal(initial.source.workId, workId)
+  const workSession = await manage.getWorkSession(workId)
+  assert.ok(workSession)
+  context.mock.method(workSession, 'send', async () => ({ tempId: 'worker-accepted' }))
+  const warnings = context.mock.method(console, 'warn', () => undefined)
+  assert.deepEqual(
+    await manage.sendChat({ source: initial.source, mode: 'auto', text: 'input', images: [] }),
+    {
+      tempId: 'worker-accepted'
+    }
+  )
+  assert.deepEqual(accepted, [{ source: initial.source, tempId: 'worker-accepted' }])
+  assert.equal(warnings.mock.callCount(), 1)
+  emit({ type: 'session_info_changed', sessionTitle: '内部标题' })
+  assert.equal(states.length, 1)
+  emit({ type: 'agent_started' })
+  emit({ type: 'agent_settled' })
+  await manage.acknowledgeCompleted(workId)
+  assert.deepEqual(
+    states.map((state) => state[0].status),
+    ['idle', 'main_running', 'completed', 'idle']
+  )
+  const second = await manage.createWorkSession(initial.cwd)
+  try {
+    assert.deepEqual(
+      states.at(-1)?.map((item) => item.source.workId),
+      [second.workId, workId]
+    )
+    await manage.setWorkSessionArrangement([workId, second.workId], 0)
+    assert.deepEqual(
+      states.at(-1)?.map((item) => item.source.workId),
+      [workId, second.workId]
+    )
+    const beforePin = states.length
+    await manage.setWorkSessionArrangement([workId, second.workId], 1)
+    assert.equal(states.length, beforePin)
+    const beforeReplace = states.at(-1)![1].source
+    await manage.replaceWorkSession(second.workId)
+    const replaced = states.at(-1)![1]
+    assert.equal(replaced.source.workId, second.workId)
+    assert.notEqual(replaced.source.sessionId, beforeReplace.sessionId)
+    const query = await manage.listWorkSessions()
+    assert.deepEqual(
+      states.at(-1),
+      query.workSessions.map(({ workId, sessionId, branchId, cwd, status }) => ({
+        source: { workId, sessionId, branchId },
+        cwd,
+        status
+      }))
+    )
+  } finally {
+    await manage.removeWorkSession(second.workId)
+  }
+  assert.deepEqual(states.at(-1), [initial])
+  await runtime.dispose()
+  const count = states.length
+  await manage.removeWorkSession(workId)
+  assert.equal(states.length, count)
+})
+
+function observePluginWorkSessions(
+  manage: InstanceType<ManageModule['WorkSessionManage']>,
+  listener: (sessions: readonly PluginWorkSession[]) => void
+): () => void {
+  return manage.subscribePluginWorkSessions(listener)
+}
+
+function deferredSignal(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((complete) => {
+    resolve = complete
+  })
+  return { promise, resolve }
+}
+
+function nextListTurn(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
+}
+
+test('P2释放A期间B增量不丢失，插件只观察已提交列表且最终收敛', async (context) => {
+  for (const action of ['replace', 'delete'] as const) {
+    await context.test(action, async (context) => {
+      const { manage, workId: workB, updates, emit } = await createFixture(context)
+      const b = await manage.getWorkSession(workB)
+      assert.ok(b)
+      const a = await manage.createWorkSession(b.cwd)
+      const reads = context.mock.method(
+        manage as unknown as { createSnapshot(): L2WorkSessionListResponse },
+        'createSnapshot'
+      )
+      const [, pi] = await modulesPromise
+      const runtimeA = pi.getL4PiWorkSessionRuntime(a.sessionId)
+      const originalDispose = runtimeA.dispose.bind(runtimeA)
+      const started = deferredSignal()
+      const release = deferredSignal()
+      context.mock.method(runtimeA, 'dispose', async () => {
+        started.resolve()
+        await release.promise
+        await originalDispose()
+      })
+      const states: Array<readonly PluginWorkSession[]> = []
+      const lateStates: Array<readonly PluginWorkSession[]> = []
+      const off = observePluginWorkSessions(manage, (value) => {
+        states.push(value)
+      })
+      await nextListTurn()
+      const errors = context.mock.method(console, 'error', () => undefined)
+      updates.length = 0
+      const operation =
+        action === 'replace'
+          ? manage.replaceWorkSession(a.workId)
+          : manage.removeWorkSession(a.workId)
+      let offLate = (): void => undefined
+      try {
+        await started.promise
+        emit({ type: 'agent_started' })
+        emit({ type: 'session_info_changed', sessionTitle: 'B的新标题' })
+        const message = { type: 'user' as const, text: 'B消息', images: [] }
+        const tempId = randomUUID()
+        emit({ type: 'message_start', tempId, message })
+        emit({ type: 'message_commit', tempId, entryId: 'b-entry', timestampMs: 100, message })
+        assert.deepEqual(updates, [
+          { type: 'update', workId: workB, changes: { status: 'main_running' } },
+          { type: 'update', workId: workB, changes: { sessionTitle: 'B的新标题' } },
+          {
+            type: 'update',
+            workId: workB,
+            changes: { messageCounts: { user: 1, total: 1 }, lastMessageUpdatedAt: 100 }
+          }
+        ])
+        assert.equal(errors.mock.callCount(), 0)
+        assert.equal(
+          states.at(-1)?.find((item) => item.source.workId === workB)?.status,
+          'main_running'
+        )
+        assert.equal(
+          states.at(-1)?.find((item) => item.source.workId === a.workId)?.source.sessionId,
+          a.sessionId
+        )
+        offLate = observePluginWorkSessions(manage, (value) => {
+          lateStates.push(value)
+        })
+        await nextListTurn()
+        assert.equal(lateStates.length, 0, '生命周期未提交时不能遍历ChatRecord建立新基线')
+        release.resolve()
+        await operation
+        await nextListTurn()
+        assert.equal(reads.mock.callCount(), 2, '替换复用已生成快照，删除只为新订阅读取一次基线')
+        const current = await manage.listWorkSessions()
+        const expected = current.workSessions.map(
+          ({ workId, sessionId, branchId, cwd, status }) => ({
+            source: { workId, sessionId, branchId },
+            cwd,
+            status
+          })
+        )
+        assert.deepEqual(states.at(-1), expected)
+        assert.deepEqual(lateStates.at(-1), expected)
+        const currentB = current.workSessions.find((item) => item.workId === workB)!
+        assert.equal(currentB.status, 'main_running')
+        assert.equal(currentB.sessionTitle, 'B的新标题')
+        assert.deepEqual(currentB.messageCounts, { user: 1, total: 1 })
+        assert.equal(errors.mock.callCount(), 0)
+      } finally {
+        release.resolve()
+        await operation
+        off()
+        offLate()
+        await manage.removeWorkSession(a.workId)
+      }
+    })
+  }
+})
+
+test('P2列表投影惰性读取，非公开字段不重读，创建排序复用已有完整快照', async (context) => {
+  const { manage, workId, emit } = await createFixture(context)
+  const methods = manage as unknown as { createSnapshot(): L2WorkSessionListResponse }
+  const reads = context.mock.method(methods, 'createSnapshot')
+  emit({ type: 'session_info_changed', sessionTitle: '无人订阅' })
+  emit({ type: 'agent_started' })
+  assert.equal(reads.mock.callCount(), 0)
+  const states: Array<readonly PluginWorkSession[]> = []
+  const off = observePluginWorkSessions(manage, (value) => {
+    states.push(value)
+  })
+  context.after(off)
+  await nextListTurn()
+  assert.equal(reads.mock.callCount(), 1)
+  assert.equal(states.length, 1)
+  emit({ type: 'session_info_changed', sessionTitle: '仅标题变化' })
+  const message = { type: 'user' as const, text: '仅计数和时间变化', images: [] }
+  const tempId = randomUUID()
+  emit({ type: 'message_start', tempId, message })
+  emit({ type: 'message_commit', tempId, entryId: 'metadata-entry', timestampMs: 101, message })
+  assert.equal(reads.mock.callCount(), 1)
+  assert.equal(states.length, 1)
+  emit({ type: 'agent_settled' })
+  assert.equal(reads.mock.callCount(), 1)
+  assert.equal(states.at(-1)?.[0].status, 'completed')
+  const second = await manage.createWorkSession(states[0][0].cwd)
+  try {
+    assert.equal(reads.mock.callCount(), 2, '创建只能使用原流程已有的完整快照')
+    await manage.setWorkSessionArrangement([workId, second.workId], 0)
+    assert.equal(reads.mock.callCount(), 3, '排序只能使用原流程已有的完整快照')
+    assert.deepEqual(
+      states.at(-1)?.map((item) => item.source.workId),
+      [workId, second.workId]
+    )
+  } finally {
+    await manage.removeWorkSession(second.workId)
+    off()
+    off()
+  }
+  assert.equal(reads.mock.callCount(), 3, '删除按已提交delete更新投影')
+  emit({ type: 'agent_started' })
+  assert.equal(reads.mock.callCount(), 3)
+  const latest: Array<readonly PluginWorkSession[]> = []
+  const offLatest = observePluginWorkSessions(manage, (value) => {
+    latest.push(value)
+  })
+  await nextListTurn()
+  assert.equal(reads.mock.callCount(), 4)
+  assert.equal(latest[0][0].status, 'main_running')
+  offLatest()
 })

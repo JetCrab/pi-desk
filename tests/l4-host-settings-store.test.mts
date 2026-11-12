@@ -1,14 +1,27 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
+import { createJiti } from 'jiti'
+type HostSettingsStore =
+  import('../src/server/l4_foundation/l4-host-settings-store').L4HostSettingsStore
 import { HostSettingsSchema } from '../plugins/pi-desk-sdk/src/settings.ts'
-import { L4HostSettingsStore } from '../src/server/l4_foundation/l4-host-settings-store.ts'
-import { L3AppRuntime } from '../src/server/l3_modules/app-runtime/l3-app-runtime.ts'
+const require = createRequire(import.meta.url)
+const jiti = createJiti(import.meta.url, {
+  tsconfigPaths: resolve('tsconfig.json'),
+  alias: { 'server-only': join(dirname(require.resolve('server-only')), 'empty.js') }
+})
+const { L4HostSettingsStore } = await jiti.import<
+  typeof import('../src/server/l4_foundation/l4-host-settings-store')
+>('../src/server/l4_foundation/l4-host-settings-store.ts')
+const { L3AppRuntime } = await jiti.import<
+  typeof import('../src/server/l3_modules/app-runtime/l3-app-runtime')
+>('../src/server/l3_modules/app-runtime/l3-app-runtime.ts')
 import { applyL3AppRuntimeEvent } from '../src/common/l3_modules/app-runtime/l3-app-runtime-state.ts'
 import { L3AppRuntimeApplyRequestSchema } from '../src/common/l3_modules/app-runtime/l3-app-runtime-contract.ts'
 
-async function fixture(context: test.TestContext): Promise<L4HostSettingsStore> {
+async function fixture(context: test.TestContext): Promise<HostSettingsStore> {
   const base = resolve('temp/tests/shared-settings')
   await mkdir(base, { recursive: true })
   const root = await mkdtemp(join(base, 'persistent-region-'))
@@ -17,6 +30,39 @@ async function fixture(context: test.TestContext): Promise<L4HostSettingsStore> 
     region: { locale: 'en', timeZone: 'UTC' }
   }))
 }
+
+test('共享设置只使用config，旧文件存在或损坏均不读取和修改', async (context) => {
+  const base = resolve('temp/pi/l4-host-settings-store')
+  await mkdir(base, { recursive: true })
+  const root = await mkdtemp(join(base, 'settings-migration-'))
+  const agentDir = join(root, 'agent')
+  await mkdir(agentDir)
+  const previous = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = agentDir
+  context.after(async () => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = previous
+    await rm(root, { recursive: true, force: true })
+  })
+  const legacy = join(agentDir, 'pi-desk-settings.json')
+  const target = join(agentDir, 'config', 'pi-desk-settings.json')
+  const content = JSON.stringify({ region: { locale: 'zh-CN', timeZone: 'Asia/Shanghai' } })
+  await writeFile(legacy, content)
+  const store = new L4HostSettingsStore(undefined, () => ({
+    region: { locale: 'en', timeZone: 'UTC' }
+  }))
+  assert.deepEqual(store.getSnapshot().region, { locale: 'en', timeZone: 'UTC' })
+  assert.equal(await readFile(legacy, 'utf8'), content)
+  await store.update({ locale: 'zh-CN', timeZone: 'Asia/Tokyo' })
+  assert.deepEqual(new L4HostSettingsStore().getSnapshot().region, {
+    locale: 'zh-CN',
+    timeZone: 'Asia/Tokyo'
+  })
+  assert.equal(JSON.parse(await readFile(target, 'utf8')).region.timeZone, 'Asia/Tokyo')
+  await writeFile(legacy, '{broken')
+  assert.equal(new L4HostSettingsStore().getSnapshot().region.timeZone, 'Asia/Tokyo')
+  assert.equal(await readFile(legacy, 'utf8'), '{broken')
+})
 
 test('共享设置只保存生效地区，串行合并修改且快照不可变', async (context) => {
   const store = await fixture(context)

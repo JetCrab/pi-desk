@@ -50,6 +50,10 @@ function runServiceProcess(options) {
     'pi',
     'l4-pi-package-maintenance-runner.mts'
   )
+  const environmentMaintenanceEntry = path.join(
+    packageRoot,
+    'src/server/l4_foundation/environment/l4-environment-maintenance-runner.mts'
+  )
   let tsxImport
   let tsconfigPathsRegister
   try {
@@ -66,6 +70,7 @@ function runServiceProcess(options) {
   const MANAGED_RESTART_DELAY_MS = 100
   const MAINTENANCE_ERROR_MAX_CHARS = 4000
   const MAINTENANCE_TIMEOUT_MS = 120_000
+  const ENVIRONMENT_MAINTENANCE_TIMEOUT_MS = 30 * 60_000
   let child = null
   let maintenanceChild = null
   let restartTimer = null
@@ -146,7 +151,7 @@ function runServiceProcess(options) {
     }))
   }
 
-  function runPackageMaintenance(maintenance) {
+  function runPackageMaintenance(maintenance, environment) {
     return new Promise((resolveMaintenance, rejectMaintenance) => {
       const nextMaintenanceChild = spawn(
         process.execPath,
@@ -155,10 +160,14 @@ function runServiceProcess(options) {
           piRuntimeImport,
           '--import',
           pathToFileURL(tsxImport).href,
-          packageMaintenanceEntry,
-          maintenance.action,
-          maintenance.source,
-          ...(maintenance.registry ? [maintenance.registry] : [])
+          ...(environment
+            ? [environmentMaintenanceEntry]
+            : [
+                packageMaintenanceEntry,
+                maintenance.action,
+                maintenance.source,
+                ...(maintenance.registry ? [maintenance.registry] : [])
+              ])
         ],
         {
           cwd: packageRoot,
@@ -166,12 +175,18 @@ function runServiceProcess(options) {
             ...process.env,
             TSX_TSCONFIG_PATH: path.join(packageRoot, 'tsconfig.json')
           },
-          stdio: ['ignore', 'pipe', 'pipe'],
+          stdio: [environment ? 'pipe' : 'ignore', 'pipe', 'pipe'],
           windowsHide: true,
           detached: process.platform !== 'win32'
         }
       )
       maintenanceChild = nextMaintenanceChild
+      if (environment) {
+        nextMaintenanceChild.stdin.on('error', () => {
+          reportDiagnostic('环境维护 stdin 传输失败。')
+        })
+        nextMaintenanceChild.stdin.end(JSON.stringify(environment))
+      }
       let stdout = ''
       let stderr = ''
       let settled = false
@@ -211,10 +226,14 @@ function runServiceProcess(options) {
         () =>
           finish(() =>
             rejectMaintenance(
-              new Error('包维护超过120秒，已停止；结果未确认，请检查配置，后续命令不执行')
+              new Error(
+                environment
+                  ? '环境维护超过30分钟，已停止；启动前确认回滚。'
+                  : '包维护超过120秒，已停止；结果未确认，请检查配置，后续命令不执行'
+              )
             )
           ),
-        MAINTENANCE_TIMEOUT_MS
+        environment ? ENVIRONMENT_MAINTENANCE_TIMEOUT_MS : MAINTENANCE_TIMEOUT_MS
       )
       nextMaintenanceChild.once('close', (code) => {
         finish(() => {
@@ -230,8 +249,18 @@ function runServiceProcess(options) {
     })
   }
 
-  async function applyMaintenanceAndRestart(batch) {
+  async function applyMaintenanceAndRestart(batch, environment) {
     maintenanceError = null
+    if (environment) {
+      try {
+        await runPackageMaintenance(null, environment)
+      } catch {
+        maintenanceError = '环境维护失败；启动前会恢复未完成提交，恢复失败拒绝启动。'
+        reportDiagnostic(maintenanceError)
+      } finally {
+        environment = null
+      }
+    }
     for (const [index, maintenance] of (batch ?? []).entries()) {
       if (stopping) return
       writeManagedLog(
@@ -268,6 +297,7 @@ function runServiceProcess(options) {
   function startChild() {
     if (stopping) return
     let pendingMaintenance = null
+    let pendingEnvironment = null
     let pendingMode = null
     let standbyReady = false
     let expectedShutdown = false
@@ -367,7 +397,8 @@ function runServiceProcess(options) {
           ...diagnosticContext,
           nextMode: safeMode ? 'basic' : 'normal'
         })
-        void applyMaintenanceAndRestart(pendingMaintenance)
+        void applyMaintenanceAndRestart(pendingMaintenance, pendingEnvironment)
+        pendingEnvironment = null
         return
       }
       if (!safeMode && !expectedShutdown && standbyActivated) {
@@ -448,12 +479,34 @@ function runServiceProcess(options) {
         return
       }
 
+      if (message?.type === 'pi-desk.environment-maintenance') {
+        const request = message.request
+        if (
+          pendingEnvironment ||
+          pendingMaintenance ||
+          !request ||
+          !/^[0-9a-f-]{36}$/i.test(request.id ?? '') ||
+          !['export', 'import'].includes(request.kind) ||
+          typeof request.agentDir !== 'string' ||
+          !path.isAbsolute(request.agentDir) ||
+          typeof request.cwd !== 'string' ||
+          !path.isAbsolute(request.cwd) ||
+          typeof request.password !== 'string' ||
+          !request.password ||
+          request.password.length > 4096
+        ) {
+          reportDiagnostic('忽略无效或重复的环境维护请求。')
+          return
+        }
+        pendingEnvironment = request
+        return
+      }
       const maintenance = readMaintenanceRequest(message)
       if (!maintenance) {
         reportDiagnostic('忽略了无效的服务 IPC 消息。')
         return
       }
-      if (pendingMaintenance) {
+      if (pendingMaintenance || pendingEnvironment) {
         reportDiagnostic('当前服务进程重复提交插件维护请求，已保留第一条。')
         return
       }

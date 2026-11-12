@@ -2,7 +2,12 @@
 
 import { replaceL4HostSettings } from '@client/l4_foundation/locale/l4-region-store'
 import type { PiDeskBrowserChannel, PluginPushMessage } from '@jetcrab/pi-desk-sdk/browser'
-import { L2ChatSocketContracts } from '@common/l2_biz/chat/l2-chat-websocket-contract'
+import {
+  L2ChatSocketContracts,
+  L2ChatSendRequestSchema,
+  L2ChatSendResponseSchema
+} from '@common/l2_biz/chat/l2-chat-websocket-contract'
+import { isL2ChatSendResultUnknown } from '@common/l2_biz/chat/l2-chat-send-error'
 import { L4ClientTunnelResolveContract } from '@common/l4_foundation/tunnel/l4-client-tunnel-contract'
 import { L2PluginSocketContracts } from '@common/l2_biz/plugin/l2-plugin-websocket-contract'
 import {
@@ -35,7 +40,7 @@ export interface L2PluginHostRuntimeOwner {
 }
 
 function createTransport(
-  owner: L4AppSocketOwner,
+  owner: Pick<L4AppSocketOwner, 'request' | 'subscribe'>,
   canLoadEntries: () => boolean
 ): L4PluginHostTransport {
   const pi: L4PluginHostTransport['pi'] = {
@@ -157,6 +162,23 @@ function createPluginAwareSocket(
       contract: L4AppSocketRequestContract<TInput, TOutput>,
       input: TInput
     ): Promise<TOutput> {
+      if (contract.path === L2ChatSocketContracts.send.path) {
+        const { source } = L2ChatSendRequestSchema.parse(input)
+        let output: TOutput
+        try {
+          output = await owner.request(contract, input)
+        } catch (cause) {
+          pluginHost.publishChatSubmitResult({
+            source,
+            status: isL2ChatSendResultUnknown(cause) ? 'unknown' : 'failed',
+            message: cause instanceof Error ? cause.message : '发送失败'
+          })
+          throw cause
+        }
+        const { tempId } = L2ChatSendResponseSchema.parse(output)
+        pluginHost.publishChatSubmitResult({ source, status: 'accepted', tempId })
+        return output
+      }
       const output = await owner.request(contract, input)
       if (contract.path !== L2WorkSessionSocketContracts.list.path) return output
 
@@ -202,15 +224,17 @@ export function createL2PluginHostRuntime(
     typeof window !== 'undefined' &&
     new URL(window.location.href).searchParams.get('plugins') === 'off'
   let serviceMode: 'normal' | 'basic' = 'normal'
+  const transportOwner: Pick<L4AppSocketOwner, 'request' | 'subscribe'> = {
+    request: (contract, input) => appSocket.request(contract, input),
+    subscribe: (contract, listener) => owner.subscribe(contract, listener)
+  }
   const pluginHost = createL4PluginHostRuntime(
-    createTransport(owner, () => !bypassEntries && serviceMode === 'normal'),
+    createTransport(transportOwner, () => !bypassEntries && serviceMode === 'normal'),
     undefined,
     notifyPlugin
   )
-  return {
-    appSocket: createPluginAwareSocket(owner, pluginHost, (mode) => {
-      serviceMode = mode
-    }),
-    pluginHost
-  }
+  const appSocket = createPluginAwareSocket(owner, pluginHost, (mode) => {
+    serviceMode = mode
+  })
+  return { appSocket, pluginHost }
 }

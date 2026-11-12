@@ -108,7 +108,10 @@ export function ProfileCard({
   let localUrl = active?.status !== 'stopping' ? active?.localUrl : null
   let pathLabel: string | null = null
   let connectionStatus: string | null = null
-  if (mappingEnabled && active && active.status !== 'stopping') {
+  const localWorkbench = ['localhost', '127.0.0.1', '[::1]'].includes(
+    globalThis.location?.hostname ?? ''
+  )
+  if (mappingEnabled && !localWorkbench && active && active.status !== 'stopping') {
     localUrl = null
     if (tunnel?.status === 'ready') {
       if (tunnel.path === null) {

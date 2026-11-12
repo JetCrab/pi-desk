@@ -81,13 +81,13 @@ pub(crate) struct EnvironmentSnapshot {
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 struct Choices {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     node: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pi: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     bash: Option<PathBuf>,
-    #[serde(default, rename = "download", skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     download_source: Option<DownloadSource>,
 }
 
@@ -128,6 +128,7 @@ impl EnvironmentData {
 pub(crate) struct EnvironmentState {
     pub(crate) root: PathBuf,
     choices_path: PathBuf,
+    owner_path: PathBuf,
     data: Mutex<EnvironmentData>,
     source_recommendation: tokio::sync::OnceCell<DownloadSource>,
 }
@@ -154,14 +155,28 @@ pub(crate) fn requires_node(server: &ServerConfig) -> bool {
 }
 
 impl EnvironmentState {
+    #[cfg(test)]
     pub(crate) fn new(root: PathBuf, choices_path: PathBuf) -> Self {
-        let choices = fs::read(&choices_path)
+        let owner_path = choices_path.with_file_name(crate::desktop_storage::CONFIG_NAME);
+        Self::new_with_owner(root, choices_path, owner_path)
+    }
+
+    pub(crate) fn new_with_owner(
+        root: PathBuf,
+        choices_path: PathBuf,
+        owner_path: PathBuf,
+    ) -> Self {
+        let mut choices: Choices = fs::read(&choices_path)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
+        choices.download_source = crate::desktop_environment::load_preferences(&owner_path)
+            .ok()
+            .and_then(|prefs| prefs.download);
         Self {
             root,
             choices_path,
+            owner_path,
             source_recommendation: tokio::sync::OnceCell::new(),
             data: Mutex::new(EnvironmentData {
                 choices,
@@ -210,10 +225,10 @@ impl EnvironmentState {
     pub(crate) fn save_download_source(&self, source: DownloadSource) -> Result<(), String> {
         let source = source.validated()?;
         let mut data = self.data.lock().unwrap();
-        let mut choices = data.choices.clone();
-        choices.download_source = Some(source);
-        self.save_choices(&choices)?;
-        data.choices = choices;
+        crate::desktop_environment::update_preferences(&self.owner_path, |prefs| {
+            prefs.download = Some(source.clone());
+        })?;
+        data.choices.download_source = Some(source);
         if !matches!(
             data.snapshot.pi_update.status.as_str(),
             "checking" | "updating"
@@ -231,13 +246,10 @@ impl EnvironmentState {
         if let Some(parent) = self.choices_path.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
-        let temporary = self.choices_path.with_extension("json.tmp");
-        fs::write(
-            &temporary,
-            serde_json::to_vec_pretty(choices).map_err(|error| error.to_string())?,
+        crate::desktop_storage::update_fields(
+            &self.choices_path,
+            serde_json::to_value(choices).map_err(|error| error.to_string())?,
         )
-        .and_then(|_| fs::rename(&temporary, &self.choices_path))
-        .map_err(|error| format!("保存桌面环境选择失败：{error}"))
     }
 
     pub(crate) fn snapshot(&self) -> EnvironmentSnapshot {
@@ -457,15 +469,15 @@ impl EnvironmentState {
         if std::env::var_os("PI_DESK_DESKTOP_DATA_DIR").is_some() {
             environment.push((
                 OsString::from("PI_CODING_AGENT_DIR"),
-                std::env::var_os("PI_CODING_AGENT_DIR")
-                    .unwrap_or_else(|| self.root.join("pi-agent").into_os_string()),
+                crate::desktop_storage::agent_dir()
+                    .map(|path| path.into_os_string())
+                    .unwrap_or_else(|_| self.root.join("pi-agent").into_os_string()),
             ));
             environment.push((
                 OsString::from("PI_CODING_AGENT_SESSION_DIR"),
                 std::env::var_os("PI_CODING_AGENT_SESSION_DIR").unwrap_or_else(|| {
-                    std::env::var_os("PI_CODING_AGENT_DIR")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| self.root.join("pi-agent"))
+                    crate::desktop_storage::agent_dir()
+                        .unwrap_or_else(|_| self.root.join("pi-agent"))
                         .join("sessions")
                         .into_os_string()
                 }),
@@ -756,7 +768,7 @@ impl EnvironmentState {
             components,
             search,
             injected.is_none(),
-            configured_shell(&self.root),
+            configured_shell(),
             cancelled,
             log,
         )
@@ -992,7 +1004,7 @@ impl EnvironmentState {
             Component::Node => data.choices.node.clone(),
             Component::Pi => data.choices.pi.clone(),
             Component::Bash => {
-                if configured_shell(&self.root).is_some() {
+                if configured_shell().is_some() {
                     return true;
                 }
                 data.choices.bash.clone()
@@ -1513,17 +1525,8 @@ fn candidates(
     paths
 }
 
-fn configured_shell(root: &Path) -> Option<PathBuf> {
-    let agent = std::env::var_os("PI_CODING_AGENT_DIR")
-        .map(PathBuf::from)
-        .or_else(|| {
-            if std::env::var_os("PI_DESK_DESKTOP_DATA_DIR").is_some() {
-                Some(root.join("pi-agent"))
-            } else {
-                std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-                    .map(|home| PathBuf::from(home).join(".pi/agent"))
-            }
-        })?;
+fn configured_shell() -> Option<PathBuf> {
+    let agent = crate::desktop_storage::agent_dir().ok()?;
     let value: serde_json::Value =
         serde_json::from_slice(&fs::read(agent.join("settings.json")).ok()?).ok()?;
     let shell = value["shellPath"].as_str()?;

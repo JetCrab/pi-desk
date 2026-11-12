@@ -15,11 +15,7 @@ import { RemoteDebugSettingsStore } from './l4-remote-debug-settings.js'
 import { startManagedCommand, type CommandResult, type ManagedCommand } from './command.js'
 import { startDebugGateway, type DebugGatewayHandle } from './gateway.js'
 import { pruneRunArtifacts, RunLogger } from './log.js'
-import {
-  startTunnelClient,
-  type ManagedTunnelClient,
-  type TunnelClientResult
-} from './tunnel-client.js'
+import { startTunnelClient, type ManagedTunnelClient } from './tunnel-client.js'
 
 const ENTRY_READY_TIMEOUT_MS = 60_000
 const ENTRY_READY_POLL_MS = 250
@@ -73,7 +69,6 @@ interface RuntimeDependencies {
 interface ActiveRun {
   run: RemoteDebugRun
   profile: RemoteDebugProfile
-  tunnelServer: string | null
   runDirectory: string
   logger: RunLogger
   abort: AbortController
@@ -96,6 +91,7 @@ type StageResult<T> =
 export class RemoteDebugRuntime {
   private readonly runs = new Map<string, RemoteDebugRun>()
   private readonly active = new Map<string, ActiveRun>()
+  private readonly projectSyncs = new Map<string, Promise<void>>()
   private readonly dependencies: RuntimeDependencies
   private readonly lifetime = new AbortController()
   private disposed = false
@@ -124,7 +120,10 @@ export class RemoteDebugRuntime {
     const candidates = [
       ...workSessions.map((session) => session.cwd),
       ...[...this.runs.values()].map((run) => run.cwd),
-      ...(await this.dependencies.settingsStore.projectCwds())
+      ...(await this.dependencies.settingsStore.projectCwds().catch((error) => {
+        console.warn('[pi-desk-remote-debug] 读取端口登记失败，继续加载当前项目：', error)
+        return []
+      }))
     ]
     const cwds = await Promise.all(
       candidates.map(async (cwd) => realpath(cwd).catch(() => resolve(cwd)))
@@ -134,9 +133,10 @@ export class RemoteDebugRuntime {
       uniqueCwds.set(projectCwdKey(cwd), cwd)
     }
     return Promise.all(
-      [...uniqueCwds.values()].map((cwd) =>
-        loadRemoteDebugProject(cwd, this.dependencies.settingsStore)
-      )
+      [...uniqueCwds.values()].map((cwd) => {
+        this.syncProject(cwd)
+        return loadRemoteDebugProject(cwd)
+      })
     )
   }
 
@@ -167,8 +167,6 @@ export class RemoteDebugRuntime {
   ): Promise<RemoteDebugStartResult> {
     if (this.disposed) throw new Error('Remote Debug Runtime 已关闭')
     cwd = await realpath(cwd)
-    await this.dependencies.settingsStore.syncProject(cwd)
-    const settings = await this.dependencies.settingsStore.get()
     const config = await readRemoteDebugConfig(cwd)
     if (this.disposed) throw new Error('Remote Debug Runtime 已关闭')
     if (!config) throw new Error('项目没有 .pi/remote_debug.yaml')
@@ -182,15 +180,6 @@ export class RemoteDebugRuntime {
     ) {
       throw new Error(`调试配置正在运行：${profileName}`)
     }
-    const portOwner = [...this.active.values()].find(
-      (active) =>
-        active.tunnelServer === settings.tunnelServer &&
-        active.profile.publicPort === profile.publicPort
-    )
-    if (portOwner) {
-      throw new Error(`公网端口 ${profile.publicPort} 正在被 ${portOwner.run.profile} 使用`)
-    }
-
     const ports = profilePorts(profile)
     for (const active of this.active.values()) {
       const overlap = profilePorts(active.profile).find((port) => ports.includes(port))
@@ -227,7 +216,6 @@ export class RemoteDebugRuntime {
     const active: ActiveRun = {
       run,
       profile,
-      tunnelServer: settings.tunnelServer,
       runDirectory,
       logger,
       abort: new AbortController(),
@@ -249,6 +237,7 @@ export class RemoteDebugRuntime {
       throw error
     }
     active.execution = this.execute(active)
+    this.syncProject(cwd)
     this.scheduleArtifactPrune(cwd)
     return { runId }
   }
@@ -261,6 +250,7 @@ export class RemoteDebugRuntime {
       throw new Error(`Remote Debug Run 不存在：${runId}`)
     }
     if (!active.stopRequested) {
+      active.logger.line('system', `收到停止请求 runId=${runId} stage=${active.run.activity}`)
       active.stopRequested = true
       active.run.status = 'stopping'
       active.run.activity = '正在停止'
@@ -276,31 +266,51 @@ export class RemoteDebugRuntime {
     this.disposed = true
     this.lifetime.abort()
     for (const active of this.active.values()) {
+      if (!active.stopRequested) {
+        active.logger.line(
+          'system',
+          `收到停止请求 runId=${active.run.runId} reason=插件关闭 stage=${active.run.activity}`
+        )
+      }
       active.stopRequested = true
       active.run.status = 'stopping'
       active.run.activity = '插件关闭，正在停止'
       active.abort.abort()
     }
     await Promise.allSettled([...this.active.values()].map((active) => active.execution))
+    await Promise.allSettled(this.projectSyncs.values())
     await this.pruneQueue
     this.active.clear()
     this.runs.clear()
   }
 
   private async execute(active: ActiveRun): Promise<void> {
+    let stage = '启动项目命令'
+    let remoteAccess: Promise<void> | null = null
     let outcome: RunOutcome = {
       status: 'failed',
       activity: '远程调试启动失败',
       failure: '远程调试启动失败'
     }
     try {
-      active.logger.line('system', `启动 Profile ${active.run.profile}`)
+      active.logger.line(
+        'system',
+        `启动 Profile ${active.run.profile} ${JSON.stringify({
+          runId: active.run.runId,
+          cwd: active.run.cwd,
+          profile: active.run.profile,
+          entryPort: active.profile.entryPort,
+          publicPort: active.profile.publicPort
+        })}`
+      )
       active.command = this.dependencies.startCommand({
         cwd: active.run.cwd,
         command: active.profile.command,
         logger: active.logger
       })
+      stage = '等待本机入口'
       active.run.activity = `等待本机端口 ${active.profile.entryPort}`
+      active.logger.line('system', `等待本机入口 127.0.0.1:${active.profile.entryPort}`)
       this.publishState()
 
       const entry = await raceStage(active, (signal) =>
@@ -315,57 +325,19 @@ export class RemoteDebugRuntime {
         return
       }
 
-      active.run.localUrl = `http://127.0.0.1:${active.profile.entryPort}`
-      active.run.activity = '正在启动单入口 Gateway'
-      this.publishState()
-      active.gateway = await this.dependencies.startGateway({
-        entryPort: active.profile.entryPort,
-        routes: active.profile.routes,
-        logger: active.logger
-      })
-      if (active.abort.signal.aborted) {
-        outcome = stoppedOutcome()
-        return
-      }
-
-      active.run.gatewayPort = active.gateway.port
-      active.run.activity = `正在开放公网端口 ${active.profile.publicPort}`
-      this.publishState()
-      active.tunnel = this.dependencies.startTunnel({
-        localPort: active.gateway.port,
-        publicPort: active.profile.publicPort,
-        logger: active.logger
-      })
-      const tunnelReady = await raceStage(active, () => active.tunnel!.ready)
-      if (tunnelReady.kind === 'command') {
-        outcome = commandOutcome(tunnelReady.result, active.stopRequested)
-        return
-      }
-      if (tunnelReady.kind === 'aborted') {
-        outcome = stoppedOutcome()
-        return
-      }
-
+      active.logger.line('system', `本机入口已就绪 127.0.0.1:${active.profile.entryPort}`)
+      stage = '本地访问运行中'
       active.run.status = 'running'
-      active.run.activity = '公网访问已就绪'
-      active.run.publicUrl = `http://${tunnelReady.value}`
+      active.run.localUrl = `http://127.0.0.1:${active.profile.entryPort}`
+      active.run.activity = '本地访问已就绪，正在准备远程访问'
       this.publishState()
-      active.logger.line('system', `远程地址 ${active.run.publicUrl}`)
+      remoteAccess = this.prepareRemoteAccess(active)
 
       const terminal = await raceTerminal(active)
-      if (terminal.kind === 'command') {
-        outcome = commandOutcome(terminal.result, active.stopRequested)
-      } else if (terminal.kind === 'tunnel') {
-        outcome = active.stopRequested
-          ? stoppedOutcome()
-          : {
-              status: 'failed',
-              activity: 'Tunnel Client 已退出',
-              failure: terminal.result.detail ?? 'Tunnel Client 意外退出'
-            }
-      } else {
-        outcome = stoppedOutcome()
-      }
+      outcome =
+        terminal.kind === 'command'
+          ? commandOutcome(terminal.result, active.stopRequested)
+          : stoppedOutcome()
     } catch (error) {
       outcome = active.stopRequested
         ? stoppedOutcome()
@@ -375,7 +347,12 @@ export class RemoteDebugRuntime {
             failure: error instanceof Error ? error.message : String(error)
           }
     } finally {
+      active.logger.line(
+        'system',
+        `开始清理资源 stage=${stage} outcome=${outcome.status} stopRequested=${active.stopRequested}`
+      )
       active.abort.abort()
+      await remoteAccess
       const cleanupErrors = await cleanupActiveRun(active)
       if (cleanupErrors.length > 0 && outcome.status !== 'failed') {
         outcome = {
@@ -386,11 +363,84 @@ export class RemoteDebugRuntime {
       } else if (cleanupErrors.length > 0) {
         outcome.failure = [outcome.failure, ...cleanupErrors].filter(Boolean).join('；')
       }
-      if (outcome.failure) active.logger.line('system:error', outcome.failure)
+      if (outcome.failure) active.logger.line('system:error', `stage=${stage}：${outcome.failure}`)
       active.logger.line('system', outcome.activity)
       await active.logger.close()
       this.finalize(active, outcome)
     }
+  }
+
+  private async prepareRemoteAccess(active: ActiveRun): Promise<void> {
+    let stage = '启动 Gateway'
+    try {
+      active.gateway = await this.dependencies.startGateway({
+        entryPort: active.profile.entryPort,
+        routes: active.profile.routes,
+        logger: active.logger
+      })
+      if (active.abort.signal.aborted) return
+      active.logger.line(
+        'system',
+        `Gateway 已就绪 runId=${active.run.runId} gatewayPort=${active.gateway.port} entryPort=${active.profile.entryPort}`
+      )
+      stage = '开放公网端口'
+      active.run.gatewayPort = active.gateway.port
+      active.run.activity = `本地运行中，正在开放公网端口 ${active.profile.publicPort}`
+      this.publishState()
+      active.tunnel = this.dependencies.startTunnel({
+        localPort: active.gateway.port,
+        publicPort: active.profile.publicPort,
+        logger: active.logger
+      })
+      const ready = await raceStage(active, () => active.tunnel!.ready)
+      if (ready.kind !== 'ready' || active.abort.signal.aborted) return
+
+      stage = '公网访问运行中'
+      active.run.activity = '本地与公网访问已就绪'
+      active.run.publicUrl = `http://${ready.value}`
+      this.publishState()
+      active.logger.line('system', `远程地址 ${active.run.publicUrl}`)
+
+      const terminal = await raceStage(active, () => active.tunnel!.completion)
+      if (terminal.kind === 'ready') {
+        throw new Error(terminal.value.detail ?? 'Tunnel Client 意外退出')
+      }
+    } catch (error) {
+      if (active.abort.signal.aborted) return
+      const detail = error instanceof Error ? error.message : String(error)
+      active.logger.line('system:error', `stage=${stage}：${detail}；本地访问继续运行`)
+      active.run.publicUrl = null
+      active.run.activity = '本地运行中，远程访问不可用'
+      active.run.failure = { message: `远程访问不可用：${detail}；本地访问仍可用` }
+      this.publishState()
+      if (active.tunnel) {
+        try {
+          const result = await active.tunnel.stop()
+          if (result.failed) {
+            active.logger.line(
+              'system:error',
+              formatCleanupError('Tunnel', result.detail ?? '未确认资源释放')
+            )
+          } else {
+            active.tunnel = null
+          }
+        } catch (cleanupError) {
+          active.logger.line('system:error', formatCleanupError('Tunnel', cleanupError))
+        }
+      }
+    }
+  }
+
+  private syncProject(cwd: string): void {
+    const key = projectCwdKey(cwd)
+    if (this.disposed || this.projectSyncs.has(key)) return
+    const pending = this.dependencies.settingsStore
+      .syncProject(cwd)
+      .catch((error) => {
+        console.warn(`[pi-desk-remote-debug] 项目端口登记失败，不影响本地启动 cwd=${cwd}：`, error)
+      })
+      .finally(() => this.projectSyncs.delete(key))
+    this.projectSyncs.set(key, pending)
   }
 
   private finalize(active: ActiveRun, outcome: RunOutcome): void {
@@ -444,12 +494,8 @@ export class RemoteDebugRuntime {
   }
 }
 
-async function loadRemoteDebugProject(
-  cwd: string,
-  settingsStore: RemoteDebugSettingsStore
-): Promise<RemoteDebugProject> {
+async function loadRemoteDebugProject(cwd: string): Promise<RemoteDebugProject> {
   try {
-    await settingsStore.syncProject(cwd)
     const config = await readRemoteDebugConfig(cwd)
     if (!config) {
       return {
@@ -520,14 +566,9 @@ async function raceStage<T>(
 
 async function raceTerminal(
   active: ActiveRun
-): Promise<
-  | { kind: 'command'; result: CommandResult }
-  | { kind: 'tunnel'; result: TunnelClientResult }
-  | { kind: 'aborted' }
-> {
+): Promise<{ kind: 'command'; result: CommandResult } | { kind: 'aborted' }> {
   return Promise.race([
     active.command!.completion.then((result) => ({ kind: 'command' as const, result })),
-    active.tunnel!.completion.then((result) => ({ kind: 'tunnel' as const, result })),
     aborted(active.abort.signal).then(() => ({ kind: 'aborted' as const }))
   ])
 }

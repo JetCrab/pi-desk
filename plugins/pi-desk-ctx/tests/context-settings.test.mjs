@@ -131,7 +131,7 @@ test('配置拒绝无条件规则、重复上限和缺少通用配置', () => {
   )
 })
 
-test('旧配置缺少图片设置时默认关闭并补全宽松参数，不改变token开关', () => {
+test('未填写图片预算时默认关闭并补全参数，不改变token开关', () => {
   const legacy = settingsFixture()
   const original = structuredClone(legacy)
   const parsed = parseContextIgnoreSettings(legacy)
@@ -190,7 +190,7 @@ test('图片设置拒绝负数、非整数、超范围和目标大于触发值',
   }
 })
 
-test('旧配置文件首次访问复制到 Pi Desk 路径并保留原文件', async (context) => {
+test('只使用config配置，旧root与pi-super文件不读取不修改不删除', async (context) => {
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR
   const agentDir = await mkdtemp(join(tmpdir(), 'pi-desk-ctx-migration-'))
   context.after(async () => {
@@ -201,18 +201,25 @@ test('旧配置文件首次访问复制到 Pi Desk 路径并保留原文件', as
   process.env.PI_CODING_AGENT_DIR = agentDir
 
   const previousPath = join(agentDir, 'pi-super-ctx.json')
-  const previousContent = JSON.stringify(settingsFixture())
+  const rootPath = join(agentDir, 'pi-desk-ctx.json')
+  const previousContent = '{旧配置不应解析}'
   await writeFile(previousPath, previousContent, 'utf8')
+  await writeFile(rootPath, previousContent, 'utf8')
 
   const currentPath = defaultContextIgnoreSettingsPath()
-  assert.equal(currentPath, join(agentDir, 'pi-desk-ctx.json'))
-  assert.equal(await readFile(currentPath, 'utf8'), previousContent)
+  assert.equal(currentPath, join(agentDir, 'config', 'pi-desk-ctx.json'))
+  assert.deepEqual(
+    await readContextIgnoreSettings(currentPath),
+    await readContextIgnoreSettings(join(agentDir, 'missing.json'))
+  )
+  await assert.rejects(readFile(currentPath), { code: 'ENOENT' })
+  const settings = await writeContextIgnoreSettings(
+    { ...settingsFixture(), enabled: false },
+    currentPath
+  )
+  assert.deepEqual(await readContextIgnoreSettings(), settings)
   assert.equal(await readFile(previousPath, 'utf8'), previousContent)
-
-  const currentContent = JSON.stringify({ ...settingsFixture(), enabled: false })
-  await writeFile(currentPath, currentContent, 'utf8')
-  assert.equal(defaultContextIgnoreSettingsPath(), currentPath)
-  assert.equal(await readFile(currentPath, 'utf8'), currentContent)
+  assert.equal(await readFile(rootPath, 'utf8'), previousContent)
 })
 
 test('配置文件保存实际 Token 并在读取时保持归一化顺序', async (context) => {

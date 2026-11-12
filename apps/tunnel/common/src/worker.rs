@@ -115,6 +115,7 @@ pub struct TunnelWorkerHandle {
     commands: mpsc::Sender<Command>,
     stop: watch::Sender<bool>,
     snapshot: SharedSnapshot,
+    visitor: SharedEndpoint,
     thread: Option<JoinHandle<Result<(), String>>>,
 }
 
@@ -195,6 +196,14 @@ impl TunnelWorkerHandle {
         self.snapshot.lock().unwrap().clone()
     }
 
+    pub fn visitor_id(&self) -> Option<String> {
+        self.visitor
+            .try_lock()
+            .ok()?
+            .as_ref()
+            .map(TunnelEndpoint::id)
+    }
+
     pub fn stop(&self) {
         self.stop.send_replace(true);
     }
@@ -264,16 +273,26 @@ pub fn start_tunnel_worker(mut config: TunnelWorkerConfig) -> Result<TunnelWorke
     let (commands, receiver) = mpsc::channel(COMMAND_CAPACITY);
     let (stop, stop_receiver) = watch::channel(false);
     let state = snapshot.clone();
+    let visitor: SharedEndpoint = Arc::new(tokio::sync::Mutex::new(None));
+    let shared_visitor = visitor.clone();
     let thread = std::thread::Builder::new()
         .name("pi-desk-tunnel".to_owned())
         .spawn(move || {
-            runtime.block_on(run_worker(config, identity, receiver, stop_receiver, state))
+            runtime.block_on(run_worker(
+                config,
+                identity,
+                receiver,
+                stop_receiver,
+                state,
+                shared_visitor,
+            ))
         })
         .map_err(|error| format!("无法创建隧道后台线程：{error}"))?;
     Ok(TunnelWorkerHandle {
         commands,
         stop,
         snapshot,
+        visitor,
         thread: Some(thread),
     })
 }
@@ -332,13 +351,14 @@ async fn run_worker(
     mut commands: mpsc::Receiver<Command>,
     mut stop: watch::Receiver<bool>,
     snapshot: SharedSnapshot,
+    visitor: SharedEndpoint,
 ) -> Result<(), String> {
     let mut worker = Worker {
         control: ControlIo::new(&config).map_err(|error| error.to_string())?,
         config,
         identity,
         provider: Arc::new(tokio::sync::Mutex::new(None)),
-        visitor: Arc::new(tokio::sync::Mutex::new(None)),
+        visitor,
         snapshot,
         stop: stop.clone(),
         publications: BTreeMap::new(),

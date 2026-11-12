@@ -91,6 +91,7 @@ fn stop_bypasses_a_full_command_queue_and_shutdown_joins() {
         commands,
         stop,
         snapshot: snapshot(),
+        visitor: Arc::new(tokio::sync::Mutex::new(None)),
         thread: Some(thread),
     };
     for _ in 0..COMMAND_CAPACITY {
