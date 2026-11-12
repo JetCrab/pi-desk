@@ -20,6 +20,7 @@ const env = {
 }
 let stdout = ''
 let stderr = ''
+let ocrText = ''
 const processes = []
 function launch(args) {
   const child = spawn(archive, args, { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -44,7 +45,10 @@ function launch(args) {
 async function until(check, label, timeout = 30000) {
   const end = Date.now() + timeout
   while (!(await check())) {
-    assert.ok(Date.now() < end, `Linux 安装包验收超时：${label}\n${stderr}`)
+    assert.ok(
+      Date.now() < end,
+      `Linux 安装包验收超时：${label}\n${stderr}\n最后一次 OCR 识别结果：\n${ocrText}`
+    )
     await delay(100)
   }
 }
@@ -61,16 +65,18 @@ try {
     .trim()
     .split('\n')
   assert.ok(ids[0], '没有可见的控制中心窗口')
-  await until(() => {
+  await until(async () => {
     assert.ok(!app.exited, `界面就绪前桌面退出：${app.error ?? app.code}`)
     const image = join(root, 'linux-desktop.png')
     execFileSync('import', ['-window', ids[0], image], { stdio: 'pipe', timeout: 5000 })
-    const text = execFileSync('tesseract', [image, 'stdout', '-l', 'chi_sim', '--psm', '11'], {
+    // 稀疏文本模式会把深色按钮的“安装并打开”拆散并乱序输出。
+    ocrText = execFileSync('tesseract', [image, 'stdout', '-l', 'chi_sim', '--psm', '6'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 5000
     })
-    return /这\s*台\s*电\s*脑/u.test(text) && /安\s*装\s*并\s*打\s*开/u.test(text)
+    await writeFile(join(root, 'linux-desktop-ocr.log'), ocrText)
+    return /这\s*台\s*电\s*脑/u.test(ocrText) && /安\s*装\s*并\s*打\s*开/u.test(ocrText)
   }, '可操作的本机安装页面，不接受加载中画面')
   const quit = launch(['--exit-for-update'])
   await until(() => app.exited && quit.exited, '正常退出及单实例通知')

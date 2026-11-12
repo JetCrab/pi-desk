@@ -128,7 +128,7 @@ export async function createPiDeskCommandFixture(root, agentDir) {
       response.end(JSON.stringify({ error: '测试包或版本不存在' }))
     }
   })
-  await mkdir(agentDir, { recursive: true })
+  await mkdir(join(agentDir, 'config'), { recursive: true })
   await mkdir(root, { recursive: true })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -228,7 +228,7 @@ export async function createPiDeskCommandFixture(root, agentDir) {
       })
     )
     await writeFile(
-      join(agentDir, 'pi-desk-plugins.json'),
+      join(agentDir, 'config', 'pi-desk-plugins.json'),
       JSON.stringify({ downloadSource: { mode: 'custom', registry } })
     )
   } catch (error) {
