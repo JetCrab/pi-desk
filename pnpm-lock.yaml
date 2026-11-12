@@ -29,6 +29,9 @@ importers:
       '@jetcrab/pi-desk-sdk':
         specifier: workspace:^
         version: link:plugins/pi-desk-sdk
+      '@napi-rs/keyring':
+        specifier: 2.1.2
+        version: 2.1.2
       '@radix-ui/react-use-controllable-state':
         specifier: ^1.2.6
         version: 1.2.6(@types/react@19.2.18)(react@19.2.8)

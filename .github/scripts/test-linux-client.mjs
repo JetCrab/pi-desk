@@ -7,13 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 assert.equal(process.platform, 'linux', '本入口仅用于 Linux 安装包验收')
 const archive = resolve(process.argv[2])
 const root = resolve(process.env.CLIENT_SMOKE_ROOT)
-await mkdir(join(root, 'data'), { recursive: true })
 await mkdir(join(root, 'tmp'), { recursive: true })
-await writeFile(join(root, 'data/config.json'), JSON.stringify({ targets: [] }))
-await writeFile(
-  join(root, 'data/runtime.json'),
-  JSON.stringify({ targets: {}, hideOnStartup: false })
-)
 const env = {
   ...process.env,
   PI_DESK_DESKTOP_DATA_DIR: join(root, 'data'),
@@ -76,8 +70,8 @@ try {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 5000
     })
-    return /连接你的\s*Pi\s*Desk/i.test(text)
-  }, '可操作的连接页面，不接受加载中画面')
+    return /这\s*台\s*电\s*脑/u.test(text) && /安\s*装\s*并\s*打\s*开/u.test(text)
+  }, '可操作的本机安装页面，不接受加载中画面')
   const quit = launch(['--exit-for-update'])
   await until(() => app.exited && quit.exited, '正常退出及单实例通知')
   assert.equal(quit.code, 0, `退出通知失败：${quit.error ?? stderr}`)
