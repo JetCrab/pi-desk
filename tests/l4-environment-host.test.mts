@@ -11,6 +11,7 @@ import { PassThrough } from 'node:stream'
 import { spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import test, { mock } from 'node:test'
+import { parse as parseYaml } from 'yaml'
 import type { SecretStore } from '@jetcrab/pi-desk-sdk/secrets'
 import { createJiti } from 'jiti'
 const jiti = createJiti(import.meta.url, {
@@ -112,7 +113,7 @@ test('离线导入登录配置生成目标签名材料，且不改变原生 Pi �
     const source = join(root, 'source')
     const target = join(root, 'target')
     const passwordHash = `scrypt:${'11'.repeat(16)}:${'22'.repeat(64)}`
-    await json(join(source, 'config/pi-desk-auth.json'), { passwordHash })
+    await json(join(source, 'config/pi-desk.yaml'), { 'pi-desk': { auth: { passwordHash } } })
     await json(join(target, 'auth.json'), { native: 'test-only-native-auth' })
     const nativeBefore = await readFile(join(target, 'auth.json'))
     const collection = await collectL4Environment({
@@ -129,7 +130,7 @@ test('离线导入登录配置生成目标签名材料，且不改变原生 Pi �
       archivePath: archive,
       password
     })
-    const item = manifest.files.find((file) => file.path === 'config/pi-desk-auth.json')!
+    const item = manifest.files.find((file) => file.path === 'config/pi-desk.yaml')!
     await applyL4EnvironmentImport({
       directory: join(root, 'operation'),
       agentDir: target,
@@ -139,9 +140,12 @@ test('离线导入登录配置生成目标签名材料，且不改变原生 Pi �
       selection: { id: randomUUID(), selectedIds: [item.id], mappings: [], overwrite: false },
       rollbackStore: memoryStore()
     })
-    assert.deepEqual(JSON.parse(await readFile(join(target, 'config/pi-desk-auth.json'), 'utf8')), {
-      passwordHash
-    })
+    assert.deepEqual(
+      parseYaml(await readFile(join(target, 'config/pi-desk.yaml'), 'utf8'))['pi-desk'].auth,
+      {
+        passwordHash
+      }
+    )
     assert.match(
       await readFile(join(target, 'pi-desk/auth-session-key'), 'utf8'),
       /^[a-f0-9]{64}\n$/
@@ -171,8 +175,8 @@ test('导入回滚不恢复整份旧保险库，保留未选配置及后来写�
     const oldRef = await targetStore.put('test-only-kept-secret')
     await json(join(source, 'settings.json'), { packages: [packageRoot] })
     await json(join(source, 'config/secret.json'), { key: sourceRef })
-    await json(join(source, 'config/pi-desk-auth.json'), {
-      passwordHash: `scrypt:${'11'.repeat(16)}:${'22'.repeat(64)}`
+    await json(join(source, 'config/pi-desk.yaml'), {
+      'pi-desk': { auth: { passwordHash: `scrypt:${'11'.repeat(16)}:${'22'.repeat(64)}` } }
     })
     await json(join(target, 'config/secret.json'), { key: oldRef })
     await mkdir(join(target, 'pi-desk'), { recursive: true })
@@ -211,9 +215,7 @@ test('导入回滚不恢复整份旧保险库，保留未选配置及后来写�
         selection: {
           id: randomUUID(),
           selectedIds: manifest.files
-            .filter((file) =>
-              ['config/secret.json', 'config/pi-desk-auth.json'].includes(file.path)
-            )
+            .filter((file) => ['config/secret.json', 'config/pi-desk.yaml'].includes(file.path))
             .map((file) => file.id),
           mappings: [],
           overwrite: true
@@ -231,7 +233,7 @@ test('导入回滚不恢复整份旧保险库，保留未选配置及后来写�
       await readFile(join(target, 'pi-desk/auth-session-key'), 'utf8'),
       'invalid-existing-key'
     )
-    await assert.rejects(readFile(join(target, 'config/pi-desk-auth.json')), { code: 'ENOENT' })
+    await assert.rejects(readFile(join(target, 'config/pi-desk.yaml')), { code: 'ENOENT' })
   })
 })
 

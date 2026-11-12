@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { bindConfigStore } from './config-store.ts'
+import type { PluginConfig } from './config-api.js'
+export type { PluginConfig } from './config-api.js'
 import type { AgentSession, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { normalizePluginIdentifier, type PluginJsonObject, type PluginSource } from './shared.ts'
 import type { SessionCapabilityRules } from './capabilities.js'
@@ -66,6 +69,7 @@ export type SessionPluginMethodEvent =
 
 export interface SessionPluginFacade {
   readonly name: string
+  readonly config: PluginConfig
   setState(state: PluginJsonObject | null): void
   addPreviewDirectory(directory: string, options?: { default?: boolean }): void
   push(event: string, data: PluginJsonObject): void
@@ -99,6 +103,7 @@ export function bindSessionPlugin(pi: ExtensionAPI, pluginName: string): Session
 
   return {
     name,
+    config: bindConfigStore('plugins', name),
     setState(state): void {
       pi.events.emit(SESSION_PLUGIN_STATE_EVENT, { [name]: state })
     },

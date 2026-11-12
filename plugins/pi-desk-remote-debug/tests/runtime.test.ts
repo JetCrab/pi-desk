@@ -3,6 +3,7 @@ import { createServer } from 'node:http'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
 import type { PiDeskPluginFacade, PluginJsonObject } from '@jetcrab/pi-desk-sdk/entry'
 import type { CommandResult, ManagedCommand } from '../src/command.js'
 import type { DebugGatewayHandle } from '../src/gateway.js'
@@ -35,6 +36,7 @@ function pluginFacade(
 ): PiDeskPluginFacade {
   return {
     name: 'remote-debug',
+    config: bindConfigStore('plugins', 'remote-debug', { agentDir: join(root, 'agent') }),
     notifications: {
       publish: () => '11111111-1111-4111-8111-111111111111',
       update: () => undefined,
@@ -629,7 +631,9 @@ test('端口登记等待或失败均不阻塞配置发现及本地启动', async
   context.mock.method(console, 'warn', () => undefined)
   const registration = deferredValue<void>()
   let syncRequested = false
-  const settingsStore = new RemoteDebugSettingsStore()
+  const settingsStore = new RemoteDebugSettingsStore({
+    config: bindConfigStore('plugins', 'remote-debug', { agentDir: join(root, 'agent') })
+  })
   context.mock.method(settingsStore, 'syncProject', () => {
     syncRequested = true
     return registration.promise

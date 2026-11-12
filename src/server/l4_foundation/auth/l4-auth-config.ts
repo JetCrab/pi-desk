@@ -2,11 +2,15 @@ import 'server-only'
 
 import { getL4PiDeskDataDir } from '@server/l4_foundation/pi/l4-pi-desk-data-dir'
 
-import { createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
-import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
+import { chmodSync } from 'node:fs'
+import { join } from 'node:path'
 import type { z } from 'zod'
-import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import {
+  bindConfigStore,
+  getUnifiedConfigPath,
+  readConfigSection
+} from '@jetcrab/pi-desk-sdk/config'
 import {
   L4AuthConfigSchema as AuthConfigSchema,
   L4AuthConfigError,
@@ -32,28 +36,18 @@ export interface L4AuthCredentials extends AuthConfig {
 }
 
 export function getL4AuthConfigPath(): string {
-  return getConfigPath('pi-desk-auth.json')
+  return getUnifiedConfigPath()
 }
 
 function sessionKeyPath(): string {
   return join(getL4PiDeskDataDir(), 'auth-session-key')
 }
 
-function isMissing(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'ENOENT'
-}
-
 export function readL4AuthCredentials(): L4AuthCredentials | null {
-  let content: string
   try {
-    content = readFileSync(getL4AuthConfigPath(), 'utf8')
-  } catch (error) {
-    if (isMissing(error)) return null
-    throw new L4AuthConfigError()
-  }
-
-  try {
-    const config = AuthConfigSchema.parse(JSON.parse(content) as unknown)
+    const value = readConfigSection('pi-desk', 'auth')
+    if (Object.keys(value).length === 0) return null
+    const config = AuthConfigSchema.parse(value)
     // 摘要只参与凭据绑定；Cookie 的签名能力来自另一个文件中的随机密钥。
     const sessionSecret = createHmac('sha256', readL4AuthSessionKey(sessionKeyPath()))
       .update(JSON.stringify([config.passwordHash]))
@@ -101,19 +95,14 @@ export async function verifyL4AuthPassword(
   }
 }
 
-export function writeL4AuthConfig(config: AuthConfig | null): void {
-  const path = getL4AuthConfigPath()
+export async function writeL4AuthConfig(config: AuthConfig | null): Promise<void> {
+  const store = bindConfigStore('pi-desk', 'auth')
   if (!config) {
-    try {
-      unlinkSync(path)
-    } catch (error) {
-      if (!isMissing(error)) throw error
-    }
+    await store.set({})
     return
   }
 
   const parsed = AuthConfigSchema.parse(config)
-  mkdirSync(dirname(path), { recursive: true })
   if (readL4AuthCredentials() === null) {
     initializeL4AuthSessionKey(sessionKeyPath())
   }
@@ -121,15 +110,5 @@ export function writeL4AuthConfig(config: AuthConfig | null): void {
   // mode 只约束新建文件；恢复时可能复用权限较宽的旧密钥文件。
   chmodSync(sessionKeyPath(), 0o600)
 
-  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`
-  try {
-    writeFileSync(temporaryPath, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 })
-    renameSync(temporaryPath, path)
-  } finally {
-    try {
-      unlinkSync(temporaryPath)
-    } catch (error) {
-      if (!isMissing(error)) throw error
-    }
-  }
+  await store.set(parsed)
 }

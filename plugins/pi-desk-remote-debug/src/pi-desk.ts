@@ -56,7 +56,7 @@ function methodError(error: unknown): PluginMethodError {
 export default definePiDeskPlugin({
   name: 'remote-debug',
   setup(plugin) {
-    const settingsStore = new RemoteDebugSettingsStore()
+    const settingsStore = new RemoteDebugSettingsStore({ config: plugin.config })
     const runtime = new RemoteDebugRuntime(plugin, { settingsStore })
 
     plugin.registerMethod('catalog-get', async (input) => {

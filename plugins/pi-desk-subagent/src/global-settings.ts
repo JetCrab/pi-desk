@@ -1,9 +1,8 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import type { PluginConfig, PluginJsonObject } from '@jetcrab/pi-desk-sdk/entry'
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
-import { ModelRuntime, withFileMutationQueue } from '@earendil-works/pi-coding-agent'
+import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { PluginMethodError } from '@jetcrab/pi-desk-sdk/session'
-import { listGlobalSubagentSettings, subagentSettingsPath } from './agent-config.js'
+import { listGlobalSubagentSettings } from './agent-config.js'
 
 const levels = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
@@ -51,15 +50,19 @@ async function availableModels(): Promise<
     .sort((a, b) => `${a.provider}/${a.modelId}`.localeCompare(`${b.provider}/${b.modelId}`))
 }
 
-export async function getGlobalSubagentSettings(): Promise<{
+export async function getGlobalSubagentSettings(config: PluginConfig): Promise<{
   agents: AgentSettingInput[]
   models: Awaited<ReturnType<typeof availableModels>>
 }> {
-  return { agents: listGlobalSubagentSettings(), models: await availableModels() }
+  return {
+    agents: listGlobalSubagentSettings(undefined, await config.get()),
+    models: await availableModels()
+  }
 }
 
 export async function saveGlobalSubagentSettings(
-  input: unknown
+  input: unknown,
+  config: PluginConfig
 ): Promise<{ agents: AgentSettingInput[] }> {
   const changes = parseSettings(input)
   const models = changes.some((item) => item.model && !item.disabled)
@@ -70,14 +73,8 @@ export async function saveGlobalSubagentSettings(
       throw new PluginMethodError(400, `模型当前不可用：${item.model}`)
     }
   }
-  const path = subagentSettingsPath()
-  await withFileMutationQueue(path, async () => {
-    const settings = await readFile(path, 'utf8')
-      .then((content) => JSON.parse(content) as Record<string, unknown>)
-      .catch((error: NodeJS.ErrnoException) => {
-        if (error.code === 'ENOENT') return {} as Record<string, unknown>
-        throw error
-      })
+  {
+    const settings = await config.get()
     const agents = settings.agents
     if (agents !== undefined && (!agents || typeof agents !== 'object' || Array.isArray(agents))) {
       throw new Error('全局 agents 配置不是对象')
@@ -99,20 +96,10 @@ export async function saveGlobalSubagentSettings(
       if (Object.keys(entry).length) next[item.name] = entry
       else delete next[item.name]
     }
-    settings.agents = next
-    const temporary = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`
-    try {
-      await mkdir(dirname(path), { recursive: true })
-      await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
-      await rename(temporary, path)
-    } catch (error) {
-      const { rm } = await import('node:fs/promises')
-      await rm(temporary, { force: true })
-      throw error
-    }
-  })
+    await config.set(JSON.parse(JSON.stringify({ ...settings, agents: next })) as PluginJsonObject)
+  }
   console.info('[pi-desk-subagent] 全局子代理配置已保存', {
     agents: changes.map((item) => item.name)
   })
-  return { agents: listGlobalSubagentSettings() }
+  return { agents: listGlobalSubagentSettings(undefined, await config.get()) }
 }

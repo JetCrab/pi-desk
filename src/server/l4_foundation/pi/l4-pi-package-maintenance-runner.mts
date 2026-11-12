@@ -147,8 +147,8 @@ async function main(): Promise<void> {
   const preferences = await jiti.import<typeof import('./l4-pi-plugin-preferences')>(
     './l4-pi-plugin-preferences.ts'
   )
-  if (action === 'remove') preferences.removeL4PiPluginPreference(source, agentDir)
-  else if (registry) preferences.setL4PiPluginRegistry(source, registry, agentDir)
+  if (action === 'remove') await preferences.removeL4PiPluginPreference(source, agentDir)
+  else if (registry) await preferences.setL4PiPluginRegistry(source, registry, agentDir)
 }
 
 process.on('SIGINT', () => stop('SIGINT'))

@@ -1,9 +1,6 @@
 import 'server-only'
 
-import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
-import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import { bindConfigStore, readConfigSection } from '@jetcrab/pi-desk-sdk/config'
 import {
   HostSettingsSchema,
   type HostRegion,
@@ -26,19 +23,14 @@ export class L4HostSettingsStore {
   private tail: Promise<void> = Promise.resolve()
 
   constructor(
-    private readonly path = getConfigPath('pi-desk-settings.json'),
+    private readonly agentDir?: string,
     private readonly defaults: () => HostSettingsSnapshot = initialSettings
   ) {}
 
   getSnapshot(): HostSettingsSnapshot {
     if (!this.snapshot) {
-      if (existsSync(this.path)) {
-        this.snapshot = HostSettingsSchema.parse(JSON.parse(readFileSync(this.path, 'utf8')))
-      } else {
-        const initial = HostSettingsSchema.parse(this.defaults())
-        this.save(initial)
-        this.snapshot = initial
-      }
+      const value = readConfigSection('pi-desk', 'settings', this.agentDir)
+      this.snapshot = HostSettingsSchema.parse(Object.keys(value).length ? value : this.defaults())
     }
     return this.snapshot
   }
@@ -49,11 +41,11 @@ export class L4HostSettingsStore {
   }
 
   update(region: Partial<HostRegion>): Promise<void> {
-    const update = this.tail.then(() => {
+    const update = this.tail.then(async () => {
       const previous = this.getSnapshot()
       const next = HostSettingsSchema.parse({ region: { ...previous.region, ...region } })
       if (JSON.stringify(previous) === JSON.stringify(next)) return
-      this.save(next)
+      await this.save(next)
       this.snapshot = next
       console.info('[Pi Desk][Settings] 共享地区设置已保存', next.region)
       for (const listener of this.listeners) {
@@ -70,15 +62,8 @@ export class L4HostSettingsStore {
     return update
   }
 
-  private save(value: HostSettingsSnapshot): void {
-    mkdirSync(dirname(this.path), { recursive: true })
-    const temporary = `${this.path}.${process.pid}.${randomUUID()}.tmp`
-    try {
-      writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
-      renameSync(temporary, this.path)
-    } finally {
-      if (existsSync(temporary)) unlinkSync(temporary)
-    }
+  private async save(value: HostSettingsSnapshot): Promise<void> {
+    await bindConfigStore('pi-desk', 'settings', { agentDir: this.agentDir }).set(value)
   }
 }
 

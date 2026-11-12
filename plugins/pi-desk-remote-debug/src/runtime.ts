@@ -108,7 +108,8 @@ export class RemoteDebugRuntime {
       startTunnel: dependencies.startTunnel ?? startTunnelClient,
       waitForPort: dependencies.waitForPort ?? waitForTcpPort,
       createLogger: dependencies.createLogger ?? RunLogger.create,
-      settingsStore: dependencies.settingsStore ?? new RemoteDebugSettingsStore(),
+      settingsStore:
+        dependencies.settingsStore ?? new RemoteDebugSettingsStore({ config: plugin.config }),
       preparePorts: dependencies.preparePorts ?? prepareLocalPorts
     }
     this.publishState()

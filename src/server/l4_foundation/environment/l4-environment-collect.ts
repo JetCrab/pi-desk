@@ -1,4 +1,6 @@
 import { createReadStream } from 'node:fs'
+import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
+import { exportL4UnifiedConfig } from './l4-environment-unified-config'
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises'
 import { globL4Environment } from './l4-environment-glob'
 import { basename, dirname, join, relative, resolve, win32, sep } from 'node:path'
@@ -145,6 +147,7 @@ export async function collectL4Environment(input: {
       !nativeConfigFiles.has(entry.name)
   )
   const overrides = new Map<string, Buffer>()
+  const inlineSecrets = new Map<string, Record<string, string>>()
   const seen = new Set<string>()
   const settings = SettingsManager.create(input.cwd, agentDir, { projectTrusted: false })
   const manager = new DefaultPackageManager({ cwd: input.cwd, agentDir, settingsManager: settings })
@@ -203,8 +206,8 @@ export async function collectL4Environment(input: {
     assertEnvironmentEntryPath(file.path)
     if (file.format !== 'binary' && file.bytes > MAX_CONFIG_BYTES)
       throw new Error('配置文件超过32MiB限制')
-    if (file.path === 'config/pi-desk-auth.json')
-      file.warnings.push('导入此登录配置后需要重新登录，可能需要使用备份中的登录密码。')
+    if (file.path === 'config/pi-desk.yaml')
+      file.warnings.push('统一配置若含登录保护设置，恢复后需要使用备份中的登录密码。')
     metadataBytes += Buffer.byteLength(JSON.stringify(file))
     if (
       files.length >= ENVIRONMENT_ARCHIVE_DEFAULT_LIMITS.maxFiles ||
@@ -782,6 +785,17 @@ export async function collectL4Environment(input: {
       )
   }
   for (const file of files) {
+    if (file.base === 'agent' && file.path === 'config/pi-desk.yaml') {
+      const portable = await exportL4UnifiedConfig(
+        await load(file.sourcePath),
+        bindConfigStore('pi-desk', 'environment', { agentDir })
+      )
+      overrides.set(environmentPathKey(file.sourcePath, platform), portable.content)
+      inlineSecrets.set(file.id, portable.secrets)
+      file.secretPaths = portable.paths
+      file.bytes = portable.content.length
+      file.warnings.push('统一配置中的本机路径保持原值，恢复后需按目标机器检查。')
+    }
     if (file.format !== 'binary') {
       const content = transformL4EnvironmentConfig({
         content: await load(file.sourcePath),
@@ -818,7 +832,11 @@ export async function collectL4Environment(input: {
               readL4EnvironmentStructured(content, file.format),
               file.secretPaths
             )
-            const secrets = Buffer.from(JSON.stringify(refs.length ? await store.export(refs) : {}))
+            const secrets = Buffer.from(
+              JSON.stringify(
+                inlineSecrets.get(file.id) ?? (refs.length ? await store.export(refs) : {})
+              )
+            )
             if (secrets.length > MAX_CONFIG_BYTES)
               throw new L4EnvironmentValidationError(
                 '单项凭据导出超过32MiB，不能生成无法预览的备份'

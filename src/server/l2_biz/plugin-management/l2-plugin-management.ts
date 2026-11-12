@@ -508,7 +508,7 @@ export class L2PluginManagement {
       throw new L2PluginManagementInvalidPackageError('只有 npm 插件包支持更新渠道')
     }
     this.assertSourceIdle(target.source)
-    setL4PiPluginUpdateTag(target.source, L4PluginUpdateTagSchema.parse(tag), this.agentDir)
+    await setL4PiPluginUpdateTag(target.source, L4PluginUpdateTagSchema.parse(tag), this.agentDir)
     this.updates.clear(target.source)
     this.publish()
   }
@@ -1019,7 +1019,7 @@ export class L2PluginManagement {
       // 先前项可能安装失败或注册同名插件，不能依赖并行准备时的旧结论。
       this.assertPluginNameAvailable(pluginName, operationSource)
       if (updateTag) {
-        setL4PiPluginUpdateTag(operationSource, updateTag, this.agentDir)
+        await setL4PiPluginUpdateTag(operationSource, updateTag, this.agentDir)
         this.updates.clear(operationSource)
       }
     }
@@ -1037,7 +1037,7 @@ export class L2PluginManagement {
           const previouslyDisabled = readL4PiPluginPreferences(this.agentDir).disabled.includes(
             l2PluginSourceIdentity(source)
           )
-          setL4PiPluginEnabled(source, mutation === 'enable', this.agentDir)
+          await setL4PiPluginEnabled(source, mutation === 'enable', this.agentDir)
           this.sourceCache = null
           try {
             await this.applyMutationSources([source], true)
@@ -1051,7 +1051,7 @@ export class L2PluginManagement {
                 )
             }
           } catch (error) {
-            setL4PiPluginEnabled(source, !previouslyDisabled, this.agentDir)
+            await setL4PiPluginEnabled(source, !previouslyDisabled, this.agentDir)
             this.sourceCache = null
             throw error
           }
@@ -1064,7 +1064,7 @@ export class L2PluginManagement {
               cwd: this.packageManagerCwd
             })
           } else {
-            removeL4PiPluginPreference(operationSource, this.agentDir)
+            await removeL4PiPluginPreference(operationSource, this.agentDir)
           }
           for (const change of await runtime.scanSourceChanges([operationSource])) {
             if (change.current) {

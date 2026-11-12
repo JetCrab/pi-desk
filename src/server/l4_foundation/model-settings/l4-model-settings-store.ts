@@ -1,6 +1,8 @@
 import 'server-only'
 
 import { randomUUID } from 'node:crypto'
+import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
+import { z } from 'zod'
 import {
   existsSync,
   mkdirSync,
@@ -96,12 +98,18 @@ function writeJsonRecordAtomic(path: string, value: JsonRecord): void {
   writeTextAtomic(path, `${JSON.stringify(value, null, 2)}\n`)
 }
 
-function writeRecordsWithRollback(files: Array<{ path: string; value: JsonRecord }>): void {
+async function writeRecordsWithRollback(
+  files: Array<{ path: string; value: JsonRecord }>
+): Promise<void> {
+  const preferencesPath = modelPreferencesPath()
+  const preferences = readL4ModelPreferences()
+  const store = bindConfigStore('pi-desk', 'models')
   const originals = files.map(({ path }) => (existsSync(path) ? readFileSync(path, 'utf8') : null))
   let written = 0
   try {
     for (const { path, value } of files) {
-      writeJsonRecordAtomic(path, value)
+      if (path === preferencesPath) await store.set(z.record(z.string(), z.json()).parse(value))
+      else writeJsonRecordAtomic(path, value)
       written += 1
     }
   } catch (cause) {
@@ -109,7 +117,9 @@ function writeRecordsWithRollback(files: Array<{ path: string; value: JsonRecord
       const path = files[index].path
       const content = originals[index]
       try {
-        if (content === null) unlinkSync(path)
+        if (path === preferencesPath)
+          await store.set(z.record(z.string(), z.json()).parse(preferences))
+        else if (content === null) unlinkSync(path)
         else writeTextAtomic(path, content)
       } catch (error) {
         console.error('[Pi Desk][ModelSettings] 配置文件回滚失败', {
@@ -836,7 +846,7 @@ export async function replaceL4ModelSettings(input: L4ModelSettingsReplaceInput)
   await serializeWrite(async () => {
     try {
       const { files } = await prepareModelSettings(input)
-      writeRecordsWithRollback(files)
+      await writeRecordsWithRollback(files)
     } catch (cause) {
       console.error('[Pi Desk][ModelSettings] 模型配置保存失败', {
         message: cause instanceof Error ? cause.message : String(cause)

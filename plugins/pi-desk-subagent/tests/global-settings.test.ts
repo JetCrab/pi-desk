@@ -4,7 +4,16 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { saveGlobalSubagentSettings } from '../src/global-settings'
+import { saveGlobalSubagentSettings as saveSettings } from '../src/global-settings'
+import { bindConfigStore, getUnifiedConfigPath } from '@jetcrab/pi-desk-sdk/config'
+
+function config() {
+  return bindConfigStore('plugins', 'subagent')
+}
+
+function saveGlobalSubagentSettings(input: unknown) {
+  return saveSettings(input, config())
+}
 import { listGlobalSubagentSettings } from '../src/agent-config'
 
 test('独立配置保存不重写原生settings的注释、换行及未知字段', async (context) => {
@@ -30,15 +39,13 @@ test('独立配置保存不重写原生settings的注释、换行及未知字段
     agents: [{ name: 'explore', model: '', thinking: null, disabled: true }]
   })
   assert.equal(await readFile(nativePath, 'utf8'), native)
-  const settings = JSON.parse(
-    await readFile(join(agentDir, 'config', 'pi-desk-subagent.json'), 'utf8')
-  )
+  const settings = (await config().get()) as { agents: Record<string, unknown> }
   assert.deepEqual(settings.agents.explore, { disabled: true })
 })
 
 test('全局子代理设置仅修改目标字段并拒绝无效模型和重复名称', async () => {
   const agentDir = await mkdtemp(join(tmpdir(), 'pi-desk-subagent-settings-'))
-  const settingsPath = join(agentDir, 'config', 'pi-desk-subagent.json')
+  const settingsPath = getUnifiedConfigPath(agentDir)
   const nativePath = join(agentDir, 'settings.json')
   const originalNative =
     '{ "customGlobalKey": { "keep": true }, "agents": { "explore": { "disabled": false } } }'
@@ -50,29 +57,23 @@ test('全局子代理设置仅修改目标字段并拒绝无效模型和重复�
   try {
     await mkdir(join(agentDir, 'config'), { recursive: true })
     await writeFile(nativePath, originalNative)
-    await writeFile(
-      settingsPath,
-      JSON.stringify({
-        agents: {
-          explore: {
-            model: 'old-provider/old-model',
-            thinking: 'medium',
-            disabled: false,
-            customAgentKey: 'preserve'
-          },
-          dev: { model: 'other-provider/other-model', customAgentKey: 'untouched' }
-        }
-      }),
-      'utf8'
-    )
+    await config().set({
+      agents: {
+        explore: {
+          model: 'old-provider/old-model',
+          thinking: 'medium',
+          disabled: false,
+          customAgentKey: 'preserve'
+        },
+        dev: { model: 'other-provider/other-model', customAgentKey: 'untouched' }
+      }
+    })
 
     const result = await saveGlobalSubagentSettings({
       agents: [{ name: 'explore', model: '', thinking: null, disabled: true }]
     })
     assert.equal(await readFile(nativePath, 'utf8'), originalNative)
-    const saved = JSON.parse(
-      await readFile(join(agentDir, 'config', 'pi-desk-subagent.json'), 'utf8')
-    ) as {
+    const saved = (await config().get()) as {
       agents: Record<string, Record<string, unknown>>
     }
     assert.deepEqual(saved.agents.explore, { disabled: true, customAgentKey: 'preserve' })

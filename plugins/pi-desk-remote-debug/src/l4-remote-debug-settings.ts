@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto'
 import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import { isAbsolute, join, resolve } from 'node:path'
+import { getAgentDir } from '@earendil-works/pi-coding-agent'
+import type { PluginConfig } from '@jetcrab/pi-desk-sdk/entry'
 import { z } from 'zod'
 import {
   normalizeRoutePath,
@@ -33,21 +34,22 @@ const persistedSettingsSchema = remoteDebugRangesSchema.extend(registrationsSche
 type PersistedSettings = z.infer<typeof persistedSettingsSchema>
 
 interface SettingsStoreOptions {
+  config: PluginConfig
   agentDir?: string
   readTunnelServer?: () => Promise<string | null>
   isPortAvailable?: (port: number) => Promise<boolean>
 }
 
 export class RemoteDebugSettingsStore {
-  private readonly path: string
+  private readonly config: PluginConfig
   private readonly registrationsPath: string
   private readonly queryTunnelServer: () => Promise<string | null>
   private readonly isPortAvailable: (port: number) => Promise<boolean>
   private queue: Promise<void> = Promise.resolve()
 
-  constructor(options: SettingsStoreOptions = {}) {
-    this.path = getConfigPath('pi-desk-remote-debug-ports.json', options.agentDir)
-    const agentDir = dirname(dirname(this.path))
+  constructor(options: SettingsStoreOptions) {
+    this.config = options.config
+    const agentDir = options.agentDir ?? getAgentDir()
     this.registrationsPath = join(agentDir, 'pi-desk', 'remote-debug-registrations.json')
     this.queryTunnelServer = options.readTunnelServer ?? readDesktopTunnelServer
     this.isPortAvailable = options.isPortAvailable ?? isLocalPortAvailable
@@ -217,7 +219,8 @@ export class RemoteDebugSettingsStore {
   }
 
   private async read(): Promise<PersistedSettings> {
-    const ranges = await this.readJson(this.path)
+    const saved = await this.config.get()
+    const ranges = Object.keys(saved).length ? saved : undefined
     const registrations = await this.readJson(this.registrationsPath)
     return persistedSettingsSchema.parse({
       ...remoteDebugRangesSchema.parse(ranges ?? structuredClone(DEFAULT_REMOTE_DEBUG_RANGES)),
@@ -241,7 +244,7 @@ export class RemoteDebugSettingsStore {
   private async persist(settings: PersistedSettings): Promise<void> {
     const { registrations, ...ranges } = persistedSettingsSchema.parse(settings)
     await this.persistJson(this.registrationsPath, { registrations })
-    await this.persistJson(this.path, ranges)
+    await this.config.set(ranges)
   }
 
   private async persistJson(path: string, value: unknown): Promise<void> {

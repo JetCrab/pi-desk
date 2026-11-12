@@ -148,8 +148,13 @@ export function projectSubagentControlMessage(
 export default definePiDeskPlugin({
   name: 'subagent',
   setup(plugin) {
-    plugin.registerMethod('settings-get', () => getGlobalSubagentSettings())
-    plugin.registerMethod('settings-save', (input) => saveGlobalSubagentSettings(input))
+    let saving: Promise<unknown> = Promise.resolve()
+    plugin.registerMethod('settings-get', () => getGlobalSubagentSettings(plugin.config))
+    plugin.registerMethod('settings-save', (input) => {
+      const operation = saving.then(() => saveGlobalSubagentSettings(input, plugin.config))
+      saving = operation.catch(() => undefined)
+      return operation
+    })
     plugin.registerBrowserEntry('./dist/browser/entry.js')
     plugin.declareCapabilities(async ({ signal }) => {
       const workSessions = await plugin.host.workSessions.listWorkSessions()
@@ -158,7 +163,9 @@ export default definePiDeskPlugin({
           label: '子代理',
           options: collectSubagentCapabilityOptions(
             workSessions.map((session) => session.cwd),
-            signal
+            signal,
+            undefined,
+            await plugin.config.get()
           )
         }
       }

@@ -1,13 +1,7 @@
 import 'server-only'
 
-import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
-
-function storePath(): string {
-  return getConfigPath('pi-desk-ignored-directories.json')
-}
+import { resolve } from 'node:path'
+import { bindConfigStore, readConfigSection } from '@jetcrab/pi-desk-sdk/config'
 
 export function getL4PiDirectoryKey(cwd: string): string {
   const normalized = resolve(cwd)
@@ -39,11 +33,10 @@ function normalizeDirectories(cwds: readonly string[]): string[] {
 }
 
 export function listL4IgnoredPiDirectoryCwds(): string[] {
-  const path = storePath()
-  if (!existsSync(path)) return []
-
   try {
-    return normalizeDirectories(parseDirectories(JSON.parse(readFileSync(path, 'utf8')) as unknown))
+    return normalizeDirectories(
+      parseDirectories(readConfigSection('pi-desk', 'ignored-directories').directories ?? [])
+    )
   } catch (error) {
     console.warn('[Pi Desk][PiDirectoryIgnoreStore] 忽略目录配置无效，将按空列表处理', {
       errorName: error instanceof Error ? error.name : 'UnknownError'
@@ -52,7 +45,10 @@ export function listL4IgnoredPiDirectoryCwds(): string[] {
   }
 }
 
-export function replaceL4PiDirectoryIgnore(cwdInput: string, ignored: boolean): void {
+export async function replaceL4PiDirectoryIgnore(
+  cwdInput: string,
+  ignored: boolean
+): Promise<void> {
   const cwd = resolve(cwdInput)
   const key = getL4PiDirectoryKey(cwd)
   const current = listL4IgnoredPiDirectoryCwds()
@@ -62,16 +58,7 @@ export function replaceL4PiDirectoryIgnore(cwdInput: string, ignored: boolean): 
   const next = ignored
     ? [...current, cwd]
     : current.filter((item) => getL4PiDirectoryKey(item) !== key)
-  const path = storePath()
-  mkdirSync(dirname(path), { recursive: true })
-
-  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`
-  try {
-    writeFileSync(temporaryPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
-    renameSync(temporaryPath, path)
-  } finally {
-    if (existsSync(temporaryPath)) unlinkSync(temporaryPath)
-  }
+  await bindConfigStore('pi-desk', 'ignored-directories').set({ directories: next })
 
   console.info('[Pi Desk][PiDirectoryIgnoreStore] 已更新忽略目录', {
     cwd,

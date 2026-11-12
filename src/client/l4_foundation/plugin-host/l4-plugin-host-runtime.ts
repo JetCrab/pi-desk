@@ -12,6 +12,7 @@ import {
   type BrowserConnectionHost,
   type BrowserFilePreviewMode,
   type BrowserFilePreviewOptions,
+  type BrowserFloatingHost,
   type BrowserConnectionSnapshot,
   type BrowserContributionDefinitionMap,
   type BrowserContributionDescriptor,
@@ -62,6 +63,7 @@ import {
   subscribeL4HostSettings
 } from '@client/l4_foundation/locale/l4-region-store'
 import { L4PluginHostEvents } from './l4-plugin-host-events'
+import { L4PluginFloatingRuntime } from './l4-plugin-floating-runtime'
 import { L4PluginLogHostRuntime, type L4PluginLogChannel } from './l4-plugin-log-runtime'
 import { L4ClientTunnelHostRuntime } from '@client/l4_foundation/tunnel/l4-client-tunnels'
 import type { L4TunnelPublication } from '@common/l4_foundation/tunnel/l4-client-tunnel-contract'
@@ -497,6 +499,7 @@ export class L4PluginHostRuntime {
   private workSessionGoTo: L4PluginHostWorkSessionGoTo | null = null
   private projectPreview: ((directory: string) => void) | null = null
   private terminalOpen: ((cwd: string, signal: AbortSignal) => Promise<void>) | null = null
+  private readonly floating = new L4PluginFloatingRuntime()
   private workSessionFilePreview: L4PluginHostWorkSessionFilePreview | null = null
   private workSessionFileReveal: L4PluginHostWorkSessionFileReveal | null = null
   private imageReader: L4PluginHostImageReader | null = null
@@ -614,6 +617,11 @@ export class L4PluginHostRuntime {
 
   getMessageViewResolution(viewKey: string): L4PluginMessageViewResolution {
     return this.messageViewResolutions.get(viewKey) ?? null
+  }
+
+  bindFloatingContainer(container: HTMLElement): () => void {
+    if (this.disposed) throw new Error('Plugin Host Runtime has been disposed')
+    return this.floating.bindContainer(container)
   }
 
   bindWorkSessionCreate(create: L4PluginHostWorkSessionCreate): () => void {
@@ -973,7 +981,11 @@ export class L4PluginHostRuntime {
     const checkSource = (): void => {
       if (!this.workSessions.some((item) => sameSource(item.source, source))) dispose()
     }
-    const scope = { source, host: this.createBrowserHost(actionOwner), signal: controller.signal }
+    const scope = {
+      source,
+      host: this.createBrowserHost(actionOwner, owner.host.floating),
+      signal: controller.signal
+    }
     scopes.set(signal, scope)
     this.workSessionListeners.add(checkSource)
     owner.subscriptionDisposers.add(dispose)
@@ -1941,7 +1953,10 @@ export class L4PluginHostRuntime {
     return toPluginWorkSession(await goTo(input))
   }
 
-  private createBrowserHost(owner: Omit<L4PluginEntryOwner, 'host'>): BrowserPluginHost {
+  private createBrowserHost(
+    owner: Omit<L4PluginEntryOwner, 'host'>,
+    ownerFloating?: BrowserFloatingHost
+  ): BrowserPluginHost {
     const pluginName = owner.descriptor.pluginName
     const assertActive = (): void => {
       if (!owner.active || this.disposed) throw new Error('Browser Entry 已失效')
@@ -2019,7 +2034,14 @@ export class L4PluginHostRuntime {
     })
     owner.subscriptionDisposers.add(() => tunnels.dispose())
 
-    return {
+    const floating = ownerFloating ?? this.floating.createHost(owner, () => host)
+    const host: BrowserPluginHost = {
+      floating: {
+        open: (input) => {
+          assertActive()
+          return floating.open(input)
+        }
+      },
       events: this.events.createHost(owner),
       get tunnels() {
         assertActive()
@@ -2138,6 +2160,7 @@ export class L4PluginHostRuntime {
       connection,
       theme
     }
+    return host
   }
 
   private dispatchPush(message: PluginPushMessage): void {

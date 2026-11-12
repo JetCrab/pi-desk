@@ -1,14 +1,7 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type FocusEvent
-} from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   PluginButton,
-  PluginPopover,
+  PluginStatusCapsule,
   PluginScroll,
   PluginSurface,
   usePluginHost
@@ -17,31 +10,17 @@ import { countTodoItems, type TodoInput, type TodoItem } from './contract.js'
 import type { TodoBrowserController, TodoBrowserState } from './browser-runtime.js'
 
 const STYLES = `
-.pi-desk-todo{min-width:0;position:relative;padding-inline:.5rem}
-.pi-desk-todo-row{position:relative;min-width:0;padding:.125rem .375rem;border-radius:.5rem;background:var(--pi-desk-plugin-muted,var(--muted));transition:background-color 150ms ease-out}
-.pi-desk-todo-row:hover,.pi-desk-todo-row:focus-within,.pi-desk-todo-row:has([aria-expanded="true"]){background:var(--accent)}
-.pi-desk-todo-summary{width:100%;min-width:0;justify-content:flex-start;gap:.375rem;padding-inline:.25rem 2.125rem;text-align:left;color:inherit}
-.pi-desk-todo .pi-desk-todo-row .pi-desk-todo-summary{background:transparent}
-.pi-desk-todo-summary-copy{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}
-.pi-desk-todo-count,.pi-desk-todo-blocked{flex:none;font-size:.75rem;font-weight:400;font-variant-numeric:tabular-nums;white-space:nowrap}
-.pi-desk-todo-count{color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground))}
-.pi-desk-todo-blocked{color:var(--status-warning,var(--foreground))}
-.pi-desk-todo-dismiss{position:absolute;top:50%;right:.375rem;min-width:1.75rem;padding-inline:.25rem;transform:translateY(-50%)}
-.pi-desk-todo-segments{display:flex;height:.1875rem;gap:.1875rem;margin:.125rem .375rem .25rem;overflow:hidden;border-radius:.125rem}
-.pi-desk-todo-segment{flex:1;min-width:0;background:var(--pi-desk-plugin-border,var(--border));border-radius:.125rem}
-.pi-desk-todo-segment[data-status="1"]{background:var(--foreground)}
-.pi-desk-todo-segment[data-status="2"]{background:var(--muted-foreground)}
-.pi-desk-todo-segment[data-status="3"]{background:var(--status-warning,var(--foreground))}
+.pi-desk-todo{min-width:0;padding-inline:.5rem}
+.pi-desk-todo-dismiss{min-width:1.75rem;padding-inline:.25rem;color:inherit!important;background:transparent!important}
+.pi-desk-todo-dismiss:hover{background:color-mix(in srgb,currentColor 12%,transparent)!important}
+.pi-desk-todo-blocked{font-weight:500}
 .pi-desk-todo-icon{display:inline-flex;flex:none;width:1rem;height:1rem;align-items:center;justify-content:center}
 .pi-desk-todo-icon svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-.pi-desk-todo-icon[data-status="0"]{color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground))}
-.pi-desk-todo-icon[data-status="2"]{color:var(--status-success,var(--foreground))}
-.pi-desk-todo-icon[data-status="3"]{color:var(--status-warning,var(--foreground))}
-.pi-desk-todo-popup{width:min(40rem,calc(var(--anchor-width) + .75rem));overflow:hidden}
+.pi-desk-todo-icon[data-status="0"]{opacity:.65}
 .pi-desk-todo-panel{display:flex;min-width:0;min-height:0;flex:1;flex-direction:column}
-.pi-desk-todo-heading{display:flex;flex:none;flex-wrap:wrap;align-items:baseline;gap:.25rem .75rem;padding:.75rem 1rem .625rem;border-bottom:1px solid var(--pi-desk-plugin-border,var(--border))}
+.pi-desk-todo-heading{display:flex;flex:none;flex-wrap:wrap;align-items:baseline;gap:.25rem .75rem;padding:.75rem 1rem .625rem;border-bottom:1px solid color-mix(in srgb,currentColor 18%,transparent)}
 .pi-desk-todo-heading h3{flex:1 1 12rem;min-width:0;margin:0;font:inherit;font-weight:600;overflow-wrap:anywhere}
-.pi-desk-todo-meta{display:flex;flex:none;gap:.75rem;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground));font-size:.75rem;font-variant-numeric:tabular-nums;white-space:nowrap}
+.pi-desk-todo-meta{display:flex;flex:none;gap:.75rem;opacity:.75;font-size:.75rem;font-variant-numeric:tabular-nums;white-space:nowrap}
 .pi-desk-todo-scroll{min-height:0;flex:1}
 .pi-desk-todo-scroll-content{padding:.375rem .5rem .5rem;overscroll-behavior:contain}
 .pi-desk-todo-list{list-style:none;margin:0;padding:0}
@@ -50,13 +29,11 @@ const STYLES = `
 .pi-desk-todo-leaf-copy{flex:1;min-width:0}
 .pi-desk-todo-title{display:block;overflow-wrap:anywhere}
 .pi-desk-todo-leaf[data-status="1"] .pi-desk-todo-title{font-weight:600}
-.pi-desk-todo-leaf[data-status="2"] .pi-desk-todo-title{color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground))}
-.pi-desk-todo-note{margin:.125rem 0 0;font-size:.8125rem;overflow-wrap:anywhere;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground))}
-.pi-desk-todo-leaf[data-status="3"] .pi-desk-todo-note{color:var(--status-warning,var(--foreground))}
+.pi-desk-todo-leaf[data-status="2"] .pi-desk-todo-title{opacity:.7}
+.pi-desk-todo-note{margin:.125rem 0 0;font-size:.8125rem;overflow-wrap:anywhere;opacity:.75}
 .pi-desk-todo-flag{margin-inline-end:.5em;font-weight:600}
 .pi-desk-todo-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .pi-desk-todo-error{display:flex;align-items:center;gap:.5rem;justify-content:space-between;padding:.375rem .5rem;color:var(--pi-desk-plugin-destructive,var(--destructive));font-size:.8125rem;overflow-wrap:anywhere}
-@media(prefers-reduced-motion:reduce){.pi-desk-todo-row{transition:none}}
 `
 
 const LABELS = {
@@ -68,7 +45,6 @@ const LABELS = {
     tasks: '任务',
     done: '完成',
     dismiss: '隐藏整份任务进度',
-    details: '查看任务进度，点击保持展开',
     failure: '任务进度同步失败',
     retry: '重试'
   },
@@ -80,7 +56,6 @@ const LABELS = {
     tasks: 'Tasks',
     done: 'completed',
     dismiss: 'Hide the entire task progress',
-    details: 'View task progress; click to keep open',
     failure: 'Could not sync task progress',
     retry: 'Retry'
   }
@@ -102,9 +77,7 @@ function StatusIcon({ status }: { status: 0 | 1 | 2 | 3 }): React.JSX.Element {
     <span className="pi-desk-todo-icon" data-status={status} aria-hidden="true">
       <svg viewBox="0 0 24 24">
         {status === 3 ? (
-          <>
-            <path d="m12 3 10 18H2zM12 9v5m0 3v.1" />
-          </>
+          <path d="m12 3 10 18H2zM12 9v5m0 3v.1" />
         ) : (
           <>
             <circle cx="12" cy="12" r="9" />
@@ -148,141 +121,110 @@ function TodoProgress({
   controller,
   labels
 }: {
-  todo: TodoInput
+  todo: TodoInput | null
   state: TodoBrowserState
   controller: TodoBrowserController
   labels: Labels
 }): React.JSX.Element {
-  const [hovered, setHovered] = useState(false)
-  const [focused, setFocused] = useState(false)
+  const [open, setOpen] = useState(false)
   const [pinned, setPinned] = useState(false)
-  const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const widgetRef = useRef<HTMLDivElement>(null)
-  const panelRef = useRef<HTMLDivElement>(null)
   const ignoreReturnFocus = useRef(false)
-  const open = hovered || focused || pinned
-  const counts = countTodoItems(todo.items)
-  const blocked = todo.items.filter((item) => item.status === 3).length
-  const current = todo.items.some((item) => item.status === 1)
+  const visible = Boolean(todo && !state.snapshot.hidden && todo.items.length > 0)
+  const counts = todo ? countTodoItems(todo.items) : { completed: 0, total: 0 }
+  const blocked = todo?.items.filter((item) => item.status === 3).length ?? 0
+  const current = todo?.items.some((item) => item.status === 1)
     ? 1
     : blocked
       ? 3
       : counts.completed === counts.total
         ? 2
         : 0
-  const label = summary(todo, labels)
+  const label = todo ? summary(todo, labels) : labels.tasks
+  const triggerProps = {
+    'data-testid': 'todo-summary',
+    'aria-label': `${label} · ${counts.completed}/${counts.total} ${labels.tasks} ${labels.done}${blocked ? ` · ${labels.blocked(blocked)}` : ''}`
+  }
 
-  useEffect(
-    () => (): void => {
-      if (enterTimer.current) clearTimeout(enterTimer.current)
-      if (leaveTimer.current) clearTimeout(leaveTimer.current)
-    },
-    []
-  )
-
-  function enter(): void {
-    if (leaveTimer.current) clearTimeout(leaveTimer.current)
-    if (enterTimer.current) clearTimeout(enterTimer.current)
-    if (open) {
-      setHovered(true)
-      return
+  useEffect(() => {
+    if (visible) return
+    let active = true
+    queueMicrotask(() => {
+      if (active) {
+        setOpen(false)
+        setPinned(false)
+      }
+    })
+    return () => {
+      active = false
     }
-    enterTimer.current = setTimeout(() => {
-      enterTimer.current = null
-      setHovered(true)
-    }, 500)
-  }
-
-  function leave(): void {
-    if (enterTimer.current) clearTimeout(enterTimer.current)
-    if (leaveTimer.current) clearTimeout(leaveTimer.current)
-    leaveTimer.current = setTimeout(() => setHovered(false), 160)
-  }
-
-  function close(): void {
-    ignoreReturnFocus.current = Boolean(panelRef.current?.contains(document.activeElement))
-    if (enterTimer.current) clearTimeout(enterTimer.current)
-    if (leaveTimer.current) clearTimeout(leaveTimer.current)
-    setPinned(false)
-    setHovered(false)
-    setFocused(false)
-  }
-
-  function onFocus(event: FocusEvent<HTMLDivElement>): void {
-    if (ignoreReturnFocus.current) {
-      ignoreReturnFocus.current = false
-      return
-    }
-    if (event.target.matches(':focus-visible')) {
-      setFocused(true)
-    }
-  }
-
-  function onBlur(event: FocusEvent<HTMLDivElement>): void {
-    const next = event.relatedTarget
-    if (
-      next instanceof Node &&
-      (widgetRef.current?.contains(next) || panelRef.current?.contains(next))
-    )
-      return
-    setFocused(false)
-  }
+  }, [visible])
 
   return (
     <div
-      ref={widgetRef}
       className="pi-desk-todo"
-      data-testid="todo-widget"
-      onFocusCapture={onFocus}
-      onBlurCapture={onBlur}
+      data-testid={visible ? 'todo-widget' : undefined}
+      onFocusCapture={(event) => {
+        if (ignoreReturnFocus.current) {
+          ignoreReturnFocus.current = false
+          return
+        }
+        if (event.target.matches('[data-slot="status-capsule-trigger"]:focus-visible'))
+          setOpen(true)
+      }}
     >
-      <div className="pi-desk-todo-row" data-testid="todo-summary-row">
-        <PluginPopover
-          open={open}
-          side="top"
-          align="center"
-          className="pi-desk-todo-popup"
-          onOpenChange={(nextOpen, details) => {
-            if (details.reason === 'trigger-press') {
-              if (pinned) close()
-              else setPinned(true)
-            } else if (!nextOpen) close()
-          }}
-          trigger={
-            <PluginButton
-              variant="ghost"
-              size="sm"
-              className="pi-desk-todo-summary"
-              data-testid="todo-summary"
-              aria-label={`${label} · ${counts.completed}/${counts.total} ${labels.tasks} ${labels.done}${blocked ? ` · ${labels.blocked(blocked)}` : ''} · ${labels.details}`}
-              aria-pressed={pinned}
-              title={label}
-              onPointerEnter={(event) => {
-                if (event.pointerType !== 'touch') enter()
-              }}
-              onPointerLeave={leave}
-            >
-              <StatusIcon status={current} />
-              <span className="pi-desk-todo-summary-copy">{label}</span>
-              {blocked ? (
-                <span className="pi-desk-todo-blocked">{labels.blocked(blocked)}</span>
-              ) : null}
-              <span className="pi-desk-todo-count">
-                {counts.completed}/{counts.total}
-              </span>
-            </PluginButton>
+      <PluginStatusCapsule
+        visible={visible}
+        open={open}
+        openOnHover
+        onOpenChange={(nextOpen, details) => {
+          if (details.reason === 'trigger-press' || details.reason === 'close-press') {
+            if (!pinned) {
+              details.cancel()
+              setPinned(true)
+              setOpen(true)
+              return
+            }
+          } else if (pinned && details.reason === 'trigger-hover' && !nextOpen) {
+            details.cancel()
+            return
           }
-        >
-          <div
-            ref={panelRef}
-            className="pi-desk-todo-panel"
-            data-testid="todo-popover"
-            onPointerEnter={(event) => {
-              if (event.pointerType !== 'touch') enter()
-            }}
-            onPointerLeave={leave}
+          if (!nextOpen) {
+            ignoreReturnFocus.current =
+              details.reason === 'escape-key' || details.reason === 'close-press'
+            setPinned(false)
+          }
+          setOpen(nextOpen)
+        }}
+        summary={label}
+        triggerProps={triggerProps}
+        icon={<StatusIcon status={current} />}
+        meta={
+          <>
+            {blocked ? `${labels.blocked(blocked)} · ` : ''}
+            {counts.completed}/{counts.total}
+          </>
+        }
+        actions={
+          <PluginButton
+            variant="ghost"
+            size="sm"
+            className="pi-desk-todo-dismiss"
+            data-testid="todo-dismiss"
+            aria-label={labels.dismiss}
+            title={labels.dismiss}
+            disabled={state.hiding}
+            onClick={() => void controller.hide()}
           >
+            <span className="pi-desk-todo-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="m6 6 12 12M6 18 18 6" />
+              </svg>
+            </span>
+          </PluginButton>
+        }
+      >
+        {todo ? (
+          <div className="pi-desk-todo-panel" data-testid="todo-popover">
             <header className="pi-desk-todo-heading">
               <h3>{todo.title}</h3>
               <div className="pi-desk-todo-meta">
@@ -306,29 +248,8 @@ function TodoProgress({
               </ul>
             </PluginScroll>
           </div>
-        </PluginPopover>
-        <PluginButton
-          variant="ghost"
-          size="sm"
-          className="pi-desk-todo-dismiss"
-          data-testid="todo-dismiss"
-          aria-label={labels.dismiss}
-          title={labels.dismiss}
-          disabled={state.hiding}
-          onClick={() => void controller.hide()}
-        >
-          <span className="pi-desk-todo-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24">
-              <path d="m6 6 12 12M6 18 18 6" />
-            </svg>
-          </span>
-        </PluginButton>
-      </div>
-      <div className="pi-desk-todo-segments" aria-hidden="true">
-        {todo.items.map((item) => (
-          <span key={item.id} className="pi-desk-todo-segment" data-status={item.status} />
-        ))}
-      </div>
+        ) : null}
+      </PluginStatusCapsule>
     </div>
   )
 }
@@ -337,7 +258,7 @@ export function TodoWidget({
   controller
 }: {
   controller: TodoBrowserController
-}): React.JSX.Element | null {
+}): React.JSX.Element {
   const host = usePluginHost()
   const state = useSyncExternalStore(
     controller.subscribe,
@@ -359,18 +280,18 @@ export function TodoWidget({
     () => host.settings.getSnapshot()
   )
   const labels = LABELS[settings.region.locale]
-  const todo = state.snapshot.todo
-  const visible = todo && !state.snapshot.hidden && todo.items.length > 0
-  if (!visible && !state.error) return null
 
   return (
     <PluginSurface>
       <style href="pi-desk-todo" precedence="plugin-todo">
         {STYLES}
       </style>
-      {visible ? (
-        <TodoProgress todo={todo} state={state} controller={controller} labels={labels} />
-      ) : null}
+      <TodoProgress
+        todo={state.snapshot.todo}
+        state={state}
+        controller={controller}
+        labels={labels}
+      />
       {state.error ? (
         <div role="alert" className="pi-desk-todo-error">
           <span>

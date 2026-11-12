@@ -1,7 +1,7 @@
 import 'server-only'
 
 import { existsSync, readFileSync } from 'node:fs'
-import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import { getUnifiedConfigPath, readConfigSection } from '@jetcrab/pi-desk-sdk/config'
 
 export function readModelJsonRecord(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {}
@@ -29,9 +29,9 @@ export function readModelJsonRecord(path: string): Record<string, unknown> {
 }
 
 export function modelPreferencesPath(): string {
-  return getConfigPath('pi-desk-models.json')
+  return getUnifiedConfigPath()
 }
 
 export function readL4ModelPreferences(): Record<string, unknown> {
-  return readModelJsonRecord(modelPreferencesPath())
+  return readConfigSection('pi-desk', 'models')
 }

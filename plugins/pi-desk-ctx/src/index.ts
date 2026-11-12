@@ -141,7 +141,7 @@ export function registerContextIgnore(
   options: ContextIgnoreRuntimeOptions = {}
 ): void {
   const plugin = bindSessionPlugin(pi, PLUGIN_STATE_KEY)
-  const loadSettings = options.loadSettings ?? readContextIgnoreSettings
+  const loadSettings = options.loadSettings ?? (() => readContextIgnoreSettings(plugin.config))
   let settings = defaultContextIgnoreSettings()
   let state = defaultContextIgnoreState()
   let pendingCheckpoint: PendingCheckpoint | undefined

@@ -131,10 +131,17 @@ async function settle(client) {
   await evaluate(
     client,
     `(async () => {
-    await Promise.allSettled(document.getAnimations()
-      .filter(a => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming().endTime))
-      .map(a => a.finished));
-    for (let index = 0; index < 4; index++) await new Promise(requestAnimationFrame);
+    let previous = '', stable = 0;
+    for (let frame = 0; frame < 180; frame++) {
+      await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
+      const current = JSON.stringify(${metrics});
+      const animating = document.getAnimations().some(a =>
+        a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming().endTime));
+      stable = !animating && current === previous ? stable + 1 : 0;
+      previous = current;
+      if (stable >= 4) return;
+    }
+    throw new Error('聊天动画与布局未收敛');
   })()`
   )
 }

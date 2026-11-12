@@ -190,7 +190,7 @@ class Cdp {
     let stable = 0
     while (Date.now() < end) {
       const hit = await this.eval(
-        `(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)return null;el.scrollIntoView({block:'nearest'});const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;return {x,y,width:r.width,height:r.height,ok:el.contains(document.elementFromPoint(x,y))}})()`
+        `(()=>{for(const el of [...document.querySelectorAll(${JSON.stringify(selector)})].reverse()){const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;if(r.width>0&&r.height>0&&el.contains(document.elementFromPoint(x,y)))return {x,y,width:r.width,height:r.height,ok:true}}return null})()`
       )
       const key = JSON.stringify(hit)
       stable = key === prior ? stable + 1 : 0
@@ -380,7 +380,7 @@ async function stablePopover(client, visible, action, label) {
 }
 async function bounds(client) {
   await client.wait(
-    `(()=>{const panel=document.querySelector('[data-testid="todo-popover"]');if(!panel)return true;const popup=panel.closest('[role="dialog"]');if(popup?.getAnimations().some(a=>a.playState==='running'))return false;const key=JSON.stringify(panel.getBoundingClientRect().toJSON());const old=window.__todoBounds;window.__todoBounds={key,count:old?.key===key?old.count+1:0};return window.__todoBounds.count>=2})()`,
+    `(()=>{const widget=document.querySelector('[data-testid="todo-widget"]');if(widget?.getAnimations({subtree:true}).some(a=>a.playState==='running'&&Number.isFinite(a.effect?.getComputedTiming().endTime)))return false;const panel=document.querySelector('[data-testid="todo-popover"]');if(!panel)return true;const popup=panel.closest('[role="dialog"]');if(popup?.getAnimations().some(a=>a.playState==='running'))return false;const key=JSON.stringify(panel.getBoundingClientRect().toJSON());const old=window.__todoBounds;window.__todoBounds={key,count:old?.key===key?old.count+1:0};return window.__todoBounds.count>=2})()`,
     '浮层定位和动画稳定',
     5000
   )
@@ -389,21 +389,21 @@ async function bounds(client) {
     const widget=document.querySelector('[data-testid="todo-widget"]');
     const panel=document.querySelector('[data-testid="todo-popover"]');
     const input=document.querySelector('[data-work-id="${works[0]}"] textarea');
-    const close=document.querySelector('[data-testid="todo-dismiss"]');
-    const row=document.querySelector('[data-testid="todo-summary-row"]');
+    const popup=document.querySelector('[data-slot="status-capsule-popup"]');
+    const close=(popup??widget)?.querySelector('[data-testid="todo-dismiss"]');
+    const row=widget?.querySelector('[data-slot="status-capsule-shell"]');
     if(widget&&row&&close){
-      const outer=widget.getBoundingClientRect(),inner=row.getBoundingClientRect(),button=close.getBoundingClientRect();
-      if(inner.left-outer.left<6||outer.right-inner.right<6)errors.push('摘要左右缺少留白');
-      if(button.left<inner.left||button.right>=inner.right||button.top<inner.top||button.bottom>inner.bottom)errors.push('关闭按钮未内嵌于摘要背景');
-      if(['transparent','rgba(0, 0, 0, 0)'].includes(getComputedStyle(row).backgroundColor))errors.push('摘要与关闭按钮缺少共享背景');
+      const outer=widget.getBoundingClientRect(),inner=(popup??row).getBoundingClientRect(),button=close.getBoundingClientRect();
+      if(!popup&&(inner.left<outer.left||inner.right>outer.right))errors.push('胶囊超出挂件容器');
+      if(button.left<inner.left||button.right>inner.right||button.top<inner.top||button.bottom>inner.bottom)errors.push('关闭按钮未内嵌于胶囊背景');
+      if(['transparent','rgba(0, 0, 0, 0)'].includes(getComputedStyle(popup??row).backgroundColor))errors.push('摘要与关闭按钮缺少共享背景');
     }
     if(widget){const r=widget.getBoundingClientRect();if(r.left<0||r.right>innerWidth+1)errors.push('摘要越界');if(input&&r.bottom>input.getBoundingClientRect().top)errors.push('摘要挡住输入框')}
     if(panel){const r=panel.getBoundingClientRect();if(r.left<0||r.right>innerWidth+1||r.top<0)errors.push('浮层越界');if(input&&r.bottom>input.getBoundingClientRect().top)errors.push('浮层挡住输入框')}
     if(panel&&row){
       const p=panel.getBoundingClientRect(),r=row.getBoundingClientRect();
-      const max=parseFloat(getComputedStyle(document.documentElement).fontSize)*40;
-      if(Math.abs(p.left+p.right-r.left-r.right)>2)errors.push('浮层未与摘要居中');
-      if(Math.abs(p.width-Math.min(max,r.width))>3)errors.push('浮层宽度未跟随摘要或超过40rem');
+      if(p.left>r.left+1||p.right<r.right-1)errors.push('浮层未覆盖摘要宽度');
+      if(input&&popup.getBoundingClientRect().bottom>input.getBoundingClientRect().top)errors.push('胶囊操作行挡住输入框');
     }
     if(close){const r=close.getBoundingClientRect();if(!close.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)))errors.push('关闭按钮被遮挡')}
     return errors

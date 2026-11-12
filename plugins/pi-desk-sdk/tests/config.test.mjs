@@ -45,11 +45,14 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'))
 }
 
-test('配置入口仅提供最新路径与事务发布，路径查询不创建目录且拒绝越界文件名', (t) => {
+test('配置入口提供绑定存储与文件工具，路径查询不创建目录且拒绝越界文件名', (t) => {
   const { agentDir } = fixture(t)
   assert.deepEqual(Object.keys(configApi).sort(), [
+    'bindConfigStore',
     'getConfigDirectory',
     'getConfigPath',
+    'getUnifiedConfigPath',
+    'readConfigSection',
     'withConfigTransaction',
     'writeConfigTextAtomic'
   ])

@@ -4,6 +4,8 @@ import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { createJiti } from 'jiti'
+import { parse as parseYaml } from 'yaml'
+import { getUnifiedConfigPath } from '../plugins/pi-desk-sdk/src/config-store.ts'
 type HostSettingsStore =
   import('../src/server/l4_foundation/l4-host-settings-store').L4HostSettingsStore
 import { HostSettingsSchema } from '../plugins/pi-desk-sdk/src/settings.ts'
@@ -26,7 +28,7 @@ async function fixture(context: test.TestContext): Promise<HostSettingsStore> {
   await mkdir(base, { recursive: true })
   const root = await mkdtemp(join(base, 'persistent-region-'))
   context.after(() => rm(root, { recursive: true, force: true }))
-  return new L4HostSettingsStore(join(root, 'pi-desk-settings.json'), () => ({
+  return new L4HostSettingsStore(root, () => ({
     region: { locale: 'en', timeZone: 'UTC' }
   }))
 }
@@ -45,7 +47,7 @@ test('共享设置只使用config，旧文件存在或损坏均不读取和修�
     await rm(root, { recursive: true, force: true })
   })
   const legacy = join(agentDir, 'pi-desk-settings.json')
-  const target = join(agentDir, 'config', 'pi-desk-settings.json')
+  const target = getUnifiedConfigPath(agentDir)
   const content = JSON.stringify({ region: { locale: 'zh-CN', timeZone: 'Asia/Shanghai' } })
   await writeFile(legacy, content)
   const store = new L4HostSettingsStore(undefined, () => ({
@@ -58,7 +60,10 @@ test('共享设置只使用config，旧文件存在或损坏均不读取和修�
     locale: 'zh-CN',
     timeZone: 'Asia/Tokyo'
   })
-  assert.equal(JSON.parse(await readFile(target, 'utf8')).region.timeZone, 'Asia/Tokyo')
+  assert.equal(
+    parseYaml(await readFile(target, 'utf8'))['pi-desk'].settings.region.timeZone,
+    'Asia/Tokyo'
+  )
   await writeFile(legacy, '{broken')
   assert.equal(new L4HostSettingsStore().getSnapshot().region.timeZone, 'Asia/Tokyo')
   assert.equal(await readFile(legacy, 'utf8'), '{broken')
@@ -97,14 +102,14 @@ test('服务重启读取已保存值而不是新的运行环境默认值', async
   await mkdir(base, { recursive: true })
   const root = await mkdtemp(join(base, 'restart-region-'))
   context.after(() => rm(root, { recursive: true, force: true }))
-  const path = join(root, 'pi-desk-settings.json')
-  const store = new L4HostSettingsStore(path, () => ({ region: { locale: 'en', timeZone: 'UTC' } }))
+  const path = getUnifiedConfigPath(root)
+  const store = new L4HostSettingsStore(root, () => ({ region: { locale: 'en', timeZone: 'UTC' } }))
   await store.update({ locale: 'zh-CN', timeZone: 'Australia/Lord_Howe' })
-  const restarted = new L4HostSettingsStore(path, () => {
+  const restarted = new L4HostSettingsStore(root, () => {
     throw new Error('不应覆盖已有设置')
   })
   assert.deepEqual(restarted.getSnapshot(), store.getSnapshot())
-  assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), store.getSnapshot())
+  assert.deepEqual(parseYaml(await readFile(path, 'utf8'))['pi-desk'].settings, store.getSnapshot())
 })
 
 test('共享设置通过现有应用快照与推送同步多个客户端并释放订阅', async (context) => {

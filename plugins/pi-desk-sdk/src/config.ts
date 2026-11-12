@@ -1,3 +1,11 @@
+export type { PluginConfig } from './config-api.js'
+export {
+  bindConfigStore,
+  getUnifiedConfigPath,
+  readConfigSection,
+  type ConfigStoreOptions
+} from './config-store.ts'
+
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import { dirname, join, resolve } from 'node:path'
 import {

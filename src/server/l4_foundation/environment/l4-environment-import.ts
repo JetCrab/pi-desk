@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto'
+import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
+import { importL4UnifiedConfigSecrets } from './l4-environment-unified-config'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { lstat, mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname, join, posix, relative, win32 } from 'node:path'
@@ -645,9 +647,18 @@ export async function planL4EnvironmentImport(input: {
             planned.file.secretPaths
           ).length
         )
-        if (planned.file.base === 'agent' && planned.file.path === 'config/pi-desk-auth.json') {
-          if (!L4ReadAuthConfigSchema.safeParse(JSON.parse(transformed.toString('utf8'))).success)
+        if (planned.file.base === 'agent' && planned.file.path === 'config/pi-desk.yaml') {
+          const root = readL4EnvironmentStructured(transformed, 'yaml') as Record<string, unknown>
+          const host = root['pi-desk'] as Record<string, unknown> | undefined
+          const auth = host?.auth
+          if (
+            auth &&
+            typeof auth === 'object' &&
+            Object.keys(auth).length &&
+            !L4ReadAuthConfigSchema.safeParse(auth).success
+          ) {
             throw new L4EnvironmentValidationError('宿主登录配置格式无效，未修改目标环境')
+          }
         }
         hash.update(transformed)
       } else for await (const chunk of content) hash.update(chunk)
@@ -767,6 +778,7 @@ export async function applyL4EnvironmentImport(input: {
   const importedRefs: Record<string, string> = {}
   // 已认证包中的逻辑秘密仅驻留内存，按当前SecretStore合同生成目标引用。
   const archiveSecrets: Record<string, string> = {}
+  const inlineSecrets: Record<string, string> = {}
   if (selected.some(({ file }) => file.secretEntry || file.base === 'desktop')) {
     await readEnvironmentArchive({
       archivePath: input.archivePath,
@@ -774,20 +786,36 @@ export async function applyL4EnvironmentImport(input: {
       async consumeEntry(header, content): Promise<void> {
         if (selected.some(({ file }) => file.base === 'desktop' && file.entry === header.path))
           desktopContent = await readL4EnvironmentBounded(content, L4_ENVIRONMENT_DESKTOP_MAX_BYTES)
-        else if (selected.some(({ file }) => file.secretEntry === header.path))
+        else {
+          const item = selected.find(({ file }) => file.secretEntry === header.path)
+          if (!item) return
           Object.assign(
-            archiveSecrets,
+            item.file.base === 'agent' && item.file.path === 'config/pi-desk.yaml'
+              ? inlineSecrets
+              : archiveSecrets,
             JSON.parse((await readL4EnvironmentBounded(content)).toString('utf8')) as Record<
               string,
               string
             >
           )
+        }
       }
     })
   }
+  if (Object.keys(inlineSecrets).some((reference) => Object.hasOwn(archiveSecrets, reference))) {
+    throw new Error('统一配置与旧保险库凭据引用冲突')
+  }
+  // 在恢复事务取得 YAML 文件锁之前准备本机密文，不写入配置分组。
+  Object.assign(
+    importedRefs,
+    await importL4UnifiedConfigSecrets(
+      inlineSecrets,
+      bindConfigStore('pi-desk', 'environment', { agentDir: input.agentDir })
+    )
+  )
   const targets = hostFiles.map(({ target }) => target)
   const restoresAuth = plan.files.some(
-    ({ file }) => file.base === 'agent' && file.path === 'config/pi-desk-auth.json'
+    ({ file }) => file.base === 'agent' && file.path === 'config/pi-desk.yaml'
   )
   if (restoresAuth) targets.push(join(input.agentDir, 'pi-desk', 'auth-session-key'))
   if (plan.workSessions.length) targets.push(join(input.agentDir, 'pi-desk', 'work-sessions.json'))

@@ -8,6 +8,7 @@ import { useL4PluginHost } from '@client/l4_foundation/plugin-host/l4-plugin-hos
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
 import { L2CapabilityModesSettings } from '@client/l2_biz/capability-modes/l2-capability-modes-settings'
 import { L2PluginApplication } from '@client/l2_biz/plugin-host/l2-plugin-application'
+import { L2PluginFloatingLayer } from '@client/l2_biz/plugin-host/l2-plugin-floating-layer'
 import { L2PluginComposerPanel } from '@client/l2_biz/plugin-host/l2-plugin-composer-panel'
 import { L2PluginManagement } from '@client/l2_biz/plugin-host/l2-plugin-management'
 import { createL2PluginManagementBiz } from '@client/l2_biz/plugin-host/l2-plugin-management-biz'
@@ -181,29 +182,32 @@ export function L1HomePage(): React.JSX.Element {
   )
 
   return (
-    <L2Workbench
-      onTerminalReady={terminalBiz.connected}
-      onTerminalDisconnected={terminalBiz.disconnected}
-      onOpenTerminal={terminalBiz.open}
-      onOpenProjectPreviewWindow={(cwd) => {
-        window.open(buildL2ProjectPreviewHref(cwd), '_blank', 'noopener,noreferrer')
-      }}
-      renderTerminalWorkspace={renderTerminalWorkspace}
-      listPluginManagement={pluginManagementBiz.list}
-      subscribePluginManagementChanges={pluginManagementBiz.subscribeChanges}
-      onTaskCenterStart={taskCenterRuntime.start}
-      onTaskCenterDispose={taskCenterRuntime.dispose}
-      onTaskCenterReconcileWorkSessions={taskCenterRuntime.reconcileWorkSessions}
-      onTaskCenterDisconnected={taskCenterRuntime.disconnected}
-      onTaskCenterReconnected={taskCenterRuntime.reconnected}
-      renderPluginApplication={renderPluginApplication}
-      renderPluginSessionSidebarTab={renderPluginSessionSidebarTab}
-      renderPluginComposerPanel={renderPluginComposerPanel}
-      renderPluginWidgets={renderPluginWidgets}
-      renderPluginSessionHeader={renderPluginSessionHeader}
-      renderSettings={renderSettings}
-      renderTaskSummary={renderTaskSummary}
-      renderTaskMenu={renderTaskMenu}
-    />
+    <>
+      <L2PluginFloatingLayer />
+      <L2Workbench
+        onTerminalReady={terminalBiz.connected}
+        onTerminalDisconnected={terminalBiz.disconnected}
+        onOpenTerminal={terminalBiz.open}
+        onOpenProjectPreviewWindow={(cwd) => {
+          window.open(buildL2ProjectPreviewHref(cwd), '_blank', 'noopener,noreferrer')
+        }}
+        renderTerminalWorkspace={renderTerminalWorkspace}
+        listPluginManagement={pluginManagementBiz.list}
+        subscribePluginManagementChanges={pluginManagementBiz.subscribeChanges}
+        onTaskCenterStart={taskCenterRuntime.start}
+        onTaskCenterDispose={taskCenterRuntime.dispose}
+        onTaskCenterReconcileWorkSessions={taskCenterRuntime.reconcileWorkSessions}
+        onTaskCenterDisconnected={taskCenterRuntime.disconnected}
+        onTaskCenterReconnected={taskCenterRuntime.reconnected}
+        renderPluginApplication={renderPluginApplication}
+        renderPluginSessionSidebarTab={renderPluginSessionSidebarTab}
+        renderPluginComposerPanel={renderPluginComposerPanel}
+        renderPluginWidgets={renderPluginWidgets}
+        renderPluginSessionHeader={renderPluginSessionHeader}
+        renderSettings={renderSettings}
+        renderTaskSummary={renderTaskSummary}
+        renderTaskMenu={renderTaskMenu}
+      />
+    </>
   )
 }

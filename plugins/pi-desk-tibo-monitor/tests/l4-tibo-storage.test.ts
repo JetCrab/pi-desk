@@ -10,16 +10,37 @@ import {
   truncate,
   writeFile
 } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { parse as parseYaml } from 'yaml'
+import { bindConfigStore, getUnifiedConfigPath } from '@jetcrab/pi-desk-sdk/config'
 import test from 'node:test'
 import { defaultSettings, type TiboRecord, type TiboStored } from '../src/l4-tibo-protocol.js'
 import {
   defaultTiboStorePaths,
-  readStore,
+  readStore as readConfigStore,
   retainRecords,
-  writeStore
+  writeStore as writeConfigStore
 } from '../src/l4-tibo-storage.js'
+
+function store(path: string) {
+  return bindConfigStore('plugins', 'tibo-monitor', { agentDir: dirname(dirname(path)) })
+}
+
+function readStore(
+  path: string,
+  dataPath = join(dirname(dirname(path)), 'pi-desk', 'tibo-monitor.json')
+) {
+  return readConfigStore(store(path), dataPath)
+}
+
+function writeStore(
+  path: string,
+  value: TiboStored,
+  dataPath = join(dirname(dirname(path)), 'pi-desk', 'tibo-monitor.json')
+) {
+  return writeConfigStore(store(path), value, dataPath)
+}
 
 function record(id: string, publishedAt: number): TiboRecord {
   return {
@@ -33,10 +54,12 @@ function record(id: string, publishedAt: number): TiboRecord {
 }
 
 async function tempFile(context: test.TestContext): Promise<{ root: string; path: string }> {
-  const root = await mkdtemp(join(tmpdir(), 'tibo-storage-'))
+  const runs = fileURLToPath(new URL('../../../temp/run/tibo-storage/', import.meta.url))
+  await mkdir(runs, { recursive: true })
+  const root = await mkdtemp(join(runs, 'config-and-data-'))
   context.after(() => rm(root, { recursive: true, force: true }))
   await mkdir(join(root, 'config'), { recursive: true })
-  return { root, path: join(root, 'config', 'pi-desk-tibo-monitor.json') }
+  return { root, path: getUnifiedConfigPath(root) }
 }
 
 test('只读写最新分离文件且旧混合配置保持原字节', async (context) => {
@@ -57,13 +80,16 @@ test('只读写最新分离文件且旧混合配置保持原字节', async (cont
   const oldContent = '{旧混合配置不应解析}'
   await writeFile(legacy, oldContent)
   await writeFile(older, oldContent)
-  const { path, dataPath } = defaultTiboStorePaths()
+  const { dataPath } = defaultTiboStorePaths()
+  const path = getUnifiedConfigPath(root)
   assert.deepEqual(await readStore(path, dataPath), { settings: defaultSettings(), records: [] })
   await writeStore(path, original, dataPath)
-  assert.equal(path, join(root, 'config', 'pi-desk-tibo-monitor.json'))
+  assert.equal(path, join(root, 'config', 'pi-desk.yaml'))
   assert.equal(dataPath, join(root, 'pi-desk', 'tibo-monitor.json'))
   assert.deepEqual(await readStore(path, dataPath), original)
-  assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { settings: original.settings })
+  assert.deepEqual(parseYaml(await readFile(path, 'utf8')).plugins['tibo-monitor'], {
+    settings: original.settings
+  })
   const data = JSON.parse(await readFile(dataPath, 'utf8'))
   assert.equal(data.settings, undefined)
   assert.deepEqual(data.records, original.records)
@@ -78,10 +104,11 @@ test('只读写最新分离文件且旧混合配置保持原字节', async (cont
 test('最新设置和业务文件拒绝混合字段且读取不改写', async (context) => {
   const { root, path } = await tempFile(context)
   const mixed = JSON.stringify({ settings: defaultSettings(), records: [] })
-  await writeFile(path, mixed)
+  await store(path).set({ settings: defaultSettings(), records: [] })
+  const before = await readFile(path, 'utf8')
   await assert.rejects(readStore(path), /Unrecognized key/)
-  assert.equal(await readFile(path, 'utf8'), mixed)
-  await writeFile(path, JSON.stringify({ settings: defaultSettings() }))
+  assert.equal(await readFile(path, 'utf8'), before)
+  await store(path).set({ settings: defaultSettings() })
   const dataPath = join(root, 'pi-desk', 'tibo-monitor.json')
   await mkdir(join(root, 'pi-desk'), { recursive: true })
   await writeFile(dataPath, mixed)
@@ -143,9 +170,9 @@ test('写入使用临时文件替换，成功后不遗留临时文件且文件�
 })
 
 test('读取实际超过64MB的文件时在JSON解析前拒绝', async (context) => {
-  const { path } = await tempFile(context)
-  await writeFile(path, '')
-  await truncate(path, 64 * 1024 * 1024 + 1)
+  const { root, path } = await tempFile(context)
+  await writeStore(path, { settings: defaultSettings(), records: [] })
+  await truncate(join(root, 'pi-desk', 'tibo-monitor.json'), 64 * 1024 * 1024 + 1)
 
   await assert.rejects(readStore(path), /超过容量限制/)
 })

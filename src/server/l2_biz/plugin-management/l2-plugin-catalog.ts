@@ -228,8 +228,8 @@ export class L2PluginCatalog {
     }
   }
 
-  replaceSettings(downloadSource: L2PluginDownloadSource): void {
-    setL4PiPluginDownloadSource(downloadSource)
+  async replaceSettings(downloadSource: L2PluginDownloadSource): Promise<void> {
+    await setL4PiPluginDownloadSource(downloadSource)
   }
 }
 

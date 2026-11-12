@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { memoryConfig } from '../../pi-desk-sdk/tests/fixtures/config.js'
 import type { GlobalPluginMethodHandler, PiDeskPluginFacade } from '@jetcrab/pi-desk-sdk/entry'
 import definition from '../src/pi-desk.js'
 
@@ -9,6 +10,7 @@ function facade(registrations: {
 }): PiDeskPluginFacade {
   return {
     name: 'usage',
+    config: memoryConfig(),
     host: {
       events: {
         on(): () => void {

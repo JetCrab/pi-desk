@@ -542,17 +542,20 @@ export class SubagentRuntime {
       )
     }
 
-    this.refreshConfigs()
+    await this.refreshConfigs()
     if (this.configs.size === 0) this.registerTools()
   }
 
-  refreshConfigs(): void {
+  async refreshConfigs(): Promise<void> {
     const parent = this.activeParent
     if (!this.sessionActive || !parent) return
+    const settings = await this.plugin.config.get()
+    if (!this.sessionActive || this.activeParent !== parent) return
     const discovery = discoverSubagentConfigs({
       cwd: parent.cwd,
       projectTrusted: parent.projectTrusted,
-      agentDir: this.agentDir
+      agentDir: this.agentDir,
+      settings
     })
     const previous = [...this.configs.values()].map(({ name, description }) => [name, description])
     this.configs = discovery.configs
@@ -849,7 +852,7 @@ export class SubagentRuntime {
     ctx: ExtensionContext
   ) {
     const parent = this.requireParent(ctx)
-    this.refreshConfigs()
+    await this.refreshConfigs()
     const config = this.resolveAgentConfig(agentType)
     if (!config) throw new Error(`当前会话没有可用的 ${agentType} Agent`)
     const record = await this.startRecord(
@@ -877,7 +880,7 @@ export class SubagentRuntime {
 
   private async resumeAgent(agentId: string, prompt: string, ctx: ExtensionContext) {
     const parent = this.requireParent(ctx)
-    this.refreshConfigs()
+    await this.refreshConfigs()
     const record = this.resolveRecord(agentId)
     if (record.status === 'running') throw new Error(`Agent ${record.taskId} 仍在运行`)
     if (!existsSync(record.sessionFile)) {
@@ -1049,7 +1052,7 @@ export class SubagentRuntime {
     signal: AbortSignal | undefined
   ): Promise<ResearchWorkerOutcome> {
     const parent = this.activeParent
-    this.refreshConfigs()
+    await this.refreshConfigs()
     const research = this.resolveAgentConfig('research')
     if (!this.sessionActive || this.stopping || !parent) throw new Error('当前父会话已变化')
     if (!research) throw new Error('当前会话没有可用的 research Agent')
@@ -1592,7 +1595,7 @@ export function registerSubagentExtension(pi: ExtensionAPI): void {
   })
   pi.on('session_tree', async (_event, ctx) => (await runtime()).startSession(ctx))
   pi.on('before_agent_start', async () => {
-    if (runtimePromise) (await runtimePromise).refreshConfigs()
+    if (runtimePromise) await (await runtimePromise).refreshConfigs()
   })
   pi.on('session_shutdown', async () => {
     if (runtimePromise) await (await runtimePromise).shutdown()

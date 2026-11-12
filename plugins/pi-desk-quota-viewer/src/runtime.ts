@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { PiDeskPluginFacade, PluginJsonObject } from '@jetcrab/pi-desk-sdk/entry'
 import { PluginMethodError } from '@jetcrab/pi-desk-sdk/session'
-import type { SecretStore } from '@jetcrab/pi-desk-sdk/secrets'
 import { z } from 'zod'
 import { QuotaHttpError } from './adapters/http.js'
 import { quotaAdapters } from './adapters/registry.js'
@@ -17,7 +16,6 @@ import type {
 } from './protocol.js'
 
 import {
-  defaultQuotaViewerConfigPath,
   MAX_SOURCES,
   normalizeHiddenItems,
   PLUGIN_IDENTIFIER_PATTERN,
@@ -27,8 +25,6 @@ import {
   type StoredConfig,
   type StoredSource
 } from './l2-quota-config.js'
-
-export { defaultQuotaViewerConfigPath } from './l2-quota-config.js'
 
 const saveSourceSchema = z
   .object({
@@ -85,8 +81,6 @@ interface RuntimeLogger {
 export interface QuotaViewerRuntimeOptions {
   adapters?: readonly QuotaAdapter[]
   fetch?: typeof fetch
-  configPath?: string
-  secretStore?: SecretStore
   logger?: RuntimeLogger
 }
 
@@ -158,8 +152,6 @@ export class QuotaViewerRuntime {
   private readonly adapters: readonly QuotaAdapter[]
   private readonly registry: ReadonlyMap<string, QuotaAdapter>
   private readonly fetchImpl: typeof fetch
-  private readonly configPath: string
-  private readonly secretStore?: SecretStore
   private readonly logger: RuntimeLogger
   private readonly states = new Map<string, SourceRuntimeState>()
   private readonly tasks = new Set<Promise<void>>()
@@ -170,7 +162,7 @@ export class QuotaViewerRuntime {
   private disposed = false
 
   constructor(
-    private readonly plugin: Pick<PiDeskPluginFacade, 'pushGlobal'>,
+    private readonly plugin: Pick<PiDeskPluginFacade, 'pushGlobal' | 'config'>,
     options: QuotaViewerRuntimeOptions = {}
   ) {
     this.adapters = options.adapters ?? quotaAdapters
@@ -181,8 +173,6 @@ export class QuotaViewerRuntime {
       throw new Error('额度 Adapter 名称重复')
     }
     this.fetchImpl = options.fetch ?? globalThis.fetch
-    this.configPath = options.configPath ?? defaultQuotaViewerConfigPath()
-    this.secretStore = options.secretStore
     this.logger = options.logger ?? console
   }
 
@@ -221,7 +211,7 @@ export class QuotaViewerRuntime {
     }
 
     const nextConfig = await updateStoredConfig(
-      this.configPath,
+      this.plugin.config,
       (current) => {
         let nextSources = current.sources
         if (parsed.sources !== undefined) {
@@ -283,8 +273,7 @@ export class QuotaViewerRuntime {
           }
         })
       },
-      this.registry,
-      this.secretStore
+      this.registry
     )
     this.config = nextConfig
     this.configLoaded = true
@@ -326,7 +315,7 @@ export class QuotaViewerRuntime {
   private async ensureConfig(): Promise<void> {
     if (this.configLoaded) return
     try {
-      this.config = await readStoredConfig(this.configPath, this.registry, this.secretStore)
+      this.config = await readStoredConfig(this.plugin.config, this.registry)
       this.configError = null
     } catch (error) {
       this.configError = errorMessage(error)

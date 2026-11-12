@@ -5,7 +5,18 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { readRemoteDebugConfig } from '../src/config.js'
-import { RemoteDebugSettingsStore } from '../src/l4-remote-debug-settings.js'
+import { RemoteDebugSettingsStore as Store } from '../src/l4-remote-debug-settings.js'
+import { bindConfigStore, getUnifiedConfigPath } from '@jetcrab/pi-desk-sdk/config'
+
+function config(agentDir?: string) {
+  return bindConfigStore('plugins', 'remote-debug', { agentDir })
+}
+
+class RemoteDebugSettingsStore extends Store {
+  constructor(options: Omit<ConstructorParameters<typeof Store>[0], 'config'>) {
+    super({ ...options, config: config(options.agentDir) })
+  }
+}
 import type { RemoteDebugProfileDraft } from '../src/l4-remote-debug-contract.js'
 
 const root = resolve(
@@ -90,24 +101,24 @@ test('最新范围与登记独立读写且旧混合文件不读取不修改不�
   const oldContent = '{旧混合文件不应解析}'
   await writeFile(legacy, oldContent)
   assert.deepEqual((await store.get()).registrations, [])
-  const path = join(agentDir, 'config', 'pi-desk-remote-debug-ports.json')
+  const path = getUnifiedConfigPath(agentDir)
   const dataPath = join(agentDir, 'pi-desk', 'remote-debug-registrations.json')
   await mkdir(join(agentDir, 'config'), { recursive: true })
   await mkdir(join(agentDir, 'pi-desk'), { recursive: true })
-  await writeFile(path, JSON.stringify(ranges))
+  await config(agentDir).set(ranges)
   await writeFile(dataPath, JSON.stringify({ registrations: [registration] }))
   const initial = await store.get()
   assert.deepEqual(initial.registrations, [registration])
-  assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), ranges)
+  assert.deepEqual(await config(agentDir).get(), ranges)
   assert.deepEqual(JSON.parse(await readFile(dataPath, 'utf8')), { registrations: [registration] })
   assert.equal(await readFile(legacy, 'utf8'), oldContent)
   const saved = await store.saveRanges({ ...ranges, localRange: { start: 44000, end: 44999 } })
   assert.deepEqual(saved.registrations, [registration])
-  assert.equal(JSON.parse(await readFile(path, 'utf8')).registrations, undefined)
+  assert.equal((await config(agentDir).get()).registrations, undefined)
   assert.deepEqual((await store.get()).registrations, [registration])
   const current = await readFile(path, 'utf8')
-  const mixed = JSON.stringify({ ...ranges, registrations: [registration] })
-  await writeFile(path, mixed)
+  await config(agentDir).set({ ...ranges, registrations: [registration] })
+  const mixed = await readFile(path, 'utf8')
   await assert.rejects(store.get(), /Unrecognized key/)
   assert.equal(await readFile(path, 'utf8'), mixed)
   await writeFile(path, current)
@@ -295,7 +306,7 @@ test('非法范围与路由不修改现有文件，损坏登记不被当作空�
   )
   assert.equal(await readFile(join(cwd, '.pi', 'remote_debug.yaml'), 'utf8'), original)
   await mkdir(join(agentDir, 'config'), { recursive: true })
-  const registry = join(agentDir, 'config', 'pi-desk-remote-debug-ports.json')
+  const registry = getUnifiedConfigPath(agentDir)
   await writeFile(registry, '{broken')
   await assert.rejects(store.get())
   await assert.rejects(store.syncProject(cwd))

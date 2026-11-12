@@ -41,11 +41,11 @@ export async function listL2IgnoredPiDirectories(
   })
 }
 
-export function replaceL2PiDirectoryIgnore(
+export async function replaceL2PiDirectoryIgnore(
   cwd: string,
   ignored: boolean
-): L2PiDirectoryIgnoreReplaceResponse {
-  replaceL4PiDirectoryIgnore(cwd, ignored)
+): Promise<L2PiDirectoryIgnoreReplaceResponse> {
+  await replaceL4PiDirectoryIgnore(cwd, ignored)
   return L2PiDirectoryIgnoreReplaceResponseSchema.parse({})
 }
 

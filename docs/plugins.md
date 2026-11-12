@@ -72,7 +72,42 @@ Node `plugin.setState()` 则整体替换自身全局状态；Browser 通过 `hos
 
 ### 配置与凭据（Node）
 
-原生 Pi 扩展和 Pi Desk Node 业务都可直接使用 `/config`、`/secrets`，不需要常驻 Global Host。这两个子入口仅供 Node 使用，不从 SDK 根入口导出，也不在 Browser Entry 或 View 中导入。
+Node Entry 的 `setup(plugin)` 和原生扩展的 `bindSessionPlugin()` 均提供已绑定插件身份的 `plugin.config`。插件不传文件路径或密钥，不重复传插件名。配置统一保存在 `<AgentDir>/config/pi-desk.yaml`：宿主使用 `pi-desk.<功能分组>`，插件使用 `plugins.<plugin.name>`。原生绑定可独立运行，不要求常驻 Global Host；Browser 通过插件 Method 操作，不直接访问配置文件。
+
+```ts
+// 在 setup(plugin) 内，或取得 bindSessionPlugin() 返回的 plugin 后调用。
+await plugin.config.set(
+  { servers: [{ host: '192.0.2.1', username: 'example', password: 'example-password' }] },
+  ['/servers/*/host', '/servers/*/username', '/servers/*/password']
+)
+const conf = await plugin.config.get(['/servers/*/host', '/servers/*/username', '/servers/*/password'])
+
+// 也可以单独处理一个 JSON 值，再原样存取配置。
+const encrypted = await plugin.config.encrypt({ token: 'example-token' })
+await plugin.config.set({ credentials: encrypted })
+const stored = await plugin.config.get()
+if (typeof stored.credentials !== 'string') throw new Error('credentials 必须是密文字符串')
+const credentials = await plugin.config.decrypt(stored.credentials)
+```
+
+| `plugin.config` 方法 | 含义 |
+| --- | --- |
+| `encrypt(value)` | 加密任意 JSON 值，返回 `enc:v1:...` 字符串；不写配置。 |
+| `decrypt(value)` | 解密一个密文字符串，恢复原 JSON 类型；不写配置。 |
+| `set(conf, encryptPaths?)` | `conf` 为可嵌套的 JSON 字典；加密指定路径后整体替换自身分组，不影响其他分组。 |
+| `get(decryptPaths?)` | 返回自身配置字典，未配置为 `{}`；只解密指定路径上的密文，普通值保留原样。 |
+
+四个方法均返回 Promise。不传路径时原样存取，不猜测敏感字段；路径数组不持久化。路径使用非根 JSON Pointer，`~0`、`~1` 分别表示 `~`、`/`；`*` 匹配当前层全部对象成员或数组元素，支持 `/groups/*/servers/*/password`。`/servers/0/password` 选择首项，`/servers` 加密整个数组。不存在的路径跳过；重复命中只处理一次；同时选择父子节点报错。路径操作不修改传入字典，读取解密不回写文件。
+
+密文直接存于 YAML，不使用 UUID 引用。AES-256-GCM 的随机数、认证标签和 JSON 类型封装由 SDK 管理；主密钥默认由系统钥匙串保存，插件不接触密钥。无系统钥匙串的部署可由宿主设置 `PI_DESK_SECRET_KEY_FILE`，指向原始 32 字节外部密钥。系统密钥不可用、密文认证失败或已有密文而主密钥丢失时明确失败，不降级到明文。直接复制 YAML 不会同时复制系统密钥；跨机器使用宿主加密环境归档恢复。
+
+共享文件写入使用跨进程锁和原子发布，保留其他分组及其注释；完整文件上限 8 MiB。业务 Schema、默认值、同插件读改写串行和生效时机仍归插件。`set()` 是整个分组替换，不是字段合并；写前路径处理失败不会发布部分配置。Owner 失效后，宿主拒绝新的配置操作及尚未发布的写入。
+
+新版用户级配置只读取新 YAML。旧全局文件和 `credentials.enc` 保留，不自动迁移、删除或回退读取。Pi 原生 `settings.json`、`models.json`、`auth.json`、`mcp.json` 及插件项目配置仍保持各自位置；会话、缓存和历史数据不并入 YAML。同步升级宿主、SDK 和使用新接口的插件；旧宿主不会仅因升级插件就获得 `plugin.config`。
+
+#### 现有项目配置与旧凭据接口
+
+`/config` 的文件级工具和 `/secrets` 仍供现有项目配置使用，均为 Node-only；新版插件用户级设置使用上面的 `plugin.config`。
 
 ```ts
 import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
@@ -82,15 +117,15 @@ const configPath = getConfigPath('example-plugin.json')
 const secrets = createSecretStore()
 ```
 
-用户级自有配置位于 `<AgentDir>/config/`；默认 AgentDir 由 Pi 的 `getAgentDir()` 决定，支持 `PI_CODING_AGENT_DIR`。Pi 原生 `settings.json`、`models.json`、`auth.json`、`mcp.json` 保持原格式和位置，不接管其凭据加密。项目配置仍由插件定义。
+默认 AgentDir 由 Pi 的 `getAgentDir()` 决定，支持 `PI_CODING_AGENT_DIR`。旧文件级接口返回 `<AgentDir>/config/` 下的位置，不负责统一 YAML 分组。项目配置仍由插件定义。
 
-新版只读取当前路径和格式，启动及读取配置时不会搬迁旧文件、回退读取旧路径、删除旧字段，或把明文凭据自动改成引用。升级前须另行将需要保留的旧配置准备为当前格式；不要依赖首次启动完成转换。
+文件级接口不执行配置迁移，不删除旧字段，也不在读取时把明文凭据改成引用。不要依赖首次启动完成转换。
 
-| `/config` 方法                                                         | 用途与边界                                                                                                         |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `getConfigDirectory(agentDir?)` / `getConfigPath(filename, agentDir?)` | 返回目录或单个文件路径，不创建目录；`filename` 只能是文件名，不能含子目录。                                        |
-| `withConfigTransaction<T>(targetPath, operation)`                      | 跨进程串行执行同一目标的异步读改写，返回回调结果 `Promise<T>`；不自动回滚。                                        |
-| `writeConfigTextAtomic(path, content)`                                 | 同步持久化 UTF-8 文本，原子发布并回读验证；自身不重复加锁。                                                        |
+| `/config` 方法                                                         | 用途与边界                                                                  |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `getConfigDirectory(agentDir?)` / `getConfigPath(filename, agentDir?)` | 返回目录或单个文件路径，不创建目录；`filename` 只能是文件名，不能含子目录。 |
+| `withConfigTransaction<T>(targetPath, operation)`                      | 跨进程串行执行同一目标的异步读改写，返回回调结果 `Promise<T>`；不自动回滚。 |
+| `writeConfigTextAtomic(path, content)`                                 | 同步持久化 UTF-8 文本，原子发布并回读验证；自身不重复加锁。                 |
 
 配置 Schema、读取和显式保存由插件维护；路径函数不执行这些工作。配置读改写放在 `withConfigTransaction()` 回调内，使用 `writeConfigTextAtomic()` 写入；不能在回调内嵌套获取同一目标锁。事务和原子写入拒绝符号链接及非普通配置文件。敏感值在显式保存时通过 `SecretStore.put()` 创建引用，读取配置只解析已保存的引用，不转换或回写文件。
 
@@ -230,6 +265,31 @@ const [open, setOpen] = useState(false)
 ```
 
 `side` 默认 `bottom`，`align` 默认 `start`，`className` 用于自身浮层的布局。浮层维持指定方向并限制可用高度；长内容自行使用 `PluginScroll`。调用方关闭或卸载时清理自己的计时器、Observer 和订阅。此组件需要支持该导出的宿主 Host Runtime，不能只更新插件依赖后向旧宿主请求。
+
+### 状态胶囊
+
+Lazy View 可从 `@jetcrab/pi-desk-sdk/react/base` 使用 `PluginStatusCapsule`，在输入区挂件中展示单行状态与向上展开的详情：
+
+```tsx
+const [open, setOpen] = useState(false)
+
+<PluginStatusCapsule
+  visible={running}
+  open={open}
+  onOpenChange={setOpen}
+  summary="正在检查文件"
+  meta="2 项"
+>
+  <div style={{ padding: '1rem' }}>当前检查的详细信息</div>
+</PluginStatusCapsule>
+```
+
+- `visible` 控制摘要显隐；保持组件挂载并更新该值，出现／退场才会平滑调整占位。初次挂载直接使用当前状态，隐藏后不占高度，隐藏或卸载不停止业务任务。调用方在隐藏时清理自己的 `open` 与悬停固定等展示状态。
+- `open/onOpenChange` 控制非模态详情，回调沿用 Base UI Popover 的事件详情；支持 Escape、外部点击和触控。默认不抢输入焦点，只有焦点进入详情后关闭才返回摘要。详情经 Portal 向上展开，受视口限高，不增加聊天布局高度；长内容可使用 `PluginScroll`。
+- `summary` 是摘要文字；`icon/meta/actions` 是可选的纯展示内容及操作，展开后会在浮层底部复用。不要在这些内容中挂载独立业务运行态。`triggerProps` 用于摘要按钮的可访问名称等原生辅助属性，不接管点击开合；`openOnHover` 可启用 500ms 悬停预览，点击固定等业务交互由调用方通过 `onOpenChange` 管理。
+- 形态过渡约 200ms、摘要文字切换约 150ms，遵循减少动态效果设置。组件只控制自身尺寸，不调用聊天滚动、不增加任务状态或网络接口。
+
+此组件需要同时更新 SDK 和宿主 Host Runtime；只更新插件依赖不能让旧宿主获得该导出。现有 Widget 的自然高度、排序和 mount/dispose 合同不变，普通挂件不会被自动转换为胶囊。
 
 ### 会话标题右侧条目
 

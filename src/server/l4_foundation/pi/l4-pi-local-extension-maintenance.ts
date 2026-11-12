@@ -101,7 +101,7 @@ export async function removeL4PiLocalExtension(input: {
       preferences.disabled.includes(identity) ||
       identity in preferences.registries ||
       identity in preferences.updateTags
-    if (hasPreference) removeL4PiPluginPreference(source, agentDir)
+    if (hasPreference) await removeL4PiPluginPreference(source, agentDir)
 
     if (removals.length || removedReferences || hasPreference) {
       console.info('[Pi Desk][LocalExtension] 已移除本地扩展入口与加载声明', {

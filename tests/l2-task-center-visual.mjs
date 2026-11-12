@@ -386,7 +386,7 @@ async function main() {
     await clickText(client, '视觉验收项目')
     await waitFor(
       client,
-      `document.body.innerText.includes('1 个任务执行中')`,
+      `document.querySelector('[data-slot="status-capsule-trigger"]')?.textContent.includes('启动 Pi Desk 开发服务')`,
       '输入框上方任务摘要'
     )
     await evaluate(

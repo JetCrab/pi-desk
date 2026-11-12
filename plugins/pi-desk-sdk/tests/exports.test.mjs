@@ -122,6 +122,8 @@ test('React 子入口暴露 Hooks、ErrorBoundary 与通用插件组件', () => 
   assert.equal(typeof react.PluginKeyValueItem, 'function')
   assert.equal(typeof react.PluginLoadingState, 'function')
   assert.equal(typeof react.PluginSpinner, 'function')
+  assert.equal(typeof react.PluginStatusCapsule, 'function')
+  assert.equal(reactBase.PluginStatusCapsule, react.PluginStatusCapsule)
   assert.equal(typeof react.PluginSelect, 'function')
   assert.equal(reactBase.PluginSelect, react.PluginSelect)
   assert.equal('PluginSelectField' in react, false)

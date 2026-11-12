@@ -19,6 +19,9 @@ import {
   stopE2eServerTree
 } from './l4-e2e-server-runtime.mjs'
 
+import { taskCapsuleFixture, checkTaskCapsule } from './l2-task-capsule-fixture.mjs'
+
+const capsuleOnly = process.argv.includes('--capsule')
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const taskId = `composer-resize-${process.pid}`
 const runRoot = join(projectRoot, 'temp/run/chat-composer-resize', taskId)
@@ -59,7 +62,7 @@ async function fixture() {
         {
           type: 'text',
           text: Array.from(
-            { length: turn === 5 ? 2 : 12 },
+            { length: capsuleOnly && !process.argv.includes('--short') ? 30 : turn === 5 ? 2 : 12 },
             (_, index) =>
               `第 ${index + 1} 段检查记录。图片移除后，当前阅读的消息应保持稳定，不出现先下移再弹回的跳动。`
           ).join('\n\n')
@@ -125,10 +128,10 @@ const installProbe = `(() => {
       composer: document.querySelector('textarea').closest('form').getBoundingClientRect().height
     };
   };
-  window.__probeFrames = () => {
+  window.__probeFrames = (count = 24) => {
     const samples = [window.__measureChat()];
     window.__frameSamples = (async () => {
-      for (let frame = 0; frame < 24; frame++) {
+      for (let frame = 0; frame < count; frame++) {
         // rAF 早于布局和 ResizeObserver；在本帧绘制后的任务中采样可见位置。
         await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
         samples.push(window.__measureChat());
@@ -234,6 +237,7 @@ async function main() {
     client = await createCdpPage(cdpPort)
     await client.send('Page.addScriptToEvaluateOnNewDocument', {
       source: `
+      ${capsuleOnly ? taskCapsuleFixture : ''}
       window.__scrollLog = [];
       const original = console.info;
       console.info = (...args) => {
@@ -269,6 +273,10 @@ async function main() {
       )
       await evaluate(client, installProbe)
       await settle(client)
+      if (capsuleOnly) {
+        await checkTaskCapsule({ client, viewport, settle, results, runRoot })
+        continue
+      }
       await pasteImages(client, 1)
       const initial = await evaluate(client, 'window.__measureChat()')
       assert.ok(
@@ -357,7 +365,7 @@ async function main() {
       )
     }
     success = true
-    console.log('图片增删、历史阅读和输入框高度回归通过。')
+    console.log(capsuleOnly ? '任务胶囊专项回归通过。' : '图片增删、历史阅读和输入框高度回归通过。')
   } finally {
     await writeFile(join(runRoot, 'measurements.json'), JSON.stringify(results, null, 2))
     await writeFile(join(runRoot, 'server.log'), serverOutput)

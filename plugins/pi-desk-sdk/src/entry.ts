@@ -1,3 +1,5 @@
+import type { PluginConfig } from './config-api.js'
+export type { PluginConfig } from './config-api.js'
 import type { CapabilityDeclarations } from './capabilities.js'
 import type { HostSettings } from './settings.js'
 import type { HostEvents, NodeHostEventMap } from './events.js'
@@ -173,6 +175,7 @@ export interface PluginMessageDeclaration {
 
 export interface PiDeskPluginFacade {
   readonly name: string
+  readonly config: PluginConfig
   readonly host: PiDeskPluginHost
   readonly notifications: PiDeskPluginNotifications
   setState(state: PluginJsonObject | null): void
