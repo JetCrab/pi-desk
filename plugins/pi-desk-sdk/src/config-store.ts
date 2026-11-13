@@ -2,7 +2,7 @@ import { dirname } from 'node:path'
 import { parseDocument } from 'yaml'
 import { z } from 'zod'
 import type { PluginConfig } from './config-api.js'
-import { getConfigPath } from './config.ts'
+import { getConfigPath, getProjectConfigPath } from './config.ts'
 import {
   ensureStorageDirectory,
   readStorageFile,
@@ -18,7 +18,7 @@ import {
   loadConfigKey,
   type ConfigKeyOptions
 } from './config-encryption.ts'
-import { normalizePluginIdentifier, type PluginJsonObject } from './shared.ts'
+import { normalizePluginIdentifier, type PluginJsonObject, type PluginJsonValue } from './shared.ts'
 
 const dictionary = z.record(z.string(), z.json())
 const maxConfigBytes = 8 * 1024 * 1024
@@ -51,6 +51,22 @@ function readDocument(path: string): {
   return { previous, document, root }
 }
 
+function isObject(value: PluginJsonValue | undefined): value is PluginJsonObject {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function mergeConfig(base: PluginJsonObject, override: PluginJsonObject): PluginJsonObject {
+  return {
+    ...base,
+    ...Object.fromEntries(
+      Object.entries(override).map(([key, value]) => {
+        const previous = Object.hasOwn(base, key) ? base[key] : undefined
+        return [key, isObject(previous) && isObject(value) ? mergeConfig(previous, value) : value]
+      })
+    )
+  }
+}
+
 /** 宿主同步启动读取普通配置；插件业务使用四接口，不从这里解密。 */
 export function readConfigSection(
   namespace: 'pi-desk' | 'plugins',
@@ -68,10 +84,11 @@ export function bindConfigStore(
   options: ConfigStoreOptions = {}
 ): PluginConfig {
   name = normalizePluginIdentifier(name, 'pluginName')
-  const path = getUnifiedConfigPath(options.agentDir)
+  const globalPath = getUnifiedConfigPath(options.agentDir)
   const assertActive = (): void => options.assertActive?.()
 
   async function access<T>(
+    path: string,
     action: (
       state: ReturnType<typeof readDocument>,
       key: (required: boolean) => Promise<Buffer>,
@@ -79,6 +96,7 @@ export function bindConfigStore(
     ) => Promise<T>
   ): Promise<T> {
     assertActive()
+    ensureStorageDirectory(dirname(globalPath))
     ensureStorageDirectory(dirname(path))
     return withStorageLock(path, async (assertLocked) => {
       const assertCurrent = (): void => {
@@ -92,12 +110,26 @@ export function bindConfigStore(
         return await action(
           state,
           async (required) => {
-            loadedKey ??= await loadConfigKey(
-              path,
-              required || hasEncryptedConfigValue(state.root),
-              options,
-              assertCurrent
-            )
+            const loadKey = async (assertKeyLocked: () => void): Promise<Buffer> => {
+              const assertKeyCurrent = (): void => {
+                assertKeyLocked()
+                assertCurrent()
+              }
+              assertKeyCurrent()
+              return loadConfigKey(
+                globalPath,
+                required ||
+                  hasEncryptedConfigValue(state.root) ||
+                  (path !== globalPath && hasEncryptedConfigValue(readDocument(globalPath).root)),
+                options,
+                assertKeyCurrent
+              )
+            }
+            // 不同项目共享主密钥；首次创建也必须按全局身份跨进程序列化。
+            loadedKey ??=
+              path === globalPath
+                ? await loadKey(assertCurrent)
+                : await withStorageLock(globalPath, loadKey)
             assertCurrent()
             return loadedKey
           },
@@ -111,15 +143,17 @@ export function bindConfigStore(
 
   return {
     async encrypt(value): Promise<string> {
-      return access(async (_state, key) => encryptConfigValue(value, await key(false)))
+      return access(globalPath, async (_state, key) => encryptConfigValue(value, await key(false)))
     },
     async decrypt(value): Promise<ReturnType<typeof decryptConfigValue>> {
-      return access(async (_state, key) => decryptConfigValue(value, await key(true)))
+      return access(globalPath, async (_state, key) => decryptConfigValue(value, await key(true)))
     },
-    async set(conf, encryptPaths = []): Promise<void> {
-      const next = dictionary.parse(conf)
-      const locations = configValueLocations(next, encryptPaths)
-      await access(async (state, key, assertCurrent) => {
+    async set(conf, setOptions = {}): Promise<void> {
+      assertActive()
+      const path = setOptions.cwd === undefined ? globalPath : getProjectConfigPath(setOptions.cwd)
+      const next = structuredClone(dictionary.parse(conf))
+      const locations = configValueLocations(next, setOptions.encryptPaths ?? [])
+      await access(path, async (state, key, assertCurrent) => {
         for (const location of locations) {
           setConfigLocation(
             location,
@@ -133,18 +167,34 @@ export function bindConfigStore(
         writeStorageFile(path, content, state.previous)
       })
     },
-    async get(decryptPaths = []): Promise<PluginJsonObject> {
-      return access(async ({ root }, key) => {
-        const section = dictionary.parse(root[namespace] ?? {})
-        const conf = dictionary.parse(section[name] ?? {})
-        for (const location of configValueLocations(conf, decryptPaths)) {
-          const value = getConfigLocation(location)
-          if (isEncryptedConfigValue(value)) {
-            setConfigLocation(location, decryptConfigValue(value, await key(true)))
+    async get(getOptions = {}): Promise<PluginJsonObject> {
+      assertActive()
+      const projectPath =
+        getOptions.cwd === undefined ? undefined : getProjectConfigPath(getOptions.cwd)
+      const paths =
+        getOptions.inherit === false
+          ? [projectPath ?? globalPath]
+          : projectPath === undefined
+            ? [globalPath]
+            : [globalPath, projectPath]
+      let result = structuredClone(
+        dictionary.parse(getOptions.inherit === false ? {} : (getOptions.defaults ?? {}))
+      )
+      for (const path of paths) {
+        const layer = await access(path, async ({ root }, key) => {
+          const section = dictionary.parse(root[namespace] ?? {})
+          const conf = dictionary.parse(section[name] ?? {})
+          for (const location of configValueLocations(conf, getOptions.decryptPaths ?? [])) {
+            const value = getConfigLocation(location)
+            if (isEncryptedConfigValue(value)) {
+              setConfigLocation(location, decryptConfigValue(value, await key(true)))
+            }
           }
-        }
-        return conf
-      })
+          return conf
+        })
+        result = mergeConfig(result, layer)
+      }
+      return result
     }
   }
 }

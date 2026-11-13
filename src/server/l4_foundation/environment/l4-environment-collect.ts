@@ -1,6 +1,9 @@
 import { createReadStream } from 'node:fs'
 import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
-import { exportL4UnifiedConfig } from './l4-environment-unified-config'
+import {
+  exportL4UnifiedConfig,
+  isL4EnvironmentUnifiedConfig
+} from './l4-environment-unified-config'
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises'
 import { globL4Environment } from './l4-environment-glob'
 import { basename, dirname, join, relative, resolve, win32, sep } from 'node:path'
@@ -206,7 +209,7 @@ export async function collectL4Environment(input: {
     assertEnvironmentEntryPath(file.path)
     if (file.format !== 'binary' && file.bytes > MAX_CONFIG_BYTES)
       throw new Error('配置文件超过32MiB限制')
-    if (file.path === 'config/pi-desk.yaml')
+    if (file.base === 'agent' && file.path === 'config/pi-desk.yaml')
       file.warnings.push('统一配置若含登录保护设置，恢复后需要使用备份中的登录密码。')
     metadataBytes += Buffer.byteLength(JSON.stringify(file))
     if (
@@ -785,7 +788,7 @@ export async function collectL4Environment(input: {
       )
   }
   for (const file of files) {
-    if (file.base === 'agent' && file.path === 'config/pi-desk.yaml') {
+    if (isL4EnvironmentUnifiedConfig(file)) {
       const portable = await exportL4UnifiedConfig(
         await load(file.sourcePath),
         bindConfigStore('pi-desk', 'environment', { agentDir })

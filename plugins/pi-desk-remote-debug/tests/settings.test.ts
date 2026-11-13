@@ -4,9 +4,10 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { readRemoteDebugConfig } from '../src/config.js'
+import { readRemoteDebugConfig as readProjectConfig, remoteDebugConfigPath } from '../src/config.js'
 import { RemoteDebugSettingsStore as Store } from '../src/l4-remote-debug-settings.js'
 import { bindConfigStore, getUnifiedConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import { main as configCli } from '../src/l4-remote-debug-config-cli.js'
 
 function config(agentDir?: string) {
   return bindConfigStore('plugins', 'remote-debug', { agentDir })
@@ -74,11 +75,25 @@ function draft(overrides: Partial<RemoteDebugProfileDraft> = {}): RemoteDebugPro
   }
 }
 
+function readRemoteDebugConfig(cwd: string) {
+  return readProjectConfig(cwd, config(join(root, 'reading-agent')))
+}
+
 async function existingConfig(cwd: string, entryPort: number, publicPort: number): Promise<void> {
-  await mkdir(join(cwd, '.pi'), { recursive: true })
-  await writeFile(
-    join(cwd, '.pi', 'remote_debug.yaml'),
-    `version: 1\nprofiles:\n  web:\n    command: pnpm dev\n    entryPort: ${entryPort}\n    publicPort: ${publicPort}\n    routes:\n      /api: ${entryPort - 1}\n      /ws: ${entryPort - 1}\n`
+  await mkdir(cwd, { recursive: true })
+  await config(join(root, 'writing-agent')).set(
+    {
+      version: 1,
+      profiles: {
+        web: {
+          command: 'pnpm dev',
+          entryPort,
+          publicPort,
+          routes: { '/api': entryPort - 1, '/ws': entryPort - 1 }
+        }
+      }
+    },
+    { cwd }
   )
 }
 
@@ -131,7 +146,7 @@ test('最新范围与登记独立读写且旧混合文件不读取不修改不�
 test('已有项目在空全局表补登记，去重路由端口且不修改项目文件', async () => {
   const { store, cwd } = await fixture()
   await existingConfig(cwd, 6240, 11004)
-  const path = join(cwd, '.pi', 'remote_debug.yaml')
+  const path = remoteDebugConfigPath(cwd)
   const before = await readFile(path, 'utf8')
   await store.syncProject(cwd)
   await store.syncProject(cwd)
@@ -205,6 +220,28 @@ test('新建配置按范围递增，显式端口先预留，同批自动分配�
   )
 })
 
+test('项目范围覆盖用于实际自动端口分配且不固化全局范围', async () => {
+  const { store, cwd, agentDir } = await fixture()
+  const shared = config(agentDir)
+  const globalRanges = {
+    localRange: { start: 44000, end: 44010 },
+    publicRange: { start: 12000, end: 12010 }
+  }
+  await store.saveRanges(globalRanges)
+  const projectRanges = {
+    localRange: { start: 44005 },
+    publicRange: { start: 12005 }
+  }
+  await shared.set(projectRanges, { cwd })
+  const saved = await store.saveProject({ cwd, profiles: [draft()] })
+  assert.equal(saved.profiles.web?.entryPort, 44005)
+  assert.equal(saved.profiles.web?.publicPort, 12005)
+  const own = await shared.get({ cwd, inherit: false })
+  assert.deepEqual(own.localRange, projectRanges.localRange)
+  assert.deepEqual(own.publicRange, projectRanges.publicRange)
+  assert.deepEqual(await shared.get({ inherit: false }), globalRanges)
+})
+
 test('端口登记是软规则，手动重复和范围外配置均允许', async () => {
   const { store, cwd, directory } = await fixture()
   const second = join(directory, '项目二')
@@ -226,10 +263,7 @@ test('更换设备只迁项目即可重建登记，不依赖旧全局路径', as
   await existingConfig(cwd, 43726, 11006)
   const moved = join(directory, '新目录', '项目')
   await mkdir(join(moved, '.pi'), { recursive: true })
-  await writeFile(
-    join(moved, '.pi', 'remote_debug.yaml'),
-    await readFile(join(cwd, '.pi', 'remote_debug.yaml'))
-  )
+  await writeFile(remoteDebugConfigPath(moved), await readFile(remoteDebugConfigPath(cwd)))
   const fresh = new RemoteDebugSettingsStore({
     agentDir: join(directory, 'new-device-agent'),
     readTunnelServer: () => readFixtureServer(desktopConfigPath),
@@ -268,12 +302,12 @@ test('范围末尾复用未登记空位，耗尽不越界且不损坏项目', as
   const config = await store.saveProject({ cwd: second, profiles: [draft()] })
   assert.equal(config.profiles.web?.entryPort, 44000)
   assert.equal(config.profiles.web?.publicPort, 12000)
-  const original = await readFile(join(second, '.pi', 'remote_debug.yaml'), 'utf8')
+  const original = await readFile(remoteDebugConfigPath(second), 'utf8')
   await assert.rejects(
     store.saveProject({ cwd: second, profiles: [draft(), draft({ name: 'another' })] }),
     /端口|范围/
   )
-  assert.equal(await readFile(join(second, '.pi', 'remote_debug.yaml'), 'utf8'), original)
+  assert.equal(await readFile(remoteDebugConfigPath(second), 'utf8'), original)
 })
 
 test('移除登记保留项目文件，再次发现恢复该条登记', async () => {
@@ -294,7 +328,7 @@ test('移除登记保留项目文件，再次发现恢复该条登记', async ()
 test('非法范围与路由不修改现有文件，损坏登记不被当作空表覆盖', async () => {
   const { store, cwd, agentDir } = await fixture()
   await existingConfig(cwd, 43000, 11001)
-  const original = await readFile(join(cwd, '.pi', 'remote_debug.yaml'), 'utf8')
+  const original = await readFile(remoteDebugConfigPath(cwd), 'utf8')
   await assert.rejects(
     store.saveRanges({
       localRange: { start: 44000, end: 43000 },
@@ -304,13 +338,106 @@ test('非法范围与路由不修改现有文件，损坏登记不被当作空�
   await assert.rejects(
     store.saveProject({ cwd, profiles: [draft({ routes: [{ path: '/', targetPort: 44000 }] })] })
   )
-  assert.equal(await readFile(join(cwd, '.pi', 'remote_debug.yaml'), 'utf8'), original)
+  assert.equal(await readFile(remoteDebugConfigPath(cwd), 'utf8'), original)
   await mkdir(join(agentDir, 'config'), { recursive: true })
   const registry = getUnifiedConfigPath(agentDir)
   await writeFile(registry, '{broken')
   await assert.rejects(store.get())
   await assert.rejects(store.syncProject(cwd))
   assert.equal(await readFile(registry, 'utf8'), '{broken')
+})
+
+test('范围按字段继承SDK默认值，读取不固化补全字段', async () => {
+  const { store, agentDir } = await fixture()
+  const shared = config(agentDir)
+  await shared.set({ localRange: { start: 43500 } })
+  const settings = await store.get()
+  assert.deepEqual(settings.localRange, { start: 43500, end: 43999 })
+  assert.deepEqual(settings.publicRange, { start: 11001, end: 11099 })
+  assert.deepEqual(await shared.get({ inherit: false }), { localRange: { start: 43500 } })
+})
+
+test('全局范围保存保留同组服务，项目表保存保留本层范围且不复制继承值', async () => {
+  const { store, cwd, agentDir } = await fixture()
+  const shared = config(agentDir)
+  const inherited = { command: 'pnpm inherited', entryPort: 45000, publicPort: 13000 }
+  await shared.set({ version: 1, profiles: { inherited } })
+  await shared.set({ localRange: { start: 46000, end: 46010 } }, { cwd })
+  const other = bindConfigStore('plugins', 'other-plugin', { agentDir })
+  await other.set({ keep: true }, { cwd })
+  await store.saveProject({ cwd, profiles: [draft({ entryPort: 46001, publicPort: 14001 })] })
+  const own = await shared.get({ cwd, inherit: false })
+  assert.deepEqual(Object.keys(own.profiles as object), ['web'])
+  assert.deepEqual(own.localRange, { start: 46000, end: 46010 })
+  assert.equal(own.publicRange, undefined)
+  assert.deepEqual(await other.get({ cwd, inherit: false }), { keep: true })
+  assert.deepEqual(await shared.get({ inherit: false }), { version: 1, profiles: { inherited } })
+  await store.syncProject(cwd)
+  assert.deepEqual(await shared.get({ inherit: false }), { version: 1, profiles: { inherited } })
+  const ranges = {
+    localRange: { start: 47000, end: 47010 },
+    publicRange: { start: 15000, end: 15010 }
+  }
+  await store.saveRanges(ranges)
+  assert.deepEqual(await shared.get({ inherit: false }), {
+    version: 1,
+    profiles: { inherited },
+    ...ranges
+  })
+  assert.deepEqual(await shared.get({ cwd, inherit: false }), own)
+})
+
+test('配置CLI只保存项目显式启动项及全局显式范围，保留共享文件分组', async (context) => {
+  const { cwd, agentDir, directory } = await fixture()
+  const shared = config(agentDir)
+  const inherited = { command: 'pnpm inherited', entryPort: 45000, publicPort: 13000 }
+  await shared.set({ version: 1, profiles: { inherited } })
+  await shared.set({ localRange: { start: 46000, end: 46010 } }, { cwd })
+  const other = bindConfigStore('plugins', 'other-plugin', { agentDir })
+  await other.set({ keep: 'project' }, { cwd })
+  const draftPath = join(directory, 'profiles.json')
+  await writeFile(
+    draftPath,
+    JSON.stringify({ profiles: [draft({ entryPort: 46001, publicPort: 14001 })] })
+  )
+  const keys = [
+    'PI_CODING_AGENT_DIR',
+    'PI_DESK_DESKTOP_EXECUTABLE',
+    'PI_DESK_DESKTOP_CONFIG'
+  ] as const
+  const previous = keys.map((key) => process.env[key])
+  process.env.PI_CODING_AGENT_DIR = agentDir
+  delete process.env.PI_DESK_DESKTOP_EXECUTABLE
+  delete process.env.PI_DESK_DESKTOP_CONFIG
+  context.mock.method(process.stdout, 'write', () => true)
+  try {
+    await configCli(['save', cwd, draftPath])
+    const own = await shared.get({ cwd, inherit: false })
+    assert.deepEqual(Object.keys(own.profiles as object), ['web'])
+    assert.equal(own.publicRange, undefined)
+    assert.deepEqual(own.localRange, { start: 46000, end: 46010 })
+    assert.deepEqual(await other.get({ cwd, inherit: false }), { keep: 'project' })
+    await configCli(['sync', cwd])
+    assert.deepEqual(await shared.get({ cwd, inherit: false }), own)
+    assert.deepEqual(await shared.get({ inherit: false }), { version: 1, profiles: { inherited } })
+    const ranges = {
+      localRange: { start: 47000, end: 47010 },
+      publicRange: { start: 15000, end: 15010 }
+    }
+    const rangesPath = join(directory, 'ranges.json')
+    await writeFile(rangesPath, JSON.stringify(ranges))
+    await configCli(['ranges', rangesPath])
+    assert.deepEqual(await shared.get({ inherit: false }), {
+      version: 1,
+      profiles: { inherited },
+      ...ranges
+    })
+  } finally {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key]
+      else process.env[key] = previous[index]
+    })
+  }
 })
 
 test('真实本机监听被自动分配跳过且不影响已有服务', async () => {

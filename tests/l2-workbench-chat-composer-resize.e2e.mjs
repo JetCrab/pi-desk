@@ -77,10 +77,19 @@ async function fixture() {
     })
   }
   session.appendSessionInfo('输入框尺寸变化检查')
+  const workSessions = [{ workId, cwd, sessionId: session.getSessionId() }]
+  if (capsuleOnly) {
+    const other = SessionManager.create(cwd)
+    for (const entry of session.getBranch()) {
+      if (entry.type === 'message') other.appendMessage(entry.message)
+    }
+    other.appendSessionInfo('胶囊切换对照')
+    workSessions.push({ workId: 'capsule-other', cwd, sessionId: other.getSessionId() })
+  }
   await writeFile(
     join(agentDir, 'pi-desk/work-sessions.json'),
     JSON.stringify({
-      workSessions: [{ workId, cwd, sessionId: session.getSessionId() }],
+      workSessions,
       pinnedCount: 0
     })
   )

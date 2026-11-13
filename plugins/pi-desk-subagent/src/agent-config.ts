@@ -99,7 +99,7 @@ function parseThinking(value: unknown, name: SubagentName): ThinkingLevel | unde
   return thinking as ThinkingLevel
 }
 
-function findProjectConfigDir(cwd: string): string | undefined {
+function findProjectResourceDirectory(cwd: string): string | undefined {
   let current = cwd
   while (true) {
     const candidate = join(current, CONFIG_DIR_NAME)
@@ -123,16 +123,8 @@ function parseModelSelection(
   return { model: selection }
 }
 
-function readAgentSetting(
-  settingsPath: string | undefined,
-  name: SubagentName,
-  supplied?: AgentSettings
-): AgentSetting | undefined {
-  const settings =
-    supplied ??
-    (settingsPath && existsSync(settingsPath)
-      ? (JSON.parse(readFileSync(settingsPath, 'utf8')) as AgentSettings)
-      : {})
+function readAgentSetting(settings: AgentSettings, name: SubagentName): AgentSetting | undefined {
+  const settingsPath = 'plugins.subagent'
   if (settings.agents === undefined) return undefined
   if (!settings.agents || typeof settings.agents !== 'object' || Array.isArray(settings.agents)) {
     throw new Error(`Agent settings must be an object: ${settingsPath}`)
@@ -225,17 +217,12 @@ export function subagentSettingsPath(agentDir = getAgentDir()): string {
   return getUnifiedConfigPath(agentDir)
 }
 
-function projectSubagentSettingsPath(projectConfigDir: string): string {
-  return join(projectConfigDir, 'config', 'pi-desk-subagent.json')
-}
-
 export function discoverSubagentConfigs(
   options: DiscoverSubagentConfigsOptions
 ): DiscoverSubagentConfigsResult {
   const agentDir = options.agentDir ?? getAgentDir()
-  const projectConfigDir = options.projectTrusted ? findProjectConfigDir(options.cwd) : undefined
-  const projectSettingsPath = projectConfigDir
-    ? projectSubagentSettingsPath(projectConfigDir)
+  const projectResourceDirectory = options.projectTrusted
+    ? findProjectResourceDirectory(options.cwd)
     : undefined
   const diagnostics: string[] = []
   const selectedFiles = new Map<string, AgentFile>()
@@ -248,8 +235,11 @@ export function discoverSubagentConfigs(
   for (const file of listAgentFiles(join(agentDir, 'agents'), diagnostics).values()) {
     selectedFiles.set(file.name, file)
   }
-  if (projectConfigDir) {
-    for (const file of listAgentFiles(join(projectConfigDir, 'agents'), diagnostics).values()) {
+  if (projectResourceDirectory) {
+    for (const file of listAgentFiles(
+      join(projectResourceDirectory, 'agents'),
+      diagnostics
+    ).values()) {
       selectedFiles.set(file.name, file)
     }
   }
@@ -261,10 +251,9 @@ export function discoverSubagentConfigs(
     if (!file) continue
 
     try {
-      const globalSetting = readAgentSetting(undefined, name, options.settings)
-      const projectSetting = readAgentSetting(projectSettingsPath, name)
-      if (projectSetting?.disabled ?? globalSetting?.disabled ?? false) continue
-      const modelSelection = projectSetting?.modelSelection ?? globalSetting?.modelSelection
+      const setting = readAgentSetting(options.settings ?? {}, name)
+      if (setting?.disabled) continue
+      const modelSelection = setting?.modelSelection
       configs.set(
         name,
         loadConfig({
@@ -295,7 +284,7 @@ export function listGlobalSubagentSettings(
     ...listAgentFiles(join(agentDir, 'agents'), []).keys()
   ])
   return [...names].sort().map((name) => {
-    const setting = readAgentSetting(undefined, name, settings)
+    const setting = readAgentSetting(settings, name)
     return {
       name,
       model: setting?.modelSelection?.model ?? '',

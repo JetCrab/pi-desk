@@ -297,6 +297,23 @@ test('运行中的父会话刷新可用类型并在下次启动读取最新模�
   runtime.sessions[0]?.complete('配置已刷新')
   await nextTick()
   assert.equal(runtime.sessions[0]?.disposed, true)
+
+  await config.set({ agents: { explore: { model: 'my/project-model' } } }, { cwd })
+  const trustedContext = { ...ctx, isProjectTrusted: () => true } as ExtensionToolContext
+  await runtime.startSession(trustedContext)
+  await tools
+    .get('agent')!
+    .execute(
+      'project-call',
+      { subagent_type: 'explore', prompt: '读取项目覆盖', description: '项目配置验证' },
+      undefined,
+      undefined,
+      trustedContext
+    )
+  assert.equal(runtime.childConfigs[1]?.model, 'my/project-model')
+  assert.equal(runtime.childConfigs[1]?.thinking, 'high')
+  runtime.sessions[1]?.complete('项目配置已应用')
+  await nextTick()
 })
 
 function abortedAssistant(errorMessage: string): AssistantMessage {

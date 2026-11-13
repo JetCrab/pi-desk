@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { parse } from 'yaml'
+import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
 import test from 'node:test'
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import type { SessionPluginMethodHandler } from '@jetcrab/pi-desk-sdk/session'
@@ -24,9 +26,8 @@ test('模型工具与浏览器方法维持执行语义，底部状态随工作�
   const project = join(testRoot, `project-${Date.now()}`)
   const poolRoot = join(testRoot, 'home')
   await mkdir(join(project, '.pi', 'workspace', 'commands'), { recursive: true })
-  await writeFile(
-    join(project, '.pi', 'workspace.yml'),
-    `schema: pi.workspace/v3
+  await bindConfigStore('plugins', 'workspace', { agentDir: join(testRoot, 'agent') }).set(
+    parse(`schema: pi.workspace/v3
 definitions:
   demo:
     description: Demo workspace
@@ -44,8 +45,8 @@ definitions:
         from: [occupied]
         onSuccess: available
         handler: .pi/workspace/commands/verify.mjs
-`,
-    'utf8'
+`),
+    { cwd: project }
   )
   await writeFile(
     join(project, '.pi', 'workspace', 'provision.mjs'),
@@ -75,6 +76,8 @@ definitions:
   let branch: typeof entries | undefined
   const statuses = new Map<string, string | undefined>()
   const originalHome = process.env.HOME
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR
+  process.env.PI_CODING_AGENT_DIR = join(testRoot, 'agent')
   const originalProfile = process.env.USERPROFILE
   let context: ExtensionContext | undefined
   process.env.HOME = poolRoot
@@ -302,6 +305,8 @@ definitions:
     releaseCommand?.()
     if (sessionShutdown && context) await sessionShutdown({}, context)
     process.env.HOME = originalHome
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir
     process.env.USERPROFILE = originalProfile
     await rm(testRoot, { recursive: true, force: true })
   }

@@ -3,6 +3,8 @@ import { test } from 'node:test'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
+import { parse } from 'yaml'
 import {
   DefaultResourceLoader,
   SettingsManager,
@@ -13,6 +15,22 @@ import {
 import { COMMAND_RESULT_SCHEMA, type Exec } from '../src/core.js'
 import workspaceExtension from '../src/index.js'
 import { WorkspaceRuntime } from '../src/runtime.js'
+
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR
+test.before(() => {
+  process.env.PI_CODING_AGENT_DIR = resolve('../../temp/pi/workspace/extension-agent')
+})
+test.after(async () => {
+  const agentDir = process.env.PI_CODING_AGENT_DIR!
+  if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+  else process.env.PI_CODING_AGENT_DIR = originalAgentDir
+  await rm(agentDir, { recursive: true, force: true })
+})
+
+async function writeConfig(cwd: string, source: string): Promise<void> {
+  await mkdir(cwd, { recursive: true })
+  await bindConfigStore('plugins', 'workspace').set(parse(source), { cwd })
+}
 
 const config = `schema: pi.workspace/v3
 definitions:
@@ -75,7 +93,7 @@ test('未配置的新项目通过包声明加载无参数 init-workspace 提示�
         await readFile(join(packageRoot, 'prompts/init-workspace.md'), 'utf8')
       ).trim()
     )
-    assert.equal(existsSync(join(project, '.pi/workspace.yml')), false)
+    assert.equal(existsSync(join(project, '.pi/pi-desk.yaml')), false)
     assert.deepEqual(await readdir(project), [])
   } finally {
     await rm(root, { recursive: true, force: true })
@@ -121,17 +139,23 @@ test('Agent 侧仅在受信任有效配置下暴露 Workspace 能力', async () 
   const root = resolve(process.cwd(), '../../temp/pi/workspace/test-agent-registration')
   await rm(root, { recursive: true, force: true })
   try {
+    await bindConfigStore('plugins', 'workspace').set(parse(config))
     const cases = [
       { name: 'missing', trusted: true, content: undefined },
+      { name: 'other-plugin', trusted: true, content: undefined },
       { name: 'invalid', trusted: true, content: 'schema: invalid\ndefinitions: {}\n' },
       { name: 'untrusted', trusted: false, content: config }
     ]
 
     for (const item of cases) {
       const project = join(root, item.name)
+      await mkdir(project, { recursive: true })
+      if (item.name === 'other-plugin') {
+        await bindConfigStore('plugins', 'other-plugin').set({ enabled: true }, { cwd: project })
+      }
       if (item.content !== undefined) {
         await mkdir(join(project, '.pi'), { recursive: true })
-        await writeFile(join(project, '.pi', 'workspace.yml'), item.content)
+        await writeConfig(project, item.content)
       }
 
       const harness = createAgentHarness()
@@ -159,7 +183,7 @@ test('Agent 侧仅在受信任有效配置下暴露 Workspace 能力', async () 
 
     const project = join(root, 'valid')
     await mkdir(join(project, '.pi'), { recursive: true })
-    await writeFile(join(project, '.pi', 'workspace.yml'), config)
+    await writeConfig(project, config)
 
     const harness = createAgentHarness()
     workspaceExtension(harness.pi)
@@ -201,7 +225,7 @@ test('新会话上下文只说明 acquire，active 后才注入精确目录和 c
   await rm(root, { recursive: true, force: true })
   try {
     await mkdir(join(root, '.pi', 'workspace', 'commands'), { recursive: true })
-    await writeFile(join(root, '.pi', 'workspace.yml'), config)
+    await writeConfig(root, config)
     await writeFile(
       join(root, '.pi', 'workspace', 'provision.mjs'),
       'export default async () => ({ success: true })\n'
@@ -227,6 +251,7 @@ test('新会话上下文只说明 acquire，active 后才注入精确目录和 c
       return { stdout: '', stderr: '', code: 0 }
     }
     const runtime = new WorkspaceRuntime({
+      config: bindConfigStore('plugins', 'workspace'),
       exec,
       runnerPath: join(root, 'runner.mjs'),
       poolRoot: join(root, 'pool'),

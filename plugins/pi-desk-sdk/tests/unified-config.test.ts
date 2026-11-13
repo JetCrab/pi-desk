@@ -69,7 +69,7 @@ test('多层通配处理用户名、IP、密码、数组及转义字段', async 
     '/tokens/*',
     '/a~1b/~0key'
   ]
-  await config.set(input, paths)
+  await config.set(input, { encryptPaths: paths })
   assert.deepEqual(input, before)
   const bytes = await readFile(path)
   for (const plaintext of ['192.0.2.1', 'fixture-user', 'fixture-password', 'first-token']) {
@@ -77,9 +77,9 @@ test('多层通配处理用户名、IP、密码、数组及转义字段', async 
   }
   const stored = await config.get()
   assert.notDeepEqual(stored, input)
-  assert.deepEqual(await config.get(paths), input)
+  assert.deepEqual(await config.get({ decryptPaths: paths }), input)
   assert.deepEqual(await readFile(path), bytes)
-  assert.deepEqual(await config.get(paths), input)
+  assert.deepEqual(await config.get({ decryptPaths: paths }), input)
 })
 
 test('手工加解密保留 JSON 类型并与路径方式组合', async (t) => {
@@ -89,31 +89,36 @@ test('手工加解密保留 JSON 类型并与路径方式组合', async (t) => {
     assert.deepEqual(await config.decrypt(encrypted), value)
     await config.set({ value: encrypted, plain: 'readable' })
     assert.deepEqual(await config.get(), { value: encrypted, plain: 'readable' })
-    assert.deepEqual(await config.get(['/value', '/plain']), { value, plain: 'readable' })
+    assert.deepEqual(await config.get({ decryptPaths: ['/value', '/plain'] }), {
+      value,
+      plain: 'readable'
+    })
   }
 })
 
 test('重复通配不重复加密，父子重叠、无效路径和认证失败不覆盖配置', async (t) => {
   const { config, path, options } = await fixture(t)
-  await config.set({ servers: [{ token: 'fixture-token' }] }, [
-    '/servers/*/token',
-    '/servers/0/token'
-  ])
-  assert.deepEqual(await config.get(['/servers/*/token']), {
+  await config.set(
+    { servers: [{ token: 'fixture-token' }] },
+    {
+      encryptPaths: ['/servers/*/token', '/servers/0/token']
+    }
+  )
+  assert.deepEqual(await config.get({ decryptPaths: ['/servers/*/token'] }), {
     servers: [{ token: 'fixture-token' }]
   })
   const before = await readFile(path)
   await assert.rejects(
-    config.set({ servers: [{ token: 'new' }] }, ['/servers', '/servers/*/token']),
+    config.set({ servers: [{ token: 'new' }] }, { encryptPaths: ['/servers', '/servers/*/token'] }),
     /父节点/u
   )
-  await assert.rejects(config.set({}, ['not-a-pointer']), /JSON Pointer/u)
-  await assert.rejects(config.set({}, ['/invalid~2escape']), /JSON Pointer/u)
+  await assert.rejects(config.set({}, { encryptPaths: ['not-a-pointer'] }), /JSON Pointer/u)
+  await assert.rejects(config.set({}, { encryptPaths: ['/invalid~2escape'] }), /JSON Pointer/u)
   const wrong = bindConfigStore('plugins', 'example-plugin', {
     ...options,
     keyProvider: async () => randomBytes(32)
   })
-  await assert.rejects(wrong.get(['/servers/*/token']), /认证失败/u)
+  await assert.rejects(wrong.get({ decryptPaths: ['/servers/*/token'] }), /认证失败/u)
   await assert.rejects(config.decrypt('enc:v1:invalid'), /认证失败/u)
   assert.deepEqual(await readFile(path), before)
 })
@@ -162,7 +167,7 @@ test('锁外修改与密文损坏不得造成覆盖或静默解密', async (t) =
       return key
     }
   })
-  const pending = pendingStore.set({ value: 'pending' }, ['/value'])
+  const pending = pendingStore.set({ value: 'pending' }, { encryptPaths: ['/value'] })
   const rejected = assert.rejects(pending, /已变化/u)
   await waiting
   const changed = 'plugins:\n  example-plugin:\n    value: external\n'

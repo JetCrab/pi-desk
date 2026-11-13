@@ -51,6 +51,7 @@ test('配置入口提供绑定存储与文件工具，路径查询不创建目�
     'bindConfigStore',
     'getConfigDirectory',
     'getConfigPath',
+    'getProjectConfigPath',
     'getUnifiedConfigPath',
     'readConfigSection',
     'withConfigTransaction',

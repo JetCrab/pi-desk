@@ -389,21 +389,26 @@ async function bounds(client) {
     const widget=document.querySelector('[data-testid="todo-widget"]');
     const panel=document.querySelector('[data-testid="todo-popover"]');
     const input=document.querySelector('[data-work-id="${works[0]}"] textarea');
-    const popup=document.querySelector('[data-slot="status-capsule-popup"]');
-    const close=(popup??widget)?.querySelector('[data-testid="todo-dismiss"]');
-    const row=widget?.querySelector('[data-slot="status-capsule-shell"]');
+    const close=document.querySelector('[data-testid="todo-dismiss"]');
+    const row=document.querySelector('[data-testid="todo-summary-row"]');
     if(widget&&row&&close){
-      const outer=widget.getBoundingClientRect(),inner=(popup??row).getBoundingClientRect(),button=close.getBoundingClientRect();
-      if(!popup&&(inner.left<outer.left||inner.right>outer.right))errors.push('胶囊超出挂件容器');
-      if(button.left<inner.left||button.right>inner.right||button.top<inner.top||button.bottom>inner.bottom)errors.push('关闭按钮未内嵌于胶囊背景');
-      if(['transparent','rgba(0, 0, 0, 0)'].includes(getComputedStyle(popup??row).backgroundColor))errors.push('摘要与关闭按钮缺少共享背景');
+      const outer=widget.getBoundingClientRect(),inner=row.getBoundingClientRect(),button=close.getBoundingClientRect();
+      if(inner.left-outer.left<6||outer.right-inner.right<6)errors.push('摘要左右缺少留白');
+      if(button.left<inner.left||button.right>=inner.right||button.top<inner.top||button.bottom>inner.bottom)errors.push('关闭按钮未内嵌于摘要背景');
+      if(['transparent','rgba(0, 0, 0, 0)'].includes(getComputedStyle(row).backgroundColor))errors.push('摘要与关闭按钮缺少共享背景');
+      if(widget.querySelector('[data-slot="status-capsule"]'))errors.push('Todo仍使用胶囊');
     }
     if(widget){const r=widget.getBoundingClientRect();if(r.left<0||r.right>innerWidth+1)errors.push('摘要越界');if(input&&r.bottom>input.getBoundingClientRect().top)errors.push('摘要挡住输入框')}
     if(panel){const r=panel.getBoundingClientRect();if(r.left<0||r.right>innerWidth+1||r.top<0)errors.push('浮层越界');if(input&&r.bottom>input.getBoundingClientRect().top)errors.push('浮层挡住输入框')}
     if(panel&&row){
       const p=panel.getBoundingClientRect(),r=row.getBoundingClientRect();
-      if(p.left>r.left+1||p.right<r.right-1)errors.push('浮层未覆盖摘要宽度');
-      if(input&&popup.getBoundingClientRect().bottom>input.getBoundingClientRect().top)errors.push('胶囊操作行挡住输入框');
+      const max=parseFloat(getComputedStyle(document.documentElement).fontSize)*40;
+      if(Math.abs(p.left+p.right-r.left-r.right)>2)errors.push('浮层未与摘要居中');
+      if(Math.abs(p.width-Math.min(max,r.width))>3)errors.push('浮层宽度未跟随摘要或超过40rem');
+      const warning=panel.querySelector('[data-status="3"] .pi-desk-todo-icon');
+      const success=panel.querySelector('[data-status="2"] .pi-desk-todo-icon');
+      if(warning&&getComputedStyle(warning).color===getComputedStyle(panel).color)errors.push('警告状态色缺失');
+      if(success&&getComputedStyle(success).color===getComputedStyle(panel).color)errors.push('完成状态色缺失');
     }
     if(close){const r=close.getBoundingClientRect();if(!close.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)))errors.push('关闭按钮被遮挡')}
     return errors
@@ -689,8 +694,32 @@ try {
       '切换另一个会话'
     )
     await first.wait(`!document.querySelector('[data-testid="todo-widget"]')`, '其他会话不继承Todo')
+    await first.eval(`(() => {
+      window.__todoRestoreAnimations = [];
+      const inspect = event => {
+        if(event.target.closest?.('[data-testid="todo-widget"]') &&
+           (event.type === 'animationstart' || ['height','width','opacity','transform'].includes(event.propertyName))) {
+          window.__todoRestoreAnimations.push(event.type);
+        }
+      };
+      document.addEventListener('transitionrun', inspect, true);
+      document.addEventListener('animationstart', inspect, true);
+      window.__finishTodoRestore = () => {
+        document.removeEventListener('transitionrun', inspect, true);
+        document.removeEventListener('animationstart', inspect, true);
+        return window.__todoRestoreAnimations;
+      };
+    })()`)
     await first.click(`[data-testid="work-session-row-${works[0]}"]`)
     await first.wait(`document.querySelector('[data-testid="todo-widget"]')`, '切回保留内存')
+    await first.eval(
+      'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))'
+    )
+    assert.deepEqual(
+      await first.eval('window.__finishTodoRestore()'),
+      [],
+      'Todo切回会话出现入场动效'
+    )
     const previousSource = await source(first)
     const response = await fetch(url + 'api/work-sessions/branch', {
       method: 'POST',

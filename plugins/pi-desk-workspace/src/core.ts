@@ -15,6 +15,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { isAlias, parseDocument } from 'yaml'
+import { getProjectConfigPath, type PluginConfig } from '@jetcrab/pi-desk-sdk/config'
 import type {
   JsonValue,
   ParameterItemSchema,
@@ -26,7 +27,6 @@ import type {
   WorkspaceStatus
 } from './contract.js'
 
-export const CONFIG_RELATIVE_PATH = join('.pi', 'workspace.yml')
 export const CONFIG_SCHEMA = 'pi.workspace/v3'
 export const WORKSPACE_METADATA_DIRECTORY = '.pi-workspace'
 export const MARKER_FILE = join(WORKSPACE_METADATA_DIRECTORY, 'workspace.json')
@@ -473,7 +473,11 @@ export function parseConfig(source: string, filePath: string): WorkspaceConfig {
     fail(filePath, '不允许多文档')
   }
 
-  const root = requireObject(document.toJS(), filePath)
+  return validateWorkspaceConfig(document.toJS(), filePath)
+}
+
+export function validateWorkspaceConfig(value: unknown, filePath: string): WorkspaceConfig {
+  const root = requireObject(value, filePath)
   onlyKeys(root, ['schema', 'definitions'], filePath)
   if (root.schema !== CONFIG_SCHEMA) {
     fail(`${filePath}.schema`, `仅支持 ${CONFIG_SCHEMA}`)
@@ -493,20 +497,27 @@ export function parseConfig(source: string, filePath: string): WorkspaceConfig {
   return { path: filePath, definitions }
 }
 
-export async function loadConfig(projectRoot: string): Promise<WorkspaceConfig | undefined> {
-  const path = join(projectRoot, CONFIG_RELATIVE_PATH)
-  if (!existsSync(path)) return undefined
-  return parseConfig(await readFile(path, 'utf8'), path)
+export async function loadConfig(
+  projectRoot: string,
+  config: PluginConfig
+): Promise<WorkspaceConfig | undefined> {
+  const own = await config.get({ cwd: projectRoot, inherit: false })
+  if (Object.keys(own).length === 0) return undefined
+  return validateWorkspaceConfig(
+    await config.get({ cwd: projectRoot }),
+    getProjectConfigPath(projectRoot)
+  )
 }
 
-export async function loadConfigForSession(projectRoot: string): Promise<{
+export async function loadConfigForSession(
+  projectRoot: string,
+  config: PluginConfig
+): Promise<{
   config?: WorkspaceConfig
   warning?: string
 }> {
-  const path = join(projectRoot, CONFIG_RELATIVE_PATH)
-  if (!existsSync(path)) return {}
   try {
-    return { config: await loadConfig(projectRoot) }
+    return { config: await loadConfig(projectRoot, config) }
   } catch (error) {
     return { warning: `Workspace 配置无效：${(error as Error).message}` }
   }

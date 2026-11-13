@@ -5,7 +5,7 @@
     "url": "git+https://github.com/JetCrab/pi-desk.git",
     "directory": "plugins/pi-desk-sdk"
   },
-  "version": "1.1.19",
+  "version": "1.1.20",
   "license": "Apache-2.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -89,7 +89,7 @@
     "typecheck:isolated": "tsc -p tsconfig.json --noEmit --isolatedModules",
     "prepack": "pnpm run build",
     "test": "pnpm run build && node --test tests/*.test.mjs && pnpm run test:config",
-    "test:config": "node --import tsx --test tests/unified-config.test.ts"
+    "test:config": "node --import tsx --test tests/unified-config.test.ts tests/project-config.test.ts tests/project-config-boundaries.test.ts"
   },
   "dependencies": {
     "@napi-rs/keyring": "2.1.2",

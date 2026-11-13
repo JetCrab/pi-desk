@@ -59,8 +59,21 @@ test('宿主自动绑定配置身份，Native 共用分组，旧 Owner 不可写
     assert.deepEqual(await runtime.invoke('config-b', 'get', {}), { value: 'second' })
     const native = bindSessionPlugin({} as ExtensionAPI, 'config-b')
     assert.deepEqual(await native.config.get(), { value: 'second' })
+    const cwd = join(root, 'project')
+    await mkdir(cwd)
+    await stores['config-b']!.set({ value: 'project', nested: { project: true } }, { cwd })
+    assert.deepEqual(
+      await native.config.get({ cwd, defaults: { fallback: true, nested: { default: true } } }),
+      { value: 'project', fallback: true, nested: { default: true, project: true } }
+    )
+    assert.deepEqual(await runtime.invoke('config-b', 'get', {}), { value: 'second' })
     await runtime.replaceSource('config-a', null)
     await assert.rejects(stores['config-a']!.set({ value: 'stale' }), /active|失效|不可用/i)
+    await assert.rejects(
+      stores['config-a']!.set({ value: 'stale-project' }, { cwd }),
+      /active|失效|不可用/i
+    )
+    await assert.rejects(stores['config-a']!.get({ cwd }), /active|失效|不可用/i)
     assert.deepEqual(await runtime.invoke('config-b', 'get', {}), { value: 'second' })
   } finally {
     await runtime?.dispose()

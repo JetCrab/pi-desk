@@ -3,6 +3,8 @@ import { afterEach, test } from 'node:test'
 import { existsSync, renameSync } from 'node:fs'
 import { mkdir, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
+import { parse } from 'yaml'
 import {
   COMMAND_RESULT_SCHEMA,
   MARKER_FILE,
@@ -62,7 +64,10 @@ definitions:
 async function createProject(): Promise<string> {
   const project = join(tempRoot, 'project')
   await mkdir(join(project, '.pi', 'workspace', 'commands'), { recursive: true })
-  await writeFile(join(project, '.pi', 'workspace.yml'), configSource, 'utf8')
+  await bindConfigStore('plugins', 'workspace', { agentDir: join(tempRoot, 'agent') }).set(
+    parse(configSource),
+    { cwd: project }
+  )
   await writeFile(
     join(project, '.pi', 'workspace', 'provision.mjs'),
     'export default async () => ({ success: true })\n'
@@ -132,6 +137,7 @@ function runtimeOptions(
   const previewDirectories: string[] = []
   const changes: WorkspaceChangedEvent[] = []
   const runtime = new WorkspaceRuntime({
+    config: bindConfigStore('plugins', 'workspace', { agentDir: join(tempRoot, 'agent') }),
     exec,
     runnerPath: join(project, 'runner.mjs'),
     poolRoot: join(tempRoot, 'pool'),

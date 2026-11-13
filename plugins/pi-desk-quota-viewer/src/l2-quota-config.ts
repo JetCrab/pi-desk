@@ -54,7 +54,7 @@ export async function readStoredConfig(
   config: PluginConfig,
   registry: ReadonlyMap<string, QuotaAdapter>
 ): Promise<StoredConfig> {
-  const value = await config.get(['/sources/*/config/*'])
+  const value = await config.get({ decryptPaths: ['/sources/*/config/*'] })
   return normalizeConfig(Object.keys(value).length ? value : { sources: [] }, registry)
 }
 
@@ -76,7 +76,7 @@ export async function writeStoredConfig(
           `/sources/${index}/config/${field.key.replaceAll('~', '~0').replaceAll('/', '~1')}`
       )
   })
-  await config.set(normalized, paths)
+  await config.set(normalized, { encryptPaths: paths })
 }
 
 /** 调用方 Runtime 串行编排同插件的读改写。 */

@@ -2,7 +2,13 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CheckIcon, CircleStopIcon, LoaderCircleIcon, OctagonAlertIcon } from 'lucide-react'
+import {
+  ArrowUpRightIcon,
+  CheckIcon,
+  CircleStopIcon,
+  LoaderCircleIcon,
+  OctagonAlertIcon
+} from 'lucide-react'
 import { PluginStatusCapsule } from '@jetcrab/pi-desk-sdk/react/base'
 import type { L2TaskSummary } from '@common/l2_biz/task-center/l2-task-center-contract'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
@@ -15,12 +21,20 @@ const STATUS_LABELS = {
   interrupted: 'statusInterrupted'
 } as const
 
+const STATUS_COLORS = {
+  running: 'text-muted-foreground',
+  completed: 'text-status-success',
+  failed: 'text-destructive',
+  stopped: 'text-muted-foreground',
+  interrupted: 'text-status-warning'
+} as const
+
 function StatusIcon({ task }: { task: L2TaskSummary }): React.JSX.Element {
   if (task.status === 'running')
     return <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" />
-  if (task.status === 'completed') return <CheckIcon className="size-4" />
-  if (task.status === 'stopped') return <CircleStopIcon className="size-4" />
-  return <OctagonAlertIcon className="size-4" />
+  if (task.status === 'completed') return <CheckIcon className="size-4 text-status-success" />
+  if (task.status === 'stopped') return <CircleStopIcon className="size-4 text-muted-foreground" />
+  return <OctagonAlertIcon className={`size-4 ${STATUS_COLORS[task.status]}`} />
 }
 
 export function L2TaskCenterSummary({
@@ -74,8 +88,16 @@ export function L2TaskCenterSummary({
     >
       <div className="p-4" data-testid="task-capsule-preview">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold">{t('title')}</h3>
-          <span className="text-xs opacity-70">{t('recordCount', { count: tasks.length })}</span>
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold">{t('title')}</h3>
+            <span className="text-xs text-muted-foreground">
+              {t('recordCount', { count: tasks.length })}
+            </span>
+          </div>
+          <Button type="button" variant="ghost" size="sm" onClick={() => showTask()}>
+            {t('open')}
+            <ArrowUpRightIcon />
+          </Button>
         </div>
         <div className="space-y-1">
           {preview.map((task) => (
@@ -90,23 +112,16 @@ export function L2TaskCenterSummary({
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block break-words text-sm">{task.title}</span>
-                {task.activity ? (
+                {task.activity && task.activity.trim() !== t(STATUS_LABELS[task.status]) ? (
                   <span className="mt-1 block break-words text-xs opacity-70">{task.activity}</span>
                 ) : null}
               </span>
-              <span className="shrink-0 text-xs opacity-70">{t(STATUS_LABELS[task.status])}</span>
+              <span className={`shrink-0 text-xs ${STATUS_COLORS[task.status]}`}>
+                {t(STATUS_LABELS[task.status])}
+              </span>
             </button>
           ))}
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="mt-3 w-full text-inherit hover:bg-current/10 hover:text-inherit"
-          onClick={() => showTask()}
-        >
-          {t('open')}
-        </Button>
       </div>
     </PluginStatusCapsule>
   )

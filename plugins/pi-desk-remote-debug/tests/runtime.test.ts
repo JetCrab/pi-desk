@@ -4,6 +4,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
+import { parse } from 'yaml'
 import type { PiDeskPluginFacade, PluginJsonObject } from '@jetcrab/pi-desk-sdk/entry'
 import type { CommandResult, ManagedCommand } from '../src/command.js'
 import type { DebugGatewayHandle } from '../src/gateway.js'
@@ -73,8 +74,11 @@ function pluginFacade(
 }
 
 async function writeConfig(content: string): Promise<void> {
-  await mkdir(join(cwd, '.pi'), { recursive: true })
-  await writeFile(join(cwd, '.pi', 'remote_debug.yaml'), content, 'utf8')
+  await mkdir(cwd, { recursive: true })
+  await bindConfigStore('plugins', 'remote-debug', { agentDir: join(root, 'agent') }).set(
+    parse(content),
+    { cwd }
+  )
 }
 
 const desktopEnvironmentKeys = ['PI_DESK_DESKTOP_EXECUTABLE', 'PI_DESK_DESKTOP_CONFIG'] as const
@@ -110,6 +114,38 @@ test.after(async () => {
   if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
   else process.env.PI_CODING_AGENT_DIR = originalAgentDir
   await rm(root, { recursive: true, force: true })
+})
+
+test('全局服务不使仅含其他插件分组的项目被识别为已配置', async () => {
+  const unconfigured = join(root, 'unconfigured-project')
+  await mkdir(unconfigured, { recursive: true })
+  const shared = bindConfigStore('plugins', 'remote-debug', { agentDir: join(root, 'agent') })
+  const previous = await shared.get({ inherit: false })
+  await shared.set({
+    version: 1,
+    profiles: { inherited: { command: 'pnpm inherited', entryPort: 45000, publicPort: 13000 } }
+  })
+  const other = bindConfigStore('plugins', 'other-plugin', { agentDir: join(root, 'agent') })
+  await other.set({ keep: true }, { cwd: unconfigured })
+  const runtime = new RemoteDebugRuntime(
+    pluginFacade([], [{ source: source(), cwd: unconfigured, status: 'idle' }]),
+    {
+      settingsStore: new RemoteDebugSettingsStore({
+        config: shared,
+        agentDir: join(root, 'agent'),
+        readTunnelServer: async () => null
+      })
+    }
+  )
+  try {
+    const projects = await runtime.catalog()
+    assert.equal(projects.find((project) => project.cwd === unconfigured)?.status, 'unconfigured')
+    assert.deepEqual(await shared.get({ cwd: unconfigured, inherit: false }), {})
+    assert.deepEqual(await other.get({ cwd: unconfigured, inherit: false }), { keep: true })
+  } finally {
+    await runtime.dispose()
+    await shared.set(previous)
+  }
 })
 
 test('运行到公网就绪后可显式停止并完整清理', async () => {
@@ -683,9 +719,11 @@ test('公网端口拒绝后真实项目 HTTP 与 Gateway 仍可访问，停止�
     script,
     `import { createServer } from 'node:http'\ncreateServer((_req, res) => res.end('local-ready')).listen(${port}, '127.0.0.1')\n`
   )
-  await writeFile(
-    join(directory, '.pi', 'remote_debug.yaml'),
-    `version: 1\nprofiles:\n  web:\n    command: node "${script.replaceAll('\\', '/')}"\n    entryPort: ${port}\n    publicPort: 43333\n`
+  await bindConfigStore('plugins', 'remote-debug', { agentDir: join(root, 'agent') }).set(
+    parse(
+      `version: 1\nprofiles:\n  web:\n    command: node "${script.replaceAll('\\', '/')}"\n    entryPort: ${port}\n    publicPort: 43333\n`
+    ),
+    { cwd: directory }
   )
   const tunnel = deferredTunnel('unused')
   const runtime = new RemoteDebugRuntime(pluginFacade([]), {

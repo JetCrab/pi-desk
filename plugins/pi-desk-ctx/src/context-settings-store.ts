@@ -6,12 +6,15 @@ import {
 } from './context-settings.js'
 
 export async function readContextIgnoreSettings(
-  config: PluginConfig
+  config: PluginConfig,
+  cwd?: string
 ): Promise<ContextIgnoreSettings> {
-  const value = await config.get()
-  return Object.keys(value).length
-    ? parseContextIgnoreSettings(value)
-    : defaultContextIgnoreSettings()
+  return parseContextIgnoreSettings(
+    await config.get({
+      ...(cwd ? { cwd } : {}),
+      defaults: JSON.parse(JSON.stringify(defaultContextIgnoreSettings())) as PluginJsonObject
+    })
+  )
 }
 
 export async function writeContextIgnoreSettings(

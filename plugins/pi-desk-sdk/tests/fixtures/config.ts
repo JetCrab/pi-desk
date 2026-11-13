@@ -7,8 +7,10 @@ export function memoryConfig(initial: PluginJsonObject = {}): PluginConfig {
     async get(): Promise<PluginJsonObject> {
       return structuredClone(value)
     },
-    async set(next, paths): Promise<void> {
-      if (paths?.length) throw new Error('此业务夹具不提供加密；加密测试使用真实配置存储')
+    async set(next, options): Promise<void> {
+      if (options?.encryptPaths?.length) {
+        throw new Error('此业务夹具不提供加密；加密测试使用真实配置存储')
+      }
       value = structuredClone(next)
     },
     async encrypt(): Promise<string> {

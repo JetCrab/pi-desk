@@ -226,6 +226,27 @@ test('只使用统一配置，旧JSON配置保持原字节', async (context) => 
   }
 })
 
+test('可信项目覆盖上下文设置且不固化继承值，设置页仍只编辑全局', async (context) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-desk-ctx-project-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const cwd = join(root, 'project')
+  const nested = join(cwd, 'nested')
+  await mkdir(nested, { recursive: true })
+  const config = bindConfigStore('plugins', 'context-ignore', { agentDir: join(root, 'agent') })
+  await config.set({ enabled: false, imageBudget: { keepTextTurns: 7 } })
+  await config.set({ imageBudget: { enabled: true } }, { cwd })
+  const path = join(cwd, '.pi', 'pi-desk.yaml')
+  const before = await readFile(path, 'utf8')
+  const effective = await readContextIgnoreSettings(config, cwd)
+  assert.equal(effective.enabled, false)
+  assert.equal(effective.imageBudget.enabled, true)
+  assert.equal(effective.imageBudget.keepTextTurns, 7)
+  assert.equal((await readContextIgnoreSettings(config)).imageBudget.enabled, false)
+  assert.equal((await readContextIgnoreSettings(config, nested)).imageBudget.enabled, false)
+  assert.equal(await readFile(path, 'utf8'), before)
+  assert.deepEqual(parseYaml(before).plugins['context-ignore'], { imageBudget: { enabled: true } })
+})
+
 test('配置文件保存实际 Token 并在读取时保持归一化顺序', async (context) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-desk-ctx-settings-'))
   context.after(() => rm(root, { recursive: true, force: true }))

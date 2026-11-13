@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto'
 import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
-import { importL4UnifiedConfigSecrets } from './l4-environment-unified-config'
+import {
+  importL4UnifiedConfigSecrets,
+  isL4EnvironmentUnifiedConfig
+} from './l4-environment-unified-config'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { lstat, mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname, join, posix, relative, win32 } from 'node:path'
@@ -779,20 +782,34 @@ export async function applyL4EnvironmentImport(input: {
   // 已认证包中的逻辑秘密仅驻留内存，按当前SecretStore合同生成目标引用。
   const archiveSecrets: Record<string, string> = {}
   const inlineSecrets: Record<string, string> = {}
-  if (selected.some(({ file }) => file.secretEntry || file.base === 'desktop')) {
+  const globalConfig = selected.find(
+    ({ file }) => file.base === 'agent' && file.path === 'config/pi-desk.yaml'
+  )
+  let restoresAuth = false
+  if (globalConfig || selected.some(({ file }) => file.secretEntry || file.base === 'desktop')) {
     await readEnvironmentArchive({
       archivePath: input.archivePath,
       password: input.password,
       async consumeEntry(header, content): Promise<void> {
-        if (selected.some(({ file }) => file.base === 'desktop' && file.entry === header.path))
+        if (globalConfig?.file.entry === header.path) {
+          const root = readL4EnvironmentStructured(
+            await readL4EnvironmentBounded(content),
+            'yaml'
+          ) as Record<string, unknown>
+          const host = root['pi-desk'] as Record<string, unknown> | undefined
+          const auth = host?.auth
+          restoresAuth =
+            auth !== undefined &&
+            (auth === null || typeof auth !== 'object' || Object.keys(auth).length > 0)
+        } else if (
+          selected.some(({ file }) => file.base === 'desktop' && file.entry === header.path)
+        )
           desktopContent = await readL4EnvironmentBounded(content, L4_ENVIRONMENT_DESKTOP_MAX_BYTES)
         else {
           const item = selected.find(({ file }) => file.secretEntry === header.path)
           if (!item) return
           Object.assign(
-            item.file.base === 'agent' && item.file.path === 'config/pi-desk.yaml'
-              ? inlineSecrets
-              : archiveSecrets,
+            isL4EnvironmentUnifiedConfig(item.file) ? inlineSecrets : archiveSecrets,
             JSON.parse((await readL4EnvironmentBounded(content)).toString('utf8')) as Record<
               string,
               string
@@ -814,9 +831,6 @@ export async function applyL4EnvironmentImport(input: {
     )
   )
   const targets = hostFiles.map(({ target }) => target)
-  const restoresAuth = plan.files.some(
-    ({ file }) => file.base === 'agent' && file.path === 'config/pi-desk.yaml'
-  )
   if (restoresAuth) targets.push(join(input.agentDir, 'pi-desk', 'auth-session-key'))
   if (plan.workSessions.length) targets.push(join(input.agentDir, 'pi-desk', 'work-sessions.json'))
   if (desktopContent)

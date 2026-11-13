@@ -141,7 +141,6 @@ export function registerContextIgnore(
   options: ContextIgnoreRuntimeOptions = {}
 ): void {
   const plugin = bindSessionPlugin(pi, PLUGIN_STATE_KEY)
-  const loadSettings = options.loadSettings ?? (() => readContextIgnoreSettings(plugin.config))
   let settings = defaultContextIgnoreSettings()
   let state = defaultContextIgnoreState()
   let pendingCheckpoint: PendingCheckpoint | undefined
@@ -163,7 +162,13 @@ export function registerContextIgnore(
 
   async function reloadSettings(ctx: ExtensionContext): Promise<void> {
     try {
-      settings = normalizeContextIgnoreSettings(await loadSettings())
+      const loaded = options.loadSettings
+        ? await options.loadSettings()
+        : await readContextIgnoreSettings(
+            plugin.config,
+            ctx.isProjectTrusted() ? ctx.cwd : undefined
+          )
+      settings = normalizeContextIgnoreSettings(loaded)
     } catch (error) {
       console.warn('[context-ignore] 配置读取失败，继续使用最近一次有效配置', {
         sessionId: ctx.sessionManager.getSessionId(),

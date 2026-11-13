@@ -2,8 +2,8 @@ import { existsSync } from 'node:fs'
 import { appendFile, mkdir, realpath, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
+import { getProjectConfigPath, type PluginConfig } from '@jetcrab/pi-desk-sdk/config'
 import {
-  CONFIG_RELATIVE_PATH,
   WorkspaceError,
   appendCompletedOperation,
   appendRunningOperation,
@@ -109,6 +109,7 @@ export type WorkspaceTaskInput = {
 }
 
 export type WorkspaceRuntimeDependencies = {
+  config: PluginConfig
   exec: Exec
   runnerPath: string
   poolRoot?: string
@@ -224,7 +225,7 @@ export class WorkspaceRuntime {
   }
 
   async snapshot(context: WorkspaceRuntimeContext): Promise<WorkspaceSnapshot> {
-    const configPath = join(context.cwd, CONFIG_RELATIVE_PATH)
+    const configPath = getProjectConfigPath(context.cwd)
     if (!context.trusted) {
       this.active = undefined
       this.activeRequirement = undefined
@@ -238,7 +239,7 @@ export class WorkspaceRuntime {
       }
     }
 
-    const loaded = await loadConfigForSession(context.cwd)
+    const loaded = await loadConfigForSession(context.cwd, this.dependencies.config)
     if (!loaded.config) {
       this.active = undefined
       this.activeRequirement = undefined
@@ -551,7 +552,7 @@ export class WorkspaceRuntime {
     input: WorkspaceExternalOperation
   ): Promise<boolean> {
     if (!context.trusted) return false
-    const loaded = await loadConfigForSession(context.cwd)
+    const loaded = await loadConfigForSession(context.cwd, this.dependencies.config)
     if (!loaded.config) return false
 
     let directory: string
@@ -604,7 +605,7 @@ export class WorkspaceRuntime {
 
   async promptContext(context: WorkspaceRuntimeContext): Promise<string | undefined> {
     if (!context.trusted) return undefined
-    const loaded = await loadConfigForSession(context.cwd)
+    const loaded = await loadConfigForSession(context.cwd, this.dependencies.config)
     if (!loaded.config) return undefined
 
     const definitions = Object.values(loaded.config.definitions)
@@ -656,9 +657,9 @@ export class WorkspaceRuntime {
   }
 
   private async requireConfig(projectRoot: string): Promise<WorkspaceConfig> {
-    const loaded = await loadConfigForSession(projectRoot)
+    const loaded = await loadConfigForSession(projectRoot, this.dependencies.config)
     if (loaded.warning) throw new WorkspaceError(loaded.warning)
-    if (!loaded.config) throw new WorkspaceError('未找到 .pi/workspace.yml')
+    if (!loaded.config) throw new WorkspaceError('未找到 plugins.workspace 配置')
     return loaded.config
   }
 

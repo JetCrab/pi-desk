@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { bindConfigStore } from './config-store.ts'
 import type { PluginConfig } from './config-api.js'
-export type { PluginConfig } from './config-api.js'
+export type { PluginConfig, PluginConfigGetOptions, PluginConfigSetOptions } from './config-api.js'
 import type { AgentSession, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { normalizePluginIdentifier, type PluginJsonObject, type PluginSource } from './shared.ts'
 import type { SessionCapabilityRules } from './capabilities.js'

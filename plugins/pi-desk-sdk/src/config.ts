@@ -1,4 +1,4 @@
-export type { PluginConfig } from './config-api.js'
+export type { PluginConfig, PluginConfigGetOptions, PluginConfigSetOptions } from './config-api.js'
 export {
   bindConfigStore,
   getUnifiedConfigPath,
@@ -7,7 +7,8 @@ export {
 } from './config-store.ts'
 
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
-import { dirname, join, resolve } from 'node:path'
+import { lstatSync } from 'node:fs'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import {
   ensureStorageDirectory,
   readStorageFile,
@@ -24,6 +25,13 @@ export function getConfigPath(filename: string, agentDir?: string): string {
     throw new Error('配置文件名必须是单个文件名')
   }
   return join(getConfigDirectory(agentDir), filename)
+}
+
+/** 显式项目目录必须已存在；不使用进程 CWD 或搜索父目录。 */
+export function getProjectConfigPath(cwd: string): string {
+  if (!isAbsolute(cwd)) throw new Error('项目配置 cwd 必须是绝对目录')
+  if (!lstatSync(cwd).isDirectory()) throw new Error('项目配置 cwd 必须是普通目录')
+  return join(cwd, '.pi', 'pi-desk.yaml')
 }
 
 /** 串行保护同一目标的完整读改写；操作内不能嵌套获取同一目标锁。 */

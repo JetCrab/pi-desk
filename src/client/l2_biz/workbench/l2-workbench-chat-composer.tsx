@@ -630,7 +630,9 @@ function L2WorkbenchChatComposerComponent({
         </div>
       ) : null}
 
-      {renderTaskSummary({ source, cwd: workSession.cwd, pluginState: taskCenterPluginState })}
+      {chatReady && widgetsVisible
+        ? renderTaskSummary({ source, cwd: workSession.cwd, pluginState: taskCenterPluginState })
+        : null}
 
       <L2NativeUiQuestions model={nativeUi} />
       <L2NativeUiExtras snapshot={nativeUi.state.snapshot} placement="aboveEditor" />

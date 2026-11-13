@@ -549,7 +549,9 @@ export class SubagentRuntime {
   async refreshConfigs(): Promise<void> {
     const parent = this.activeParent
     if (!this.sessionActive || !parent) return
-    const settings = await this.plugin.config.get()
+    const settings = await this.plugin.config.get(
+      parent.projectTrusted ? { cwd: parent.cwd } : undefined
+    )
     if (!this.sessionActive || this.activeParent !== parent) return
     const discovery = discoverSubagentConfigs({
       cwd: parent.cwd,

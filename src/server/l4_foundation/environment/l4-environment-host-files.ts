@@ -7,5 +7,11 @@ export const L4_ENVIRONMENT_HOST_FILES: readonly L4EnvironmentFileDeclaration[] 
     path: 'pi-desk.yaml',
     format: 'yaml',
     localPaths: ['/pi-desk/plugins/disabled/*', '/pi-desk/ignored-directories/directories/*']
+  },
+  {
+    base: 'project',
+    path: 'pi-desk.yaml',
+    format: 'yaml',
+    secretPaths: []
   }
 ]

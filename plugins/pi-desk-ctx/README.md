@@ -12,6 +12,6 @@
 
 有效助手轮必须包含正文或工具调用且正常完成；正文轮不含内部思考。错误、取消、未完成及空回应不计入。尚未经过有效助手回应的新图组不会拆分：自身不超过触发值时可高于整理目标；自身超过触发值时取消本次发送，并提示缩图或分批。旧图需要再次查看时重新读取或提供。
 
-设置通过 `plugin.config` 保存在 `<AgentDir>/config/pi-desk.yaml` 的 `plugins.context-ignore`，包含 `imageBudget: { enabled, triggerBytes, targetBytes, keepAssistantTurns, keepTextTurns }`。旧全局文件保留，不读取、迁移或删除。字节值是 1–1 GiB 的整数且目标不大于触发值，轮数为 1–100。关闭后保留填写值；原生会话在下一次开始任务时重新读取设置，升级插件后已有会话须重载 Pi 配置。
+设置通过 `plugin.config` 保存在 `<AgentDir>/config/pi-desk.yaml` 的 `plugins.context-ignore`，包含 `imageBudget: { enabled, triggerBytes, targetBytes, keepAssistantTurns, keepTextTurns }`。可信会话还读取当前 `<cwd>/.pi/pi-desk.yaml` 的同名分组，按默认、全局、项目递归覆盖字段，数组整体替换，不搜索父目录；未信任项目只用全局。设置页仍只保存全局层。旧全局文件保留，不读取、迁移或删除。字节值是 1–1 GiB 的整数且目标不大于触发值，轮数为 1–100。关闭后保留填写值；原生会话在下一次开始任务时重新读取设置，升级插件后已有会话须重载 Pi 配置。
 
 许可与第三方来源见本目录的 LICENSE 及适用的归属说明。

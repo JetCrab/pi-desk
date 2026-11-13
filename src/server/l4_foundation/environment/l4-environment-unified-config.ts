@@ -1,7 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import { parseDocument } from 'yaml'
 import { z } from 'zod'
+import type { L4EnvironmentFile } from './l4-environment-manifest'
 import type { PluginConfig, PluginJsonValue } from '@jetcrab/pi-desk-sdk/entry'
+
+export function isL4EnvironmentUnifiedConfig(
+  file: Pick<L4EnvironmentFile, 'base' | 'path'>
+): boolean {
+  return (
+    (file.base === 'agent' && file.path === 'config/pi-desk.yaml') ||
+    (file.base === 'project' && file.path === 'pi-desk.yaml')
+  )
+}
 
 /** 归档内部使用既有逻辑凭据条目；目标环境重新加密，不复制系统主密钥。 */
 export async function exportL4UnifiedConfig(
