@@ -210,6 +210,7 @@ test('真实 createChildSession Child 随父能力回调收紧恢复且保留角
   context.after(() => rm(root, { recursive: true, force: true }))
   const agentDir = join(root, 'agent')
   const cwd = join(root, 'project')
+  await mkdir(cwd, { recursive: true })
   const config = useSubagentConfig(context, agentDir)
   await config.set({ agents: { explore: { model: `${model.provider}/${model.id}` } } })
   await mkdir(join(agentDir, 'skills', 'allowed'), { recursive: true })
