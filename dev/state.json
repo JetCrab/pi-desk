@@ -2,14 +2,14 @@
   "checks": "74ddabddabecaf2333105443b9764c60687b8277",
   "units": {
     "windows": {
-      "version": "1.1.37",
-      "source": "1f0583c6dc3465f8a0b38af6a286244ef7e22c6c",
-      "runId": "43149131430"
+      "version": "1.1.38",
+      "source": "528628c20a8e72d82e8cfb8558fd11deda92165e",
+      "runId": "43539037135"
     },
     "macos": {
-      "version": "1.1.37",
-      "source": "1f0583c6dc3465f8a0b38af6a286244ef7e22c6c",
-      "runId": "43149131430"
+      "version": "1.1.38",
+      "source": "528628c20a8e72d82e8cfb8558fd11deda92165e",
+      "runId": "43539037135"
     },
     "android": {
       "version": "1.1.3",
@@ -82,9 +82,9 @@
       "runId": "43149131430"
     },
     "linux": {
-      "version": "1.1.37",
-      "source": "1f0583c6dc3465f8a0b38af6a286244ef7e22c6c",
-      "runId": "43149131430"
+      "version": "1.1.38",
+      "source": "528628c20a8e72d82e8cfb8558fd11deda92165e",
+      "runId": "43539037135"
     },
     "pi-desk-workspace": {
       "version": "1.1.19",
