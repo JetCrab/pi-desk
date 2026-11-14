@@ -1,10 +1,7 @@
 'use client'
 
 import {
-  ArrowRightIcon,
-  ArrowUpToLineIcon,
   CopyPlusIcon,
-  CornerDownLeftIcon,
   EllipsisIcon,
   GitBranchIcon,
   FileTextIcon,
@@ -13,8 +10,6 @@ import {
   PaperclipIcon,
   RefreshCwIcon,
   RotateCcwIcon,
-  SendIcon,
-  SquareIcon,
   Trash2Icon,
   XIcon
 } from 'lucide-react'
@@ -75,6 +70,7 @@ import { useL2WorkbenchSlashCommand } from './hooks/l2-workbench-slash-command'
 import { useL2WorkbenchComposerLayout } from './hooks/l2-workbench-composer-layout'
 import { L2WorkbenchContextUsage } from './l2-workbench-context-usage'
 import { L2WorkbenchModelContextDialog } from './l2-workbench-model-context-dialog'
+import { L2WorkbenchComposerActions } from './views/l2-workbench-composer-actions'
 import { L2WorkbenchModelPicker } from './views/l2-workbench-model-picker'
 import { L2WorkbenchQueuePreview } from './l2-workbench-queue-preview'
 import {
@@ -228,12 +224,6 @@ function L2WorkbenchChatComposerComponent({
   const footerRef = useRef<HTMLDivElement | null>(null)
   const submitToolsRef = useRef<HTMLDivElement | null>(null)
   const statusRef = useRef<HTMLSpanElement | null>(null)
-  const desktopMetadataRow = useL2WorkbenchComposerLayout(
-    mobile,
-    footerRef,
-    submitToolsRef,
-    statusRef
-  )
   const [localError, setLocalError] = useState<string | null>(null)
   const [activePluginPanel, setActivePluginPanel] = useState<{
     pluginName: string
@@ -328,6 +318,13 @@ function L2WorkbenchChatComposerComponent({
       ? inputState.outbox
       : null
   const showRunningActions = mainRunning && !idleSending
+  const desktopMetadataRow = useL2WorkbenchComposerLayout(
+    mobile,
+    footerRef,
+    submitToolsRef,
+    statusRef,
+    showRunningActions
+  )
   const queues = chatRuntimeState.queues
   const imageBytes = inputState.images.reduce((total, image) => total + image.blob.size, 0)
   const imageProcessing = inputState.images.some((image) => image.status === 'optimizing')
@@ -929,9 +926,7 @@ function L2WorkbenchChatComposerComponent({
                   {t('modelContextUnknown', { defaultValue: '上下文未知' })}
                 </span>
               ) : null}
-            </PromptInputTools>
 
-            <PromptInputTools data-composer-tools="metadata" className={styles.metadataTools}>
               <L2GitBranchButton
                 workSession={workSession}
                 runtime={gitRuntime}
@@ -946,7 +941,9 @@ function L2WorkbenchChatComposerComponent({
                 disabled={!chatReady}
                 onChange={changeCapabilityMode}
               />
+            </PromptInputTools>
 
+            <PromptInputTools data-composer-tools="metadata" className={styles.metadataTools}>
               <L2WorkbenchModelPicker
                 key={currentSourceKey}
                 source={source}
@@ -977,56 +974,19 @@ function L2WorkbenchChatComposerComponent({
                 }
               />
 
-              {showRunningActions ? (
-                <>
-                  <PromptInputButton
-                    tooltip={t('steerNow')}
-                    aria-label={t('steerNow')}
-                    variant="secondary"
-                    disabled={!canSend || sendActionPending}
-                    onClick={() => void send('auto')}
-                  >
-                    <ArrowRightIcon className="size-3.5" />
-                  </PromptInputButton>
-                  <PromptInputButton
-                    tooltip={t('sendFollowUp')}
-                    aria-label={t('sendFollowUp')}
-                    variant="outline"
-                    disabled={!canSend || sendActionPending}
-                    onClick={() => void send('follow_up')}
-                  >
-                    <ArrowUpToLineIcon className="size-3.5" />
-                  </PromptInputButton>
-                  <PromptInputButton
-                    tooltip={t('stopResponse')}
-                    aria-label={t('stopResponse')}
-                    variant="destructive"
-                    disabled={!chatReady || actionPending}
-                    onClick={() => void runAction(() => inputRuntime.interrupt(source))}
-                  >
-                    <SquareIcon className="size-3.5 fill-current" />
-                  </PromptInputButton>
-                </>
-              ) : (
-                <Button
-                  type={idleSending ? 'button' : 'submit'}
-                  size="icon"
-                  disabled={!idleSending && (!canSend || sendActionPending)}
-                  aria-disabled={idleSending || !canSend || sendActionPending}
-                  aria-busy={idleSending}
-                  aria-label={
-                    idleSending ? t('sending') : chatReady ? t('send') : t('synchronizing')
-                  }
-                >
-                  {idleSending ? (
-                    <SendIcon className="size-4" />
-                  ) : !chatReady ? (
-                    <LoaderCircleIcon className="size-4 animate-spin" />
-                  ) : (
-                    <CornerDownLeftIcon />
-                  )}
-                </Button>
-              )}
+              <L2WorkbenchComposerActions
+                key={currentSourceKey}
+                ready={chatReady}
+                stopping={idleSending || mainRunning}
+                expanded={showRunningActions}
+                sendDisabled={!canSend || sendActionPending}
+                stopDisabled={!chatReady || actionPending}
+                onSend={() => void send('auto')}
+                onFollowUp={() => void send('follow_up')}
+                onInterrupt={() =>
+                  void runAction(() => inputRuntime.interrupt(source, mainRunning))
+                }
+              />
             </div>
           </PromptInputFooter>
         </InputGroup>

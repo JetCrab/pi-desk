@@ -19,15 +19,31 @@ export const taskCapsuleFixture = `
         }
       });
     }
+    send(data) {
+      const message = JSON.parse(data);
+      if (message.head?.path === 'task-center/detail-watch' && message.body?.source?.workId === 'composer-resize') {
+        const task = window.__capsuleTasks?.find(task => task.taskId === message.body.taskId);
+        queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+          head: { ...message.head, op: 'resp' },
+          body: { code: 0, msg: '', data: { snapshot: task ? {
+            taskId: task.taskId, canInterrupt: false,
+            body: { kind: 'text', text: task.title + '的执行详情', truncated: false }
+          } : null } }
+        }) })));
+        return;
+      }
+      super.send(data);
+    }
   };
-  window.__setCapsuleTasks = (count, status = 'running', activity = '验证任务胶囊与聊天位置') => {
+  window.__setCapsuleTasks = (count, status = 'running', activity = '验证任务胶囊与聊天位置', completedCount = 0) => {
     const runtime = structuredClone(window.__capsuleRuntime);
-    runtime.plugins['task-center'] = { tasks: Array.from({ length: count }, (_, index) => ({
+    runtime.plugins['task-center'] = { tasks: Array.from({ length: count + completedCount }, (_, index) => ({
       taskId: 'capsule-task-' + index, taskKind: '测试', taskType: 'fixture',
       title: index === 0 ? '检查界面结构' : '核对移动端布局',
-      activity, info: [], status,
-      startedAt: Date.now() - 1000, endedAt: status === 'running' ? null : Date.now()
+      activity, info: [], status: index < count ? status : 'completed',
+      startedAt: Date.now() - 1000, endedAt: index < count && status === 'running' ? null : Date.now()
     })) };
+    window.__capsuleTasks = runtime.plugins['task-center'].tasks;
     window.__capsuleSocket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
       head: { op: 'push', path: 'chat/source-event' },
       body: { source: window.__capsuleSource, event: { type: 'runtime_update', runtime } }
@@ -103,19 +119,68 @@ export async function checkTaskCapsule({ client, viewport, settle, results, runR
   )
   await settle(client)
   const beforeDetails = await evaluate(client, 'window.__measureChat()')
-  await click(client, '[data-slot="status-capsule-trigger"]')
-  await waitFor(
-    client,
-    'Boolean(document.querySelector("[data-slot=status-capsule-popup]"))',
-    '胶囊展开'
-  )
-  await settle(client)
-  assert.equal((await evaluate(client, 'window.__measureChat()')).viewport, beforeDetails.viewport)
+  for (const completedCount of [0, 1]) {
+    await evaluate(client, `window.__setCapsuleTasks(1, 'running', '执行中', ${completedCount})`)
+    await settle(client)
+    await click(client, '[data-slot="status-capsule-trigger"]')
+    await waitFor(
+      client,
+      'document.querySelector("[role=dialog] pre")?.textContent === "检查界面结构的执行详情"',
+      '单任务直接显示对应执行详情'
+    )
+    assert.equal(
+      await evaluate(
+        client,
+        'Boolean(document.querySelector("[data-testid=task-capsule-preview]"))'
+      ),
+      false,
+      '单任务仍展开了预览列表'
+    )
+    if (completedCount === 0) {
+      await writeFile(
+        join(runRoot, `capsule-single-detail-${viewport.width}.png`),
+        await screenshot(client)
+      )
+    }
+    if (viewport.mobile) {
+      await click(client, '[role="dialog"] [aria-label="返回任务列表"]')
+      await waitFor(
+        client,
+        `document.querySelector('[role="dialog"] [aria-current="true"]')?.checkVisibility()`,
+        '详情可返回任务列表'
+      )
+    }
+    for (const type of ['keyDown', 'keyUp']) {
+      await client.send('Input.dispatchKeyEvent', {
+        type,
+        key: 'Escape',
+        code: 'Escape',
+        windowsVirtualKeyCode: 27
+      })
+    }
+    await waitFor(client, '!document.querySelector("[role=dialog]")', '单任务详情关闭')
+  }
+  results.push({ label: `${prefix}单任务及历史记录直达详情`, passed: true })
   await evaluate(client, 'window.__probeFrames(); window.__setCapsuleTasks(2)')
   const multiple = await evaluate(client, 'window.__frameSamples')
   assert.ok(
     multiple.every((sample) => sample.viewport === beforeDetails.viewport && sample.gap <= 2)
   )
+  await click(client, '[data-slot="status-capsule-trigger"]')
+  await waitFor(
+    client,
+    'Boolean(document.querySelector("[data-slot=status-capsule-popup]"))',
+    '多任务胶囊展开'
+  )
+  await settle(client)
+  assert.equal((await evaluate(client, 'window.__measureChat()')).viewport, beforeDetails.viewport)
+  await evaluate(client, 'window.__setCapsuleTasks(3)')
+  await waitFor(
+    client,
+    'document.querySelector("[data-testid=task-capsule-preview]")?.textContent.includes("3 条执行记录")',
+    '预览中的并行任务实时增加'
+  )
+  await evaluate(client, 'window.__setCapsuleTasks(2)')
   await waitFor(
     client,
     'document.querySelector("[data-testid=task-capsule-preview]")?.textContent.includes("核对移动端布局")',
@@ -312,7 +377,7 @@ export async function checkTaskCapsule({ client, viewport, settle, results, runR
   await client.send('Emulation.setEmulatedMedia', {
     features: [{ name: 'prefers-reduced-motion', value: 'reduce' }]
   })
-  await evaluate(client, 'window.__setCapsuleTasks(1)')
+  await evaluate(client, 'window.__setCapsuleTasks(2)')
   await settle(client)
   assert.equal(
     await evaluate(

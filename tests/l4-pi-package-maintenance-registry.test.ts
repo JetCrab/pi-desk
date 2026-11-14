@@ -13,7 +13,7 @@ import { createJiti } from 'jiti'
 const execFileAsync = promisify(execFile)
 const require = createRequire(import.meta.url)
 
-test('scoped插件使用指定源，公共SDK和普通依赖保留默认源', { timeout: 90_000 }, async (t) => {
+test('私有插件使用独立源，公共SDK和普通依赖使用所选公共源', { timeout: 90_000 }, async (t) => {
   const runId = `mixed-registry-${randomUUID()}`
   const root = resolve('temp/run/pidesk-maintenance', runId)
   const artifacts = resolve('temp/package/pidesk-maintenance', runId)
@@ -140,7 +140,7 @@ test('scoped插件使用指定源，公共SDK和普通依赖保留默认源', { 
       PI_CODING_AGENT_DIR: agentDir,
       PI_CODING_AGENT_SESSION_DIR: join(agentDir, 'sessions'),
       PI_OFFLINE: '1',
-      NPM_CONFIG_REGISTRY: urls[1]!,
+      NPM_CONFIG_REGISTRY: 'http://127.0.0.1:1',
       'NPM_CONFIG_@FIXTURE-PRIVATE:REGISTRY': 'http://127.0.0.1:1',
       npm_config_userconfig: npmrc,
       npm_config_cache: join(root, 'npm-cache'),
@@ -160,12 +160,22 @@ test('scoped插件使用指定源，公共SDK和普通依赖保留默认源', { 
       typeof import('../src/server/l4_foundation/pi/l4-pi-package-maintenance')
     >('../src/server/l4_foundation/pi/l4-pi-package-maintenance.ts')
     await run({
-      maintenance: { action: 'install', source: `npm:${pluginName}@1.0.0`, registry: urls[0]! },
+      maintenance: {
+        action: 'install',
+        source: `npm:${pluginName}@1.0.0`,
+        registry: urls[0]!,
+        publicRegistry: urls[1]!
+      },
       agentDir,
       cwd: root
     })
     await run({
-      maintenance: { action: 'reinstall', source: `npm:${pluginName}@1.0.0`, registry: urls[0]! },
+      maintenance: {
+        action: 'reinstall',
+        source: `npm:${pluginName}@1.0.0`,
+        registry: urls[0]!,
+        publicRegistry: urls[1]!
+      },
       agentDir,
       cwd: root
     })

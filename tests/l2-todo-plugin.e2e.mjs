@@ -88,7 +88,19 @@ export default function(pi) {
   await cp(entry, join(pluginDir, 'dist/browser/actual-entry.js'))
   await writeFile(
     entry,
-    `import activate from './actual-entry.js';export default function(plugin){const dispose=activate(plugin);window.__todoHost=plugin.host;window.__todoReady=true;return ()=>{window.__todoReady=false;dispose?.()}}`
+    `import activate from './actual-entry.js'
+export default function(plugin) {
+  // 模拟旧版胶囊卸载后仍由React页面资源保留的局部样式。
+  const legacy = document.createElement('style')
+  legacy.dataset.href = 'pi-desk-todo'
+  legacy.dataset.precedence = 'plugin-todo'
+  legacy.textContent = '.pi-desk-todo{min-width:0;padding-inline:.5rem}.pi-desk-todo-dismiss{min-width:1.75rem;padding-inline:.25rem;color:inherit!important;background:transparent!important}'
+  document.head.append(legacy)
+  const dispose = activate(plugin)
+  window.__todoHost = plugin.host
+  window.__todoReady = true
+  return () => { window.__todoReady = false; dispose?.() }
+}`
   )
   await writeFile(join(agentDir, 'settings.json'), JSON.stringify({ packages: [] }))
   await writeFile(
@@ -394,10 +406,15 @@ async function bounds(client) {
     if(widget&&row&&close){
       const outer=widget.getBoundingClientRect(),inner=row.getBoundingClientRect(),button=close.getBoundingClientRect();
       if(inner.left-outer.left<6||outer.right-inner.right<6)errors.push('摘要左右缺少留白');
+      const widgetStyle=getComputedStyle(widget);
+      const contentWidth=outer.width-parseFloat(widgetStyle.paddingLeft)-parseFloat(widgetStyle.paddingRight);
+      if(Math.abs(inner.width-contentWidth)>1)errors.push('摘要没有铺满挂件内容区');
       if(button.left<inner.left||button.right>=inner.right||button.top<inner.top||button.bottom>inner.bottom)errors.push('关闭按钮未内嵌于摘要背景');
       if(['transparent','rgba(0, 0, 0, 0)'].includes(getComputedStyle(row).backgroundColor))errors.push('摘要与关闭按钮缺少共享背景');
       if(widget.querySelector('[data-slot="status-capsule"]'))errors.push('Todo仍使用胶囊');
     }
+    const segments=widget?.querySelector('[data-testid="todo-segments"]');
+    if(widget&&(!segments||segments.getBoundingClientRect().height<1||[...segments.children].some(segment=>segment.getBoundingClientRect().width<1)))errors.push('分段进度不可见');
     if(widget){const r=widget.getBoundingClientRect();if(r.left<0||r.right>innerWidth+1)errors.push('摘要越界');if(input&&r.bottom>input.getBoundingClientRect().top)errors.push('摘要挡住输入框')}
     if(panel){const r=panel.getBoundingClientRect();if(r.left<0||r.right>innerWidth+1||r.top<0)errors.push('浮层越界');if(input&&r.bottom>input.getBoundingClientRect().top)errors.push('浮层挡住输入框')}
     if(panel&&row){
@@ -474,9 +491,16 @@ try {
         '登记进度不自动打开浮层'
       )
     }
+    assert.equal(
+      await first.eval(`Boolean(document.querySelector('style[data-href="pi-desk-todo"]'))`),
+      true,
+      '回归前置：页面保留旧版Todo样式资源'
+    )
     await bounds(first)
     await first.screenshot('summary-dark.png')
-    passed.push('E01：真实Native工具全量登记，单份摘要和多端同步，不自动打开浮层')
+    passed.push(
+      'E01：真实Native工具全量登记，旧版样式残留时横条与分段进度正常，单份摘要和多端同步，不自动打开浮层'
+    )
 
     const updated = structuredClone(todo)
     updated.items.find((item) => item.id === 'backend').status = 2
@@ -654,6 +678,13 @@ try {
         '其他页面同步隐藏'
       )
       assert.deepEqual(await method(first, 'get'), { todo: completed, hidden: true })
+      assert.equal(
+        await first.eval(
+          `Boolean([...document.querySelectorAll('style')].find(style=>!style.hasAttribute('data-href')&&style.textContent.includes('.pi-desk-todo-row{')))`
+        ),
+        false,
+        'Todo隐藏后释放自身局部样式，不留在页面缓存'
+      )
       await first.send('Page.reload')
       await first.wait(
         `window.__todoReady && document.querySelector('[data-pi-desk-plugin="todo"][data-pi-desk-kind="widget"]')`,

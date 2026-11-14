@@ -1,3 +1,5 @@
+import { rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { DefaultPackageManager, SettingsManager } from '@earendil-works/pi-coding-agent'
 
 function assertSettingsSaved(settings: SettingsManager): void {
@@ -28,12 +30,20 @@ async function main(): Promise<void> {
     )
   // installedPath 由官方包管理器检查实际路径，配置声明不代表文件已安装。
   if (installed?.installedPath) {
-    process.stdout.write(`[Pi Desk][PackageReinstall] 正在卸载插件文件：${source}\n`)
-    // remove 不删除配置声明，installAndPersist 由官方实现保留原有对象过滤设置。
-    await manager.remove(source)
+    process.stdout.write(`[Pi Desk][PackageReinstall] 正在清理插件文件并保留依赖锁：${source}\n`)
+    // npm uninstall 会剪除独占依赖及其锁记录；只清理受管目标，让官方安装复用原依赖树。
+    await rm(join(agentDir, 'npm', 'node_modules', packageName!), {
+      recursive: true,
+      force: true
+    })
   }
   process.stdout.write(`[Pi Desk][PackageReinstall] 正在重新安装插件：${source}\n`)
-  await manager.installAndPersist(source)
+  if (source === `npm:${packageName}`) {
+    await manager.install(`${source}@latest`)
+    manager.addSourceToSettings(source)
+  } else {
+    await manager.installAndPersist(source)
+  }
   await settings.flush()
   assertSettingsSaved(settings)
   process.stdout.write(`[Pi Desk][PackageReinstall] 插件重装完成：${source}\n`)

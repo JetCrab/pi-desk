@@ -98,6 +98,16 @@ function chooseVersion(metadata: Record<string, unknown>, selector: string): str
   return selected
 }
 
+async function readL4PluginPublicRegistry(
+  source: L4PluginDownloadSource
+): Promise<string | undefined> {
+  if (source.mode === 'local') return undefined
+  if (source.mode === 'custom') return normalizeRegistry(source.registry)
+  if (source.mode === 'official') return L4_PLUGIN_OFFICIAL_REGISTRY
+  if (source.mode === 'domestic') return L4_PLUGIN_DOMESTIC_REGISTRY
+  return getL4PluginRecommendedRegistry()
+}
+
 export async function readL4PluginInstallRegistry(
   name: string,
   options: { downloadSource?: L4PluginDownloadSource; registry?: string; agentDir?: string }
@@ -128,11 +138,7 @@ export async function readL4PluginInstallRegistry(
         return { registry, fallback: false }
     }
   }
-  if (source.mode === 'custom')
-    return { registry: normalizeRegistry(source.registry), fallback: false }
-  if (source.mode === 'official') return { registry: L4_PLUGIN_OFFICIAL_REGISTRY, fallback: false }
-  if (source.mode === 'domestic') return { registry: L4_PLUGIN_DOMESTIC_REGISTRY, fallback: false }
-  return { registry: await getL4PluginRecommendedRegistry(), fallback: true }
+  return { registry: (await readL4PluginPublicRegistry(source))!, fallback: source.mode === 'auto' }
 }
 
 export async function resolveL4PluginInstall(
@@ -144,7 +150,7 @@ export async function resolveL4PluginInstall(
     signal?: AbortSignal
     cache?: boolean
   } = {}
-): Promise<{ source: string; registry?: string }> {
+): Promise<{ source: string; registry?: string; publicRegistry?: string }> {
   if (!source.startsWith('npm:')) return { source }
   const match = /^npm:((?:@[^/]+\/)?[^@]+)(?:@([^@]+))?$/.exec(source)
   if (!match) throw new L4PluginRegistryError('npm 插件来源无效', 400)
@@ -185,7 +191,16 @@ export async function resolveL4PluginInstall(
   // 本机源仅供版本查询，安装必须继续沿用 npm 配置，也不能保存为逐包仓库归属。
   return {
     source: `npm:${name}@${version}`,
-    ...(downloadSource.mode === 'local' ? {} : { registry })
+    ...(downloadSource.mode === 'local'
+      ? {}
+      : {
+          registry,
+          publicRegistry:
+            selected.fallback ||
+            [L4_PLUGIN_OFFICIAL_REGISTRY, L4_PLUGIN_DOMESTIC_REGISTRY].includes(registry)
+              ? registry
+              : await readL4PluginPublicRegistry(downloadSource)
+        })
   }
 }
 

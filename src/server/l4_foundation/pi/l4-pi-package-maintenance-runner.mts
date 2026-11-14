@@ -62,19 +62,25 @@ async function main(): Promise<void> {
   const source = process.argv[3]?.trim()
   if (!source || source.length > 2048) throw new Error('插件维护来源无效')
   const registry = process.argv[4] ? L4PluginRegistrySchema.parse(process.argv[4]) : undefined
+  const publicRegistry = process.argv[5] ? L4PluginRegistrySchema.parse(process.argv[5]) : undefined
   const scope = /^npm:(@[^/]+)\//.exec(source)?.[1]
-  // scoped 源只覆盖对应 scope，公共依赖继续使用原有默认源。
   const registryKey = scope ? `npm_config_${scope}:registry` : 'npm_config_registry'
   const inheritedEnvironment = { ...process.env }
   // 自动审计会查询整个共享依赖树，不能让无关包的联网检查阻塞维护。
   const maintenanceEnvironment: Record<string, string> = {
     npm_config_audit: 'false',
     npm_config_fund: 'false',
+    ...(publicRegistry
+      ? { npm_config_registry: publicRegistry, 'npm_config_@jetcrab:registry': publicRegistry }
+      : {}),
     ...(registry ? { [registryKey]: registry } : {})
   }
+  const maintenanceKeys = new Set(
+    Object.keys(maintenanceEnvironment).map((key) => key.toLowerCase())
+  )
   for (const key of Object.keys(inheritedEnvironment)) {
     // Windows 子进程的环境名不区分大小写，不能同时保留两种拼写。
-    if (Object.hasOwn(maintenanceEnvironment, key.toLowerCase())) delete inheritedEnvironment[key]
+    if (maintenanceKeys.has(key.toLowerCase())) delete inheritedEnvironment[key]
   }
 
   const configuredAgentDir = process.env.PI_CODING_AGENT_DIR

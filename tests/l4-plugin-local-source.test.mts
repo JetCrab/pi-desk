@@ -91,19 +91,17 @@ test('本机源沿用npm配置，版本查询和隔离预检不被历史仓库�
         integrity: `sha512-${createHash('sha512').update(tar).digest('base64')}`
       }
     }
-    response
-      .writeHead(200, { 'Content-Type': 'application/json' })
-      .end(
-        JSON.stringify(
-          match[2] === name
-            ? {
-                name,
-                'dist-tags': { latest: manifest.version, dev: manifest.version },
-                versions: { [manifest.version]: detail }
-              }
-            : detail
-        )
+    response.writeHead(200, { 'Content-Type': 'application/json' }).end(
+      JSON.stringify(
+        match[2] === name
+          ? {
+              name,
+              'dist-tags': { latest: manifest.version, dev: manifest.version },
+              versions: { [manifest.version]: detail }
+            }
+          : detail
       )
+    )
   })
   try {
     await mkdir(join(installRoot, 'etc'), { recursive: true })
@@ -153,9 +151,10 @@ test('本机源沿用npm配置，版本查询和隔离预检不被历史仓库�
     const preferences = await jiti.import<
       typeof import('../src/server/l4_foundation/pi/l4-pi-plugin-preferences')
     >('../src/server/l4_foundation/pi/l4-pi-plugin-preferences.ts')
-    preferences.setL4PiPluginDownloadSource({ mode: 'local' }, agentDir)
-    preferences.setL4PiPluginRegistry(`npm:${plugin}`, `${base}/stale`, agentDir)
-    const preferencesBefore = await readFile(join(agentDir, 'pi-desk-plugins.json'), 'utf8')
+    await preferences.setL4PiPluginDownloadSource({ mode: 'local' }, agentDir)
+    await preferences.setL4PiPluginRegistry(`npm:${plugin}`, `${base}/stale`, agentDir)
+    const preferencesPath = join(agentDir, 'config/pi-desk.yaml')
+    const preferencesBefore = await readFile(preferencesPath, 'utf8')
     await t.test('本机scope与默认源优先，解析结果不向安装器注入源', async () => {
       assert.deepEqual(
         await registry.resolveL4PluginInstall(`npm:${plugin}`, {
@@ -176,10 +175,7 @@ test('本机源沿用npm配置，版本查询和隔离预检不被历史仓库�
       )
       assert.ok(requests.some((entry) => entry.path === `/public/${utility}` && !entry.auth))
       assert.ok(requests.every((entry) => !/stale|catalog/.test(entry.path)))
-      assert.equal(
-        await readFile(join(agentDir, 'pi-desk-plugins.json'), 'utf8'),
-        preferencesBefore
-      )
+      assert.equal(await readFile(preferencesPath, 'utf8'), preferencesBefore)
       await assert.rejects(
         registry.resolveL4PluginInstall(`npm:${plugin}@9.0.0`, { agentDir, cache: false }),
         /不存在/
@@ -224,21 +220,17 @@ test('本机源沿用npm配置，版本查询和隔离预检不被历史仓库�
       const probe = Object.assign(Object.create(L2PluginManagement.prototype), {
         agentDir,
         stagingRoot,
+        lifetime: new AbortController(),
         disposed: false
-      }) as { probeCandidate: (source: string, activeSource: string) => Promise<void> }
-      await probe.probeCandidate(`npm:${plugin}@1.1.0`, `npm:${plugin}`)
+      }) as { probeCandidate: (source: string) => Promise<void> }
+      await probe.probeCandidate(`npm:${plugin}@1.1.0`)
       assert.ok(requests.some((entry) => entry.path === `/public/${utility}/-/package.tgz`))
       assert.equal(await readFile(join(installRoot, '.npmrc'), 'utf8'), localText)
       assert.equal(await readFile(join(installRoot, 'etc/npmrc'), 'utf8'), globalText)
       assert.deepEqual(await readdir(stagingRoot), [])
-      await assert.rejects(
-        probe.probeCandidate('npm:missing-local-fixture@1.0.0', 'npm:missing-local-fixture')
-      )
+      await assert.rejects(probe.probeCandidate('npm:missing-local-fixture@1.0.0'))
       assert.deepEqual(await readdir(stagingRoot), [])
-      assert.equal(
-        await readFile(join(agentDir, 'pi-desk-plugins.json'), 'utf8'),
-        preferencesBefore
-      )
+      assert.equal(await readFile(preferencesPath, 'utf8'), preferencesBefore)
     })
     await t.test('npm环境默认源优先于安装prefix配置', async () => {
       const other = join(root, 'other-agent')

@@ -125,11 +125,11 @@ function runServiceProcess(options) {
         sources.has(maintenance.source)
       )
         return null
-      if (maintenance.registry !== undefined) {
-        if (typeof maintenance.registry !== 'string' || maintenance.registry.length > 2048)
-          return null
+      for (const registry of [maintenance.registry, maintenance.publicRegistry]) {
+        if (registry === undefined) continue
+        if (typeof registry !== 'string' || registry.length > 2048) return null
         try {
-          const url = new URL(maintenance.registry)
+          const url = new URL(registry)
           if (
             !['https:', 'http:'].includes(url.protocol) ||
             url.username ||
@@ -144,10 +144,11 @@ function runServiceProcess(options) {
       }
       sources.add(maintenance.source)
     }
-    return requests.map(({ action, source, registry }) => ({
+    return requests.map(({ action, source, registry, publicRegistry }) => ({
       action,
       source,
-      ...(registry ? { registry } : {})
+      ...(registry ? { registry } : {}),
+      ...(publicRegistry ? { publicRegistry } : {})
     }))
   }
 
@@ -166,7 +167,10 @@ function runServiceProcess(options) {
                 packageMaintenanceEntry,
                 maintenance.action,
                 maintenance.source,
-                ...(maintenance.registry ? [maintenance.registry] : [])
+                ...(maintenance.registry || maintenance.publicRegistry
+                  ? [maintenance.registry ?? '']
+                  : []),
+                ...(maintenance.publicRegistry ? [maintenance.publicRegistry] : [])
               ])
         ],
         {

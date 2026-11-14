@@ -6,6 +6,7 @@ export interface L4PiDeskPackageMaintenanceRequest {
   action: 'install' | 'update' | 'remove' | 'reinstall'
   source: string
   registry?: string
+  publicRegistry?: string
 }
 
 type L4PiDeskRestartHandler = (

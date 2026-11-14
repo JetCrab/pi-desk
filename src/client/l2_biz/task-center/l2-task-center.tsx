@@ -438,7 +438,7 @@ function TaskCenterPanel({
   }, [runtime])
   useSyncExternalStore(runtime.subscribe, getPanelSnapshot, getPanelSnapshot)
   const state = runtime.getState()
-  const [mobileDetail, setMobileDetail] = useState(false)
+  const [mobileDetail, setMobileDetail] = useState(true)
   const selectedTask = tasks.find((task) => task.taskId === state.selectedTaskId) ?? null
 
   useEffect(() => {
@@ -448,6 +448,7 @@ function TaskCenterPanel({
 
   const showMobileDetail = mobileDetail && state.selectedTaskId !== null
   const panelOpen = state.open && sameSource(state.source, source)
+  if (!panelOpen && !mobileDetail) setMobileDetail(true)
 
   const select = (taskId: string): void => {
     runtime.selectTask(taskId)

@@ -69,7 +69,10 @@ export async function runL4PiPackageMaintenance(input: {
       runnerPath,
       input.maintenance.action,
       input.maintenance.source,
-      ...(input.maintenance.registry ? [input.maintenance.registry] : [])
+      ...(input.maintenance.registry || input.maintenance.publicRegistry
+        ? [input.maintenance.registry ?? '']
+        : []),
+      ...(input.maintenance.publicRegistry ? [input.maintenance.publicRegistry] : [])
     ],
     agentDir: input.agentDir,
     env: { PI_DESK_PACKAGE_MAINTENANCE_CWD: input.cwd },

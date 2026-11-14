@@ -9,7 +9,6 @@ import { cn } from '@client/l4_foundation/lib/l4-utils'
 import { PromptInputButton } from '@client/l4_foundation/ui/ai-elements/prompt-input'
 import type { L2GitWorkspaceRuntime } from './l2-git-workspace-runtime'
 import { getL2GitBranchSummary, type L2GitBranchPickerTarget } from './l2-git-workspace-model'
-import styles from './l2-git-branch-button.module.css'
 
 interface L2GitBranchButtonProps {
   workSession: L2WorkSessionListItem
@@ -69,16 +68,14 @@ export function L2GitBranchButton({
 
   const loading = heads?.status === 'loading' && !summary
   const failed = heads?.status === 'error' && !summary
-  const label = loading ? null : summary
 
   return (
     <PromptInputButton
       data-testid="composer-git-branch"
       tooltip={
-        failed ? (heads.error ?? t('gitStatusReadFailed')) : (label?.title ?? t('gitBranches'))
+        failed ? (heads.error ?? t('gitStatusReadFailed')) : (summary?.title ?? t('gitBranches'))
       }
       aria-label={t('gitBranches')}
-      className={styles.branchTrigger}
       disabled={loading}
       onClick={() =>
         onOpen({
@@ -92,25 +89,15 @@ export function L2GitBranchButton({
       {loading ? (
         <LoaderCircleIcon className="size-4 shrink-0 animate-spin" />
       ) : (
-        <GitBranchIcon className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+        <GitBranchIcon
+          className={cn(
+            'size-4 shrink-0',
+            failed || summary?.diverged
+              ? 'text-amber-600 dark:text-amber-400'
+              : 'text-emerald-600 dark:text-emerald-400'
+          )}
+        />
       )}
-      {failed ? (
-        <span className={cn(styles.branchFallback, 'text-amber-600 dark:text-amber-400')}>
-          Git !
-        </span>
-      ) : label ? (
-        <>
-          <span
-            data-git-branch-full
-            className={cn(
-              styles.branchFull,
-              label.diverged && 'text-amber-600 dark:text-amber-400'
-            )}
-          >
-            {label.full}
-          </span>
-        </>
-      ) : null}
     </PromptInputButton>
   )
 }

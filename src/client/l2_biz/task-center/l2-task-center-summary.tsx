@@ -52,7 +52,7 @@ export function L2TaskCenterSummary({
   if (highlighted && highlighted !== recent) setRecent(highlighted)
   const settled = recent ? tasks.find((task) => task.taskId === recent.taskId) : null
   const visible = highlighted !== null || Boolean(settled && recent)
-  if (!visible && open) setOpen(false)
+  if ((!visible || running.length === 1) && open) setOpen(false)
   const displayTask = highlighted ?? settled ?? recent
 
   useEffect(() => {
@@ -81,7 +81,13 @@ export function L2TaskCenterSummary({
     <PluginStatusCapsule
       visible={visible}
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen && running.length === 1 && highlighted) {
+          showTask(highlighted.taskId)
+          return
+        }
+        setOpen(nextOpen)
+      }}
       summary={summary}
       icon={displayTask ? <StatusIcon task={displayTask} /> : null}
       meta={highlighted && running.length === 1 ? t('statusRunning') : undefined}

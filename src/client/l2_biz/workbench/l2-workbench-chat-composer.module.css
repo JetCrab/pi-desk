@@ -44,6 +44,89 @@
   gap: 0.25rem;
 }
 
+.actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.actionButton {
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  flex: 0 0 2rem;
+}
+
+.runningActionsClip {
+  position: relative;
+  width: 0;
+  height: 2rem;
+  overflow: hidden;
+  transition: width 280ms ease-out;
+}
+
+.runningActions {
+  position: absolute;
+  right: 0;
+  display: flex;
+  width: 4.5rem;
+  height: 2rem;
+  align-items: center;
+  gap: 0.25rem;
+  padding-right: 0.25rem;
+}
+
+.runningActions .actionButton {
+  opacity: 0;
+  transform: translateX(0.375rem);
+  transition:
+    opacity 200ms ease-out,
+    transform 240ms ease-out;
+}
+
+.actions[data-expanded='true'] .runningActionsClip {
+  width: 4.5rem;
+}
+
+.actions[data-expanded='true'] .runningActions .actionButton {
+  opacity: 1;
+  transform: translateX(0);
+  transition-delay: 45ms;
+}
+
+.actions[data-expanded='true'] .runningActions .actionButton:nth-child(2) {
+  transition-delay: 15ms;
+}
+
+.mainAction {
+  color: var(--primary-foreground);
+  background-color: var(--primary);
+  transition:
+    background-color 280ms ease-out,
+    color 280ms ease-out;
+}
+
+.mainAction:hover {
+  background-color: color-mix(in srgb, var(--primary) 90%, transparent);
+}
+
+.mainAction[data-stopping='true'] {
+  color: var(--destructive);
+  background-color: color-mix(in srgb, var(--destructive) 10%, var(--card));
+}
+
+.mainAction[data-stopping='true']:hover {
+  background-color: color-mix(in srgb, var(--destructive) 18%, var(--card));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runningActionsClip,
+  .runningActions .actionButton,
+  .mainAction {
+    transition: none;
+  }
+}
+
 .modelTrigger {
   position: relative;
   min-width: 2rem;
