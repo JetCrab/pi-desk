@@ -19,11 +19,7 @@ import {
   type SessionEntry,
   type ToolDefinition
 } from '@earendil-works/pi-coding-agent'
-import {
-  EventStream,
-  type AssistantMessage,
-  type AssistantMessageEvent
-} from '@earendil-works/pi-ai'
+import { createAssistantMessageEventStream, type AssistantMessage } from '@earendil-works/pi-ai'
 import { getModel } from '@earendil-works/pi-ai/compat'
 import type { TaskReportEvent } from '@jetcrab/pi-desk-sdk'
 import type { SubagentConfig } from '../src/agent-config'
@@ -35,19 +31,6 @@ import {
   SubagentRuntime,
   type SubagentParentContext
 } from '../src/subagent-runtime'
-
-class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
-  constructor() {
-    super(
-      (event) => event.type === 'done' || event.type === 'error',
-      (event) => {
-        if (event.type === 'done') return event.message
-        if (event.type === 'error') return event.error
-        throw new Error('Unexpected assistant event')
-      }
-    )
-  }
-}
 
 type FakeSessionControl = {
   session: AgentSession
@@ -359,7 +342,7 @@ test('重试兼容扩展等待原生 AgentSession 重试成功后再结束 promp
     initialState: { model, systemPrompt: 'Test', tools: [] },
     streamFn: () => {
       callCount += 1
-      const stream = new MockAssistantStream()
+      const stream = createAssistantMessageEventStream()
       queueMicrotask(() => {
         if (callCount === 1) {
           const message: AssistantMessage = {

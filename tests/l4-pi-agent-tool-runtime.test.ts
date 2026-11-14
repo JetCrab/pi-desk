@@ -154,7 +154,7 @@ test('批量工具中断时只丢弃未提交卡片，保留已提交结果且�
     }
     emitAgent({ type: 'turn_end', message, toolResults: results })
     assert.deepEqual(runtime.activeMessages(), [])
-    emitSession({ type: 'agent_settled' })
+    emitSession({ type: 'agent_settled', aborted: true })
     await Promise.resolve()
     assert.deepEqual(
       events.filter((event) => event.type === 'message_discard'),
