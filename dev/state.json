@@ -1,5 +1,5 @@
 {
-  "checks": "74ddabddabecaf2333105443b9764c60687b8277",
+  "checks": "4943a4c945555e0df9c8bd391081e55afbb9665e",
   "units": {
     "windows": {
       "version": "1.1.38",
@@ -27,9 +27,9 @@
       "runId": "43142025816"
     },
     "pi-desk": {
-      "version": "1.1.49",
-      "source": "74ddabddabecaf2333105443b9764c60687b8277",
-      "runId": "43349391012"
+      "version": "1.1.50",
+      "source": "4943a4c945555e0df9c8bd391081e55afbb9665e",
+      "runId": "43541198328"
     },
     "pi-desk-bg-run": {
       "version": "1.1.17",
@@ -92,9 +92,9 @@
       "runId": "43349391012"
     },
     "pi-desk-todo": {
-      "version": "1.0.19",
-      "source": "74ddabddabecaf2333105443b9764c60687b8277",
-      "runId": "43349391012"
+      "version": "1.0.20",
+      "source": "4943a4c945555e0df9c8bd391081e55afbb9665e",
+      "runId": "43541198328"
     }
   }
 }
