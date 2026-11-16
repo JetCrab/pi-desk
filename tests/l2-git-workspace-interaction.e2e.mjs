@@ -28,14 +28,9 @@ import {
 const execFileAsync = promisify(execFile)
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const edgePath = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
-const testRoot = join(projectRoot, 'temp', 'pi', 'git-workspace-e2e', String(process.pid))
-const failureRoot = join(
-  projectRoot,
-  'temp',
-  'run',
-  'git-workspace-interaction',
-  String(process.pid)
-)
+const runId = `composer-branch-bottom-${process.pid}`
+const testRoot = join(projectRoot, 'temp', 'pi', 'git-workspace-e2e', runId)
+const failureRoot = join(projectRoot, 'temp', 'run', 'git-workspace-interaction', runId)
 const agentDir = join(testRoot, 'agent')
 const projectDir = join(testRoot, 'A')
 const noGitProjectDir = join(testRoot, 'NoGit')
@@ -45,13 +40,7 @@ const repositoryB = join(projectDir, 'B')
 const repositoryC = join(projectDir, 'C')
 const repositoryD = join(projectDir, 'D')
 const workSessionStorePath = join(agentDir, 'pi-desk', 'work-sessions.json')
-const outputRoot = join(
-  projectRoot,
-  'temp',
-  'run',
-  'git-workspace-interaction',
-  String(process.pid)
-)
+const outputRoot = join(projectRoot, 'temp', 'run', 'git-workspace-interaction', runId)
 const desktopDirectoryFirstOutput = join(
   outputRoot,
   '客户端_桌面暗色',
@@ -73,7 +62,7 @@ const composerDesktopSingleRunOutput = join(
   'temp',
   'run',
   'git-workspace-layout-e2e',
-  String(process.pid),
+  runId,
   '聊天输入区__桌面460无Git单行.png'
 )
 const composerDesktopRunOutput = join(
@@ -81,7 +70,7 @@ const composerDesktopRunOutput = join(
   'temp',
   'run',
   'git-workspace-layout-e2e',
-  String(process.pid),
+  runId,
   '聊天输入区__桌面窄列两行.png'
 )
 const composerMobileRunOutput = join(
@@ -89,7 +78,7 @@ const composerMobileRunOutput = join(
   'temp',
   'run',
   'git-workspace-layout-e2e',
-  String(process.pid),
+  runId,
   '聊天输入区__移动端443px单行.png'
 )
 const password = 'Qq.445566'
@@ -320,7 +309,8 @@ async function login(client) {
   assert.equal(result.ok, true, result.body?.msg)
   await evaluate(
     client,
-    `localStorage.setItem('pi-desk:workbench-layout', JSON.stringify({ primaryWorkId: ${JSON.stringify(workId)} }));
+    `localStorage.setItem('pi-super-theme', 'system');
+     localStorage.setItem('pi-desk:workbench-layout', JSON.stringify({ primaryWorkId: ${JSON.stringify(workId)} }));
      localStorage.removeItem('pi-desk:file-window-position')`
   )
 }
@@ -415,8 +405,7 @@ async function assertRepositoryView(client) {
   assert.match(repositoryState.branchC, /develop/)
   assert.match(repositoryState.branchD, /main/)
   assert.equal(repositoryState.modelBeforeGit, false)
-  assert.match(repositoryState.composerSummary, /4 个仓库/)
-  assert.doesNotMatch(repositoryState.composerSummary, /分支不一致/)
+  assert.equal(repositoryState.composerSummary.trim(), '')
 }
 
 async function readComposerLayout(client, targetWorkId = workId) {
@@ -450,7 +439,6 @@ async function readComposerLayout(client, targetWorkId = workId) {
         const node = nodes.find(([candidate]) => candidate === name)?.[1];
         return node instanceof HTMLElement ? rect(node) : null;
       };
-      const fullBranch = frame.querySelector('[data-git-branch-full]');
       const modelDetails = frame.querySelector('[data-model-trigger-details]');
       return {
         mobile: frame.getAttribute('data-composer-mobile'),
@@ -465,7 +453,7 @@ async function readComposerLayout(client, targetWorkId = workId) {
         model: readNode('model'),
         modelText: find('[aria-label="选择模型与思考等级"]')?.textContent?.trim() ?? '',
         send: readNode('send'),
-        gitFullDisplay: fullBranch instanceof HTMLElement ? getComputedStyle(fullBranch).display : null,
+        gitText: find('[data-testid="composer-git-branch"]')?.textContent?.trim() ?? '',
         modelDetailsDisplay: modelDetails instanceof HTMLElement ? getComputedStyle(modelDetails).display : null,
         modelDetailsWidth: modelDetails instanceof HTMLElement ? modelDetails.getBoundingClientRect().width : null
       };
@@ -475,6 +463,10 @@ async function readComposerLayout(client, targetWorkId = workId) {
 
 function assertComposerBounds(layout, label) {
   assert.ok(layout, `${label}输入区不存在`)
+  if (layout.git) {
+    assert.equal(layout.gitText, '', `${label}Git 应只显示图标：${JSON.stringify(layout)}`)
+    assert.equal(layout.git.width, 32, `${label}Git 图标按钮宽度：${JSON.stringify(layout)}`)
+  }
   const controls = ['attachment', 'context', 'git', 'model', 'send']
     .map((name) => layout[name])
     .filter(Boolean)
@@ -557,9 +549,8 @@ async function assertComposerDesktopNarrowLayout(client) {
   assert.equal(layout.mobile, 'false', JSON.stringify(layout))
   assert.equal(layout.metadataRow, 'true', JSON.stringify(layout))
   assert.ok(layout.git && layout.model && layout.attachment && layout.send, JSON.stringify(layout))
-  assertSameTop(layout, ['git', 'model'], '桌面窄列上一行')
-  assertSameTop(layout, ['attachment', 'context', 'send'], '桌面窄列下一行')
-  assert.ok(layout.git.top + 2 < layout.attachment.top, JSON.stringify(layout))
+  assertSameTop(layout, ['attachment', 'context', 'git', 'send'], '桌面窄列下一行')
+  assert.ok(layout.model.bottom + 2 <= layout.git.top, JSON.stringify(layout))
 }
 
 async function assertComposerMobileLayout(client, width) {
@@ -568,7 +559,6 @@ async function assertComposerMobileLayout(client, width) {
   assertComposerOrder(layout, `移动端 ${width}px`)
   assert.equal(layout.mobile, 'true', JSON.stringify(layout))
   assertSameTop(layout, ['attachment', 'context', 'git', 'model', 'send'], `移动端 ${width}px 单行`)
-  assert.equal(layout.gitFullDisplay, 'none', JSON.stringify(layout))
   assert.notEqual(layout.modelDetailsDisplay, 'none', JSON.stringify(layout))
   assert.ok(layout.modelDetailsWidth > 0, JSON.stringify(layout))
   assert.ok(layout.footer.height <= 50, JSON.stringify(layout))
@@ -587,7 +577,7 @@ async function selectWorkSession(client, targetWorkId) {
   assert.equal(selected, true, `未找到工作会话：${targetWorkId}`)
   await waitFor(
     client,
-    `document.querySelector(${JSON.stringify(`[data-work-id="${targetWorkId}"] textarea`)}) !== null && document.querySelector(${JSON.stringify(`[data-work-id="${targetWorkId}"] footer[data-composer-active="true"]`)}) !== null`,
+    `document.querySelector(${JSON.stringify(`[data-work-id="${targetWorkId}"] textarea`)}) !== null && document.querySelector(${JSON.stringify(`[data-work-id="${targetWorkId}"] form [aria-label="发送消息"]`)}) !== null`,
     `切换到工作会话 ${targetWorkId}`,
     () => serverOutput
   )
@@ -861,7 +851,9 @@ async function main() {
   let branchCapture
   let composerDesktopSingleCapture
   let composerDesktopCapture
+  let composerDesktopLightCapture
   let composerMobileCapture
+  let composerMobileLightCapture
   let mobileCapture
   let mobileBranchesCapture
   try {
@@ -873,6 +865,7 @@ async function main() {
       agentDir,
       port: appPort,
       development: true,
+      nextDirectory: join(projectRoot, 'temp', 'build', 'git-workspace-interaction', runId, 'next'),
       onOutput: (output) => {
         serverOutput += output
       }
@@ -925,17 +918,18 @@ async function main() {
     await navigate(client, `http://127.0.0.1:${appPort}/`)
     await waitFor(
       client,
-      `document.querySelector('[data-work-id=${JSON.stringify(workId)}] textarea') !== null`,
-      '工作台加载',
+      `document.querySelector('[data-testid="work-session-row-${workId}"]') !== null`,
+      '工作会话列表加载',
       () => serverOutput,
       60_000
     )
+    await selectWorkSession(client, workId)
     await waitFor(client, 'window.innerWidth === 4000', '桌面宽列视口', () => serverOutput)
     await waitFor(
       client,
       `(() => {
         const column = document.querySelector('[data-work-id="${workId}"]');
-        return column?.querySelector('footer[data-composer-active="true"] [aria-label="发送消息"]') !== null &&
+        return column?.querySelector('form [aria-label="发送消息"]') !== null &&
           !column.querySelector('[aria-label="选择模型与思考等级"]')?.textContent?.includes('选择模型');
       })()`,
       '当前会话初始化完成且模型就绪',
@@ -1020,7 +1014,7 @@ async function main() {
       client,
       `(() => {
         const column = document.querySelector('[data-work-id="${workId}"]');
-        return column?.querySelector('[data-git-branch-full]') !== null && column?.querySelector('form[data-composer-metadata-row="true"]') !== null;
+        return column?.querySelector('[data-testid="composer-git-branch"]') !== null && column?.querySelector('form[data-composer-metadata-row="true"]') !== null;
       })()`,
       'Git 异步出现后重新判断桌面换行',
       () => serverOutput,
@@ -1034,13 +1028,29 @@ async function main() {
         const model = form?.querySelector('[aria-label="选择模型与思考等级"]')?.getBoundingClientRect();
         const attachment = form?.querySelector('[aria-label="添加图片"]')?.getBoundingClientRect();
         const send = form?.querySelector('[aria-label="发送消息"]')?.getBoundingClientRect();
-        return Boolean(git && model && attachment && send) && Math.abs(git.top - model.top) <= 2 && Math.abs(attachment.top - send.top) <= 2 && git.top + 2 < attachment.top;
+        return Boolean(git && model && attachment && send) && Math.abs(git.top - attachment.top) <= 2 && Math.abs(attachment.top - send.top) <= 2 && model.bottom + 2 <= git.top;
       })()`,
-      'Git 长模型桌面460px输入区两行布局',
+      '桌面窄列模型独立上移，Git 留在底行',
       () => serverOutput
     )
     await assertComposerDesktopNarrowLayout(client)
     composerDesktopCapture = await screenshot(client)
+    await client.send('Emulation.setEmulatedMedia', {
+      features: [
+        { name: 'prefers-color-scheme', value: 'light' },
+        { name: 'prefers-reduced-motion', value: 'reduce' }
+      ]
+    })
+    await waitFor(client, `!document.documentElement.classList.contains('dark')`, '桌面浅色主题')
+    await assertComposerDesktopNarrowLayout(client)
+    composerDesktopLightCapture = await screenshot(client)
+    await client.send('Emulation.setEmulatedMedia', {
+      features: [
+        { name: 'prefers-color-scheme', value: 'dark' },
+        { name: 'prefers-reduced-motion', value: 'reduce' }
+      ]
+    })
+    await waitFor(client, `document.documentElement.classList.contains('dark')`, '恢复桌面暗色主题')
 
     await setViewport(client, 443, 844, true)
     await waitFor(
@@ -1048,25 +1058,44 @@ async function main() {
       `(() => {
         const form = document.querySelector('[data-work-id="${workId}"] form[data-composer-mobile="true"]');
         const git = form?.querySelector('[data-testid="composer-git-branch"]');
-        const full = form?.querySelector('[data-git-branch-full]');
         const modelDetails = form?.querySelector('[data-model-trigger-details]');
         const buttons = [form?.querySelector('[aria-label="添加图片"]'), git, form?.querySelector('[aria-label="选择模型与思考等级"]'), form?.querySelector('[aria-label="发送消息"]')].filter(Boolean).map((node) => node.getBoundingClientRect().top);
-        return Boolean(form && git && full && modelDetails && buttons.length === 4) && getComputedStyle(full).display === 'none' && getComputedStyle(modelDetails).display !== 'none' && Math.max(...buttons) - Math.min(...buttons) <= 2;
+        return Boolean(form && git && modelDetails && buttons.length === 4) && git.textContent.trim() === '' && getComputedStyle(modelDetails).display !== 'none' && Math.max(...buttons) - Math.min(...buttons) <= 2;
       })()`,
       '443px 移动端输入区单行布局',
       () => serverOutput
     )
     await assertComposerMobileLayout(client, 443)
     composerMobileCapture = await screenshot(client)
+    await client.send('Emulation.setEmulatedMedia', {
+      features: [
+        { name: 'prefers-color-scheme', value: 'light' },
+        { name: 'prefers-reduced-motion', value: 'reduce' }
+      ]
+    })
+    await waitFor(client, `!document.documentElement.classList.contains('dark')`, '移动端浅色主题')
+    await assertComposerMobileLayout(client, 443)
+    composerMobileLightCapture = await screenshot(client)
+    await client.send('Emulation.setEmulatedMedia', {
+      features: [
+        { name: 'prefers-color-scheme', value: 'dark' },
+        { name: 'prefers-reduced-motion', value: 'reduce' }
+      ]
+    })
+    await waitFor(
+      client,
+      `document.documentElement.classList.contains('dark')`,
+      '恢复移动端暗色主题'
+    )
 
     await setViewport(client, 390, 844, true)
     await waitFor(
       client,
       `(() => {
-        const full = document.querySelector('[data-work-id="${workId}"] [data-git-branch-full]');
+        const git = document.querySelector('[data-work-id="${workId}"] [data-testid="composer-git-branch"]');
         const modelDetails = document.querySelector('[data-work-id="${workId}"] [data-model-trigger-details]');
         const controls = ['[aria-label="添加图片"]', '[data-testid="composer-git-branch"]', '[aria-label="选择模型与思考等级"]', '[aria-label="发送消息"]'].map((selector) => document.querySelector('[data-work-id="${workId}"] ' + selector)?.getBoundingClientRect().top).filter((top) => typeof top === 'number');
-        return full && modelDetails && getComputedStyle(full).display === 'none' && getComputedStyle(modelDetails).display !== 'none' && controls.length === 4 && Math.max(...controls) - Math.min(...controls) <= 2;
+        return git && modelDetails && git.textContent.trim() === '' && getComputedStyle(modelDetails).display !== 'none' && controls.length === 4 && Math.max(...controls) - Math.min(...controls) <= 2;
       })()`,
       '390px 移动端 Git 优先图标化',
       () => serverOutput
@@ -1137,7 +1166,15 @@ async function main() {
       [mobileBranchesOutput, mobileBranchesCapture],
       [composerDesktopSingleRunOutput, composerDesktopSingleCapture],
       [composerDesktopRunOutput, composerDesktopCapture],
-      [composerMobileRunOutput, composerMobileCapture]
+      [
+        join(outputRoot, '客户端_浅色', '聊天输入区__桌面窄列两行.png'),
+        composerDesktopLightCapture
+      ],
+      [composerMobileRunOutput, composerMobileCapture],
+      [
+        join(outputRoot, '客户端_浅色', '聊天输入区__移动端443px单行.png'),
+        composerMobileLightCapture
+      ]
     ])
   } catch (error) {
     await mkdir(failureRoot, { recursive: true })

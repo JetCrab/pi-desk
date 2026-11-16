@@ -11,22 +11,9 @@ import type {
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const browserRoot = join(packageRoot, 'dist', 'browser')
 
-test('环境归档声明全局及项目子代理配置且不搬迁资源目录', async () => {
+test('统一配置由宿主归档，插件不重复声明配置文件', async () => {
   const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
-  assert.deepEqual(manifest.piDesk.environment.files, [
-    {
-      base: 'config',
-      path: 'pi-desk-subagent.json',
-      format: 'json',
-      secretPaths: []
-    },
-    {
-      base: 'project',
-      path: 'config/pi-desk-subagent.json',
-      format: 'json',
-      secretPaths: []
-    }
-  ])
+  assert.equal(manifest.piDesk.environment, undefined)
 })
 
 async function browserSources(): Promise<string[]> {

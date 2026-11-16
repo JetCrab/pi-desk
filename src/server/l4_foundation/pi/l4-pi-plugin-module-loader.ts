@@ -3,6 +3,10 @@ import 'server-only'
 import { createJiti, type TransformOptions, type TransformResult } from 'jiti'
 import { readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import {
+  createL4PiPluginModuleResolver,
+  L4_PI_PLUGIN_RESOLVER
+} from './l4-pi-plugin-module-resolver'
 
 type L4PiDeskPluginModule = {
   default?: unknown
@@ -85,6 +89,18 @@ function transformPluginCode(
   const source = options.source
   const transformed = transform(options)
   if (!transformed.error && !transformed.code.includes('__JITI_ERROR__')) {
+    // Jiti 的公开 transform 入口只缓存转译代码；依赖解析留到每次执行，避免固化旧 exports。
+    const resolverId = JSON.stringify(L4_PI_PLUGIN_RESOLVER)
+    const prelude = `
+require = require(${resolverId}).wrapRequire(require, __filename);
+jitiImport = ((original) => (request, options) =>
+  original(require(${resolverId}).resolve(request, __filename), options))(jitiImport);
+jitiESMResolve = ((original) => (request, options) =>
+  original(require(${resolverId}).resolve(request, __filename), options))(jitiESMResolve);
+`
+    transformed.code = transformed.code
+      .replace(/^#!/, '//')
+      .replace(/^((?:\s|\/\/[^\r\n]*|\/\*[\s\S]*?\*\/)*(?:["']use strict["'];)?)/, `$1${prelude}`)
     storeCode(filename, {
       source,
       transforms: new Map(cached?.transforms).set(async, transformed),
@@ -129,32 +145,34 @@ async function createPluginModuleLoader(): Promise<L4PiPluginModuleLoader> {
     importNativePiModule('typebox/value')
   ])
 
+  const virtualModules: Record<string, unknown> = {
+    '@earendil-works/pi-coding-agent': piCodingAgent,
+    '@earendil-works/pi-agent-core': piAgentCore,
+    '@earendil-works/pi-tui': piTui,
+    '@earendil-works/pi-ai/providers/all': piAiProviders,
+    '@earendil-works/pi-ai/compat': piAiCompat,
+    '@earendil-works/pi-ai/oauth': piAiOauth,
+    '@earendil-works/pi-ai': piAiCompat,
+    '@mariozechner/pi-coding-agent': piCodingAgent,
+    '@mariozechner/pi-agent-core': piAgentCore,
+    '@mariozechner/pi-tui': piTui,
+    '@mariozechner/pi-ai/providers/all': piAiProviders,
+    '@mariozechner/pi-ai/compat': piAiCompat,
+    '@mariozechner/pi-ai/oauth': piAiOauth,
+    '@mariozechner/pi-ai': piAiCompat,
+    typebox,
+    'typebox/compile': typeboxCompile,
+    'typebox/value': typeboxValue,
+    '@sinclair/typebox': typebox,
+    '@sinclair/typebox/compile': typeboxCompile,
+    '@sinclair/typebox/value': typeboxValue
+  }
+  virtualModules[L4_PI_PLUGIN_RESOLVER] = createL4PiPluginModuleResolver(virtualModules)
   const loader = createJiti(moduleBase, {
     moduleCache: false,
     fsCache: false,
     tryNative: false,
-    virtualModules: {
-      '@earendil-works/pi-coding-agent': piCodingAgent,
-      '@earendil-works/pi-agent-core': piAgentCore,
-      '@earendil-works/pi-tui': piTui,
-      '@earendil-works/pi-ai/providers/all': piAiProviders,
-      '@earendil-works/pi-ai/compat': piAiCompat,
-      '@earendil-works/pi-ai/oauth': piAiOauth,
-      '@earendil-works/pi-ai': piAiCompat,
-      '@mariozechner/pi-coding-agent': piCodingAgent,
-      '@mariozechner/pi-agent-core': piAgentCore,
-      '@mariozechner/pi-tui': piTui,
-      '@mariozechner/pi-ai/providers/all': piAiProviders,
-      '@mariozechner/pi-ai/compat': piAiCompat,
-      '@mariozechner/pi-ai/oauth': piAiOauth,
-      '@mariozechner/pi-ai': piAiCompat,
-      typebox,
-      'typebox/compile': typeboxCompile,
-      'typebox/value': typeboxValue,
-      '@sinclair/typebox': typebox,
-      '@sinclair/typebox/compile': typeboxCompile,
-      '@sinclair/typebox/value': typeboxValue
-    }
+    virtualModules
   })
   const transform = loader.options.transform!
   // 同一转译结果可重复执行；不能缓存带模块顶层状态的 exports。
@@ -190,7 +208,8 @@ export async function loadL4PiDeskPluginEntry(
     const filename = resolve(entryPath)
     const loaded = loader.evalModule(readPluginSource(filename), {
       filename,
-      async: false
+      async: false,
+      forceTranspile: true
     }) as L4PiDeskPluginModule | undefined
     return { default: loaded?.default ?? loaded }
   } catch (error) {

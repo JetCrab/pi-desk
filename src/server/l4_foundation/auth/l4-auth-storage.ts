@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import { readConfigSection } from '@jetcrab/pi-desk-sdk/config'
 import { z } from 'zod'
 
 export const L4AuthConfigSchema = z
@@ -12,7 +12,7 @@ export const L4ReadAuthConfigSchema = L4AuthConfigSchema
 
 export class L4AuthConfigError extends Error {
   constructor() {
-    super('登录保护配置无法读取，请修复配置或删除 pi-desk-auth.json 后重新设置')
+    super('登录保护配置无法读取，请修复 pi-desk.yaml 中的 pi-desk.auth 配置')
     this.name = 'L4AuthConfigError'
   }
 }
@@ -39,7 +39,8 @@ export function initializeL4AuthSessionKey(path: string): void {
 
 /** 只供首次配置或离线恢复；普通读取不能把丢失的签名材料视为新环境。 */
 export function restoreL4AuthSessionKey(agentDir: string): void {
-  const path = getConfigPath('pi-desk-auth.json', agentDir)
-  L4AuthConfigSchema.parse(JSON.parse(readFileSync(path, 'utf8')))
+  const value = readConfigSection('pi-desk', 'auth', agentDir)
+  if (Object.keys(value).length === 0) return
+  L4AuthConfigSchema.parse(value)
   initializeL4AuthSessionKey(join(agentDir, 'pi-desk', 'auth-session-key'))
 }

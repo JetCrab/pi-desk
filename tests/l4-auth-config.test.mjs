@@ -5,11 +5,13 @@ import { join } from 'node:path'
 import { scrypt } from 'node:crypto'
 import { after, test } from 'node:test'
 import { promisify } from 'node:util'
+import { parse as parseYaml } from 'yaml'
+const authDocument = (auth) => JSON.stringify({ 'pi-desk': { auth } })
 
 const testRoot = join(process.cwd(), 'temp', 'tests', 'auth-config', String(process.pid))
 const agentDir = join(testRoot, 'agent')
 const authDirectory = join(agentDir, 'pi-desk')
-const authConfigPath = join(agentDir, 'config', 'pi-desk-auth.json')
+const authConfigPath = join(agentDir, 'config', 'pi-desk.yaml')
 const legacyAuthConfigPath = join(authDirectory, 'auth.json')
 const sessionKeyPath = join(authDirectory, 'auth-session-key')
 const deriveScrypt = promisify(scrypt)
@@ -97,23 +99,23 @@ test('认证文件格式、scrypt 参数、独立 key 与哈希期间变更拒�
   assert.equal(await readFile(legacyAuthConfigPath, 'utf8'), legacyContent)
 
   await writeFile(sessionKeyPath, 'stale key', 'utf8')
-  assert.throws(() => auth.writeL4AuthConfig({ passwordHash }), auth.L4AuthConfigError)
+  await assert.rejects(auth.writeL4AuthConfig({ passwordHash }), auth.L4AuthConfigError)
   assert.equal(await readFile(sessionKeyPath, 'utf8'), 'stale key')
   await assert.rejects(readFile(authConfigPath), { code: 'ENOENT' })
   await rm(sessionKeyPath)
-  auth.writeL4AuthConfig({ passwordHash })
+  await auth.writeL4AuthConfig({ passwordHash })
   assert.equal(auth.getL4AuthConfigPath(), authConfigPath)
   assert.equal(await readFile(legacyAuthConfigPath, 'utf8'), legacyContent)
   assert.equal(auth.readL4AuthCredentials()?.passwordHash, passwordHash)
-  const stored = JSON.parse(await readFile(authConfigPath, 'utf8'))
+  const stored = parseYaml(await readFile(authConfigPath, 'utf8'))['pi-desk'].auth
   assert.deepEqual(Object.keys(stored), ['passwordHash'])
   assert.equal(stored.passwordHash, passwordHash)
-  await writeFile(authConfigPath, JSON.stringify({ username: 'legacy', passwordHash }), 'utf8')
+  await writeFile(authConfigPath, authDocument({ username: 'legacy', passwordHash }), 'utf8')
   assert.throws(() => auth.readL4AuthCredentials(), auth.L4AuthConfigError)
   assert.throws(() => auth.restoreL4AuthSessionKey(agentDir))
-  await writeFile(authConfigPath, JSON.stringify({ passwordHash }), 'utf8')
+  await writeFile(authConfigPath, authDocument({ passwordHash }), 'utf8')
   assert.ok(await l2Auth.authenticateL2WebLogin({ password }))
-  auth.writeL4AuthConfig({ passwordHash })
+  await auth.writeL4AuthConfig({ passwordHash })
 
   const credentials = auth.readL4AuthCredentials()
   assert.ok(credentials)
@@ -140,7 +142,7 @@ test('认证文件格式、scrypt 参数、独立 key 与哈希期间变更拒�
 
   await rm(sessionKeyPath)
   assert.throws(() => auth.readL4AuthCredentials(), auth.L4AuthConfigError)
-  assert.throws(() => auth.writeL4AuthConfig({ passwordHash }), auth.L4AuthConfigError)
+  await assert.rejects(auth.writeL4AuthConfig({ passwordHash }), auth.L4AuthConfigError)
   await assert.rejects(readFile(sessionKeyPath), { code: 'ENOENT' })
   auth.restoreL4AuthSessionKey(agentDir)
   const restoredKey = await readFile(sessionKeyPath, 'utf8')
@@ -163,13 +165,13 @@ test('认证文件格式、scrypt 参数、独立 key 与哈希期间变更拒�
   await writeFile(sessionKeyPath, 'damaged key', 'utf8')
   const nextPassword = 'Updated Horse 42!'
   const nextPasswordHash = await auth.hashL4AuthPassword(nextPassword)
-  assert.throws(
-    () => auth.writeL4AuthConfig({ passwordHash: nextPasswordHash }),
+  await assert.rejects(
+    auth.writeL4AuthConfig({ passwordHash: nextPasswordHash }),
     auth.L4AuthConfigError
   )
   assert.equal(await readFile(sessionKeyPath, 'utf8'), 'damaged key')
   await rm(sessionKeyPath)
-  auth.writeL4AuthConfig({ passwordHash: nextPasswordHash })
+  await auth.writeL4AuthConfig({ passwordHash: nextPasswordHash })
   const nextCredentials = auth.readL4AuthCredentials()
   assert.ok(nextCredentials)
   assert.notEqual(nextCredentials.sessionSecret, credentials.sessionSecret)
@@ -179,18 +181,18 @@ test('认证文件格式、scrypt 参数、独立 key 与哈希期间变更拒�
   assert.equal(await auth.verifyL4AuthPassword(nextPassword, nextCredentials.passwordHash), true)
 
   const offlineAgentDir = join(testRoot, 'offline-import-agent')
-  const offlineConfigPath = join(offlineAgentDir, 'config', 'pi-desk-auth.json')
+  const offlineConfigPath = join(offlineAgentDir, 'config', 'pi-desk.yaml')
   const offlineKeyPath = join(offlineAgentDir, 'pi-desk', 'auth-session-key')
   await mkdir(join(offlineAgentDir, 'config'), { recursive: true })
   await writeFile(offlineConfigPath, '{broken')
   assert.throws(() => auth.restoreL4AuthSessionKey(offlineAgentDir))
   await assert.rejects(readFile(offlineKeyPath), { code: 'ENOENT' })
-  await writeFile(offlineConfigPath, JSON.stringify({ passwordHash: nextPasswordHash }))
+  await writeFile(offlineConfigPath, authDocument({ passwordHash: nextPasswordHash }))
   auth.restoreL4AuthSessionKey(offlineAgentDir)
   assert.match((await readFile(offlineKeyPath, 'utf8')).trim(), /^[a-f0-9]{64}$/)
   assert.equal(
     await readFile(offlineConfigPath, 'utf8'),
-    JSON.stringify({ passwordHash: nextPasswordHash })
+    authDocument({ passwordHash: nextPasswordHash })
   )
   assert.equal((await readFile(sessionKeyPath, 'utf8')).trim(), nextSessionKey)
 
@@ -222,7 +224,7 @@ test('认证文件格式、scrypt 参数、独立 key 与哈希期间变更拒�
   assert.equal(await authentication, null)
   assert.equal(auth.readL4AuthCredentials(), null)
 
-  auth.writeL4AuthConfig(null)
+  await auth.writeL4AuthConfig(null)
   assert.equal(auth.readL4AuthCredentials(), null)
   assert.equal((await readFile(sessionKeyPath, 'utf8')).trim(), nextSessionKey)
   assert.equal(await readFile(legacyAuthConfigPath, 'utf8'), legacyContent)

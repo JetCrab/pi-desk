@@ -2,7 +2,11 @@ import { randomBytes } from 'node:crypto'
 import { createConnection } from 'node:net'
 import { realpath } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
-import type { PiDeskPluginFacade, PluginWorkSession } from '@jetcrab/pi-desk-sdk/entry'
+import type {
+  PiDeskPluginFacade,
+  PluginConfig,
+  PluginWorkSession
+} from '@jetcrab/pi-desk-sdk/entry'
 import {
   readRemoteDebugConfig,
   type RemoteDebugConfig,
@@ -108,7 +112,8 @@ export class RemoteDebugRuntime {
       startTunnel: dependencies.startTunnel ?? startTunnelClient,
       waitForPort: dependencies.waitForPort ?? waitForTcpPort,
       createLogger: dependencies.createLogger ?? RunLogger.create,
-      settingsStore: dependencies.settingsStore ?? new RemoteDebugSettingsStore(),
+      settingsStore:
+        dependencies.settingsStore ?? new RemoteDebugSettingsStore({ config: plugin.config }),
       preparePorts: dependencies.preparePorts ?? prepareLocalPorts
     }
     this.publishState()
@@ -135,7 +140,7 @@ export class RemoteDebugRuntime {
     return Promise.all(
       [...uniqueCwds.values()].map((cwd) => {
         this.syncProject(cwd)
-        return loadRemoteDebugProject(cwd)
+        return loadRemoteDebugProject(cwd, this.plugin.config)
       })
     )
   }
@@ -167,9 +172,9 @@ export class RemoteDebugRuntime {
   ): Promise<RemoteDebugStartResult> {
     if (this.disposed) throw new Error('Remote Debug Runtime 已关闭')
     cwd = await realpath(cwd)
-    const config = await readRemoteDebugConfig(cwd)
+    const config = await readRemoteDebugConfig(cwd, this.plugin.config)
     if (this.disposed) throw new Error('Remote Debug Runtime 已关闭')
-    if (!config) throw new Error('项目没有 .pi/remote_debug.yaml')
+    if (!config) throw new Error('项目没有 plugins.remote-debug 配置')
     const profile = config.profiles[profileName]
     if (!profile) throw new Error(`调试配置不存在：${profileName}`)
     if (
@@ -494,9 +499,12 @@ export class RemoteDebugRuntime {
   }
 }
 
-async function loadRemoteDebugProject(cwd: string): Promise<RemoteDebugProject> {
+async function loadRemoteDebugProject(
+  cwd: string,
+  store: PluginConfig
+): Promise<RemoteDebugProject> {
   try {
-    const config = await readRemoteDebugConfig(cwd)
+    const config = await readRemoteDebugConfig(cwd, store)
     if (!config) {
       return {
         cwd,

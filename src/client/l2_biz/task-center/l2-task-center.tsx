@@ -48,6 +48,7 @@ import { L3ConversationTurnView } from '@client/l3_modules/conversation/l3-conve
 import { L3ConversationTailSpacerObserver } from '@client/l3_modules/conversation/l3-conversation-viewport'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
 import type { L2TaskCenterRuntime } from './l2-task-center-runtime'
+import { L2TaskCenterSummary } from './l2-task-center-summary'
 
 interface L2TaskCenterProps {
   source: L3WorkSessionSource
@@ -437,7 +438,7 @@ function TaskCenterPanel({
   }, [runtime])
   useSyncExternalStore(runtime.subscribe, getPanelSnapshot, getPanelSnapshot)
   const state = runtime.getState()
-  const [mobileDetail, setMobileDetail] = useState(false)
+  const [mobileDetail, setMobileDetail] = useState(true)
   const selectedTask = tasks.find((task) => task.taskId === state.selectedTaskId) ?? null
 
   useEffect(() => {
@@ -447,6 +448,7 @@ function TaskCenterPanel({
 
   const showMobileDetail = mobileDetail && state.selectedTaskId !== null
   const panelOpen = state.open && sameSource(state.source, source)
+  if (!panelOpen && !mobileDetail) setMobileDetail(true)
 
   const select = (taskId: string): void => {
     runtime.selectTask(taskId)
@@ -608,8 +610,6 @@ export function L2TaskCenter({
   variant
 }: L2TaskCenterProps): React.JSX.Element {
   const { t } = useTranslation('taskCenter')
-  const running = tasks.filter((task) => task.status === 'running')
-  const highlighted = running[0]
   const open = (): void => {
     runtime.open(source, preferredTask(tasks)?.taskId ?? null)
   }
@@ -635,24 +635,11 @@ export function L2TaskCenter({
 
   return (
     <>
-      {highlighted ? (
-        <button
-          type="button"
-          className="mb-2 flex min-h-8 w-full cursor-pointer items-center gap-2 rounded-md border bg-muted px-2.5 text-left text-sm text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={open}
-          aria-label={`${t('open')}, ${t('runningCount', { count: running.length })}`}
-        >
-          <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin text-foreground" />
-          <span className="shrink-0 font-medium text-foreground">
-            {t('runningCount', { count: running.length })}
-          </span>
-          <span className="min-w-0 flex-1 truncate">
-            {highlighted.title}
-            {highlighted.activity ? ` · ${highlighted.activity}` : ''}
-          </span>
-          <ChevronRightIcon className="size-3.5 shrink-0" />
-        </button>
-      ) : null}
+      <L2TaskCenterSummary
+        key={`${source.workId}:${source.sessionId}:${source.branchId}`}
+        tasks={tasks}
+        onOpen={(taskId) => runtime.open(source, taskId ?? preferredTask(tasks)?.taskId ?? null)}
+      />
 
       <TaskCenterPanel source={source} tasks={tasks} runtime={runtime} cwd={cwd} />
     </>

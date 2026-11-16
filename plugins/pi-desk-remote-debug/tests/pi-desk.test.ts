@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { memoryConfig } from '../../pi-desk-sdk/tests/fixtures/config.js'
 import type { PiDeskPluginFacade } from '@jetcrab/pi-desk-sdk/entry'
 import pluginDefinition from '../src/pi-desk.js'
 
@@ -8,6 +9,7 @@ test('Pi Desk Entry 注册远程调试和配置方法及唯一 Browser Entry', a
   const browserEntries: string[] = []
   const facade: PiDeskPluginFacade = {
     name: 'remote-debug',
+    config: memoryConfig(),
     notifications: {
       publish: () => '11111111-1111-4111-8111-111111111111',
       update: () => undefined,

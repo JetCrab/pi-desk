@@ -17,26 +17,20 @@ function measureRequiredElementWidths(
   const uniqueElements = [...new Set(elements)]
   const previousStyles = uniqueElements.map((element) => ({
     element,
-    flex: element.style.flex,
-    width: element.style.width,
-    minWidth: element.style.minWidth
+    flex: element.style.flex
   }))
 
   try {
     // 所有样式先统一写入，再连续读取尺寸，避免逐元素读写造成同步布局抖动。
     for (const { element } of previousStyles) {
       element.style.flex = '0 0 auto'
-      element.style.width = 'max-content'
-      element.style.minWidth = 'max-content'
     }
     return new Map(
       uniqueElements.map((element) => [element, element.getBoundingClientRect().width])
     )
   } finally {
-    for (const { element, flex, width, minWidth } of previousStyles) {
+    for (const { element, flex } of previousStyles) {
       element.style.flex = flex
-      element.style.width = width
-      element.style.minWidth = minWidth
     }
   }
 }
@@ -56,7 +50,8 @@ export function useL2WorkbenchComposerLayout(
   mobile: boolean,
   footerRef: RefObject<HTMLDivElement | null>,
   submitToolsRef: RefObject<HTMLDivElement | null>,
-  statusRef: RefObject<HTMLSpanElement | null>
+  statusRef: RefObject<HTMLSpanElement | null>,
+  showRunningActions: boolean
 ): boolean {
   const [desktopMetadataRow, setDesktopMetadataRow] = useState(false)
 
@@ -86,12 +81,27 @@ export function useL2WorkbenchComposerLayout(
         const metadataGap = pixels(window.getComputedStyle(metadataTools).columnGap)
         const submitGap = pixels(window.getComputedStyle(submitTools).columnGap)
         const status = statusRef.current
-        const widths = measureRequiredElementWidths([
-          ...primaryChildren,
-          ...metadataChildren,
-          ...submitChildren,
-          ...(status ? [status] : [])
-        ])
+        const widths = new Map(
+          measureRequiredElementWidths([
+            ...primaryChildren,
+            ...metadataChildren,
+            ...submitChildren,
+            ...(status ? [status] : [])
+          ])
+        )
+        const actions = submitTools.querySelector<HTMLElement>('[data-composer-actions]')
+        const mainAction = actions?.querySelector<HTMLElement>('[data-composer-main-action]')
+        const runningActions = actions?.querySelector<HTMLElement>(
+          '[data-composer-running-actions]'
+        )
+        if (actions && mainAction && runningActions) {
+          // 使用最终占宽，不让展开动画的中间宽度参与换行决策。
+          widths.set(
+            actions,
+            mainAction.getBoundingClientRect().width +
+              (showRunningActions ? runningActions.getBoundingClientRect().width : 0)
+          )
+        }
         const itemWidths = [
           requiredChildrenWidth(primaryChildren, primaryGap, widths),
           requiredChildrenWidth(metadataChildren, metadataGap, widths),
@@ -136,7 +146,7 @@ export function useL2WorkbenchComposerLayout(
       document.fonts.removeEventListener('loadingdone', invalidateMeasurement)
       if (updateFrame !== null) window.cancelAnimationFrame(updateFrame)
     }
-  }, [footerRef, mobile, statusRef, submitToolsRef])
+  }, [footerRef, mobile, statusRef, submitToolsRef, showRunningActions])
 
   return desktopMetadataRow
 }

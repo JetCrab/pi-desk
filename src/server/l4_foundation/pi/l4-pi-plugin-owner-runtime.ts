@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { HostSettings } from '@jetcrab/pi-desk-sdk/settings'
 import { readFile, stat } from 'node:fs/promises'
@@ -1079,6 +1080,9 @@ export class L4PiPluginOwnerRuntime {
     }
     return {
       name: pluginName,
+      config: bindConfigStore('plugins', pluginName, {
+        assertActive: () => this.ensureOwnerActive(owner)
+      }),
       host,
       notifications: {
         publish: (input) => {

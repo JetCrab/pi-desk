@@ -5,6 +5,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
+import { parse as parseYaml } from 'yaml'
 
 const originalLoad = Module._load
 Module._load = function load(request, parent, isMain) {
@@ -36,7 +37,7 @@ test('能力模式只读config，旧根文件保持原样且缺新文件用空�
   process.env.PI_CODING_AGENT_DIR = agentDir
 
   const previousPath = join(agentDir, 'pi-super-capability-modes.json')
-  const currentPath = join(agentDir, 'config', 'pi-desk-capability-modes.json')
+  const currentPath = join(agentDir, 'config', 'pi-desk.yaml')
   const rootLegacyPath = join(agentDir, 'pi-desk-capability-modes.json')
   const previousContent = '{"modes":{"old":{"name":"旧模式"}}}'
   await writeFile(previousPath, previousContent, 'utf8')
@@ -49,7 +50,9 @@ test('能力模式只读config，旧根文件保持原样且缺新文件用空�
   const modes = { current: { name: '当前模式', tools: { allow: ['read'] } } }
   await store.replace(modes)
   assert.deepEqual(new L4CapabilityModesStore().read(), modes)
-  assert.deepEqual(JSON.parse(await readFile(currentPath, 'utf8')), { modes })
+  assert.deepEqual(parseYaml(await readFile(currentPath, 'utf8'))['pi-desk']['capability-modes'], {
+    modes
+  })
   assert.equal(await readFile(previousPath, 'utf8'), previousContent)
   assert.equal(await readFile(rootLegacyPath, 'utf8'), '{broken')
 })

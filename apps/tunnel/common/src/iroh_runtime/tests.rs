@@ -862,7 +862,13 @@ async fn endpoint_shutdown_closes_clones_flows_listeners_and_udp() {
         .map_err(|_| "本机自动模式没有选中direct")?;
         let sockets = fixture.visitor.runtime.shared.endpoint()?.bound_sockets();
         let addr = mapping.local_addr();
-        fixture.visitor.clone().shutdown().await?;
+        println!("关闭前资源：映射TCP={addr}，端点UDP={sockets:?}");
+        fixture
+            .visitor
+            .clone()
+            .shutdown()
+            .await
+            .map_err(|error| format!("关闭visitor端点失败：{error}"))?;
         count(&fixture.provider, 0).await?;
         check(mapping.path() == TunnelPath::Unknown, "关闭后路径没有归零")?;
         check(
@@ -877,10 +883,51 @@ async fn endpoint_shutdown_closes_clones_flows_listeners_and_udp() {
                 .is_err(),
             "已关闭克隆仍可监听",
         )?;
-        std::net::TcpListener::bind(addr).map_err(text)?;
-        for addr in sockets {
-            std::net::UdpSocket::bind(addr).map_err(text)?;
+        let mut rebind_errors = Vec::new();
+        match std::net::TcpListener::bind(addr) {
+            Ok(_) => println!("端点关闭后映射TCP已释放：{addr}"),
+            Err(error) => {
+                rebind_errors.push(format!("端点关闭后重绑映射TCP {addr} 失败：{error}"));
+                println!(
+                    "重绑时测试客户端仍持有：local={:?}，peer={:?}",
+                    live.local_addr(),
+                    live.peer_addr()
+                );
+                // 仅诊断运行时的监听条件；即使成功，普通重绑失败仍必须使测试失败。
+                match tokio::net::TcpListener::bind(addr).await {
+                    Ok(_) => println!("诊断：按Tokio监听条件重绑TCP {addr} 成功"),
+                    Err(error) => println!("诊断：按Tokio监听条件重绑TCP {addr} 失败：{error}"),
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    match std::process::Command::new("netstat")
+                        .args(["-anv", "-p", "tcp"])
+                        .output()
+                    {
+                        Ok(output) => {
+                            let address = format!("{}.{}", addr.ip(), addr.port());
+                            for line in String::from_utf8_lossy(&output.stdout)
+                                .lines()
+                                .filter(|line| line.contains(&address))
+                            {
+                                println!("诊断：macOS TCP状态：{line}");
+                            }
+                            println!("诊断：netstat退出状态：{}", output.status);
+                        }
+                        Err(error) => println!("诊断：无法读取macOS TCP状态：{error}"),
+                    }
+                }
+            }
         }
+        for addr in sockets {
+            match std::net::UdpSocket::bind(addr) {
+                Ok(_) => println!("端点关闭后端点UDP已释放：{addr}"),
+                Err(error) => {
+                    rebind_errors.push(format!("端点关闭后重绑端点UDP {addr} 失败：{error}"));
+                }
+            }
+        }
+        check(rebind_errors.is_empty(), &rebind_errors.join("；"))?;
         mapping.shutdown().await?;
         drop(live);
         Ok::<_, String>(())

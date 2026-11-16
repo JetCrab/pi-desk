@@ -280,9 +280,14 @@ fn spawn_client(
         desktop_executable.unwrap_or_else(|| env!("CARGO_BIN_EXE_pi-desk-tunnel-client").into()),
     );
     if desktop {
+        let directory = config_path.parent().expect("配置应有隔离目录");
         command
             .arg("--tunnel-client")
-            .env("PI_DESK_DESKTOP_CONFIG", config_path);
+            .env("PI_DESK_DESKTOP_CONFIG", config_path)
+            .env("PI_DESK_DESKTOP_DATA_DIR", directory)
+            .env("PI_DESK_SECRET_KEY_FILE", directory.join("secret-key"))
+            .env("PI_CODING_AGENT_DIR", directory)
+            .env("PI_CODING_AGENT_SESSION_DIR", directory.join("sessions"));
     } else {
         command.args([
             "--config",
@@ -316,10 +321,21 @@ async fn wait_for_event(lines: &mut Lines<BufReader<ChildStdout>>, expected: &st
                 .next_line()
                 .await
                 .expect("应读取 CLI 输出")
-                .expect("CLI 不应提前关闭 stdout");
+                .unwrap_or_else(|| panic!("CLI 在等待 {expected} 时提前关闭 stdout"));
             let event: Value = serde_json::from_str(&line).expect("CLI 应输出 NDJSON");
-            if event.get("type").and_then(Value::as_str) == Some(expected) {
+            let event_type = event.get("type").and_then(Value::as_str);
+            if event_type == Some(expected) {
                 return event;
+            }
+            if event_type == Some("failed") {
+                let detail = event["detail"]
+                    .as_str()
+                    .unwrap_or("缺少失败详情")
+                    .replace(&"07".repeat(32), "[control-key]")
+                    .replace(&"45".repeat(32), "[storage-key]")
+                    .replace(&"09".repeat(32), "[provider-key]")
+                    .replace("desktop-identity-must-not-be-read", "[provider-key]");
+                panic!("CLI 在等待 {expected} 时失败：{detail}");
             }
         }
     })
@@ -379,14 +395,33 @@ async fn wait_for_port_release(public_address: &str) {
 }
 
 fn write_config(path: &PathBuf, control_address: &str) {
-    fs::write(
-        path,
-        format!(
-            r#"{{"targets":[],"tunnel":{{"controlServerUrl":"http://{control_address}","controlKey":"{}","providerSecretKey":"desktop-identity-must-not-be-read"}}}}"#,
-            "07".repeat(32)
-        ),
-    )
-    .expect("应写入壳配置");
+    let mut config = serde_json::json!({
+        "targets": [],
+        "tunnel": {
+            "controlServerUrl": format!("http://{control_address}"),
+            "controlKey": "07".repeat(32),
+            "providerSecretKey": "desktop-identity-must-not-be-read",
+        },
+    });
+    if std::env::var_os("PI_DESK_TUNNEL_TEST_DESKTOP_EXECUTABLE").is_some() {
+        // 桌面解码器校验完整 Owner 配置；独立 CLI 仍保留无效身份以验证不会读取它。
+        config["tunnel"]["providerSecretKey"] = "09".repeat(32).into();
+        let secrets = serde_json::json!({
+            "controlKey": config["tunnel"]["controlKey"],
+            "providerSecretKey": config["tunnel"]["providerSecretKey"],
+        });
+        let ciphertext = CryptoContext::new([0x45; 32])
+            .encrypt(
+                "pi-desk-desktop/storage/v1",
+                &serde_json::to_vec(&secrets).expect("应序列化测试凭据"),
+            )
+            .expect("应加密桌面测试凭据");
+        config["tunnel"]["controlKey"] = "desktop-secret://control-key".into();
+        config["tunnel"]["providerSecretKey"] = "desktop-secret://provider-identity".into();
+        config["desktopVault"] = serde_json::json!({ "version": 1, "ciphertext": ciphertext });
+        fs::write(path.with_file_name("secret-key"), [0x45; 32]).expect("应写入隔离桌面存储密钥");
+    }
+    fs::write(path, serde_json::to_vec(&config).expect("应序列化测试配置")).expect("应写入壳配置");
 }
 
 fn unused_address() -> String {
@@ -400,6 +435,7 @@ fn temporary_directory() -> PathBuf {
         .expect("系统时间有效")
         .as_nanos();
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../temp/run/tunnel-cli/iroh-integration-20261103")
+        .join("../../../temp/pi/tunnel-cli")
         .join(format!("provider-{}-{suffix}", std::process::id()))
+        .join("agent")
 }

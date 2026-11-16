@@ -46,12 +46,15 @@ function assertDirectories(path: string): void {
   }
 }
 
-export function readStorageFile(path: string): Buffer | null {
+export function readStorageFile(path: string, maximumBytes?: number): Buffer | null {
   assertDirectories(dirname(path))
   let descriptor: number | undefined
   try {
     const stat = lstatSync(path)
     if (!stat.isFile()) throw new Error(`拒绝读取非普通配置文件或符号链接：${path}`)
+    if (maximumBytes !== undefined && stat.size > maximumBytes) {
+      throw new Error(`拒绝读取超过容量限制的配置文件：${path}`)
+    }
     descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
     const opened = fstatSync(descriptor)
     if (!opened.isFile() || opened.ino !== stat.ino || opened.dev !== stat.dev) {
@@ -90,7 +93,9 @@ export function writeStorageFile(path: string, content: Buffer, expected: Buffer
   let descriptor: number | undefined
   let committed = false
   try {
-    descriptor = openSync(temporary, 'wx', 0o600)
+    const mode =
+      expected !== null && process.platform !== 'win32' ? lstatSync(path).mode & 0o600 : 0o600
+    descriptor = openSync(temporary, 'wx', mode)
     writeFileSync(descriptor, content)
     fsyncSync(descriptor)
     closeSync(descriptor)

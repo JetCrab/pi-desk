@@ -87,6 +87,43 @@ test('替换一个Owner保持其他服务和Browser资源身份不变', async (c
   assert.deepEqual(state.releases, ['owner-a'])
 })
 
+test('同路径升级SDK后热替换Owner，不重启进程或其他插件', async (context) => {
+  const { runtime, candidate, state } = await fixture(context)
+  const root = await candidate(
+    'owner-a',
+    `const { version } = require('test-hot-sdk/config')
+     plugin.registerMethod('get', async () => ({ version, pid: process.pid }))`
+  )
+  const dependency = join(root, 'node_modules/test-hot-sdk')
+  await mkdir(dependency, { recursive: true })
+  const publish = async (version: number): Promise<void> => {
+    await writeFile(join(dependency, `config-${version}.mjs`), `export const version = ${version}`)
+    await writeFile(
+      join(dependency, 'package.json'),
+      JSON.stringify({
+        name: 'test-hot-sdk',
+        exports: { './config': { node: { default: `./config-${version}.mjs` } } }
+      })
+    )
+  }
+  await publish(1)
+  await runtime.replaceSource('source-a', root)
+  assert.deepEqual(await runtime.invoke('owner-a', 'get', {}), { version: 1, pid: process.pid })
+  const otherEntry = (await runtime.listBrowserEntries()).find(
+    (entry) => entry.pluginName === 'owner-b'
+  )
+  await publish(2)
+  await runtime.replaceSource('source-a', root)
+  assert.deepEqual(await runtime.invoke('owner-a', 'get', {}), { version: 2, pid: process.pid })
+  assert.deepEqual(await runtime.invoke('owner-b', 'get', {}), { version: 1 })
+  assert.equal(state.setups.filter((name) => name === 'owner-b').length, 1)
+  assert.equal(
+    (await runtime.listBrowserEntries()).find((entry) => entry.pluginName === 'owner-b')
+      ?.resourceKey,
+    otherEntry?.resourceKey
+  )
+})
+
 test('卸载仅撤销目标Owner，重复卸载不重复调用清理', async (context) => {
   const { runtime, state } = await fixture(context)
   await runtime.replaceSource('source-a', null)

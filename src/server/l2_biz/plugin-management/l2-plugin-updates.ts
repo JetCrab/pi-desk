@@ -51,7 +51,12 @@ export class L2PluginUpdates {
     previousSource: string,
     options: Omit<L2PluginManagementInstallRequest, 'source'>,
     followTag: boolean
-  ): Promise<{ source: string; registry?: string; updateTag: string | null }> {
+  ): Promise<{
+    source: string
+    registry?: string
+    publicRegistry?: string
+    updateTag: string | null
+  }> {
     const name = l4PluginNpmName(source)
     const selector = name ? /^npm:(?:@[^/]+\/)?[^@]+@([^@]+)$/.exec(source)?.[1] : undefined
     const explicitTag =

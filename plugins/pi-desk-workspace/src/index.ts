@@ -127,6 +127,7 @@ export default function workspaceExtension(pi: ExtensionAPI): void {
   let currentContext: ExtensionContext | undefined
   let agentIntegrationRegistered = false
   const runtime = new WorkspaceRuntime({
+    config: sessionPlugin.config,
     exec: pi.exec.bind(pi),
     runnerPath: COMMAND_RUNNER,
     persist(selection: WorkspaceSelection | null): void {
@@ -216,7 +217,7 @@ export default function workspaceExtension(pi: ExtensionAPI): void {
 
   pi.on('resources_discover', async (_event, context) => {
     if (!context.isProjectTrusted()) return
-    const { config } = await loadConfigForSession(context.cwd)
+    const { config } = await loadConfigForSession(context.cwd, sessionPlugin.config)
     if (config) registerAgentIntegration()
   })
 

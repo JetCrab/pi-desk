@@ -162,7 +162,7 @@ class FixtureChild extends EventEmitter {
       } else if (scenario === 'maintenance-batch-success' && this.index === 1) {
         restartWithMaintenance(this, [
           { action: 'install', source: 'npm:batch-first' },
-          { action: 'update', source: 'npm:batch-second' },
+          { action: 'update', source: 'npm:batch-second', registry: 'https://private.example.test', publicRegistry: 'https://mirror.example.test/npm' },
           { action: 'remove', source: 'npm:batch-third' }
         ])
       } else if (scenario === 'maintenance-single-success' && this.index === 1) {
@@ -197,7 +197,8 @@ class FixtureChild extends EventEmitter {
             { action: 'install', source: 'npm:duplicate' },
             { action: 'update', source: 'npm:duplicate' }
           ],
-          [{ action: 'apply', source: 'npm:invalid-action' }]
+          [{ action: 'apply', source: 'npm:invalid-action' }],
+          [{ action: 'install', source: 'npm:invalid-public-registry', publicRegistry: 'file:///not-a-registry' }]
         ]) {
           this.emit('message', { type: 'pi-desk.plugin-maintenance', maintenance })
         }
@@ -239,9 +240,9 @@ childProcess.spawn = function (command, args, options) {
     return child
   }
   if (argv.some((argument) => String(argument).includes('l4-pi-package-maintenance-runner'))) {
-    const action = argv.at(-2)
-    const source = argv.at(-1)
-    record({ kind: 'maintenance-runner-start', action, source })
+    const runnerIndex = argv.findIndex((argument) => String(argument).includes('l4-pi-package-maintenance-runner'))
+    const [action, source, registry, publicRegistry] = argv.slice(runnerIndex + 1)
+    record({ kind: 'maintenance-runner-start', action, source, registry, publicRegistry })
     const child = new FixtureChild('maintenance', options)
     const exitCode =
       process.env.PI_DESK_CLI_FIXTURE_SCENARIO === 'maintenance-batch-failure' &&
@@ -512,6 +513,11 @@ test('CLI按顺序执行维护批次并兼容旧single请求', { timeout: 45_000
       { action: 'remove', source: 'npm:batch-third' }
     ]
   )
+  const registryEvent = batchEvents.find(
+    (event) => event.kind === 'maintenance-runner-start' && event.source === 'npm:batch-second'
+  )
+  assert.equal(registryEvent.registry, 'https://private.example.test')
+  assert.equal(registryEvent.publicRegistry, 'https://mirror.example.test/npm')
   const batchServices = batchEvents.filter((event) => event.kind === 'service-start')
   assert.equal(batchServices.length, 2)
   assert.equal(batchServices[1]?.safeMode, '')
@@ -620,7 +626,7 @@ test('CLI拒绝空批次、超限、重复来源和非法action', { timeout: 25_
     false
   )
   assert.equal(events[1]?.safeMode, '')
-  assert.equal((fixture.output().match(/忽略了无效的服务 IPC 消息/g) ?? []).length, 4)
+  assert.equal((fixture.output().match(/忽略了无效的服务 IPC 消息/g) ?? []).length, 5)
 
   fixture.child.send('pi-desk.shutdown')
   const [exitCode] = await withTimeout(fixture.exit, 'invalid fixture graceful shutdown')

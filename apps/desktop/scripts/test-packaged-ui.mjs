@@ -560,8 +560,6 @@ async function validatePiUpdate(page) {
   )
   await page.evaluate(`window.desktopLayoutState.hideOnStartup=false;
     window.desktopLayoutState.environment.components.find(item=>item.name==='pi').version='1.1.0';
-    window.desktopLayoutConfirmations=[];
-    window.confirm=message=>{window.desktopLayoutConfirmations.push(message);return window.desktopAcceptPiUpdate===true};
     window.desktopLayoutReady()`)
   await until(
     () => page.evaluate(`document.body.innerText.includes('安装与版本')`),
@@ -579,26 +577,24 @@ async function validatePiUpdate(page) {
     'Pi 候选版本'
   )
   assert.equal(
-    await page.evaluate('window.desktopLayoutConfirmations.length'),
-    0,
+    await page.evaluate(`!!document.querySelector('dialog[open]')`),
+    false,
     '检查更新不要求停止服务'
   )
   assert.equal(await page.evaluate('window.desktopLayoutState.targets[0].server.status'), 'running')
   await page.evaluate(click('更新 Pi 1.2.0'))
+  await until(() => page.evaluate(`!!document.querySelector('dialog[open]')`), '更新确认弹窗')
+  const confirmation = await page.evaluate(`document.querySelector('dialog[open]').innerText`)
+  assert.match(confirmation, /30333.*\/[\s\S]*聊天和任务会中断/u)
+  assert.match(confirmation, /原已停止的服务不会启动/u)
+  await page.evaluate(click('取消'))
+  await until(() => page.evaluate(`!document.querySelector('dialog[open]')`), '取消更新确认')
   assert.equal(
     await page.evaluate(
       `window.desktopLayoutCommands.some(item=>item.command==='update_pi_command')`
     ),
     false,
     '取消确认不发更新请求'
-  )
-  assert.match(
-    await page.evaluate('window.desktopLayoutConfirmations[0]'),
-    /30333.*\/[\s\S]*聊天和任务会中断/u
-  )
-  assert.match(
-    await page.evaluate('window.desktopLayoutConfirmations[0]'),
-    /原已停止的服务不会启动/u
   )
   for (const [theme, width, height] of [
     ['light', 960, 720],
@@ -612,8 +608,9 @@ async function validatePiUpdate(page) {
     await assertSetupFits(page, '更新 Pi 1.2.0')
     await page.screenshot(`pi-update-available-${theme}.png`)
   }
-  await page.evaluate('window.desktopAcceptPiUpdate=true')
   await page.evaluate(click('更新 Pi 1.2.0'))
+  await until(() => page.evaluate(`!!document.querySelector('dialog[open]')`), '再次确认更新')
+  await page.evaluate(click('更新 Pi'))
   await until(
     () => page.evaluate(`document.body.innerText.includes('正在安装 Pi 1.2.0')`),
     '更新阶段'
@@ -630,11 +627,32 @@ async function validatePiUpdate(page) {
     ),
     true
   )
-  await page.evaluate(
-    `document.querySelector('section[aria-label="Pi 更新"]').scrollIntoView({block:'center'})`
-  )
-  await assertSetupFits(page, '取消 Pi 更新')
-  await page.screenshot('pi-update-installing-dark.png')
+  for (const [theme, width, height] of [
+    ['light', 960, 720],
+    ['dark', 720, 560]
+  ]) {
+    await page.theme(theme)
+    await page.viewport(width, height)
+    await page.evaluate(
+      `document.querySelector('section[aria-label="Pi 更新"]').scrollIntoView({block:'center'})`
+    )
+    await assertSetupFits(page, '取消 Pi 更新')
+    const layout = await page.evaluate(`(() => {
+      const section = document.querySelector('section[aria-label="Pi 更新"]');
+      const version = [...section.querySelectorAll('p')].find(item => item.textContent === '当前版本 1.1.0');
+      const status = section.querySelector('[role="status"]');
+      return {
+        versionTop: version.getBoundingClientRect().top,
+        statusTop: status.getBoundingClientRect().top,
+        hint: status.title,
+        actions: [...section.querySelectorAll('button')].map(item => item.textContent.trim())
+      };
+    })()`)
+    assert.ok(Math.abs(layout.versionTop - layout.statusTop) < 1, '进度应与当前版本同行')
+    assert.deepEqual(layout.actions, ['取消 Pi 更新'], '更新中只保留取消操作')
+    assert.equal(layout.hint, '校验通过后仅恢复原先运行的服务；聊天和任务不会自动续跑。')
+    await page.screenshot(`pi-update-installing-${theme}.png`)
+  }
   await page.evaluate(click('取消 Pi 更新'))
   await until(
     () => page.evaluate(`document.body.innerText.includes('Pi 更新已取消，原服务已恢复')`),

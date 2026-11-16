@@ -257,7 +257,6 @@ function TodoProgress({
               data-testid="todo-summary"
               aria-label={`${label} · ${counts.completed}/${counts.total} ${labels.tasks} ${labels.done}${blocked ? ` · ${labels.blocked(blocked)}` : ''} · ${labels.details}`}
               aria-pressed={pinned}
-              title={label}
               onPointerEnter={(event) => {
                 if (event.pointerType !== 'touch') enter()
               }}
@@ -324,7 +323,7 @@ function TodoProgress({
           </span>
         </PluginButton>
       </div>
-      <div className="pi-desk-todo-segments" aria-hidden="true">
+      <div className="pi-desk-todo-segments" data-testid="todo-segments" aria-hidden="true">
         {todo.items.map((item) => (
           <span key={item.id} className="pi-desk-todo-segment" data-status={item.status} />
         ))}
@@ -365,9 +364,8 @@ export function TodoWidget({
 
   return (
     <PluginSurface>
-      <style href="pi-desk-todo" precedence="plugin-todo">
-        {STYLES}
-      </style>
+      {/* 局部样式随视图释放，避免同名React资源在插件热更新后保留旧版规则。 */}
+      <style>{STYLES}</style>
       {visible ? (
         <TodoProgress todo={todo} state={state} controller={controller} labels={labels} />
       ) : null}

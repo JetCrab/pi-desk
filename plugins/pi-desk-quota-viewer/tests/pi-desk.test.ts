@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { GlobalPluginMethodHandler, PiDeskPluginFacade } from '@jetcrab/pi-desk-sdk/entry'
 import definition from '../src/pi-desk.js'
+import { memoryConfig } from '../../pi-desk-sdk/tests/fixtures/config.js'
 
 function facade(registrations: {
   methods: string[]
@@ -9,6 +10,7 @@ function facade(registrations: {
 }): PiDeskPluginFacade {
   return {
     name: 'quota-viewer',
+    config: memoryConfig(),
     host: {
       events: {
         on(): () => void {

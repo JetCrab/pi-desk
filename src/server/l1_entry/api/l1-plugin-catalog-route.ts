@@ -74,7 +74,7 @@ export function getL1PluginCatalogSettings(request: Request): Promise<Response> 
 
 export function replaceL1PluginCatalogSettings(request: Request): Promise<Response> {
   return handle(request, L2PluginCatalogSettingsRequestSchema, async (input) => {
-    getL2PluginCatalog().replaceSettings(input.downloadSource)
+    await getL2PluginCatalog().replaceSettings(input.downloadSource)
     return await getL2PluginCatalog().getSettings()
   })
 }

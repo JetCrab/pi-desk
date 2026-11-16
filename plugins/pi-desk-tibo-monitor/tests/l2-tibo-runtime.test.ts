@@ -1,14 +1,28 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
 import test from 'node:test'
 import type {
   PluginJsonObject,
   PluginNotificationPublishInput,
   PiDeskPluginFacade
 } from '@jetcrab/pi-desk-sdk/entry'
-import { TiboRuntime } from '../src/l2-tibo-runtime.js'
+import { TiboRuntime as Runtime, type TiboRuntimeOptions } from '../src/l2-tibo-runtime.js'
+type TiboRuntime = Runtime
+const TiboRuntime = {
+  create(
+    host: Pick<PiDeskPluginFacade, 'setState' | 'notifications'>,
+    options: Omit<TiboRuntimeOptions, 'dataPath'> & { path: string }
+  ): Promise<Runtime> {
+    const agentDir = dirname(dirname(options.path))
+    return Runtime.create(
+      { ...host, config: bindConfigStore('plugins', 'tibo-monitor', { agentDir }) },
+      { ...options, dataPath: join(agentDir, 'pi-desk', 'tibo-monitor.json') }
+    )
+  }
+}
 import { fetchRss } from '../src/l4-tibo-feed.js'
 import type {
   ModelSelection,
@@ -67,7 +81,9 @@ function createHost(): {
 }
 
 async function tempPath(): Promise<{ path: string; root: string }> {
-  const root = await mkdtemp(join(tmpdir(), 'tibo-runtime-'))
+  const runs = fileURLToPath(new URL('../../../temp/run/tibo-runtime/', import.meta.url))
+  await mkdir(runs, { recursive: true })
+  const root = await mkdtemp(join(runs, 'config-binding-'))
   return { path: join(root, 'config', 'pi-desk-tibo-monitor.json'), root }
 }
 

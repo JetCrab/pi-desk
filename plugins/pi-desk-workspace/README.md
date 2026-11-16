@@ -1,6 +1,6 @@
 # @jetcrab/pi-desk-workspace
 
-为 Pi 会话分配可复用的隔离工作目录，并在 Pi Desk 会话侧栏中查看和管理工作区。项目通过 `.pi/workspace.yml` 和 Node Handler 定义初始化与项目命令。
+为 Pi 会话分配可复用的隔离工作目录，并在 Pi Desk 会话侧栏中查看和管理工作区。项目通过 `.pi/pi-desk.yaml` 的 `plugins.workspace` 分组和 Node Handler 定义初始化与项目命令。
 
 官方说明：[使用说明](https://pidesk.dev/docs/workspace/)
 
@@ -20,11 +20,11 @@
 pi install npm:@jetcrab/pi-desk-workspace
 ```
 
-只有当前项目已受信任、且存在有效的 `.pi/workspace.yml` 时，插件才向模型注册 `workspace` 工具。新增或修改配置后需要重载当前会话；Pi 中使用 `/reload`，Pi Desk 中使用 `session reload`。
+只有当前项目已受信任、且存在有效的 `plugins.workspace` 配置时，插件才向模型注册 `workspace` 工具。新增或修改配置后需要重载当前会话；Pi 中使用 `/reload`，Pi Desk 中使用 `session reload`。
 
 ## 首次配置项目
 
-在尚无 `.pi/workspace.yml` 的项目会话中输入：
+在尚无 `plugins.workspace` 配置的项目会话中输入：
 
 ```text
 /init-workspace
@@ -38,25 +38,26 @@ pi install npm:@jetcrab/pi-desk-workspace
 
 下面演示插件协议的最小调用；项目接入时按 `/init-workspace` 的命令规范补齐生命周期。
 
-在项目中创建 `.pi/workspace.yml`：
+在项目 `.pi/pi-desk.yaml` 中添加 `plugins.workspace`，保留其他分组。读取按默认值、全局、当前会话 CWD 的项目层逐字段覆盖，对象递归合并，数组整体替换；不向上查找父目录。Handler 路径仍相对原项目根目录。配置编辑只写明确的项目覆盖，不复制继承值。
 
 ```yaml
-schema: pi.workspace/v3
-
-definitions:
-  demo:
-    description: 示例工作区
-    provision:
-      description: 准备示例文件
-      handler: .pi/workspace/prepare.mjs
-      timeoutSeconds: 30
-    commands:
-      reset:
-        description: 将示例文件恢复为初始内容并释放工作区
-        from: [occupied]
-        onSuccess: available
-        handler: .pi/workspace/prepare.mjs
-        timeoutSeconds: 30
+plugins:
+  workspace:
+    schema: pi.workspace/v3
+    definitions:
+      demo:
+        description: 示例工作区
+        provision:
+          description: 准备示例文件
+          handler: .pi/workspace/prepare.mjs
+          timeoutSeconds: 30
+        commands:
+          reset:
+            description: 将示例文件恢复为初始内容并释放工作区
+            from: [occupied]
+            onSuccess: available
+            handler: .pi/workspace/prepare.mjs
+            timeoutSeconds: 30
 ```
 
 创建 `.pi/workspace/prepare.mjs`：

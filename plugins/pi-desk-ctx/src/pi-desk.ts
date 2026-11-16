@@ -17,7 +17,7 @@ export default definePiDeskPlugin({
   setup(plugin) {
     plugin.registerMethod('settings-get', async (input) => {
       emptyInput(input)
-      return jsonObject(await readContextIgnoreSettings())
+      return jsonObject(await readContextIgnoreSettings(plugin.config))
     })
     plugin.registerMethod('settings-save', async (input) => {
       let settings
@@ -29,7 +29,7 @@ export default definePiDeskPlugin({
           error instanceof Error ? error.message : '上下文忽略配置无效'
         )
       }
-      return jsonObject(await writeContextIgnoreSettings(settings))
+      return jsonObject(await writeContextIgnoreSettings(settings, plugin.config))
     })
     plugin.registerBrowserEntry('./dist/browser/entry.js')
   }

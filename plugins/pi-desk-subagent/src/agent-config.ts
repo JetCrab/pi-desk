@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import { getUnifiedConfigPath } from '@jetcrab/pi-desk-sdk/config'
 import type { CapabilityOption } from '@jetcrab/pi-desk-sdk/capabilities'
 import { fileURLToPath } from 'node:url'
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
@@ -35,6 +35,7 @@ export interface DiscoverSubagentConfigsOptions {
   projectTrusted: boolean
   agentDir?: string
   builtinAgentsDir?: string | null
+  settings?: AgentSettings
 }
 
 export interface DiscoverSubagentConfigsResult {
@@ -98,7 +99,7 @@ function parseThinking(value: unknown, name: SubagentName): ThinkingLevel | unde
   return thinking as ThinkingLevel
 }
 
-function findProjectConfigDir(cwd: string): string | undefined {
+function findProjectResourceDirectory(cwd: string): string | undefined {
   let current = cwd
   while (true) {
     const candidate = join(current, CONFIG_DIR_NAME)
@@ -122,12 +123,8 @@ function parseModelSelection(
   return { model: selection }
 }
 
-function readAgentSetting(
-  settingsPath: string | undefined,
-  name: SubagentName
-): AgentSetting | undefined {
-  if (!settingsPath || !existsSync(settingsPath)) return undefined
-  const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as AgentSettings
+function readAgentSetting(settings: AgentSettings, name: SubagentName): AgentSetting | undefined {
+  const settingsPath = 'plugins.subagent'
   if (settings.agents === undefined) return undefined
   if (!settings.agents || typeof settings.agents !== 'object' || Array.isArray(settings.agents)) {
     throw new Error(`Agent settings must be an object: ${settingsPath}`)
@@ -217,21 +214,15 @@ function loadConfig(params: {
 }
 
 export function subagentSettingsPath(agentDir = getAgentDir()): string {
-  return getConfigPath('pi-desk-subagent.json', agentDir)
-}
-
-function projectSubagentSettingsPath(projectConfigDir: string): string {
-  return join(projectConfigDir, 'config', 'pi-desk-subagent.json')
+  return getUnifiedConfigPath(agentDir)
 }
 
 export function discoverSubagentConfigs(
   options: DiscoverSubagentConfigsOptions
 ): DiscoverSubagentConfigsResult {
   const agentDir = options.agentDir ?? getAgentDir()
-  const projectConfigDir = options.projectTrusted ? findProjectConfigDir(options.cwd) : undefined
-  const globalSettingsPath = subagentSettingsPath(agentDir)
-  const projectSettingsPath = projectConfigDir
-    ? projectSubagentSettingsPath(projectConfigDir)
+  const projectResourceDirectory = options.projectTrusted
+    ? findProjectResourceDirectory(options.cwd)
     : undefined
   const diagnostics: string[] = []
   const selectedFiles = new Map<string, AgentFile>()
@@ -244,8 +235,11 @@ export function discoverSubagentConfigs(
   for (const file of listAgentFiles(join(agentDir, 'agents'), diagnostics).values()) {
     selectedFiles.set(file.name, file)
   }
-  if (projectConfigDir) {
-    for (const file of listAgentFiles(join(projectConfigDir, 'agents'), diagnostics).values()) {
+  if (projectResourceDirectory) {
+    for (const file of listAgentFiles(
+      join(projectResourceDirectory, 'agents'),
+      diagnostics
+    ).values()) {
       selectedFiles.set(file.name, file)
     }
   }
@@ -257,10 +251,9 @@ export function discoverSubagentConfigs(
     if (!file) continue
 
     try {
-      const globalSetting = readAgentSetting(globalSettingsPath, name)
-      const projectSetting = readAgentSetting(projectSettingsPath, name)
-      if (projectSetting?.disabled ?? globalSetting?.disabled ?? false) continue
-      const modelSelection = projectSetting?.modelSelection ?? globalSetting?.modelSelection
+      const setting = readAgentSetting(options.settings ?? {}, name)
+      if (setting?.disabled) continue
+      const modelSelection = setting?.modelSelection
       configs.set(
         name,
         loadConfig({
@@ -277,7 +270,10 @@ export function discoverSubagentConfigs(
   return { configs, diagnostics }
 }
 
-export function listGlobalSubagentSettings(agentDir = getAgentDir()): Array<{
+export function listGlobalSubagentSettings(
+  agentDir = getAgentDir(),
+  settings: AgentSettings = {}
+): Array<{
   name: string
   model: string
   thinking: ThinkingLevel | null
@@ -287,9 +283,8 @@ export function listGlobalSubagentSettings(agentDir = getAgentDir()): Array<{
     ...listAgentFiles(BUILTIN_AGENTS_DIR, []).keys(),
     ...listAgentFiles(join(agentDir, 'agents'), []).keys()
   ])
-  const settingsPath = subagentSettingsPath(agentDir)
   return [...names].sort().map((name) => {
-    const setting = readAgentSetting(settingsPath, name)
+    const setting = readAgentSetting(settings, name)
     return {
       name,
       model: setting?.modelSelection?.model ?? '',
@@ -302,7 +297,8 @@ export function listGlobalSubagentSettings(agentDir = getAgentDir()): Array<{
 export function collectSubagentCapabilityOptions(
   cwds: readonly string[],
   signal?: AbortSignal,
-  agentDir = getAgentDir()
+  agentDir = getAgentDir(),
+  settings: AgentSettings = {}
 ): CapabilityOption[] {
   const uniqueCwds = new Map<string, string>()
   for (const cwd of cwds) {
@@ -317,7 +313,7 @@ export function collectSubagentCapabilityOptions(
   for (const source of sources) {
     signal?.throwIfAborted()
     // A settings catalog only reads definitions; it does not grant project execution trust.
-    const { configs } = discoverSubagentConfigs(source)
+    const { configs } = discoverSubagentConfigs({ ...source, settings })
     for (const config of configs.values()) {
       const description = config.description.slice(0, 1000)
       const previous = options.get(config.name)

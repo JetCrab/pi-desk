@@ -88,7 +88,19 @@ export default function(pi) {
   await cp(entry, join(pluginDir, 'dist/browser/actual-entry.js'))
   await writeFile(
     entry,
-    `import activate from './actual-entry.js';export default function(plugin){const dispose=activate(plugin);window.__todoHost=plugin.host;window.__todoReady=true;return ()=>{window.__todoReady=false;dispose?.()}}`
+    `import activate from './actual-entry.js'
+export default function(plugin) {
+  // 模拟旧版胶囊卸载后仍由React页面资源保留的局部样式。
+  const legacy = document.createElement('style')
+  legacy.dataset.href = 'pi-desk-todo'
+  legacy.dataset.precedence = 'plugin-todo'
+  legacy.textContent = '.pi-desk-todo{min-width:0;padding-inline:.5rem}.pi-desk-todo-dismiss{min-width:1.75rem;padding-inline:.25rem;color:inherit!important;background:transparent!important}'
+  document.head.append(legacy)
+  const dispose = activate(plugin)
+  window.__todoHost = plugin.host
+  window.__todoReady = true
+  return () => { window.__todoReady = false; dispose?.() }
+}`
   )
   await writeFile(join(agentDir, 'settings.json'), JSON.stringify({ packages: [] }))
   await writeFile(
@@ -190,7 +202,7 @@ class Cdp {
     let stable = 0
     while (Date.now() < end) {
       const hit = await this.eval(
-        `(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)return null;el.scrollIntoView({block:'nearest'});const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;return {x,y,width:r.width,height:r.height,ok:el.contains(document.elementFromPoint(x,y))}})()`
+        `(()=>{for(const el of [...document.querySelectorAll(${JSON.stringify(selector)})].reverse()){const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;if(r.width>0&&r.height>0&&el.contains(document.elementFromPoint(x,y)))return {x,y,width:r.width,height:r.height,ok:true}}return null})()`
       )
       const key = JSON.stringify(hit)
       stable = key === prior ? stable + 1 : 0
@@ -380,7 +392,7 @@ async function stablePopover(client, visible, action, label) {
 }
 async function bounds(client) {
   await client.wait(
-    `(()=>{const panel=document.querySelector('[data-testid="todo-popover"]');if(!panel)return true;const popup=panel.closest('[role="dialog"]');if(popup?.getAnimations().some(a=>a.playState==='running'))return false;const key=JSON.stringify(panel.getBoundingClientRect().toJSON());const old=window.__todoBounds;window.__todoBounds={key,count:old?.key===key?old.count+1:0};return window.__todoBounds.count>=2})()`,
+    `(()=>{const widget=document.querySelector('[data-testid="todo-widget"]');if(widget?.getAnimations({subtree:true}).some(a=>a.playState==='running'&&Number.isFinite(a.effect?.getComputedTiming().endTime)))return false;const panel=document.querySelector('[data-testid="todo-popover"]');if(!panel)return true;const popup=panel.closest('[role="dialog"]');if(popup?.getAnimations().some(a=>a.playState==='running'))return false;const key=JSON.stringify(panel.getBoundingClientRect().toJSON());const old=window.__todoBounds;window.__todoBounds={key,count:old?.key===key?old.count+1:0};return window.__todoBounds.count>=2})()`,
     '浮层定位和动画稳定',
     5000
   )
@@ -394,9 +406,15 @@ async function bounds(client) {
     if(widget&&row&&close){
       const outer=widget.getBoundingClientRect(),inner=row.getBoundingClientRect(),button=close.getBoundingClientRect();
       if(inner.left-outer.left<6||outer.right-inner.right<6)errors.push('摘要左右缺少留白');
+      const widgetStyle=getComputedStyle(widget);
+      const contentWidth=outer.width-parseFloat(widgetStyle.paddingLeft)-parseFloat(widgetStyle.paddingRight);
+      if(Math.abs(inner.width-contentWidth)>1)errors.push('摘要没有铺满挂件内容区');
       if(button.left<inner.left||button.right>=inner.right||button.top<inner.top||button.bottom>inner.bottom)errors.push('关闭按钮未内嵌于摘要背景');
       if(['transparent','rgba(0, 0, 0, 0)'].includes(getComputedStyle(row).backgroundColor))errors.push('摘要与关闭按钮缺少共享背景');
+      if(widget.querySelector('[data-slot="status-capsule"]'))errors.push('Todo仍使用胶囊');
     }
+    const segments=widget?.querySelector('[data-testid="todo-segments"]');
+    if(widget&&(!segments||segments.getBoundingClientRect().height<1||[...segments.children].some(segment=>segment.getBoundingClientRect().width<1)))errors.push('分段进度不可见');
     if(widget){const r=widget.getBoundingClientRect();if(r.left<0||r.right>innerWidth+1)errors.push('摘要越界');if(input&&r.bottom>input.getBoundingClientRect().top)errors.push('摘要挡住输入框')}
     if(panel){const r=panel.getBoundingClientRect();if(r.left<0||r.right>innerWidth+1||r.top<0)errors.push('浮层越界');if(input&&r.bottom>input.getBoundingClientRect().top)errors.push('浮层挡住输入框')}
     if(panel&&row){
@@ -404,6 +422,10 @@ async function bounds(client) {
       const max=parseFloat(getComputedStyle(document.documentElement).fontSize)*40;
       if(Math.abs(p.left+p.right-r.left-r.right)>2)errors.push('浮层未与摘要居中');
       if(Math.abs(p.width-Math.min(max,r.width))>3)errors.push('浮层宽度未跟随摘要或超过40rem');
+      const warning=panel.querySelector('[data-status="3"] .pi-desk-todo-icon');
+      const success=panel.querySelector('[data-status="2"] .pi-desk-todo-icon');
+      if(warning&&getComputedStyle(warning).color===getComputedStyle(panel).color)errors.push('警告状态色缺失');
+      if(success&&getComputedStyle(success).color===getComputedStyle(panel).color)errors.push('完成状态色缺失');
     }
     if(close){const r=close.getBoundingClientRect();if(!close.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)))errors.push('关闭按钮被遮挡')}
     return errors
@@ -469,9 +491,16 @@ try {
         '登记进度不自动打开浮层'
       )
     }
+    assert.equal(
+      await first.eval(`Boolean(document.querySelector('style[data-href="pi-desk-todo"]'))`),
+      true,
+      '回归前置：页面保留旧版Todo样式资源'
+    )
     await bounds(first)
     await first.screenshot('summary-dark.png')
-    passed.push('E01：真实Native工具全量登记，单份摘要和多端同步，不自动打开浮层')
+    passed.push(
+      'E01：真实Native工具全量登记，旧版样式残留时横条与分段进度正常，单份摘要和多端同步，不自动打开浮层'
+    )
 
     const updated = structuredClone(todo)
     updated.items.find((item) => item.id === 'backend').status = 2
@@ -649,6 +678,13 @@ try {
         '其他页面同步隐藏'
       )
       assert.deepEqual(await method(first, 'get'), { todo: completed, hidden: true })
+      assert.equal(
+        await first.eval(
+          `Boolean([...document.querySelectorAll('style')].find(style=>!style.hasAttribute('data-href')&&style.textContent.includes('.pi-desk-todo-row{')))`
+        ),
+        false,
+        'Todo隐藏后释放自身局部样式，不留在页面缓存'
+      )
       await first.send('Page.reload')
       await first.wait(
         `window.__todoReady && document.querySelector('[data-pi-desk-plugin="todo"][data-pi-desk-kind="widget"]')`,
@@ -689,8 +725,32 @@ try {
       '切换另一个会话'
     )
     await first.wait(`!document.querySelector('[data-testid="todo-widget"]')`, '其他会话不继承Todo')
+    await first.eval(`(() => {
+      window.__todoRestoreAnimations = [];
+      const inspect = event => {
+        if(event.target.closest?.('[data-testid="todo-widget"]') &&
+           (event.type === 'animationstart' || ['height','width','opacity','transform'].includes(event.propertyName))) {
+          window.__todoRestoreAnimations.push(event.type);
+        }
+      };
+      document.addEventListener('transitionrun', inspect, true);
+      document.addEventListener('animationstart', inspect, true);
+      window.__finishTodoRestore = () => {
+        document.removeEventListener('transitionrun', inspect, true);
+        document.removeEventListener('animationstart', inspect, true);
+        return window.__todoRestoreAnimations;
+      };
+    })()`)
     await first.click(`[data-testid="work-session-row-${works[0]}"]`)
     await first.wait(`document.querySelector('[data-testid="todo-widget"]')`, '切回保留内存')
+    await first.eval(
+      'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))'
+    )
+    assert.deepEqual(
+      await first.eval('window.__finishTodoRestore()'),
+      [],
+      'Todo切回会话出现入场动效'
+    )
     const previousSource = await source(first)
     const response = await fetch(url + 'api/work-sessions/branch', {
       method: 'POST',

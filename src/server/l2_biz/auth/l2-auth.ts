@@ -149,7 +149,7 @@ export function replaceL2AuthSettings(
     if (readL4AuthCredentials()?.sessionSecret !== credentials?.sessionSecret) {
       throw new L2AuthRequiredError()
     }
-    writeL4AuthConfig(config)
+    await writeL4AuthConfig(config)
     recordLoginResult(true)
     console.info('[Pi Desk][Auth] 登录保护已更新', { enabled: config !== null })
   })

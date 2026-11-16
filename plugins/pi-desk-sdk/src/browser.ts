@@ -228,7 +228,25 @@ export interface BrowserTunnelHost {
   open(input: { remotePort: number }): BrowserTunnelHandle
 }
 
+export interface BrowserFloatingHandle {
+  close(): void
+}
+
+export interface BrowserFloatingImplementation {
+  mount: BrowserMount<BrowserFloatingHandle>
+}
+
+export interface BrowserFloatingOpenInput {
+  id: string
+  load(): Promise<BrowserFloatingImplementation>
+}
+
+export interface BrowserFloatingHost {
+  open(input: BrowserFloatingOpenInput): BrowserFloatingHandle
+}
+
 export interface BrowserPluginHost {
+  readonly floating: BrowserFloatingHost
   readonly events: HostEvents<BrowserHostEventMap>
   readonly settings: HostSettings
   /** 映射当前工作台后端的已发布 TCP 端口；旧宿主或无原生能力时不可用。 */

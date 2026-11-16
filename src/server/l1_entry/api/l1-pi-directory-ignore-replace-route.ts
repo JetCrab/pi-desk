@@ -28,7 +28,7 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     return createL4ApiSuccessResponse(
-      replaceL2PiDirectoryIgnore(input.data.cwd, input.data.ignored)
+      await replaceL2PiDirectoryIgnore(input.data.cwd, input.data.ignored)
     )
   } catch (error) {
     console.error('[Pi Desk][PiDirectoryIgnoreReplaceApi] 更新忽略目录失败', {

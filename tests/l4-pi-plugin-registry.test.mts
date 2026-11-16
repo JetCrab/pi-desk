@@ -163,9 +163,10 @@ test('插件仓库按目标版本读取且搜索不下载所有候选详情', { 
     assert.deepEqual(
       await registry.resolveL4PluginInstall('npm:@fixture/tool@1.0.0', {
         registry: `${base}/npm`,
+        downloadSource: { mode: 'custom', registry: `${base}/npm` },
         agentDir: root
       }),
-      { source: 'npm:@fixture/tool@1.0.0', registry: `${base}/npm` }
+      { source: 'npm:@fixture/tool@1.0.0', registry: `${base}/npm`, publicRegistry: `${base}/npm` }
     )
     await assert.rejects(
       registry.resolveL4PluginInstall('npm:@fixture/tool@9.0.0', {
@@ -177,9 +178,10 @@ test('插件仓库按目标版本读取且搜索不下载所有候选详情', { 
     assert.deepEqual(
       await registry.resolveL4PluginInstall('npm:@fixture/tool', {
         registry: `${base}/npm`,
+        downloadSource: { mode: 'custom', registry: `${base}/npm` },
         agentDir: root
       }),
-      { source: 'npm:@fixture/tool@2.0.0', registry: `${base}/npm` }
+      { source: 'npm:@fixture/tool@2.0.0', registry: `${base}/npm`, publicRegistry: `${base}/npm` }
     )
   })
   await t.test('私有scope不被国内镜像覆盖，鉴权仅发给配置路径', async () => {
@@ -188,6 +190,7 @@ test('插件仓库按目标版本读取且搜索不下载所有候选详情', { 
       agentDir: root
     })
     assert.equal(resolved.registry, `${base}/private`)
+    assert.equal(resolved.publicRegistry, 'https://mirrors.cloud.tencent.com/npm')
     assert.equal(
       requests.find((item) => item.path.startsWith('/private/'))?.auth,
       'Bearer fixture-token'
@@ -217,6 +220,7 @@ test('插件仓库按目标版本读取且搜索不下载所有候选详情', { 
         agentDir: root
       })
       assert.equal(selected.registry, 'https://mirrors.cloud.tencent.com/npm')
+      assert.equal(selected.publicRegistry, 'https://mirrors.cloud.tencent.com/npm')
       assert.equal(selected.source, 'npm:@public/tool@1.0.0')
       await assert.rejects(
         registry.resolveL4PluginInstall('npm:@public/tool@9.0.0', {
@@ -227,6 +231,12 @@ test('插件仓库按目标版本读取且搜索不下载所有候选详情', { 
       )
       assert.ok(origins.length > 0)
       assert.ok(origins.every((origin) => origin === 'https://mirrors.cloud.tencent.com'))
+      const official = await registry.resolveL4PluginInstall('npm:@public/tool@1.0.0', {
+        downloadSource: { mode: 'official' },
+        agentDir: root
+      })
+      assert.equal(official.registry, 'https://registry.npmjs.org')
+      assert.equal(official.publicRegistry, 'https://registry.npmjs.org')
     } finally {
       globalThis.fetch = realFetch
     }

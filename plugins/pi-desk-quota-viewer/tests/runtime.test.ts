@@ -7,27 +7,33 @@ import type { PluginJsonObject } from '@jetcrab/pi-desk-sdk/entry'
 import { PluginMethodError } from '@jetcrab/pi-desk-sdk/session'
 import type { QuotaAdapter, QuotaAdapterLoadResult } from '../src/adapters/types.js'
 import { account, balance } from './fixtures.js'
-import { createSecretStore } from '@jetcrab/pi-desk-sdk/secrets'
+import { bindConfigStore, getUnifiedConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import { storedConfigSchema } from '../src/l2-quota-config.js'
 import { readStoredConfig } from '../src/l2-quota-config.js'
-import {
-  defaultQuotaViewerConfigPath,
-  QuotaViewerRuntime as Runtime,
-  type QuotaViewerRuntimeOptions
-} from '../src/runtime.js'
+import { QuotaViewerRuntime as Runtime, type QuotaViewerRuntimeOptions } from '../src/runtime.js'
 
 class QuotaViewerRuntime extends Runtime {
   constructor(
-    plugin: ConstructorParameters<typeof Runtime>[0],
-    options: QuotaViewerRuntimeOptions
+    plugin: Omit<ConstructorParameters<typeof Runtime>[0], 'config'>,
+    options: QuotaViewerRuntimeOptions & { configPath: string }
   ) {
-    super(plugin, {
-      ...options,
-      secretStore: createSecretStore({
-        agentDir: dirname(options.configPath!),
-        keyProvider: async () => new Uint8Array(32).fill(7)
-      })
-    })
+    super({ ...plugin, config: fixtureConfig(options.configPath) }, options)
   }
+}
+
+function fixtureConfig(path: string) {
+  return bindConfigStore('plugins', 'quota-viewer', {
+    agentDir: dirname(path),
+    keyProvider: async () => new Uint8Array(32).fill(7)
+  })
+}
+
+function configFile(path: string): string {
+  return getUnifiedConfigPath(dirname(path))
+}
+
+async function storedConfig(path: string) {
+  return storedConfigSchema.parse(await fixtureConfig(path).get())
 }
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -135,37 +141,30 @@ test('默认只读最新config路径，旧配置不读取不修改不删除', as
   await writeFile(previousPath, previousContent, 'utf8')
   await writeFile(rootPath, previousContent, 'utf8')
 
-  const currentPath = defaultQuotaViewerConfigPath()
-  assert.equal(currentPath, join(agentDir, 'config', 'pi-desk-quota-viewer.json'))
-  await readStoredConfig(
-    currentPath,
-    new Map(),
-    createSecretStore({ agentDir, keyProvider: async () => new Uint8Array(32).fill(7) })
-  )
+  const currentPath = getUnifiedConfigPath()
+  assert.equal(currentPath, join(agentDir, 'config', 'pi-desk.yaml'))
+  await readStoredConfig(bindConfigStore('plugins', 'quota-viewer', { agentDir }), new Map())
   assert.equal(await readFile(previousPath, 'utf8'), previousContent)
   assert.equal(await readFile(rootPath, 'utf8'), previousContent)
   await assert.rejects(readFile(currentPath), { code: 'ENOENT' })
 })
 
-test('最新文件含秘密明文时查询及保存均失败且不自动改写', async (context) => {
+test('指定路径允许读取明文，读取不回写，明确保存时加密', async (context) => {
   const root = testRoot('legacy-config')
   const configPath = join(root, 'config.json')
   const sourceId = '11111111-1111-4111-8111-111111111111'
   await mkdir(root, { recursive: true })
-  await writeFile(
-    configPath,
-    JSON.stringify({
-      sources: [
-        {
-          sourceId,
-          adapter: 'fixture',
-          name: '当前配置来源',
-          enabled: false,
-          config: { endpoint: 'endpoint', token: 'test-only-plaintext' }
-        }
-      ]
-    })
-  )
+  await fixtureConfig(configPath).set({
+    sources: [
+      {
+        sourceId,
+        adapter: 'fixture',
+        name: '当前配置来源',
+        enabled: false,
+        config: { endpoint: 'endpoint', token: 'test-only-plaintext' }
+      }
+    ]
+  })
   const runtime = new QuotaViewerRuntime(plugin([]), {
     adapters: [createAdapter()],
     configPath,
@@ -176,13 +175,14 @@ test('最新文件含秘密明文时查询及保存均失败且不自动改写',
     await runtime.dispose()
     await rm(root, { recursive: true, force: true })
   })
-  const original = await readFile(configPath, 'utf8')
-  await assert.rejects(runtime.settings(), /敏感字段必须为凭据引用/)
-  await assert.rejects(
-    runtime.saveSettings({ display: { resetTimeFormat: 'absolute' } }),
-    /敏感字段必须为凭据引用/
+  const original = await readFile(configFile(configPath), 'utf8')
+  assert.equal((await runtime.settings()).sources[0]?.values.token, 'test-only-plaintext')
+  assert.equal(await readFile(configFile(configPath), 'utf8'), original)
+  await runtime.saveSettings({ display: { resetTimeFormat: 'absolute' } })
+  assert.equal(
+    (await readFile(configFile(configPath), 'utf8')).includes('test-only-plaintext'),
+    false
   )
-  assert.equal(await readFile(configPath, 'utf8'), original)
 })
 
 test('settings-save 分配 sourceId 并返回可直接编辑的密钥原值', async () => {
@@ -227,11 +227,12 @@ test('settings-save 分配 sourceId 并返回可直接编辑的密钥原值', as
     })
   )
   assert.equal(updated.sources[0]?.values.endpoint, 'second')
-  const stored = JSON.parse(await readFile(configPath, 'utf8')) as {
-    sources: Array<{ config: Record<string, string> }>
-  }
-  assert.match(stored.sources[0]?.config.token ?? '', /^secret:\/\//)
-  assert.equal((await readFile(configPath, 'utf8')).includes('next-secret-token'), false)
+  const stored = await storedConfig(configPath)
+  assert.match(stored.sources[0]?.config.token ?? '', /^enc:v1:/)
+  assert.equal(
+    (await readFile(configFile(configPath), 'utf8')).includes('next-secret-token'),
+    false
+  )
   assert.equal(updated.sources[0]?.values.token, 'next-secret-token')
   await runtime.dispose()
   await rm(root, { recursive: true, force: true })
@@ -289,9 +290,14 @@ for (const action of ['change-key', 'delete-source'] as const) {
         display: { hiddenItemKeys: [hiddenKey] }
       })
     )
-    const currentSources = JSON.parse(await readFile(configPath, 'utf8')).sources
+    const currentSources = (
+      await readStoredConfig(fixtureConfig(configPath), new Map([['fixture', createAdapter()]]))
+    ).sources
     const saved = await second.saveSettings({ display: { resetTimeFormat: 'absolute' } })
-    const disk = JSON.parse(await readFile(configPath, 'utf8'))
+    const disk = await readStoredConfig(
+      fixtureConfig(configPath),
+      new Map([['fixture', createAdapter()]])
+    )
     assert.deepEqual(disk.sources, currentSources)
     assert.deepEqual(saved.display, { resetTimeFormat: 'absolute', hiddenItemKeys: [hiddenKey] })
     assert.deepEqual((await second.settings()).sources, saved.sources)
@@ -354,7 +360,7 @@ test('显式提交完整sources仍整体替换，未提交display保留其他Run
   assert.equal(saved.sources[0]?.sourceId, cached.sources[0]?.sourceId)
   assert.equal(saved.sources[0]?.values.token, 'initial-key')
   assert.equal(saved.display.resetTimeFormat, 'absolute')
-  assert.equal(JSON.parse(await readFile(configPath, 'utf8')).sources.length, 1)
+  assert.equal((await storedConfig(configPath)).sources.length, 1)
 })
 
 test('settings-save 独立保存显示项和时间格式时保留来源、资源、密钥及另一项设置', async () => {
@@ -402,13 +408,10 @@ test('settings-save 独立保存显示项和时间格式时保留来源、资源
     state: 'known',
     value: 12
   })
-  const stored = JSON.parse(await readFile(join(root, 'config.json'), 'utf8')) as {
-    sources: Array<{ sourceId: string; config: Record<string, string> }>
-    display: { hiddenItemKeys: string[]; resetTimeFormat: string }
-  }
+  const stored = await storedConfig(join(root, 'config.json'))
   assert.equal(stored.sources[0]?.sourceId, sourceId)
   assert.equal(stored.sources[0]?.config.endpoint, 'endpoint')
-  assert.match(stored.sources[0]?.config.token ?? '', /^secret:\/\//)
+  assert.match(stored.sources[0]?.config.token ?? '', /^enc:v1:/)
   assert.equal(saved.sources[0]?.values.token, 'original-token')
   assert.deepEqual(stored.display, { resetTimeFormat: 'absolute', hiddenItemKeys: [hiddenKey] })
   const latestPush = pushes.at(-1)
@@ -1002,8 +1005,8 @@ test(
           ]
         })
       )
-      assert.equal((await stat(configPath)).mode & 0o777, 0o600)
-      await chmod(configPath, 0o400)
+      assert.equal((await stat(configFile(configPath))).mode & 0o777, 0o600)
+      await chmod(configFile(configPath), 0o400)
       await runtime.saveSettings(
         jsonObject({
           sources: [
@@ -1017,7 +1020,7 @@ test(
           ]
         })
       )
-      assert.equal((await stat(configPath)).mode & 0o777, 0o400)
+      assert.equal((await stat(configFile(configPath))).mode & 0o777, 0o400)
     } finally {
       await runtime.dispose()
       await rm(root, { recursive: true, force: true })

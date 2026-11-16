@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { EventEmitter, once } from 'node:events'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -18,34 +19,18 @@ import {
   type SessionEntry,
   type ToolDefinition
 } from '@earendil-works/pi-coding-agent'
-import {
-  EventStream,
-  type AssistantMessage,
-  type AssistantMessageEvent
-} from '@earendil-works/pi-ai'
+import { createAssistantMessageEventStream, type AssistantMessage } from '@earendil-works/pi-ai'
 import { getModel } from '@earendil-works/pi-ai/compat'
 import type { TaskReportEvent } from '@jetcrab/pi-desk-sdk'
 import type { SubagentConfig } from '../src/agent-config'
 import type { ResearchDelegateTask, ResearchWorkerOutcome } from '../src/research-runtime'
+import { useSubagentConfig } from './config-fixture'
 import {
   createRetryCompatibilityExtension,
   normalizeRetryableAbortedAssistantMessage,
   SubagentRuntime,
   type SubagentParentContext
 } from '../src/subagent-runtime'
-
-class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
-  constructor() {
-    super(
-      (event) => event.type === 'done' || event.type === 'error',
-      (event) => {
-        if (event.type === 'done') return event.message
-        if (event.type === 'error') return event.error
-        throw new Error('Unexpected assistant event')
-      }
-    )
-  }
-}
 
 type FakeSessionControl = {
   session: AgentSession
@@ -156,7 +141,15 @@ function createFakeSession(sessionManager: SessionManager): FakeSessionControl {
 class FakeSubagentRuntime extends SubagentRuntime {
   readonly sessions: FakeSessionControl[] = []
   readonly childConfigs: SubagentConfig[] = []
+  private readonly sessionEvents = new EventEmitter()
   creationGate: Promise<void> | undefined
+
+  async waitForSessions(count: number): Promise<void> {
+    const signal = AbortSignal.timeout(10_000)
+    while (this.sessions.length < count) {
+      await once(this.sessionEvents, 'created', { signal })
+    }
+  }
 
   delegate(
     ownerTaskId: string,
@@ -175,6 +168,7 @@ class FakeSubagentRuntime extends SubagentRuntime {
     this.childConfigs.push(config)
     const control = createFakeSession(sessionManager)
     this.sessions.push(control)
+    this.sessionEvents.emit('created')
     await this.creationGate
     return control.session
   }
@@ -195,16 +189,11 @@ test('运行中的父会话刷新可用类型并在下次启动读取最新模�
   const root = mkdtempSync(join(tmpdir(), 'pi-desk-subagent-refresh-'))
   const agentDir = join(root, 'agent')
   const cwd = join(root, 'project')
-  mkdirSync(join(agentDir, 'config'), { recursive: true })
   mkdirSync(cwd, { recursive: true })
-  const settingsPath = join(agentDir, 'config', 'pi-desk-subagent.json')
-  writeFileSync(
-    settingsPath,
-    JSON.stringify({
-      agents: { dev: { disabled: true }, explore: { model: 'my/old-model', thinking: 'low' } }
-    }),
-    'utf8'
-  )
+  const config = useSubagentConfig(context, agentDir)
+  await config.set({
+    agents: { dev: { disabled: true }, explore: { model: 'my/old-model', thinking: 'low' } }
+  })
 
   const tools = new Map<string, ToolDefinition>()
   let activeTools: string[] = []
@@ -261,18 +250,14 @@ test('运行中的父会话刷新可用类型并在下次启动读取最新模�
     ['explore', 'research']
   )
 
-  writeFileSync(
-    settingsPath,
-    JSON.stringify({
-      agents: {
-        dev: { disabled: true },
-        explore: { model: 'my/new-model', thinking: 'high' },
-        research: { disabled: true }
-      }
-    }),
-    'utf8'
-  )
-  runtime.refreshConfigs()
+  await config.set({
+    agents: {
+      dev: { disabled: true },
+      explore: { model: 'my/new-model', thinking: 'high' },
+      research: { disabled: true }
+    }
+  })
+  await runtime.refreshConfigs()
 
   const refreshedAgent = tools.get('agent')
   assert.ok(refreshedAgent)
@@ -295,6 +280,23 @@ test('运行中的父会话刷新可用类型并在下次启动读取最新模�
   runtime.sessions[0]?.complete('配置已刷新')
   await nextTick()
   assert.equal(runtime.sessions[0]?.disposed, true)
+
+  await config.set({ agents: { explore: { model: 'my/project-model' } } }, { cwd })
+  const trustedContext = { ...ctx, isProjectTrusted: () => true } as ExtensionToolContext
+  await runtime.startSession(trustedContext)
+  await tools
+    .get('agent')!
+    .execute(
+      'project-call',
+      { subagent_type: 'explore', prompt: '读取项目覆盖', description: '项目配置验证' },
+      undefined,
+      undefined,
+      trustedContext
+    )
+  assert.equal(runtime.childConfigs[1]?.model, 'my/project-model')
+  assert.equal(runtime.childConfigs[1]?.thinking, 'high')
+  runtime.sessions[1]?.complete('项目配置已应用')
+  await nextTick()
 })
 
 function abortedAssistant(errorMessage: string): AssistantMessage {
@@ -340,7 +342,7 @@ test('重试兼容扩展等待原生 AgentSession 重试成功后再结束 promp
     initialState: { model, systemPrompt: 'Test', tools: [] },
     streamFn: () => {
       callCount += 1
-      const stream = new MockAssistantStream()
+      const stream = createAssistantMessageEventStream()
       queueMicrotask(() => {
         if (callCount === 1) {
           const message: AssistantMessage = {
@@ -761,7 +763,7 @@ test('Root research 等待全部平级 Worker 且 Worker 不直接通知主代�
       return outcomes
     })
 
-  await nextTick()
+  await runtime.waitForSessions(3)
   assert.equal(runtime.sessions.length, 3)
   assert.equal(settled, false)
   const list = tools.get('agent_list')!
@@ -835,7 +837,7 @@ test('Root research 等待全部平级 Worker 且 Worker 不直接通知主代�
     controller.signal,
     () => undefined
   )
-  await nextTick()
+  await runtime.waitForSessions(5)
   controller.abort()
   const interruptedOutcomes = await interrupted
   assert.deepEqual(
@@ -1349,6 +1351,7 @@ for (const operation of ['agent', 'agent_resume'] as const) {
     f.releases.push(gate.resolve)
     f.runtime.creationGate = gate.promise
     const messagesBefore = f.messages.length
+    const created = f.runtime.waitForSessions(f.runtime.sessions.length + 1)
     const creating =
       operation === 'agent'
         ? f.start()
@@ -1357,6 +1360,7 @@ for (const operation of ['agent', 'agent_resume'] as const) {
             prompt: '恢复旧任务'
           })
     const rejected = assert.rejects(creating, /当前父会话已变化/)
+    await created
     let navigated = false
     const stopping = f.runtime.beforeTree(new AbortController().signal).then(() => {
       navigated = true

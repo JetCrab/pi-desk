@@ -19,10 +19,9 @@ interface PackageManifest {
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const browserRoot = join(packageRoot, 'dist', 'browser')
 
-test('环境归档声明workspace项目定义与Handler目录且不映射相对路径或工作区实体', async () => {
+test('环境归档仅声明Handler资源，统一配置由宿主归档', async () => {
   const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
   assert.deepEqual(manifest.piDesk.environment.files, [
-    { base: 'project', path: 'workspace.yml', format: 'yaml', secretPaths: [] },
     { base: 'project', path: 'workspace', format: 'binary', secretPaths: [] }
   ])
 })

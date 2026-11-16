@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { createSecretStore, type SecretStore } from '@jetcrab/pi-desk-sdk/secrets'
 import { withConfigTransaction } from '@jetcrab/pi-desk-sdk/config'
@@ -163,8 +163,16 @@ async function withTargetLocks<T>(paths: readonly string[], action: () => Promis
       ] as const
     })
   )
+  const projectPriority = (target: string): number => {
+    const path = process.platform === 'win32' ? target.toLowerCase() : target
+    return basename(path) === 'pi-desk.yaml' && basename(dirname(path)) === '.pi' ? 0 : 1
+  }
   const targets = [...byKey]
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    // SDK 项目写入持有项目锁后再获取全局主密钥锁，事务必须保持相同顺序。
+    .sort(
+      ([a, pathA], [b, pathB]) =>
+        projectPriority(pathA) - projectPriority(pathB) || (a < b ? -1 : a > b ? 1 : 0)
+    )
     .map(([, target]) => target)
   async function next(index: number): Promise<T> {
     if (index === targets.length) return action()

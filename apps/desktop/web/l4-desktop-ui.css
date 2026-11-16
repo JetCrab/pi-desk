@@ -337,6 +337,17 @@ textarea:disabled {
   font-size: 0.875rem;
   font-weight: 600;
 }
+.pi-version {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+.pi-update-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
 .access-address {
   display: flex;
   align-items: center;

@@ -3,7 +3,10 @@ import { randomUUID } from 'node:crypto'
 import fs, { type PathLike } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
+import { parse as parseYaml } from 'yaml'
+import { bindConfigStore, getUnifiedConfigPath } from '../plugins/pi-desk-sdk/src/config-store.ts'
+import type { PluginJsonObject } from '../plugins/pi-desk-sdk/src/shared.ts'
 import test from 'node:test'
 import { createJiti } from 'jiti'
 import { CONFIG_DIR_NAME, ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent'
@@ -81,14 +84,11 @@ async function withFixture(
     await writeFile(path, typeof input === 'string' ? input : JSON.stringify(input))
     await writeFile(join(agentDir, 'auth.json'), '{}')
     await mkdir(join(agentDir, 'config'), { recursive: true })
-    await writeFile(
-      join(agentDir, 'config', 'pi-desk-models.json'),
-      JSON.stringify({
-        modelPresets: [
-          { provider: 'fixture', modelId: 'test-model', thinkingLevel: 'high', color: null }
-        ]
-      })
-    )
+    await bindConfigStore('pi-desk', 'models', { agentDir }).set({
+      modelPresets: [
+        { provider: 'fixture', modelId: 'test-model', thinkingLevel: 'high', color: null }
+      ]
+    })
     const store = await jiti.import<Store>(
       '../src/server/l4_foundation/model-settings/l4-model-settings-store.ts'
     )
@@ -105,7 +105,10 @@ async function withFixture(
 }
 
 async function readConfig(path: string): Promise<Config> {
-  return JSON.parse(await readFile(path, 'utf8')) as Config
+  const text = await readFile(path, 'utf8')
+  return basename(path) === 'pi-desk.yaml'
+    ? (parseYaml(text)['pi-desk'].models as Config)
+    : (JSON.parse(text) as Config)
 }
 
 function providerOf(config: Config): Record<string, unknown> {
@@ -124,8 +127,10 @@ test('模型偏好：只读config，原生旧偏好字段和注释保持原字�
   legacy.modelSelections = [{ provider: 'openai-codex', modelId: 'legacy-only' }]
   const content = '// native-comment\n' + JSON.stringify(legacy, null, 2)
   await withFixture(content, async (store, path, agentDir) => {
-    const preferencesPath = join(agentDir, 'config', 'pi-desk-models.json')
-    await writeFile(preferencesPath, JSON.stringify({ customPreference: { keep: true } }))
+    const preferencesPath = getUnifiedConfigPath(agentDir)
+    await bindConfigStore('pi-desk', 'models', { agentDir }).set({
+      customPreference: { keep: true }
+    })
     const settings = await store.readL4ModelSettings()
     assert.deepEqual(settings.nativeConfig, legacy)
     assert.deepEqual(settings.presets, [])
@@ -155,7 +160,7 @@ test('模型偏好：缺新文件使用空偏好，原生编辑保留旧根字�
   ]
   legacy.modelSelections = []
   await withFixture(legacy, async (store, path, agentDir) => {
-    const target = join(agentDir, 'config', 'pi-desk-models.json')
+    const target = getUnifiedConfigPath(agentDir)
     await rm(target)
     const before = await readFile(path, 'utf8')
     const settings = await store.readL4ModelSettings()
@@ -383,7 +388,7 @@ test('账号模型：登录不自动收录，只保存引用并统一过滤聊�
     await store.replaceL4ModelSettings({
       accountModels: [{ provider: 'openai-codex', modelId: first, overrides: {} }]
     })
-    const preferences = await readConfig(join(agentDir, 'config', 'pi-desk-models.json'))
+    const preferences = await readConfig(getUnifiedConfigPath(agentDir))
     assert.deepEqual(preferences.modelSelections, [{ provider: 'openai-codex', modelId: first }])
     const config = await readConfig(path)
     assert.equal(config.modelSelections, undefined)
@@ -431,10 +436,10 @@ test('账号模型：登录不自动收录，只保存引用并统一过滤聊�
 test('账号模型：参数覆盖稀疏写入，恢复默认及自定义配置保存不丢失高级字段', async () => {
   await withAccountFixture(async (store, path, agentDir, [first]) => {
     const config = await readConfig(path)
-    const preferencesPath = join(agentDir, 'config', 'pi-desk-models.json')
+    const preferencesPath = getUnifiedConfigPath(agentDir)
     const preferences = await readConfig(preferencesPath)
     preferences.modelSelections = [{ provider: 'openai-codex', modelId: first }]
-    await writeFile(preferencesPath, JSON.stringify(preferences))
+    await bindConfigStore('pi-desk', 'models', { agentDir }).set(preferences as PluginJsonObject)
     const providers = config.providers as Record<string, unknown>
     providers['openai-codex'] = {
       modelOverrides: { [first]: { promptCache: { long: 7200 }, cost: { input: 7 } } }
@@ -497,7 +502,7 @@ test('账号模型：取消收录清理常用组合但保留已忽略项目原�
     const ignoreStore = await jiti.import<
       typeof import('../src/server/l4_foundation/pi/l4-pi-directory-ignore-store')
     >('../src/server/l4_foundation/pi/l4-pi-directory-ignore-store.ts')
-    ignoreStore.replaceL4PiDirectoryIgnore(project.cwd, true)
+    await ignoreStore.replaceL4PiDirectoryIgnore(project.cwd, true)
     const before = await readFile(path, 'utf8')
     const projectBefore = await readFile(project.path, 'utf8')
     const preview = L2ModelSettingsPreviewResponseSchema.parse(
@@ -671,7 +676,7 @@ test('模型替换：预览只读，确认后同步已知项目并保留无关�
     const ignoreStore = await jiti.import<
       typeof import('../src/server/l4_foundation/pi/l4-pi-directory-ignore-store')
     >('../src/server/l4_foundation/pi/l4-pi-directory-ignore-store.ts')
-    ignoreStore.replaceL4PiDirectoryIgnore(second.cwd, true)
+    await ignoreStore.replaceL4PiDirectoryIgnore(second.cwd, true)
     const settings = await store.readL4ModelSettings()
     const replacement = settings.providers[0].models[0]
     replacement.modelId = 'new-model'

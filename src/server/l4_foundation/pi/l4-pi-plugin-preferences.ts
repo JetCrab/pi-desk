@@ -1,8 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
-import { randomUUID } from 'node:crypto'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
-import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import { bindConfigStore, readConfigSection } from '@jetcrab/pi-desk-sdk/config'
 import { z } from 'zod'
 import {
   L4PluginDownloadSourceSchema,
@@ -24,44 +21,32 @@ const PreferencesSchema = z
   .strict()
 type Preferences = z.infer<typeof PreferencesSchema>
 
-function preferencesPath(agentDir: string): string {
-  return getConfigPath('pi-desk-plugins.json', agentDir)
-}
-
 export function readL4PiPluginPreferences(agentDir = getAgentDir()): Preferences {
-  const path = preferencesPath(agentDir)
-  return existsSync(path)
-    ? PreferencesSchema.parse(JSON.parse(readFileSync(path, 'utf8')))
-    : PreferencesSchema.parse({})
+  return PreferencesSchema.parse(readConfigSection('pi-desk', 'plugins', agentDir))
 }
 
-function updatePreferences(agentDir: string, update: (current: Preferences) => Preferences): void {
-  const path = preferencesPath(agentDir)
+async function updatePreferences(
+  agentDir: string,
+  update: (current: Preferences) => Preferences
+): Promise<void> {
   const next = PreferencesSchema.parse(update(readL4PiPluginPreferences(agentDir)))
-  mkdirSync(dirname(path), { recursive: true })
-  const temporary = `${path}.${randomUUID()}.tmp`
-  try {
-    writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
-    renameSync(temporary, path)
-  } finally {
-    rmSync(temporary, { force: true })
-  }
+  await bindConfigStore('pi-desk', 'plugins', { agentDir }).set(next)
 }
 
-export function setL4PiPluginDownloadSource(
+export async function setL4PiPluginDownloadSource(
   downloadSource: L4PluginDownloadSource,
   agentDir = getAgentDir()
-): void {
-  updatePreferences(agentDir, (current) => ({ ...current, downloadSource }))
+): Promise<void> {
+  await updatePreferences(agentDir, (current) => ({ ...current, downloadSource }))
 }
 
-export function setL4PiPluginEnabled(
+export async function setL4PiPluginEnabled(
   source: string,
   enabled: boolean,
   agentDir = getAgentDir()
-): void {
+): Promise<void> {
   const identity = l4PluginSourceIdentity(source)
-  updatePreferences(agentDir, (current) => ({
+  await updatePreferences(agentDir, (current) => ({
     ...current,
     disabled: [
       ...current.disabled.filter((item) => item !== identity),
@@ -70,13 +55,13 @@ export function setL4PiPluginEnabled(
   }))
 }
 
-export function setL4PiPluginRegistry(
+export async function setL4PiPluginRegistry(
   source: string,
   registry: string | null,
   agentDir = getAgentDir()
-): void {
+): Promise<void> {
   const identity = l4PluginSourceIdentity(source)
-  updatePreferences(agentDir, (current) => {
+  await updatePreferences(agentDir, (current) => {
     const registries = { ...current.registries }
     if (
       registry &&
@@ -101,21 +86,24 @@ export function readL4PiPluginUpdateTag(source: string, agentDir = getAgentDir()
     : 'latest'
 }
 
-export function setL4PiPluginUpdateTag(
+export async function setL4PiPluginUpdateTag(
   source: string,
   tag: string,
   agentDir = getAgentDir()
-): void {
+): Promise<void> {
   const identity = l4PluginSourceIdentity(source)
-  updatePreferences(agentDir, (current) => ({
+  await updatePreferences(agentDir, (current) => ({
     ...current,
     updateTags: { ...current.updateTags, [identity]: tag }
   }))
 }
 
-export function removeL4PiPluginPreference(source: string, agentDir = getAgentDir()): void {
+export async function removeL4PiPluginPreference(
+  source: string,
+  agentDir = getAgentDir()
+): Promise<void> {
   const identity = l4PluginSourceIdentity(source)
-  updatePreferences(agentDir, (current) => {
+  await updatePreferences(agentDir, (current) => {
     const registries = { ...current.registries }
     const updateTags = { ...current.updateTags }
     delete registries[identity]

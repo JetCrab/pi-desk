@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
 import { join } from 'node:path'
 import test from 'node:test'
 import type { HostRegion, HostSettings } from '@jetcrab/pi-desk-sdk/settings'
@@ -16,8 +17,10 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 test('后台分析读取共享地区，改变地区及重启后不误用旧缓存', async (context) => {
-  const root = await mkdtemp(join(tmpdir(), 'tibo-shared-region-'))
-  const path = join(root, 'config', 'pi-desk-tibo-monitor.json')
+  const runs = fileURLToPath(new URL('../../../temp/run/tibo-region/', import.meta.url))
+  await mkdir(runs, { recursive: true })
+  const root = await mkdtemp(join(runs, 'config-binding-'))
+  const configStore = bindConfigStore('plugins', 'tibo-monitor', { agentDir: root })
   const dataPath = join(root, 'pi-desk', 'tibo-monitor.json')
   context.after(() => rm(root, { recursive: true, force: true }))
   let region: HostRegion = { locale: 'en', timeZone: 'America/New_York' }
@@ -33,29 +36,34 @@ test('后台分析读取共享地区，改变地区及重启后不误用旧缓�
   }
   const regions: HostRegion[] = []
   const host = {
+    config: configStore,
     setState() {},
     notifications: { publish: () => 'notice', update() {}, delete() {} }
   }
-  await writeStore(path, {
-    settings: {
-      enabled: false,
-      model: { provider: 'fixture', modelId: 'translator' },
-      intervalSeconds: 60,
-      retentionCount: 10
+  await writeStore(
+    configStore,
+    {
+      settings: {
+        enabled: false,
+        model: { provider: 'fixture', modelId: 'translator' },
+        intervalSeconds: 60,
+        retentionCount: 10
+      },
+      records: [
+        {
+          id: 'post',
+          title: 'Post',
+          text: 'Original text',
+          publishedAt: 1000,
+          link: 'https://x.com/alice/status/1',
+          analysis: { translation: '旧中文译文', reset: { level: 'none', reason: '无' }, times: [] }
+        }
+      ]
     },
-    records: [
-      {
-        id: 'post',
-        title: 'Post',
-        text: 'Original text',
-        publishedAt: 1000,
-        link: 'https://x.com/alice/status/1',
-        analysis: { translation: '旧中文译文', reset: { level: 'none', reason: '无' }, times: [] }
-      }
-    ]
-  })
+    dataPath
+  )
   const options = {
-    path,
+    dataPath,
     settings,
     translate: async (
       _post: unknown,
@@ -89,7 +97,7 @@ test('后台分析读取共享地区，改变地区及重启后不误用旧缓�
   await runtime.dispose()
   assert.equal(listeners.size, 0)
   const stored = JSON.parse(await readFile(dataPath, 'utf8'))
-  const config = JSON.parse(await readFile(path, 'utf8'))
+  const config = (await configStore.get()) as { settings: Record<string, unknown> }
   assert.deepEqual(stored.analysisRegion, region)
   assert.equal('locale' in config.settings, false)
   assert.equal('timeZone' in config.settings, false)

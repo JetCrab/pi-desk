@@ -508,7 +508,7 @@ export class L2PluginManagement {
       throw new L2PluginManagementInvalidPackageError('只有 npm 插件包支持更新渠道')
     }
     this.assertSourceIdle(target.source)
-    setL4PiPluginUpdateTag(target.source, L4PluginUpdateTagSchema.parse(tag), this.agentDir)
+    await setL4PiPluginUpdateTag(target.source, L4PluginUpdateTagSchema.parse(tag), this.agentDir)
     this.updates.clear(target.source)
     this.publish()
   }
@@ -999,10 +999,17 @@ export class L2PluginManagement {
         ...(npmName && mutation !== 'del' && (reinstall || target || mutation === 'update')
           ? { action: 'reinstall' as const, source: resolved.source }
           : maintenanceRequest(mutation, resolved.source)),
-        ...('registry' in resolved && resolved.registry ? { registry: resolved.registry } : {})
+        ...('registry' in resolved && resolved.registry ? { registry: resolved.registry } : {}),
+        ...('publicRegistry' in resolved && resolved.publicRegistry
+          ? { publicRegistry: resolved.publicRegistry }
+          : {})
       }
       if (mutation !== 'del')
-        pluginName = await this.probeCandidate(resolved.source, request.registry)
+        pluginName = await this.probeCandidate(
+          resolved.source,
+          request.registry,
+          request.publicRegistry
+        )
     }
     return { request, updateTag, pluginName }
   }
@@ -1019,7 +1026,7 @@ export class L2PluginManagement {
       // 先前项可能安装失败或注册同名插件，不能依赖并行准备时的旧结论。
       this.assertPluginNameAvailable(pluginName, operationSource)
       if (updateTag) {
-        setL4PiPluginUpdateTag(operationSource, updateTag, this.agentDir)
+        await setL4PiPluginUpdateTag(operationSource, updateTag, this.agentDir)
         this.updates.clear(operationSource)
       }
     }
@@ -1037,7 +1044,7 @@ export class L2PluginManagement {
           const previouslyDisabled = readL4PiPluginPreferences(this.agentDir).disabled.includes(
             l2PluginSourceIdentity(source)
           )
-          setL4PiPluginEnabled(source, mutation === 'enable', this.agentDir)
+          await setL4PiPluginEnabled(source, mutation === 'enable', this.agentDir)
           this.sourceCache = null
           try {
             await this.applyMutationSources([source], true)
@@ -1051,7 +1058,7 @@ export class L2PluginManagement {
                 )
             }
           } catch (error) {
-            setL4PiPluginEnabled(source, !previouslyDisabled, this.agentDir)
+            await setL4PiPluginEnabled(source, !previouslyDisabled, this.agentDir)
             this.sourceCache = null
             throw error
           }
@@ -1064,7 +1071,7 @@ export class L2PluginManagement {
               cwd: this.packageManagerCwd
             })
           } else {
-            removeL4PiPluginPreference(operationSource, this.agentDir)
+            await removeL4PiPluginPreference(operationSource, this.agentDir)
           }
           for (const change of await runtime.scanSourceChanges([operationSource])) {
             if (change.current) {
@@ -1234,7 +1241,11 @@ export class L2PluginManagement {
     return writing() && this.sourceCache ? this.sourceCache : snapshot
   }
 
-  private async probeCandidate(source: string, registry?: string): Promise<string | null> {
+  private async probeCandidate(
+    source: string,
+    registry?: string,
+    publicRegistry?: string
+  ): Promise<string | null> {
     const root = join(this.stagingRoot, randomUUID())
     const stagingAgentDir = join(root, 'agent')
     const stagingCwd = join(root, 'workspace')
@@ -1242,27 +1253,32 @@ export class L2PluginManagement {
 
     console.info('[Pi Desk][PluginManagement] 开始在隔离 AgentDir 预检候选插件', { source })
     try {
-      // npm 解析结果没有 registry 表示本机模式，预检需保留完整项目配置而非单个源地址。
-      if (!registry && l2PluginNpmName(source)) {
-        for (const configPath of ['.npmrc', join('etc', 'npmrc')]) {
+      if (l2PluginNpmName(source)) {
+        // 只继承锁和 npm 配置，不复制或链接正式 node_modules，也不安装无关插件。
+        for (const configPath of ['package-lock.json', '.npmrc', join('etc', 'npmrc')]) {
           const target = join(stagingAgentDir, 'npm', configPath)
           await mkdir(dirname(target), { recursive: true })
           try {
             await copyFile(join(this.agentDir, 'npm', configPath), target)
-            console.info('[Pi Desk][PluginManagement] 已为隔离预检继承本机 npm 配置', {
+            console.info('[Pi Desk][PluginManagement] 隔离预检已继承 npm 安装状态', {
               source,
               configPath
             })
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
               throw new L2PluginManagementInvalidPackageError(
-                `无法继承本机 npm 配置（${configPath}）：${errorMessage(error)}`
+                `无法继承 npm 安装状态（${configPath}）：${errorMessage(error)}`
               )
           }
         }
       }
       await runL4PiPackageMaintenance({
-        maintenance: { action: 'install', source, ...(registry ? { registry } : {}) },
+        maintenance: {
+          action: 'install',
+          source,
+          ...(registry ? { registry } : {}),
+          ...(publicRegistry ? { publicRegistry } : {})
+        },
         agentDir: stagingAgentDir,
         cwd: stagingCwd,
         signal: this.lifetime.signal

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
-import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import type { PluginConfig } from '@jetcrab/pi-desk-sdk/entry'
 import {
   defaultSettings,
   storedSchema,
@@ -30,21 +30,16 @@ async function assertFile(path: string): Promise<boolean> {
   }
 }
 
-export function defaultTiboStorePaths(): { path: string; dataPath: string } {
+export function defaultTiboStorePaths(): { dataPath: string } {
   const agentDir = getAgentDir()
   return {
-    path: getConfigPath('pi-desk-tibo-monitor.json', agentDir),
     dataPath: join(agentDir, 'pi-desk', 'tibo-monitor.json')
   }
 }
 
-export async function readStore(
-  path: string,
-  dataPath = join(dirname(dirname(path)), 'pi-desk', 'tibo-monitor.json')
-): Promise<TiboStored> {
-  const settings = (await assertFile(path))
-    ? JSON.parse(await readFile(path, 'utf8'))
-    : { settings: defaultSettings() }
+export async function readStore(config: PluginConfig, dataPath: string): Promise<TiboStored> {
+  const saved = await config.get()
+  const settings = Object.keys(saved).length ? saved : { settings: defaultSettings() }
   const data = (await assertFile(dataPath))
     ? JSON.parse(await readFile(dataPath, 'utf8'))
     : { records: [] }
@@ -60,9 +55,9 @@ export async function readStore(
 }
 
 export async function writeStore(
-  path: string,
+  config: PluginConfig,
   value: TiboStored,
-  dataPath = join(dirname(dirname(path)), 'pi-desk', 'tibo-monitor.json')
+  dataPath: string
 ): Promise<void> {
   const stored = storedSchema.parse({
     settings: value.settings,
@@ -71,7 +66,7 @@ export async function writeStore(
   })
   const { settings, ...data } = stored
   await writeJson(dataPath, data)
-  await writeJson(path, { settings })
+  await config.set({ settings })
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {

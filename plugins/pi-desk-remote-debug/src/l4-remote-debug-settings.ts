@@ -1,12 +1,14 @@
 import { randomBytes } from 'node:crypto'
 import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { getConfigPath } from '@jetcrab/pi-desk-sdk/config'
+import { isAbsolute, join, resolve } from 'node:path'
+import { getAgentDir } from '@earendil-works/pi-coding-agent'
+import type { PluginConfig } from '@jetcrab/pi-desk-sdk/entry'
 import { z } from 'zod'
 import {
   normalizeRoutePath,
   readRemoteDebugConfig,
   validateRemoteDebugConfig,
+  validateRemoteDebugRanges,
   writeRemoteDebugConfig,
   type RemoteDebugConfig
 } from './config.js'
@@ -33,21 +35,22 @@ const persistedSettingsSchema = remoteDebugRangesSchema.extend(registrationsSche
 type PersistedSettings = z.infer<typeof persistedSettingsSchema>
 
 interface SettingsStoreOptions {
+  config: PluginConfig
   agentDir?: string
   readTunnelServer?: () => Promise<string | null>
   isPortAvailable?: (port: number) => Promise<boolean>
 }
 
 export class RemoteDebugSettingsStore {
-  private readonly path: string
+  private readonly config: PluginConfig
   private readonly registrationsPath: string
   private readonly queryTunnelServer: () => Promise<string | null>
   private readonly isPortAvailable: (port: number) => Promise<boolean>
   private queue: Promise<void> = Promise.resolve()
 
-  constructor(options: SettingsStoreOptions = {}) {
-    this.path = getConfigPath('pi-desk-remote-debug-ports.json', options.agentDir)
-    const agentDir = dirname(dirname(this.path))
+  constructor(options: SettingsStoreOptions) {
+    this.config = options.config
+    const agentDir = options.agentDir ?? getAgentDir()
     this.registrationsPath = join(agentDir, 'pi-desk', 'remote-debug-registrations.json')
     this.queryTunnelServer = options.readTunnelServer ?? readDesktopTunnelServer
     this.isPortAvailable = options.isPortAvailable ?? isLocalPortAvailable
@@ -65,6 +68,8 @@ export class RemoteDebugSettingsStore {
       const tunnelServer = await this.readTunnelServer()
       const next = { ...settings, ...ranges }
       await this.persist(next)
+      const own = await this.config.get({ inherit: false })
+      await this.config.set({ ...own, ...ranges })
       return { ...next, tunnelServer }
     })
   }
@@ -72,7 +77,7 @@ export class RemoteDebugSettingsStore {
   syncProject(cwd: string): Promise<void> {
     return this.enqueue(async () => {
       const canonicalCwd = await realpath(cwd)
-      const config = await readRemoteDebugConfig(canonicalCwd)
+      const config = await readRemoteDebugConfig(canonicalCwd, this.config)
       if (!config) return
       const settings = await this.read()
       const tunnelServer = await this.readTunnelServer()
@@ -128,8 +133,10 @@ export class RemoteDebugSettingsStore {
         }
       }
       validateRemoteDebugConfig({ version: 1, profiles })
-      const existing = await readRemoteDebugConfig(cwd)
-      const settings = await this.read()
+      const own = await this.config.get({ cwd, inherit: false })
+      const existing =
+        own.profiles === undefined ? null : await readRemoteDebugConfig(cwd, this.config)
+      const settings = await this.read(cwd)
       const tunnelServer = await this.readTunnelServer()
       if (existing) syncRegistrations(settings, cwd, existing, tunnelServer)
       const registeredLocal = settings.registrations.flatMap((item) => [
@@ -173,7 +180,7 @@ export class RemoteDebugSettingsStore {
         }
       }
       const config = validateRemoteDebugConfig({ version: 1, profiles })
-      await writeRemoteDebugConfig(cwd, config)
+      await writeRemoteDebugConfig(cwd, config, this.config)
       syncRegistrations(settings, cwd, config, tunnelServer)
       try {
         await this.persist(settings)
@@ -216,11 +223,11 @@ export class RemoteDebugSettingsStore {
     return pending
   }
 
-  private async read(): Promise<PersistedSettings> {
-    const ranges = await this.readJson(this.path)
+  private async read(cwd?: string): Promise<PersistedSettings> {
+    const saved = await this.config.get({ cwd, defaults: DEFAULT_REMOTE_DEBUG_RANGES })
     const registrations = await this.readJson(this.registrationsPath)
     return persistedSettingsSchema.parse({
-      ...remoteDebugRangesSchema.parse(ranges ?? structuredClone(DEFAULT_REMOTE_DEBUG_RANGES)),
+      ...validateRemoteDebugRanges(saved),
       registrations:
         registrations === undefined ? [] : registrationsSchema.parse(registrations).registrations
     })
@@ -239,9 +246,8 @@ export class RemoteDebugSettingsStore {
   }
 
   private async persist(settings: PersistedSettings): Promise<void> {
-    const { registrations, ...ranges } = persistedSettingsSchema.parse(settings)
+    const { registrations } = persistedSettingsSchema.parse(settings)
     await this.persistJson(this.registrationsPath, { registrations })
-    await this.persistJson(this.path, ranges)
   }
 
   private async persistJson(path: string, value: unknown): Promise<void> {

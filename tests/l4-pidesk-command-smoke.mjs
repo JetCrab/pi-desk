@@ -9,6 +9,7 @@ import { basename, dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import WebSocket from 'ws'
+import { parseDocument } from 'yaml'
 import { assertPortReleased } from './l4-e2e-server-runtime.mjs'
 import {
   createCdpPage,
@@ -128,7 +129,7 @@ export async function createPiDeskCommandFixture(root, agentDir) {
       response.end(JSON.stringify({ error: '测试包或版本不存在' }))
     }
   })
-  await mkdir(agentDir, { recursive: true })
+  await mkdir(join(agentDir, 'config'), { recursive: true })
   await mkdir(root, { recursive: true })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -227,10 +228,12 @@ export async function createPiDeskCommandFixture(root, agentDir) {
         }
       })
     )
-    await writeFile(
-      join(agentDir, 'pi-desk-plugins.json'),
-      JSON.stringify({ downloadSource: { mode: 'custom', registry } })
+    const configPath = join(agentDir, 'config', 'pi-desk.yaml')
+    const config = parseDocument(
+      existsSync(configPath) ? await readFile(configPath, 'utf8') : '{}\n'
     )
+    config.setIn(['pi-desk', 'plugins'], { downloadSource: { mode: 'custom', registry } })
+    await writeFile(configPath, config.toString())
   } catch (error) {
     server.closeAllConnections()
     await new Promise((done) => server.close(done))

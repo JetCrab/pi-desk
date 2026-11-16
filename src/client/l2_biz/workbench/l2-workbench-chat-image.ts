@@ -132,10 +132,12 @@ export async function inspectL2WorkbenchImage(file: File): Promise<L2WorkbenchSt
   if (!SUPPORTED_INPUT_TYPES.has(mimeType)) {
     throw new Error(l2WorkbenchText('imageTypeUnsupported'))
   }
-  const decoded = await decodeDimensions(file)
+  // 剪贴板可能引用会被后续截图覆盖的临时文件，先固定完整字节快照。
+  const blob = new Blob([await file.arrayBuffer()], { type: mimeType })
+  const decoded = await decodeDimensions(blob)
   decoded.bitmap.close()
   return {
-    blob: file,
+    blob,
     mimeType,
     width: decoded.width,
     height: decoded.height,

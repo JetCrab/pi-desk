@@ -134,6 +134,9 @@ function messageEntry(id, parentId, message) {
 function extensionContext(branch) {
   return {
     cwd: rootDir,
+    isProjectTrusted() {
+      return false
+    },
     model: { contextWindow: 200_000 },
     getContextUsage() {
       return undefined
@@ -159,7 +162,7 @@ test('系统提示词说明压缩格式且不注册 context_history', async () =
   assert.equal(typeof beforeAgentStart, 'function')
   const result = await beforeAgentStart(
     { systemPrompt: 'BASE', systemPromptOptions: { skills: [] } },
-    { cwd: rootDir }
+    extensionContext([])
   )
 
   assert.equal(result.systemPrompt.startsWith('BASE\n\n'), true)

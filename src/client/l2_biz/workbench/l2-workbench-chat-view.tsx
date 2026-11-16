@@ -161,7 +161,7 @@ function L2WorkbenchChatViewComponent({
             <>
               <ConversationContent
                 scrollClassName="pi-desk-chat-scrollbar pi-desk-chat-conversation-scroll overflow-auto"
-                className="mx-auto min-h-full w-full max-w-3xl gap-6 px-3 pt-3 pb-4 sm:px-5"
+                className="mx-auto min-h-full w-full max-w-3xl gap-6 px-3 pt-3 pb-0 sm:px-5"
               >
                 {turnWindow.visibleTurns.map((turn, index) => {
                   const turnIndex = turnWindow.startIndex + index

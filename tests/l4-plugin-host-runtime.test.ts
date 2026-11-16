@@ -5,7 +5,10 @@ import {
   type BrowserApplicationImplementation,
   type BrowserEntryFactory,
   type BrowserFilePreviewOptions,
+  type BrowserFloatingHandle,
+  type BrowserFloatingImplementation,
   type BrowserPluginHost,
+  type BrowserPluginFacade,
   type BrowserSessionHeaderActionContext,
   type BrowserSessionSidebarHeaderAction,
   type BrowserSessionSidebarTabTarget,
@@ -181,6 +184,383 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   }
   throw new Error('等待宿主测试状态超时')
 }
+
+function createFloatingLayer(): HTMLElement {
+  const children = new Set<HTMLElement>()
+  return {
+    ownerDocument: {
+      createElement: () => {
+        const child = {
+          dataset: {},
+          style: {},
+          remove: () => children.delete(child)
+        } as unknown as HTMLElement
+        return child
+      }
+    },
+    append: (element: HTMLElement) => children.add(element),
+    get childElementCount() {
+      return children.size
+    }
+  } as unknown as HTMLElement
+}
+
+function deferredFloating<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((complete) => {
+    resolve = complete
+  })
+  return { promise, resolve }
+}
+
+test('悬浮组件按需打开，加载中及就绪后同ID去重，插件和实例相互隔离', async (context) => {
+  const first = entry()
+  const second = entry('second-plugin', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
+  const hosts: BrowserPluginHost[] = []
+  const runtime = createL4PluginHostRuntime(createTransport([first, second]), async () => ({
+    default: (plugin: BrowserPluginFacade): void => {
+      hosts.push(plugin.host)
+    }
+  }))
+  context.after(() => runtime.dispose())
+  const layer = createFloatingLayer()
+  const unbind = runtime.bindFloatingContainer(layer)
+  await initialize(runtime)
+  assert.equal(layer.childElementCount, 0)
+  const loading = deferredFloating<BrowserFloatingImplementation>()
+  let loads = 0
+  let mounts = 0
+  let cleanups = 0
+  const load = async (): Promise<BrowserFloatingImplementation> => {
+    loads++
+    return loading.promise
+  }
+  const firstHandle = hosts[0].floating.open({ id: 'todo:项目', load })
+  const duplicate = (): BrowserFloatingHandle =>
+    hosts[0].floating.open({
+      id: 'todo:项目',
+      load: async () => {
+        throw new Error('重复loader不可执行')
+      }
+    })
+  assert.equal(duplicate(), firstHandle)
+  await waitFor(() => loads === 1)
+  const implementation: BrowserFloatingImplementation = {
+    mount: () => {
+      mounts++
+      return () => {
+        cleanups++
+      }
+    }
+  }
+  loading.resolve(implementation)
+  await waitFor(() => mounts === 1)
+  assert.equal(duplicate(), firstHandle)
+  hosts[0].floating.open({ id: 'another', load: async () => implementation })
+  hosts[1].floating.open({ id: 'todo:项目', load: async () => implementation })
+  await waitFor(() => mounts === 3)
+  assert.equal(layer.childElementCount, 3)
+  firstHandle.close()
+  firstHandle.close()
+  await waitFor(() => cleanups === 1)
+  assert.equal(layer.childElementCount, 2)
+  unbind()
+  await waitFor(() => cleanups === 3)
+  assert.equal(layer.childElementCount, 0)
+})
+
+test('悬浮组件加载前关闭不执行loader，加载中关闭不挂载；同ID新实例不受旧句柄影响', async (context) => {
+  let host!: BrowserPluginHost
+  const runtime = createL4PluginHostRuntime(createTransport([entry()]), async () => ({
+    default: (plugin: BrowserPluginFacade): void => {
+      host = plugin.host
+    }
+  }))
+  context.after(() => runtime.dispose())
+  await initialize(runtime)
+  let loads = 0
+  let mounts = 0
+  const implementation: BrowserFloatingImplementation = {
+    mount: () => {
+      mounts++
+    }
+  }
+  const pending = host.floating.open({
+    id: 'pending',
+    load: async () => {
+      loads++
+      return implementation
+    }
+  })
+  pending.close()
+  const layer = createFloatingLayer()
+  runtime.bindFloatingContainer(layer)
+  const loading = deferredFloating<BrowserFloatingImplementation>()
+  const old = host.floating.open({
+    id: 'todo',
+    load: async () => {
+      loads++
+      return loading.promise
+    }
+  })
+  await waitFor(() => loads === 1)
+  old.close()
+  const current = host.floating.open({ id: 'todo', load: async () => implementation })
+  assert.notEqual(current, old)
+  old.close()
+  loading.resolve(implementation)
+  await waitFor(() => mounts === 1)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(loads, 1)
+  assert.equal(mounts, 1)
+  assert.equal(layer.childElementCount, 1)
+})
+
+test('悬浮组件迟到mount只清理一次，abort回调重入不会撤销新实例', async (context) => {
+  let host!: BrowserPluginHost
+  const runtime = createL4PluginHostRuntime(createTransport([entry()]), async () => ({
+    default: (plugin: BrowserPluginFacade): void => {
+      host = plugin.host
+    }
+  }))
+  context.after(() => runtime.dispose())
+  const layer = createFloatingLayer()
+  runtime.bindFloatingContainer(layer)
+  await initialize(runtime)
+  const mounting = deferredFloating<() => void>()
+  let signal!: AbortSignal
+  let old!: BrowserFloatingHandle
+  let replacement!: BrowserFloatingHandle
+  let cleanups = 0
+  old = host.floating.open({
+    id: 'todo',
+    load: async () => ({
+      mount: (input) => {
+        signal = input.signal
+        signal.addEventListener(
+          'abort',
+          () => {
+            replacement = host.floating.open({
+              id: 'todo',
+              load: async () => ({ mount: () => undefined })
+            })
+            old.close()
+          },
+          { once: true }
+        )
+        return mounting.promise
+      }
+    })
+  })
+  await waitFor(() => Boolean(signal))
+  old.close()
+  assert.equal(signal.aborted, true)
+  mounting.resolve(() => {
+    cleanups++
+  })
+  await waitFor(() => cleanups === 1)
+  assert.equal(layer.childElementCount, 1)
+  assert.equal(
+    host.floating.open({
+      id: 'todo',
+      load: async () => {
+        throw new Error('不可替换')
+      }
+    }),
+    replacement
+  )
+  old.close()
+  assert.equal(layer.childElementCount, 1)
+})
+
+test('悬浮组件不随调用方View或Source释放，标题Action也归属真实Browser Owner', async (context) => {
+  let host!: BrowserPluginHost
+  let actionHost!: BrowserPluginHost
+  let floatingSignal!: AbortSignal
+  let floatingHost!: BrowserPluginHost
+  let handle: BrowserFloatingHandle | undefined
+  const load = async (): Promise<BrowserFloatingImplementation> => ({
+    mount: (input) => {
+      floatingSignal = input.signal
+      floatingHost = input.host
+      assert.equal(input.target, handle)
+    }
+  })
+  const runtime = createL4PluginHostRuntime(createTransport([entry()]), async () => ({
+    default: (plugin: BrowserPluginFacade): void => {
+      host = plugin.host
+      plugin.registerContribution('application', 'caller', {
+        label: '调用方',
+        load: async () => ({
+          mount: ({ host: viewHost }) => {
+            handle = viewHost.floating.open({ id: 'todo', load })
+          }
+        })
+      })
+      const action = {
+        type: 'action' as const,
+        label: '打开',
+        icon: { type: 'builtin' as const, name: 'file' as const },
+        onSelect: (input: BrowserSessionHeaderActionContext): void => {
+          actionHost = input.host
+          const opened = actionHost.floating.open({ id: 'todo', load })
+          if (handle) assert.equal(opened, handle)
+          handle = opened
+        }
+      }
+      plugin.registerSessionHeaderItem('open', { inline: action, overflow: action })
+    }
+  }))
+  context.after(() => runtime.dispose())
+  runtime.bindFloatingContainer(createFloatingLayer())
+  await initialize(runtime, [{ ...source, cwd: '/project', status: 'idle' }])
+  const callerDispose = await runtime.mountContribution({
+    pluginName: 'fixture-plugin',
+    kind: 'application',
+    contributionName: 'caller',
+    container: {} as HTMLElement,
+    target: applicationTarget()
+  })
+  await waitFor(() => Boolean(floatingSignal))
+  await callerDispose()
+  const actionController = new AbortController()
+  await runtime.invokeSessionHeaderAction({
+    pluginName: 'fixture-plugin',
+    contributionName: 'open',
+    presentation: 'inline',
+    source,
+    signal: actionController.signal
+  })
+  actionController.abort()
+  runtime.replaceWorkSessions([])
+  assert.equal(floatingSignal.aborted, false)
+  assert.equal(floatingHost, host)
+  assert.throws(() => actionHost.floating.open({ id: 'another', load }), /失效/)
+  // 单独从新的Action打开，不能让内部View持有短期Action Host。
+  assert.ok(handle)
+  handle.close()
+  handle = undefined
+  runtime.replaceWorkSessions([{ ...source, cwd: '/project', status: 'idle' }])
+  const newAction = new AbortController()
+  await runtime.invokeSessionHeaderAction({
+    pluginName: 'fixture-plugin',
+    contributionName: 'open',
+    presentation: 'inline',
+    source,
+    signal: newAction.signal
+  })
+  await waitFor(() => !floatingSignal.aborted)
+  newAction.abort()
+  assert.equal(floatingHost, host)
+  assert.equal(host.floating.open({ id: 'todo', load }), handle)
+  await runtime.dispose()
+  assert.equal(floatingSignal.aborted, true)
+})
+
+test('悬浮组件Owner换代释放旧实例，不迁移或自动打开，旧Host和旧句柄隔离', async (context) => {
+  const oldEntry = entry()
+  const nextEntry = entry('fixture-plugin', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
+  const transport = createTransport([oldEntry])
+  const hosts: BrowserPluginHost[] = []
+  const signals: AbortSignal[] = []
+  let cleanups = 0
+  const runtime = createL4PluginHostRuntime(transport, async () => ({
+    default: (plugin: BrowserPluginFacade): void => {
+      hosts.push(plugin.host)
+    }
+  }))
+  context.after(() => runtime.dispose())
+  const layer = createFloatingLayer()
+  runtime.bindFloatingContainer(layer)
+  await initialize(runtime)
+  const load = async (): Promise<BrowserFloatingImplementation> => ({
+    mount: ({ signal }) => {
+      signals.push(signal)
+      return () => {
+        cleanups++
+      }
+    }
+  })
+  const old = hosts[0].floating.open({ id: 'todo', load })
+  await waitFor(() => signals.length === 1)
+  transport.setEntries([nextEntry])
+  await runtime.refreshEntries()
+  assert.equal(signals[0].aborted, true)
+  assert.equal(layer.childElementCount, 0)
+  assert.throws(() => hosts[0].floating.open({ id: 'todo', load }), /失效/)
+  hosts[1].floating.open({ id: 'todo', load })
+  await waitFor(() => signals.length === 2)
+  old.close()
+  assert.equal(signals[1].aborted, false)
+  transport.setEntries([])
+  await runtime.refreshEntries()
+  await waitFor(() => cleanups === 2)
+  assert.equal(layer.childElementCount, 0)
+})
+
+test('悬浮组件失败释放ID并允许显式重试，不影响其他实例', async (context) => {
+  context.mock.method(console, 'error', () => undefined)
+  let host!: BrowserPluginHost
+  const notifications: string[] = []
+  const runtime = createL4PluginHostRuntime(
+    createTransport([entry()]),
+    async () => ({
+      default: (plugin: BrowserPluginFacade): void => {
+        host = plugin.host
+      }
+    }),
+    (_name, input) => {
+      notifications.push(input.description ?? '')
+    }
+  )
+  context.after(() => runtime.dispose())
+  const layer = createFloatingLayer()
+  runtime.bindFloatingContainer(layer)
+  await initialize(runtime)
+  assert.throws(
+    () => host.floating.open({ id: ' ', load: async () => ({ mount: () => undefined }) }),
+    /非空/
+  )
+  const healthy = host.floating.open({
+    id: 'healthy',
+    load: async () => ({ mount: () => undefined })
+  })
+  const first = host.floating.open({
+    id: 'todo',
+    load: async () => {
+      throw new Error('加载失败')
+    }
+  })
+  await waitFor(() => notifications.length === 1)
+  assert.equal(layer.childElementCount, 1)
+  const second = host.floating.open({
+    id: 'todo',
+    load: async () => ({
+      mount: () => {
+        throw new Error('挂载失败')
+      }
+    })
+  })
+  assert.notEqual(first, second)
+  await waitFor(() => notifications.length === 2)
+  let target!: BrowserFloatingHandle
+  host.floating.open({
+    id: 'todo',
+    load: async () => ({
+      mount: (input) => {
+        target = input.target
+      }
+    })
+  })
+  await waitFor(() => Boolean(target))
+  first.close()
+  second.close()
+  assert.equal(layer.childElementCount, 2)
+  target.close()
+  healthy.close()
+  assert.equal(layer.childElementCount, 0)
+  assert.deepEqual(notifications, ['加载失败', '挂载失败'])
+})
 
 test('侧栏顶部操作整体替换，禁用、忙碌及旧按钮不可执行', async (context) => {
   const descriptor = entry()

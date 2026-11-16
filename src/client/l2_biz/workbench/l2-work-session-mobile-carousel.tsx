@@ -2,6 +2,7 @@
 
 import {
   Children,
+  startTransition,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -37,7 +38,6 @@ interface L2WorkSessionMobileCarouselProps {
 
 interface PositionIndicatorState {
   index: number
-  position: number
   visible: boolean
 }
 
@@ -66,18 +66,17 @@ export function L2WorkSessionMobileCarousel({
   const effectiveActiveWorkId = items.some((item) => item.workId === activeWorkId)
     ? activeWorkId
     : fallbackWorkId
-  const [initialIndex] = useState(() =>
-    Math.max(
-      0,
-      items.findIndex((item) => item.workId === effectiveActiveWorkId)
-    )
+  const activeIndex = Math.max(
+    0,
+    items.findIndex((item) => item.workId === effectiveActiveWorkId)
   )
+  const [initialIndex] = useState(activeIndex)
   const hideTimerRef = useRef<number | null>(null)
   const pointerDownRef = useRef(false)
+  const indicatorProgressRef = useRef<HTMLDivElement>(null)
   const [api, setApi] = useState<CarouselApi>()
   const [indicator, setIndicator] = useState<PositionIndicatorState>({
     index: initialIndex,
-    position: initialIndex,
     visible: false
   })
 
@@ -101,14 +100,16 @@ export function L2WorkSessionMobileCarousel({
         carouselApi.scrollProgress() * (items.length - 1),
         items.length
       )
+      if (indicatorProgressRef.current) {
+        // 连续进度不进入 React 状态，避免每一帧遍历整棵轮播子树。
+        indicatorProgressRef.current.style.transform = `translate3d(${position * 100}%, 0, 0)`
+      }
       const index = Math.round(position)
       setIndicator((current) => {
         const nextVisible = visible ?? current.visible
-        return current.index === index &&
-          Math.abs(current.position - position) < 0.001 &&
-          current.visible === nextVisible
+        return current.index === index && current.visible === nextVisible
           ? current
-          : { index, position, visible: nextVisible }
+          : { index, visible: nextVisible }
       })
     },
     [items.length]
@@ -144,10 +145,9 @@ export function L2WorkSessionMobileCarousel({
 
   useLayoutEffect(() => {
     if (!api || !effectiveActiveWorkId) return
-    const nextIndex = items.findIndex((item) => item.workId === effectiveActiveWorkId)
-    if (nextIndex < 0 || api.selectedScrollSnap() === nextIndex) return
-    api.scrollTo(nextIndex, true)
-  }, [api, effectiveActiveWorkId, items])
+    if (api.selectedScrollSnap() === activeIndex) return
+    api.scrollTo(activeIndex, true)
+  }, [activeIndex, api, effectiveActiveWorkId])
 
   useEffect(() => {
     if (!api) return
@@ -169,8 +169,9 @@ export function L2WorkSessionMobileCarousel({
     }
     const handleSelect = (carouselApi: ReadyCarouselApi): void => {
       const selected = items[carouselApi.selectedScrollSnap()]
-      if (selected && selected.workId !== activeWorkId) {
-        onActiveWorkSessionChange(selected.workId)
+      if (selected) {
+        // select 在吸附动画开始时触发；焦点切换不能同步阻塞动画首帧。
+        startTransition(() => onActiveWorkSessionChange(selected.workId))
       }
       updateIndicator(carouselApi)
     }
@@ -199,7 +200,6 @@ export function L2WorkSessionMobileCarousel({
       api.off('reInit', handleReInit)
     }
   }, [
-    activeWorkId,
     api,
     clearHideTimer,
     items,
@@ -216,7 +216,7 @@ export function L2WorkSessionMobileCarousel({
 
   const indicatorItem = items[indicator.index] ?? items[0]!
   const indicatorWidth = `${100 / items.length}%`
-  const indicatorOffset = `translate3d(${indicator.position * 100}%, 0, 0)`
+  const indicatorOffset = `translate3d(${initialIndex * 100}%, 0, 0)`
 
   return (
     <Carousel
@@ -259,6 +259,7 @@ export function L2WorkSessionMobileCarousel({
           </div>
           <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
             <div
+              ref={indicatorProgressRef}
               className="h-full rounded-full bg-foreground"
               style={{ width: indicatorWidth, transform: indicatorOffset }}
             />

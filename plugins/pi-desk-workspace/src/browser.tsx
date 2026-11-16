@@ -138,7 +138,7 @@ function WorkspaceView({
                 </PluginAlert>
               ) : snapshot.config.status === 'missing' ? (
                 <PluginEmptyState density="compact">
-                  当前项目还没有 .pi/workspace.yml
+                  当前项目没有 plugins.workspace 配置
                 </PluginEmptyState>
               ) : snapshot.config.status === 'invalid' ? (
                 <PluginAlert tone="error" density="compact">
@@ -147,7 +147,7 @@ function WorkspaceView({
                     <PluginButton
                       size="sm"
                       variant="secondary"
-                      onClick={() => target.files.preview('.pi/workspace.yml')}
+                      onClick={() => target.files.preview('.pi/pi-desk.yaml')}
                     >
                       查看配置
                     </PluginButton>

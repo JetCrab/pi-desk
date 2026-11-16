@@ -24,7 +24,7 @@ const pideskInputs = [
   /^src\/common\/l3_modules\/(?:app-runtime|capability-modes|conversation|plugin-host)\//,
   /^src\/common\/l4_foundation\/(?:file|http|locale|pi|plugin|realtime)\//,
   /^(?:bin\/|plugins\/pi-desk-sdk\/|package\.json$|pnpm-|next\.config|tsconfig|docs\/examples\/)/,
-  /^tests\/(?:l[124]-pidesk(?:-|\.)|l2-plugin-(?:command|management)|l4-(?:pi-|(?:e2e-server|browser-cdp|webpack-test)-runtime)|fixtures\/l4-workflow-test-runtime)/,
+  /^tests\/(?:l[124]-pidesk(?:-|\.)|l2-plugin-(?:command|management|install-dependencies)|l4-(?:pi-|(?:e2e-server|browser-cdp|webpack-test)-runtime)|fixtures\/l4-workflow-test-runtime)/,
   /^\.github\/(?:scripts\/(?:select-ci-checks|release-npm|verify-npm-install)\.mjs$|workflows\/(?:check|release-npm)\.yml$)/
 ]
 

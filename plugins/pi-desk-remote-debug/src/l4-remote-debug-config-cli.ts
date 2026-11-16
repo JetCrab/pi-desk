@@ -7,13 +7,14 @@ import {
   remoteDebugRangesSchema
 } from './l4-remote-debug-contract.js'
 import { RemoteDebugSettingsStore } from './l4-remote-debug-settings.js'
+import { bindConfigStore } from '@jetcrab/pi-desk-sdk/config'
 
 const projectFileSchema = z.strictObject({
   profiles: remoteDebugProjectSaveSchema.shape.profiles
 })
 
 export async function main(args: readonly string[] = process.argv.slice(2)): Promise<void> {
-  const store = new RemoteDebugSettingsStore()
+  const store = new RemoteDebugSettingsStore({ config: bindConfigStore('plugins', 'remote-debug') })
   const [command, ...values] = args
   let result: unknown
   if (command === 'show' && values.length === 0) {
