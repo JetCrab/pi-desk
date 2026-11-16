@@ -27,6 +27,11 @@ import {
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const scenario = process.argv[2] ?? 'all'
 const desktop = process.argv.includes('--desktop')
+const touchSwitch = process.argv.includes('--swipe')
+assert.ok(
+  !touchSwitch || (!desktop && scenario === 'follow-retained'),
+  '触摸切换仅用于移动端保留挂载返回场景'
+)
 assert.ok(
   [
     'all',
@@ -232,10 +237,54 @@ async function readEarlier(client) {
   return (await evaluate(client, metrics)).top
 }
 
+async function swipeMobile(client, from, to) {
+  const rect = await evaluate(
+    client,
+    `(() => {
+      const log = document.querySelector('[data-work-id="${from}"] [role="log"]');
+      const from = log.getBoundingClientRect();
+      const to = document.querySelector('[data-work-id="${to}"]').getBoundingClientRect();
+      const next = to.left > from.left;
+      const x = from.left + from.width * (next ? 0.8 : 0.2);
+      for (const paragraph of log.querySelectorAll('p')) {
+        const rect = paragraph.getBoundingClientRect();
+        const y = rect.top + rect.height / 2;
+        const target = document.elementFromPoint(x, y);
+        if (y <= from.top + 16 || y >= from.bottom - 16 || !log.contains(target)) continue;
+        if (target.closest('button, a, input, textarea, [data-carousel-swipe-lock]')) continue;
+        return { left: from.left, width: from.width, y, next };
+      }
+      return null;
+    })()`
+  )
+  assert.ok(rect, '应找到可见且未被控件占用的聊天正文起滑点')
+  const start = rect.next ? 0.8 : 0.2
+  const point = (index) => ({
+    x: rect.left + rect.width * (start + ((1 - 2 * start) * index) / 8),
+    y: rect.y,
+    id: 1
+  })
+  await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(0)] })
+  try {
+    for (let index = 1; index <= 8; index += 1) {
+      await client.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [point(index)]
+      })
+    }
+  } finally {
+    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  }
+}
+
 async function switchMobile(client, from, to) {
-  await click(client, `[data-work-id="${from}"] [aria-label="显示工作会话菜单"]`)
-  await click(client, '[data-testid="sidebar-mode-sessions"]')
-  await click(client, `[data-testid="work-session-row-${to}"]`)
+  if (touchSwitch) {
+    await swipeMobile(client, from, to)
+  } else {
+    await click(client, `[data-work-id="${from}"] [aria-label="显示工作会话菜单"]`)
+    await click(client, '[data-testid="sidebar-mode-sessions"]')
+    await click(client, `[data-testid="work-session-row-${to}"]`)
+  }
   await waitFor(
     client,
     `(() => {
@@ -248,7 +297,8 @@ async function switchMobile(client, from, to) {
 }
 
 async function recordSwitch(client, from, to) {
-  if (!desktop) {
+  const swipe = touchSwitch
+  if (!desktop && !swipe) {
     await click(client, `[data-work-id="${from}"] [aria-label="显示工作会话菜单"]`)
     await click(client, '[data-testid="sidebar-mode-sessions"]')
   }
@@ -271,7 +321,7 @@ async function recordSwitch(client, from, to) {
           const scroll = log && [...log.querySelectorAll('div')].find(element =>
             ['auto', 'scroll'].includes(getComputedStyle(element).overflowY));
           const user = [...(log?.querySelectorAll('[data-chat-user-message]') ?? [])].at(-1);
-          if (scroll && user) {
+          if (scroll && user && (!${swipe} || Math.abs(log.getBoundingClientRect().left) <= 2)) {
             firstMessageAt ??= now;
             window.__switchFrames.push({
               time: now - firstMessageAt,
@@ -291,9 +341,10 @@ async function recordSwitch(client, from, to) {
         };
         requestAnimationFrame(sample);
       });
-      document.querySelector(${JSON.stringify(selector)}).click();
+      if (!${swipe}) document.querySelector(${JSON.stringify(selector)}).click();
     })()`
   )
+  if (swipe) await swipeMobile(client, from, to)
   return evaluate(client, 'window.__switchComplete')
 }
 
@@ -421,6 +472,8 @@ async function checkFollowReturn(client, mode) {
   const immediate = mode === 'send-switch'
   const destination = remount ? replacementWorkId : otherWorkId
   const requestArrived = once(modelEvents, 'reply', { signal: AbortSignal.timeout(20000) })
+  // 发送或切换失败时仍由主流程清理，不让尚未 await 的超时提前终止进程。
+  void requestArrived.catch(() => undefined)
   await startReply(client, '修改', { short: true, immediate })
   if (!immediate) {
     const before = await evaluate(client, metrics)
@@ -936,6 +989,9 @@ async function main() {
     `
     })
     await setViewport(client, desktop ? 1280 : 390, desktop ? 900 : 854, !desktop)
+    if (touchSwitch) {
+      await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
+    }
     await navigate(client, `http://127.0.0.1:${appPort}/login`)
     const login = await evaluate(
       client,
