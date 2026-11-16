@@ -79,12 +79,12 @@ test('更新渠道独立、单项错误隔离，检查缓存不改变安装目�
   const { L2PluginUpdates } = await jiti.import<
     typeof import('../src/server/l2_biz/plugin-management/l2-plugin-updates')
   >('../src/server/l2_biz/plugin-management/l2-plugin-updates.ts')
-  preferences.setL4PiPluginDownloadSource({ mode: 'custom', registry: origin }, root)
+  await preferences.setL4PiPluginDownloadSource({ mode: 'custom', registry: origin }, root)
   const develop = source('develop', '1.0.1-dev.1', root)
   const stable = source('stable', '1.0.0', root)
   const missing = source('no-dev', '1.0.0', root)
-  preferences.setL4PiPluginUpdateTag(develop.source, 'dev', root)
-  preferences.setL4PiPluginUpdateTag(missing.source, 'dev', root)
+  await preferences.setL4PiPluginUpdateTag(develop.source, 'dev', root)
+  await preferences.setL4PiPluginUpdateTag(missing.source, 'dev', root)
   const updates = new L2PluginUpdates(root, root, new AbortController().signal)
   const sources = [develop, stable, missing]
   const unchecked = await updates.read(sources, {})
@@ -111,15 +111,18 @@ test('更新渠道独立、单项错误隔离，检查缓存不改变安装目�
   const noDowngrade = await updates.read([{ ...develop, version: '2.0.0' }], {})
   assert.equal(noDowngrade.get(develop.source)?.updateAvailable, false)
 
-  preferences.setL4PiPluginUpdateTag(develop.source, 'latest', root)
+  await preferences.setL4PiPluginUpdateTag(develop.source, 'latest', root)
   const changed = await updates.read([develop], {})
   assert.equal(changed.get(develop.source)?.availableVersion, null, '不能把dev缓存给latest渠道')
   const stableTarget = await updates.read([develop], { checkUpdates: true })
   assert.equal(stableTarget.get(develop.source)?.availableVersion, '2.0.0')
-  preferences.setL4PiPluginDownloadSource({ mode: 'custom', registry: `${origin}/second` }, root)
+  await preferences.setL4PiPluginDownloadSource(
+    { mode: 'custom', registry: `${origin}/second` },
+    root
+  )
   assert.equal((await updates.read([develop], {})).get(develop.source)?.availableVersion, null)
 
-  preferences.setL4PiPluginUpdateTag(develop.source, 'dev', root)
+  await preferences.setL4PiPluginUpdateTag(develop.source, 'dev', root)
   const optional = await updates.resolveInstall('npm:develop', develop.source, {}, false)
   assert.equal(optional.source, 'npm:develop@1.0.1-dev.3')
   assert.equal(optional.updateTag, 'dev')

@@ -1,6 +1,7 @@
 'use client'
 
-import { LoaderCircleIcon, PlusIcon } from 'lucide-react'
+import { PlusIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useId, useMemo } from 'react'
 import type { BrowserBeforeLeaveHandler } from '@jetcrab/pi-desk-sdk/browser'
 import { useL4AppSocket } from '@client/l4_foundation/realtime/app-socket/l4-app-socket'
@@ -64,13 +65,13 @@ export function L2PiSettings({
       {state.dialog}
       <header className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b p-4 @min-[40rem]/mcp:grid-cols-[auto_minmax(0,1fr)_auto]">
         <h2 className="flex items-center gap-2 text-xl font-semibold">
-          MCP
-          <span className="inline-flex size-4">
+          <span className="sm:sr-only">MCP</span>
+          <span className={cn('inline-flex size-4', !state.loading && 'sm:hidden')}>
             {state.loading && (
-              <LoaderCircleIcon
+              <L4LoadingSpinner
                 role="status"
                 aria-label={t('正在读取配置…')}
-                className="size-4 animate-spin text-muted-foreground"
+                className="size-4 text-muted-foreground"
               />
             )}
           </span>

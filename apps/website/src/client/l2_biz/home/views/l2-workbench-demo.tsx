@@ -6,7 +6,6 @@ import {
   Boxes,
   Files,
   GitBranch,
-  LoaderCircle,
   Minimize2,
   MonitorSmartphone,
   Pin,
@@ -14,6 +13,7 @@ import {
 } from 'lucide-react'
 import { MotionConfig } from 'motion/react'
 import { useRef, type ReactElement } from 'react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { DemoActivity, DemoStep } from '../hooks/l2-demo-activity'
 import { useShowcase } from '../hooks/l2-use-showcase'
 import { useShowcaseScenes } from '../hooks/l2-use-showcase-scenes'
@@ -129,11 +129,7 @@ export function WorkbenchDemo(): ReactElement {
                   className="relative flex min-h-10 shrink-0 cursor-pointer items-center justify-center gap-2 px-4 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors after:absolute after:inset-x-4 after:bottom-0 after:h-0.5 after:rounded-full after:bg-transparent hover:text-foreground focus-visible:rounded-md focus-visible:outline-2 focus-visible:outline-ring data-active:text-foreground data-active:after:bg-foreground"
                 >
                   {scenes.loadingChapter === index ? (
-                    <LoaderCircle
-                      size={18}
-                      aria-hidden="true"
-                      className="animate-spin motion-reduce:animate-none"
-                    />
+                    <L4LoadingSpinner size={18} aria-hidden="true" />
                   ) : (
                     <Icon size={18} aria-hidden="true" />
                   )}

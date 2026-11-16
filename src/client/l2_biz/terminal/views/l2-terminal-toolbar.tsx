@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import {
   CircleAlertIcon,
-  LoaderCircleIcon,
   Maximize2Icon,
   Minimize2Icon,
   MoreHorizontalIcon,
@@ -195,7 +195,7 @@ export function L2TerminalToolbar({
         onClick={onCreate}
       >
         {opening ? (
-          <LoaderCircleIcon className="size-4 motion-safe:animate-spin" aria-hidden />
+          <L4LoadingSpinner className="size-4" aria-hidden />
         ) : (
           <PlusIcon className="size-4" />
         )}

@@ -96,6 +96,7 @@ export interface L4PiModelContextTool {
 }
 
 export interface L4PiModelContext {
+  baseSystemPrompt?: string
   systemPrompt: string
   tools: L4PiModelContextTool[]
 }
@@ -396,6 +397,8 @@ export class L4PiChatWorker {
     private readonly capabilities: {
       mode: () => string | null
       rules: () => L3CapabilityMode | undefined
+      initialize?: () => Promise<void>
+      appendSystemPrompt?: () => Promise<string>
     } = { mode: () => null, rules: () => undefined },
     resources?: L4PiSessionResources
   ) {
@@ -416,6 +419,8 @@ export class L4PiChatWorker {
       resources: this.resources,
       ui: this.nativeUi,
       readCapabilities: this.capabilities.rules,
+      initializeCapabilities: this.capabilities.initialize,
+      readAppendSystemPrompt: this.capabilities.appendSystemPrompt,
       onInput: (event) =>
         this.validateFinalInput(event.text, event.images, event.streamingBehavior),
       onMessageEnd: ({ message }) => {
@@ -795,8 +800,15 @@ export class L4PiChatWorker {
     }
   }
 
-  async readModelContext(): Promise<L4PiModelContext> {
-    const session = await this.ensureSession()
+  async readModelContext(previewAppendSystemPrompt?: string): Promise<L4PiModelContext> {
+    if (
+      previewAppendSystemPrompt !== undefined &&
+      (!this.session || this.sessionLifecycle || this.disposed)
+    ) {
+      throw new Error('Pi 会话尚未就绪，提示词预览暂不可用')
+    }
+    const session =
+      previewAppendSystemPrompt === undefined ? await this.ensureSession() : this.session!
 
     const activeToolNames = new Set(session.getActiveToolNames())
     const tools = session
@@ -809,7 +821,9 @@ export class L4PiChatWorker {
       }))
 
     const context: L4PiModelContext = {
-      systemPrompt: session.systemPrompt,
+      ...(previewAppendSystemPrompt === undefined
+        ? { systemPrompt: session.systemPrompt }
+        : this.initialization.systemPrompt.preview(session, previewAppendSystemPrompt)),
       tools
     }
     console.info('[Pi Desk][PiChatWorker] 已读取模型上下文', {

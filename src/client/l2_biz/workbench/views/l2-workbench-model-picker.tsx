@@ -9,6 +9,7 @@ import {
   Settings2Icon
 } from 'lucide-react'
 import { useState } from 'react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useTranslation } from 'react-i18next'
 import type { L2ChatRuntime, L2ChatSource } from '@common/l2_biz/chat/l2-chat-contract'
 import { PromptInputButton } from '@client/l4_foundation/ui/ai-elements/prompt-input'
@@ -151,7 +152,7 @@ export function L2WorkbenchModelPicker({
         <div className="pi-desk-chat-scrollbar min-h-0 flex-auto overflow-x-hidden overflow-y-auto overscroll-contain p-1">
           {catalog.status === 'loading' ? (
             <DropdownMenuItem disabled>
-              <RefreshCwIcon className="size-4 animate-spin" />
+              <L4LoadingSpinner className="size-4" />
               {t('modelsLoading')}
             </DropdownMenuItem>
           ) : null}

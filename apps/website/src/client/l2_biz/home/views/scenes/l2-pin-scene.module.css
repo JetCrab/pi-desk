@@ -112,7 +112,6 @@
 }
 .working svg {
   flex-shrink: 0;
-  animation: working 1.2s linear infinite;
 }
 .mobileWorkbench {
   .desk > aside {
@@ -205,11 +204,6 @@
   background: var(--card);
   pointer-events: none;
 }
-@keyframes working {
-  to {
-    transform: rotate(360deg);
-  }
-}
 @media (prefers-reduced-motion: reduce) {
   .columns,
   .desk > aside,
@@ -219,8 +213,7 @@
   .swipe {
     display: none;
   }
-  .columnChat,
-  .working svg {
+  .columnChat {
     animation: none;
   }
 }

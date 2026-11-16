@@ -33,7 +33,7 @@ export const REMOTE_DEBUG_LAYOUT = `
 .remote-debug-split{height:100%;min-height:0;align-items:stretch}
 .remote-debug-split>.pi-desk-ui-content{display:flex;min-height:0;flex-direction:column}
 .remote-debug-split .pi-desk-ui-split-navigation-scroll{height:100%;max-height:none}
-.remote-debug-settings{min-width:0;width:100%;padding:1rem;container-type:inline-size;font-size:.875rem}
+.remote-debug-settings{min-width:0;width:100%;padding:1rem;container:remote-debug-settings / inline-size;font-size:.875rem}
 .remote-debug-settings [hidden]{display:none}
 .remote-debug-stack{display:grid;min-width:0;gap:.75rem}
 .remote-debug-heading,.remote-debug-profile-head,.remote-debug-actions{display:flex;min-width:0;gap:.5rem;align-items:center;flex-wrap:wrap}
@@ -67,6 +67,7 @@ export const REMOTE_DEBUG_LAYOUT = `
 .remote-debug-log{height:16rem;max-height:45dvh}
 .remote-debug-form{display:grid;min-width:0;gap:1rem}
 .remote-debug-form-width{width:100%;max-width:40rem;min-width:0}
+@container remote-debug-settings (min-width:40rem){.remote-debug-settings-title{display:none}.remote-debug-settings-heading{justify-content:flex-end;margin-bottom:.75rem}}
 @container (max-width:25rem){.remote-debug-access-row:has(.remote-debug-path-badge),.remote-debug-access-row:has(.remote-debug-path-badge) .remote-debug-address-actions{gap:.25rem}}
 @container (max-width:40rem){.remote-debug-split>.pi-desk-ui-navigation,.remote-debug-profile-description,.remote-debug-navigation,.remote-debug-project-title{display:none}.remote-debug-mobile-project{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:.5rem}}
 `

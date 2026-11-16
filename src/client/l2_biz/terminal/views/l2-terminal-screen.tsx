@@ -2,13 +2,8 @@
 
 import { useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  ArrowDownIcon,
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  ArrowUpIcon,
-  LoaderCircleIcon
-} from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
+import { ArrowDownIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon } from 'lucide-react'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import type { L2TerminalBiz } from '../l2-terminal-biz'
@@ -78,7 +73,7 @@ export function L2TerminalScreen({
                 : 'right-3 top-2 rounded-md bg-background/95 px-2 py-1 text-xs'
             )}
           >
-            <LoaderCircleIcon className="size-4 shrink-0 motion-safe:animate-spin" aria-hidden />
+            <L4LoadingSpinner className="size-4 shrink-0" aria-hidden />
             <span>{status}</span>
           </div>
         ) : null}

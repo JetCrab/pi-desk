@@ -13,6 +13,9 @@ const { packageRoot } = require('../../l4_foundation/process/l4-package-root.js'
 const { PI_RUNTIME_EXIT_CODE } = require('../../l4_foundation/pi/l4-pi-global-runtime.js')
 
 function runServiceProcess(options) {
+  const desktopParentStdin = process.env.PI_DESK_DESKTOP_PARENT_STDIN === '1' ? process.stdin : null
+  if (desktopParentStdin) delete process.env.PI_DESK_DESKTOP_PARENT_STDIN
+
   let managedLog
   try {
     managedLog = createRollingLogWriter(process.env.PI_DESK_LOG_FILE)
@@ -294,6 +297,11 @@ function runServiceProcess(options) {
   }
 
   function finishProcess(code) {
+    if (desktopParentStdin) {
+      desktopParentStdin.removeListener('end', onDesktopParentDisconnect)
+      desktopParentStdin.removeListener('error', onDesktopParentDisconnect)
+      desktopParentStdin.destroy()
+    }
     process.exitCode = code
     if (process.connected) process.disconnect()
   }
@@ -554,6 +562,15 @@ function runServiceProcess(options) {
     }
   }
 
+  function onDesktopParentDisconnect(error) {
+    if (stopping) return
+    reportDiagnostic('桌面父进程生命线已断开，停止托管服务。', {
+      cliPid: process.pid,
+      ...(error ? { error: error.message } : {})
+    })
+    stop()
+  }
+
   process.on('SIGINT', stop)
   process.on('SIGTERM', stop)
   if (process.channel) {
@@ -566,6 +583,18 @@ function runServiceProcess(options) {
       }
     })
     process.on('disconnect', stop)
+  }
+  if (desktopParentStdin) {
+    // 输出错误可晚于 finishProcess，监听保留到进程退出，避免 EPIPE 打断清理。
+    process.stdout.on('error', onDesktopParentDisconnect)
+    process.stderr.on('error', onDesktopParentDisconnect)
+    desktopParentStdin.once('end', onDesktopParentDisconnect)
+    desktopParentStdin.once('error', onDesktopParentDisconnect)
+    if (desktopParentStdin.readableEnded || desktopParentStdin.destroyed) {
+      onDesktopParentDisconnect()
+    } else {
+      desktopParentStdin.resume()
+    }
   }
   startChild()
 }

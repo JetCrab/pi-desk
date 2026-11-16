@@ -62,17 +62,16 @@
   width: 0;
   height: 2rem;
   overflow: hidden;
-  transition: width 280ms ease-out;
+  transition: width 320ms ease-in-out;
 }
 
 .runningActions {
   position: absolute;
   right: 0;
   display: flex;
-  width: 4.5rem;
+  width: 2.25rem;
   height: 2rem;
   align-items: center;
-  gap: 0.25rem;
   padding-right: 0.25rem;
 }
 
@@ -80,30 +79,25 @@
   opacity: 0;
   transform: translateX(0.375rem);
   transition:
-    opacity 200ms ease-out,
-    transform 240ms ease-out;
+    opacity 320ms ease-in-out,
+    transform 320ms ease-in-out;
 }
 
 .actions[data-expanded='true'] .runningActionsClip {
-  width: 4.5rem;
+  width: 2.25rem;
 }
 
 .actions[data-expanded='true'] .runningActions .actionButton {
   opacity: 1;
   transform: translateX(0);
-  transition-delay: 45ms;
-}
-
-.actions[data-expanded='true'] .runningActions .actionButton:nth-child(2) {
-  transition-delay: 15ms;
 }
 
 .mainAction {
   color: var(--primary-foreground);
   background-color: var(--primary);
   transition:
-    background-color 280ms ease-out,
-    color 280ms ease-out;
+    background-color 420ms ease-in-out,
+    color 420ms ease-in-out;
 }
 
 .mainAction:hover {

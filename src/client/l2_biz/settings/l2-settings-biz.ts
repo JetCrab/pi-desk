@@ -7,6 +7,7 @@ const SettingsSectionSchema = z.union([
     'habits',
     'auth',
     'models',
+    'project-default',
     'mcp-settings',
     'capability-modes',
     'skills',
@@ -42,7 +43,9 @@ function saveSelection(key: string, value: string): void {
 }
 
 export function readL2SettingsSection(): L2SettingsSection {
-  return readSelection(SECTION_STORAGE_KEY, SettingsSectionSchema, 'appearance')
+  const section = readSelection(SECTION_STORAGE_KEY, SettingsSectionSchema, 'appearance')
+  const legacyTab = readSelection(MODEL_TAB_STORAGE_KEY, z.string(), '')
+  return section === 'models' && legacyTab === 'project-default' ? 'project-default' : section
 }
 
 export function saveL2SettingsSection(section: L2SettingsSection): void {
@@ -50,7 +53,8 @@ export function saveL2SettingsSection(section: L2SettingsSection): void {
 }
 
 export function readL2ModelSettingsTab(): L2ModelSettingsTab {
-  return readSelection(MODEL_TAB_STORAGE_KEY, ModelSettingsTabSchema, 'providers')
+  const tab = readSelection(MODEL_TAB_STORAGE_KEY, ModelSettingsTabSchema, 'providers')
+  return tab === 'project-default' ? 'providers' : tab
 }
 
 export function saveL2ModelSettingsTab(tab: L2ModelSettingsTab): void {

@@ -6,9 +6,6 @@
   align-items: center;
   gap: 8px;
 }
-.working svg {
-  animation: working 1.2s linear infinite;
-}
 .toolbar,
 .settingsToolbar {
   display: flex;
@@ -376,11 +373,6 @@
   padding: 4px 12px;
   color: var(--muted-foreground);
 }
-@keyframes working {
-  to {
-    transform: rotate(360deg);
-  }
-}
 @container stage (min-width:640px) {
   .desk > aside {
     display: flex;
@@ -418,10 +410,5 @@
   }
   .quotaMetrics > div > div:not(.quotaProgress) {
     justify-content: flex-start;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .working svg {
-    animation: none;
   }
 }

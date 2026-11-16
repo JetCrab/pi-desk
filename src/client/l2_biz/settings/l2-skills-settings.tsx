@@ -2,13 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  FolderTreeIcon,
-  LoaderCircleIcon,
-  PanelLeftCloseIcon,
-  PanelLeftOpenIcon,
-  RefreshCwIcon
-} from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
+import { FolderTreeIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, RefreshCwIcon } from 'lucide-react'
 import type { L2SkillFileGetRequest } from '@common/l2_biz/settings/l2-skills-contract'
 import { useL4AppSocket } from '@client/l4_foundation/realtime/app-socket/l4-app-socket'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
@@ -161,7 +156,7 @@ export function L2SkillsSettings({
             <PanelLeftOpenIcon className="size-4" />
           )}
         </Button>
-        <h2 className="text-xl font-semibold">Skills</h2>
+        <h2 className="text-xl font-semibold sm:sr-only">Skills</h2>
         <div className="flex-1" />
         <Button
           variant="ghost"
@@ -171,7 +166,7 @@ export function L2SkillsSettings({
           onClick={refresh}
         >
           {refreshing ? (
-            <LoaderCircleIcon className="size-3.5 animate-spin" />
+            <L4LoadingSpinner className="size-3.5" />
           ) : (
             <RefreshCwIcon className="size-3.5" />
           )}

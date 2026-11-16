@@ -1,6 +1,6 @@
 'use client'
 
-import { LoaderCircleIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { PluginSource } from '@jetcrab/pi-desk-sdk/browser'
@@ -264,7 +264,7 @@ function Loading(): React.JSX.Element {
   const { t } = useTranslation('workbench')
   return (
     <div className="flex size-full items-center justify-center gap-2 text-sm text-muted-foreground">
-      <LoaderCircleIcon className="size-4 animate-spin" />
+      <L4LoadingSpinner className="size-4" />
       {t('loadingFile')}
     </div>
   )

@@ -7,6 +7,7 @@ import {
   FolderTreeIcon,
   InfoIcon,
   ListFilterIcon,
+  SearchIcon,
   PaletteIcon,
   PlugIcon,
   SlidersHorizontalIcon,
@@ -24,6 +25,7 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { BrowserBeforeLeaveHandler } from '@jetcrab/pi-desk-sdk/browser'
+import type { L3CapabilityModeNames } from '@common/l3_modules/capability-modes/l3-capability-modes-contract'
 import type { L2WorkSessionListItem } from '@common/l2_biz/work-session/l2-work-session-contract'
 import type { L4PluginBrowserContributionDescriptor } from '@client/l4_foundation/plugin-host/l4-plugin-host-runtime'
 import { L4_APP_VERSION, L4_APP_VERSION_UPDATED_AT } from '@client/l4_foundation/l4-app-info'
@@ -39,6 +41,8 @@ import {
 } from '@client/l4_foundation/ui/l4-app-dialog'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
+import { Input } from '@client/l4_foundation/ui/shadcn/input'
+import { L4ChoiceGroup } from '@client/l4_foundation/ui/l4-choice-group'
 import { L4BrandIcon } from '@client/l4_foundation/ui/l4-brand-icon'
 import {
   Collapsible,
@@ -54,6 +58,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@client/l4_foundation/ui/shadcn/select'
+import { L2ProjectDefaultSettings } from './l2-project-default-settings'
 import { L2SkillsSettings } from './l2-skills-settings'
 import { L2AuthSettings } from './l2-auth-settings'
 import { L2RegionSettings } from './l2-region-settings'
@@ -76,6 +81,7 @@ interface L2SettingsProps {
   initialModelTab?: 'presets'
   workSessions: readonly Pick<L2WorkSessionListItem, 'cwd' | 'projectName'>[]
   focusedCwd: string | null
+  modeNames: L3CapabilityModeNames
   pluginAttention: L2SettingsPluginAttention
   renderPluginManagement: () => ReactNode
   renderEnvironmentSettings: () => ReactNode
@@ -112,16 +118,24 @@ interface SettingsSectionOption {
 }
 
 const SETTINGS_SECTIONS: readonly SettingsSectionOption[] = [
-  { id: 'appearance', label: 'appearance', icon: PaletteIcon },
-  { id: 'region', label: 'region', icon: LanguagesIcon },
-  { id: 'habits', label: 'habits', icon: SlidersHorizontalIcon },
+  { id: 'appearance', label: 'generalPreferences', icon: PaletteIcon },
   { id: 'models', label: 'models', icon: BotIcon },
+  { id: 'capability-modes', label: 'workModes', icon: ListFilterIcon },
+  { id: 'project-default', label: 'projectDefault', icon: FolderTreeIcon },
   { id: 'mcp-settings', label: 'mcpSettings', icon: PlugIcon },
-  { id: 'capability-modes', label: 'capabilityModes', icon: ListFilterIcon },
   { id: 'skills', label: 'skills', icon: FolderTreeIcon },
   { id: 'plugins', label: 'plugins', icon: PlugIcon },
+  { id: 'environment', label: 'systemAndData', icon: ArchiveIcon }
+]
+
+const PREFERENCE_TASKS: readonly SettingsSectionOption[] = [
+  { id: 'appearance', label: 'appearance', icon: PaletteIcon },
+  { id: 'region', label: 'region', icon: LanguagesIcon },
+  { id: 'habits', label: 'operationReminders', icon: SlidersHorizontalIcon }
+]
+const SYSTEM_TASKS: readonly SettingsSectionOption[] = [
   { id: 'environment', label: 'environmentBackup', icon: ArchiveIcon },
-  { id: 'auth', label: 'loginProtection', icon: ShieldCheckIcon },
+  { id: 'auth', label: 'accessProtection', icon: ShieldCheckIcon },
   { id: 'about', label: 'about', icon: InfoIcon }
 ]
 
@@ -155,7 +169,7 @@ function AboutSettings(): React.JSX.Element {
   const region = useL4Region()
   return (
     <section aria-labelledby="settings-about-title" className="min-w-0 space-y-6">
-      <h2 id="settings-about-title" className="text-xl font-semibold">
+      <h2 id="settings-about-title" className="text-xl font-semibold sm:sr-only">
         {t('about')}
       </h2>
       <div className="flex items-center gap-3 rounded-xl bg-muted p-4">
@@ -192,6 +206,7 @@ export function L2Settings({
   initialModelTab,
   workSessions,
   focusedCwd,
+  modeNames,
   pluginAttention,
   renderPluginManagement,
   renderEnvironmentSettings,
@@ -233,7 +248,8 @@ export function L2Settings({
     // 不保存临时回退项，插件目录加载后仍能恢复原来的页面。
     if (open) saveL2SettingsSection(activeSection)
   }, [activeSection, open])
-  const [pluginMenuOpen, setPluginMenuOpen] = useState(false)
+  const [pluginMenuOpen, setPluginMenuOpen] = useState(true)
+  const [query, setQuery] = useState('')
   const [guardPending, setGuardPending] = useState(false)
   const beforeLeaveRef = useRef<BrowserBeforeLeaveHandler | null>(null)
   const guardPendingRef = useRef(false)
@@ -242,8 +258,27 @@ export function L2Settings({
   )
   const effectiveSection: SettingsSection =
     activeSection.startsWith('plugin:') && !activePluginPage ? 'appearance' : activeSection
-  const activeBuiltinSection = SETTINGS_SECTIONS.find((section) => section.id === effectiveSection)
+  const tasks = PREFERENCE_TASKS.some((task) => task.id === effectiveSection)
+    ? PREFERENCE_TASKS
+    : SYSTEM_TASKS.some((task) => task.id === effectiveSection)
+      ? SYSTEM_TASKS
+      : null
+  const navigationSection = tasks?.[0]?.id ?? effectiveSection
+  const activeBuiltinSection = SETTINGS_SECTIONS.find((section) => section.id === navigationSection)
   const ActiveBuiltinIcon = activeBuiltinSection?.icon
+  const search = query.trim().toLocaleLowerCase()
+  const visibleSections = search
+    ? [
+        ...new Map(
+          [...SETTINGS_SECTIONS, ...PREFERENCE_TASKS, ...SYSTEM_TASKS]
+            .filter((section) => t(section.label).toLocaleLowerCase().includes(search))
+            .map((section) => [section.id, section])
+        ).values()
+      ]
+    : SETTINGS_SECTIONS
+  const visiblePluginPages = pluginPages.filter((page) =>
+    page.descriptor.label.toLocaleLowerCase().includes(search)
+  )
 
   const runAfterGuard = useCallback(async (action: () => void): Promise<void> => {
     if (guardPendingRef.current) return
@@ -289,18 +324,33 @@ export function L2Settings({
         finalFocus={false}
         showCloseButton={!guardPending}
       >
-        <L4AppDialogHeader className="border-b px-4 py-3 pr-12">
-          <L4AppDialogTitle>{t('title')}</L4AppDialogTitle>
+        <L4AppDialogHeader className="flex-row items-center gap-4 border-b px-4 py-3 pr-12">
+          <L4AppDialogTitle className="shrink-0">{t('title')}</L4AppDialogTitle>
+          <div className="relative ml-auto w-full max-w-64">
+            <SearchIcon
+              aria-hidden="true"
+              className="pointer-events-none absolute left-2 top-2 size-4 text-muted-foreground"
+            />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              aria-label={t('searchSettings')}
+              placeholder={t('searchSettings')}
+              className="pl-8"
+            />
+          </div>
         </L4AppDialogHeader>
 
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
           <div className="shrink-0 border-b bg-sidebar p-3 sm:hidden">
             <Select
-              value={effectiveSection}
+              value={search ? effectiveSection : navigationSection}
               disabled={guardPending}
               onValueChange={(value) => {
                 if (typeof value !== 'string') return
-                const builtin = SETTINGS_SECTIONS.find((section) => section.id === value)
+                const builtin = [...SETTINGS_SECTIONS, ...PREFERENCE_TASKS, ...SYSTEM_TASKS].find(
+                  (section) => section.id === value
+                )
                 if (builtin) {
                   selectSection(builtin.id)
                   return
@@ -335,7 +385,12 @@ export function L2Settings({
                 </SelectValue>
               </SelectTrigger>
               <SelectContent positionerClassName="z-[120]" align="start">
-                {SETTINGS_SECTIONS.map((section) => {
+                {visibleSections.length === 0 && visiblePluginPages.length === 0 ? (
+                  <SelectGroup>
+                    <SelectLabel>{t('searchSettingsEmpty')}</SelectLabel>
+                  </SelectGroup>
+                ) : null}
+                {visibleSections.map((section) => {
                   const Icon = section.icon
                   return (
                     <SelectItem key={section.id} value={section.id}>
@@ -355,10 +410,10 @@ export function L2Settings({
                     </SelectItem>
                   )
                 })}
-                {pluginPages.length > 0 ? (
+                {visiblePluginPages.length > 0 ? (
                   <SelectGroup>
                     <SelectLabel>{t('pluginSettings')}</SelectLabel>
-                    {pluginPages.map((page) => {
+                    {visiblePluginPages.map((page) => {
                       const id = pluginSectionId(page.pluginName, page.descriptor.contributionName)
                       return (
                         <SelectItem key={id} value={id}>
@@ -377,10 +432,15 @@ export function L2Settings({
             aria-label={t('category')}
             className="pi-desk-chat-scrollbar hidden w-48 shrink-0 space-y-4 overflow-auto border-r bg-sidebar p-3 sm:block"
           >
+            {visibleSections.length === 0 && visiblePluginPages.length === 0 ? (
+              <p role="status" className="px-2 py-3 text-sm text-muted-foreground">
+                {t('searchSettingsEmpty')}
+              </p>
+            ) : null}
             <div className="grid grid-cols-1 gap-1">
-              {SETTINGS_SECTIONS.map((section) => {
+              {visibleSections.map((section) => {
                 const Icon = section.icon
-                const selected = section.id === effectiveSection
+                const selected = section.id === (search ? effectiveSection : navigationSection)
                 return (
                   <Button
                     key={section.id}
@@ -413,9 +473,9 @@ export function L2Settings({
                 )
               })}
             </div>
-            {pluginPages.length > 0 ? (
+            {visiblePluginPages.length > 0 ? (
               <Collapsible
-                open={pluginMenuOpen || Boolean(activePluginPage)}
+                open={Boolean(search) || pluginMenuOpen || Boolean(activePluginPage)}
                 onOpenChange={setPluginMenuOpen}
                 className="mt-2 border-t pt-2"
               >
@@ -425,17 +485,17 @@ export function L2Settings({
                   className="flex min-h-8 w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-sm font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <span className="min-w-0 flex-1 text-left">{t('pluginSettings')}</span>
-                  <span className="tabular-nums">{pluginPages.length}</span>
+                  <span className="tabular-nums">{visiblePluginPages.length}</span>
                   <ChevronDownIcon
                     className={cn(
                       'size-3.5 transition-transform',
-                      pluginMenuOpen || activePluginPage ? 'rotate-180' : null
+                      search || pluginMenuOpen || activePluginPage ? 'rotate-180' : null
                     )}
                   />
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <div className="mt-1 grid grid-cols-1 gap-1">
-                    {pluginPages.map((page) => {
+                    {visiblePluginPages.map((page) => {
                       const id = pluginSectionId(page.pluginName, page.descriptor.contributionName)
                       const selected = id === effectiveSection
                       return (
@@ -463,77 +523,100 @@ export function L2Settings({
             ) : null}
           </nav>
 
-          {activePluginPage ? (
-            <div className="min-h-0 flex-1 overflow-hidden">
-              <ExternalSettingsSection
-                render={renderPluginSettingsPage}
-                input={{
-                  pluginName: activePluginPage.pluginName,
-                  descriptor: activePluginPage.descriptor,
-                  onClose: requestClose,
-                  onBeforeLeaveChange: updateBeforeLeave
-                }}
-              />
-            </div>
-          ) : effectiveSection === 'skills' ? (
-            <div className="min-h-0 flex-1 overflow-hidden">
-              {open && (
-                <L2SkillsSettings
-                  projects={skillProjects}
-                  focusedCwd={focusedCwd}
-                  onBeforeLeaveChange={updateBeforeLeave}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {tasks ? (
+              <div className="shrink-0 border-b px-4 py-3">
+                <L4ChoiceGroup
+                  label={t(tasks === PREFERENCE_TASKS ? 'generalPreferences' : 'systemAndData')}
+                  layout="segmented"
+                  value={effectiveSection}
+                  options={tasks.map((task) => ({ value: task.id, label: t(task.label) }))}
+                  disabled={guardPending}
+                  onChange={selectSection}
                 />
-              )}
-            </div>
-          ) : effectiveSection === 'mcp-settings' ? (
-            <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-              {open && (
+              </div>
+            ) : null}
+            {activePluginPage ? (
+              <div className="min-h-0 flex-1 overflow-hidden">
                 <ExternalSettingsSection
-                  render={renderMcpSettings}
-                  input={{ onBeforeLeaveChange: updateBeforeLeave }}
+                  render={renderPluginSettingsPage}
+                  input={{
+                    pluginName: activePluginPage.pluginName,
+                    descriptor: activePluginPage.descriptor,
+                    onClose: requestClose,
+                    onBeforeLeaveChange: updateBeforeLeave
+                  }}
                 />
-              )}
-            </div>
-          ) : effectiveSection === 'capability-modes' ? (
-            <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-              {open && (
-                <ExternalSettingsSection
-                  render={renderCapabilityModesSettings}
-                  input={{ onBeforeLeaveChange: updateBeforeLeave }}
-                />
-              )}
-            </div>
-          ) : effectiveSection === 'models' ? (
-            <div className="min-h-0 flex-1 overflow-hidden">
-              {open && (
-                <L2ModelSettingsView
-                  connectionReady={connectionReady}
-                  initialTab={initialModelTab}
-                  onBeforeLeaveChange={updateBeforeLeave}
-                />
-              )}
-            </div>
-          ) : effectiveSection === 'plugins' ? (
-            <div className="min-h-0 flex-1 overflow-hidden">{renderPluginManagement()}</div>
-          ) : (
-            <L4AppDialogBody className="min-w-0 max-h-none">
-              <div className="p-4 sm:p-6">
-                {effectiveSection === 'appearance' ? (
-                  <L2AppearanceSettings />
-                ) : effectiveSection === 'habits' ? (
-                  <L2HabitSettings />
-                ) : effectiveSection === 'environment' ? (
-                  open && renderEnvironmentSettings()
-                ) : effectiveSection === 'auth' ? (
-                  open && <L2AuthSettings />
-                ) : effectiveSection === 'region' ? (
-                  <L2RegionSettings canLeave={onBeforeReload} />
-                ) : (
-                  <AboutSettings />
+              </div>
+            ) : effectiveSection === 'skills' ? (
+              <div className="min-h-0 flex-1 overflow-hidden">
+                {open && (
+                  <L2SkillsSettings
+                    projects={skillProjects}
+                    focusedCwd={focusedCwd}
+                    onBeforeLeaveChange={updateBeforeLeave}
+                  />
                 )}
               </div>
-            </L4AppDialogBody>
-          )}
+            ) : effectiveSection === 'mcp-settings' ? (
+              <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+                {open && (
+                  <ExternalSettingsSection
+                    render={renderMcpSettings}
+                    input={{ onBeforeLeaveChange: updateBeforeLeave }}
+                  />
+                )}
+              </div>
+            ) : effectiveSection === 'capability-modes' ? (
+              <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+                {open && (
+                  <ExternalSettingsSection
+                    render={renderCapabilityModesSettings}
+                    input={{ onBeforeLeaveChange: updateBeforeLeave }}
+                  />
+                )}
+              </div>
+            ) : effectiveSection === 'project-default' ? (
+              <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+                {open && (
+                  <L2ProjectDefaultSettings
+                    modeNames={modeNames}
+                    onBeforeLeaveChange={updateBeforeLeave}
+                  />
+                )}
+              </div>
+            ) : effectiveSection === 'models' ? (
+              <div className="min-h-0 flex-1 overflow-hidden">
+                {open && (
+                  <L2ModelSettingsView
+                    connectionReady={connectionReady}
+                    initialTab={initialModelTab}
+                    onBeforeLeaveChange={updateBeforeLeave}
+                  />
+                )}
+              </div>
+            ) : effectiveSection === 'plugins' ? (
+              <div className="min-h-0 flex-1 overflow-hidden">{renderPluginManagement()}</div>
+            ) : (
+              <L4AppDialogBody className="min-w-0 max-h-none">
+                <div className="p-4 sm:p-6">
+                  {effectiveSection === 'appearance' ? (
+                    <L2AppearanceSettings />
+                  ) : effectiveSection === 'habits' ? (
+                    <L2HabitSettings />
+                  ) : effectiveSection === 'environment' ? (
+                    open && renderEnvironmentSettings()
+                  ) : effectiveSection === 'auth' ? (
+                    open && <L2AuthSettings />
+                  ) : effectiveSection === 'region' ? (
+                    <L2RegionSettings canLeave={onBeforeReload} />
+                  ) : (
+                    <AboutSettings />
+                  )}
+                </div>
+              </L4AppDialogBody>
+            )}
+          </div>
         </div>
       </L4AppDialogContent>
     </L4AppDialogRoot>

@@ -1,6 +1,7 @@
 'use client'
 
-import { CheckIcon, CircleAlertIcon, CopyIcon, LoaderCircleIcon, RefreshCwIcon } from 'lucide-react'
+import { CheckIcon, CircleAlertIcon, CopyIcon, RefreshCwIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import styles from './l2-work-session-columns.module.css'
@@ -68,7 +69,7 @@ export function L2WorkbenchInitializationNotice({
             {copied ? t('copied') : t('copyInitializationError')}
           </Button>
           <Button size="sm" disabled={!canReload} onClick={onReload}>
-            {reloading ? <LoaderCircleIcon className="animate-spin" /> : <RefreshCwIcon />}
+            {reloading ? <L4LoadingSpinner /> : <RefreshCwIcon />}
             {reloading ? t('reloadingPi') : t('reloadPi')}
           </Button>
         </div>

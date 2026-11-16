@@ -2,7 +2,7 @@
 
 import { useId, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { LoaderCircleIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import {
   L4AppDialogContent,
   L4AppDialogRoot,
@@ -77,7 +77,7 @@ export function L2WorkSessionRenameDialog({
               {t('cancel', { ns: 'common' })}
             </Button>
             <Button type="submit" disabled={disabled || saving || !title.trim()} aria-busy={saving}>
-              {saving ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
+              {saving ? <L4LoadingSpinner className="size-4" /> : null}
               {t('save', { ns: 'common' })}
             </Button>
           </div>

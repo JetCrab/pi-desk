@@ -271,6 +271,133 @@ test('无登录保护的全局统一配置可恢复且不创建签名材料', as
   }
 })
 
+test('系统提示词随配置归档，插件数据开关不影响收集，正文路径与字节原样恢复', async () => {
+  const runs = resolve('temp/run/unified-config')
+  await mkdir(runs, { recursive: true })
+  const root = await mkdtemp(join(runs, 'system-prompts-roundtrip-'))
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR
+  const previousSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR
+  const agentDir = join(root, 'agent')
+  process.env.PI_CODING_AGENT_DIR = agentDir
+  process.env.PI_CODING_AGENT_SESSION_DIR = join(agentDir, 'sessions')
+  let success = false
+  try {
+    const source = join(agentDir, 'source')
+    const sourceCwd = join(root, 'source-project')
+    await mkdir(join(source, 'config', 'system-prompts', 'modes'), { recursive: true })
+    await mkdir(join(source, 'config', 'migration-backups'))
+    await mkdir(sourceCwd)
+    const modes = {
+      custom: { name: '独立正文', promptSource: 'custom' },
+      empty: { name: '空正文', promptSource: 'custom' }
+    }
+    await bindConfigStore('pi-desk', 'capability-modes', { agentDir: source }).set({
+      modes,
+      defaultMode: 'custom'
+    })
+    await bindConfigStore('pi-desk', 'capability-modes', { agentDir: source }).set(
+      { defaultMode: null },
+      { cwd: sourceCwd }
+    )
+    const contents = new Map([
+      [
+        'config/system-prompts/global-append.md',
+        Buffer.from(`\uFEFF# 全局追加\r\n原路径：${source}\r\n项目：${sourceCwd}\r\n  保留空格\n`)
+      ],
+      [
+        'config/system-prompts/modes/6cdfd271da635d491e37a2b4a1044b306e6e9e039aeadee95bb355efadf8cb33.md',
+        Buffer.from(`独立模式\n${sourceCwd}/说明.md\n\n中文正文\r\n`)
+      ],
+      [
+        'config/system-prompts/modes/2e1cfa82b035c26cbbbdae632cea070514eb8b773f616aaeaf668e2f0be8f10d.md',
+        Buffer.alloc(0)
+      ],
+      [
+        'config/migration-backups/global-append-system.ts.disabled',
+        Buffer.from('export default function archivedFixture() {}\r\n')
+      ]
+    ])
+    for (const [path, content] of contents) await writeFile(join(source, path), content)
+    for (const includePluginData of [false, true]) {
+      const target = join(agentDir, includePluginData ? 'target-with-data' : 'target-without-data')
+      const targetCwd = join(root, includePluginData ? 'project-with-data' : 'project-without-data')
+      await mkdir(targetCwd)
+      const collection = await collectL4Environment({
+        agentDir: source,
+        cwd: sourceCwd,
+        includeSessions: false,
+        includePluginData
+      })
+      const prompts = collection.manifest.files.filter((file) => contents.has(file.path))
+      assert.equal(prompts.length, contents.size)
+      for (const file of prompts) {
+        assert.equal(file.base, 'agent')
+        assert.equal(file.category, 'config')
+        assert.equal(file.format, 'binary')
+        assert.deepEqual(file.localPaths, [])
+        assert.deepEqual(file.mappingSources, [])
+      }
+      const archivePath = join(root, `system-prompts-${includePluginData}.enc`)
+      const password = 'fixture-system-prompt-archive'
+      await writeEnvironmentArchive({
+        outputPath: archivePath,
+        password,
+        entries: collection.entries()
+      })
+      const { manifest } = await inspectL4EnvironmentArchive({
+        id: randomUUID(),
+        archivePath,
+        password
+      })
+      const selectedIds = manifest.files
+        .filter(
+          (file) =>
+            contents.has(file.path) ||
+            file.path === 'config/pi-desk.yaml' ||
+            (file.base === 'project' && file.path === 'pi-desk.yaml')
+        )
+        .map((file) => file.id)
+      await applyL4EnvironmentImport({
+        directory: join(root, `operation-${includePluginData}`),
+        agentDir: target,
+        archivePath,
+        password,
+        manifest,
+        selection: {
+          id: randomUUID(),
+          selectedIds,
+          mappings: [{ from: sourceCwd, to: targetCwd }],
+          overwrite: false
+        },
+        rollbackStore: createSecretStore({
+          agentDir: join(root, `rollback-${includePluginData}`),
+          keyProvider: async () => new Uint8Array(32).fill(6)
+        })
+      })
+      for (const [path, content] of contents) {
+        assert.deepEqual(await readFile(join(target, path)), content)
+        assert.deepEqual(await readFile(join(source, path)), content)
+      }
+      await assert.rejects(readFile(join(target, 'extensions', 'global-append-system.ts')), {
+        code: 'ENOENT'
+      })
+      const restored = bindConfigStore('pi-desk', 'capability-modes', { agentDir: target })
+      assert.deepEqual(await restored.get({ inherit: false }), { modes, defaultMode: 'custom' })
+      assert.deepEqual(await restored.get({ cwd: targetCwd, inherit: false }), {
+        defaultMode: null
+      })
+    }
+    success = true
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir
+    if (previousSessionDir === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR
+    else process.env.PI_CODING_AGENT_SESSION_DIR = previousSessionDir
+    if (success) await rm(root, { recursive: true, force: true })
+    else console.error(`系统提示词归档失败现场：${root}`)
+  }
+})
+
 test('环境事务与项目配置操作竞争时不反向持有全局主密钥锁', async (t) => {
   const runs = resolve('temp/run/unified-config')
   await mkdir(runs, { recursive: true })

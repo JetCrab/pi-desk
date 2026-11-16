@@ -18,6 +18,14 @@ import {
   type L2ProjectModelDefaultGetResponse,
   type L2ProjectModelDefaultReplaceRequest
 } from '@common/l2_biz/model-settings/l2-model-settings-contract'
+import {
+  L2CapabilityModeDefaultsGetRequestSchema,
+  L2CapabilityModeDefaultsGetResponseSchema,
+  L2CapabilityModeDefaultsReplaceRequestSchema,
+  L2CapabilityModeDefaultsReplaceResponseSchema,
+  type L2CapabilityModeDefaultsGetResponse,
+  type L2CapabilityModeDefaultsReplaceRequest
+} from '@common/l2_biz/capability-modes/l2-capability-modes-contract'
 import { L2PiDirectoryListResponseSchema } from '@common/l2_biz/pi-session/l2-pi-session-contract'
 import type { z } from 'zod'
 import { requestL4Api as request } from '@client/l4_foundation/lib/l4-api-request'
@@ -33,6 +41,30 @@ export interface L2ModelSettingsBiz {
   listDirectories: () => Promise<z.infer<typeof L2PiDirectoryListResponseSchema>>
   getProjectDefault: (cwd: string) => Promise<L2ProjectModelDefaultGetResponse>
   replaceProjectDefault: (input: L2ProjectModelDefaultReplaceRequest) => Promise<void>
+  getCapabilityModeDefault: (cwd: string | null) => Promise<L2CapabilityModeDefaultsGetResponse>
+  replaceCapabilityModeDefault: (input: L2CapabilityModeDefaultsReplaceRequest) => Promise<void>
+}
+
+export interface L2ProjectDefaultChanges {
+  model?: L2ProjectModelDefaultReplaceRequest
+  mode?: L2CapabilityModeDefaultsReplaceRequest
+}
+
+export async function saveL2ProjectDefaultChanges(
+  biz: Pick<L2ModelSettingsBiz, 'replaceProjectDefault' | 'replaceCapabilityModeDefault'>,
+  changes: L2ProjectDefaultChanges
+): Promise<{
+  model: PromiseSettledResult<void> | null
+  mode: PromiseSettledResult<void> | null
+}> {
+  const [model, mode] = await Promise.allSettled([
+    changes.model ? biz.replaceProjectDefault(changes.model) : Promise.resolve(),
+    changes.mode ? biz.replaceCapabilityModeDefault(changes.mode) : Promise.resolve()
+  ])
+  return {
+    model: changes.model ? model : null,
+    mode: changes.mode ? mode : null
+  }
 }
 
 function parseSettingsInput(input: L2ModelSettingsReplaceRequest): L2ModelSettingsReplaceRequest {
@@ -118,6 +150,21 @@ export function createL2ModelSettingsBiz(clientId: string): L2ModelSettingsBiz {
         '/api/project-model-default/replace',
         L2ProjectModelDefaultReplaceRequestSchema.parse(input),
         L2ProjectModelDefaultReplaceResponseSchema
+      )
+    },
+    getCapabilityModeDefault: (cwd) =>
+      request(
+        clientId,
+        '/api/capability-mode-defaults/get',
+        L2CapabilityModeDefaultsGetRequestSchema.parse({ cwd }),
+        L2CapabilityModeDefaultsGetResponseSchema
+      ),
+    async replaceCapabilityModeDefault(input): Promise<void> {
+      await request(
+        clientId,
+        '/api/capability-mode-defaults/replace',
+        L2CapabilityModeDefaultsReplaceRequestSchema.parse(input),
+        L2CapabilityModeDefaultsReplaceResponseSchema
       )
     }
   }

@@ -10,8 +10,13 @@ import {
 } from '@common/l2_biz/plugin/l2-plugin-catalog-contract'
 import type { L2PluginManagementInstallRequest } from '@common/l2_biz/plugin/l2-plugin-management-contract'
 import type { L2PluginManagementBiz } from '../l2-plugin-management-biz'
+import {
+  useL2PluginDevAvailability,
+  type L2PluginDevAvailability
+} from './l2-use-plugin-dev-availability'
 
 interface PluginCatalogState {
+  dev: L2PluginDevAvailability
   query: string
   setQuery: (value: string) => void
   composing: boolean
@@ -54,8 +59,10 @@ interface PluginCatalogState {
 
 export function useL2PluginCatalog(
   biz: L2PluginManagementBiz,
-  active: boolean
+  active: boolean,
+  defaultSource: L2PluginDownloadSource | null = null
 ): PluginCatalogState {
+  const sourceContext = JSON.stringify(defaultSource)
   const { t } = useTranslation('pluginManagement')
   const [query, setQuery] = useState('')
   const [composing, setComposing] = useState(false)
@@ -83,6 +90,28 @@ export function useL2PluginCatalog(
     'default'
   )
   const [downloadRegistry, setDownloadRegistry] = useState('')
+  const customRegistry =
+    downloadMode === 'custom' ? L2PluginRegistrySchema.safeParse(downloadRegistry) : null
+  const devRegistry = customRegistry?.success
+    ? customRegistry.data
+    : downloadMode === 'default' && searchSource === 'custom'
+      ? selection?.registry
+      : undefined
+  const followsOwner =
+    downloadMode === 'default' ||
+    (downloadMode !== 'custom' && downloadMode === defaultSource?.mode)
+  const dev = useL2PluginDevAvailability(
+    biz,
+    followsOwner || customRegistry?.success ? (selection?.name ?? null) : null,
+    devRegistry,
+    JSON.stringify([
+      sourceContext,
+      selection?.name,
+      selection?.registry,
+      downloadMode,
+      downloadRegistry
+    ])
+  )
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -290,6 +319,10 @@ export function useL2PluginCatalog(
     setComposing(true)
   }
   return {
+    dev:
+      selection && !followsOwner && !customRegistry
+        ? { loading: false, version: null, error: t('devSourceUnverified') }
+        : dev,
     query,
     setQuery,
     composing,

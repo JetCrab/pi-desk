@@ -4,13 +4,15 @@ import {
   AlertTriangleIcon,
   CheckCircle2Icon,
   CircleAlertIcon,
-  EllipsisIcon,
+  ChevronUpIcon,
   InfoIcon,
   XIcon
 } from 'lucide-react'
 import {
   useCallback,
   useEffect,
+  useId,
+  useLayoutEffect,
   useRef,
   useState,
   type FocusEvent,
@@ -22,11 +24,11 @@ import type {
   L3AppNotificationLevel
 } from '@common/l3_modules/app-runtime/l3-app-runtime-contract'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
+import motion from './l2-workbench-notifications.module.css'
 
 const OPEN_DELAY_MS = 120
 const CLOSE_DELAY_MS = 180
-const COLLAPSED_HEIGHT_PX = 64
-const HISTORY_CARD_HEIGHT_PX = 60
+const EXIT_DURATION_MS = 240
 const MAX_VISIBLE_HISTORY_CARDS = 5
 
 interface L2WorkbenchNotificationsProps {
@@ -38,19 +40,19 @@ interface L2WorkbenchNotificationsProps {
 
 const LEVEL_STYLES: Record<L3AppNotificationLevel, { icon: string; label: string }> = {
   info: {
-    icon: 'text-muted-foreground',
+    icon: 'bg-muted text-muted-foreground',
     label: 'noticeInfo'
   },
   success: {
-    icon: 'text-status-success',
+    icon: 'bg-status-success/10 text-status-success',
     label: 'noticeSuccess'
   },
   warning: {
-    icon: 'text-status-warning',
+    icon: 'bg-status-warning/10 text-status-warning',
     label: 'noticeWarning'
   },
   error: {
-    icon: 'text-destructive',
+    icon: 'bg-destructive/10 text-destructive',
     label: 'noticeError'
   }
 }
@@ -74,6 +76,8 @@ function NotificationCard({
   latest,
   mobile,
   moreCount,
+  expanded = false,
+  historyId,
   busy,
   onConsume,
   onDismiss,
@@ -84,6 +88,8 @@ function NotificationCard({
   latest: boolean
   mobile: boolean
   moreCount: number
+  expanded?: boolean
+  historyId?: string
   busy: boolean
   onConsume: () => void
   onDismiss: () => void
@@ -98,10 +104,8 @@ function NotificationCard({
     <div
       data-testid={`app-notification-${notification.notificationId}`}
       data-latest={latest ? 'true' : undefined}
-      className={cn(
-        'group flex min-w-0 items-stretch overflow-hidden rounded-lg bg-foreground/[0.04]',
-        latest ? 'h-14' : 'min-h-14'
-      )}
+      title={[notification.title, notification.description].filter(Boolean).join('\n')}
+      className="group flex h-14 min-w-0 items-stretch overflow-hidden rounded-lg hover:bg-foreground/[0.03]"
     >
       <button
         type="button"
@@ -112,35 +116,50 @@ function NotificationCard({
             ? t('actionableNotice', { level: t(style.label), title: notification.title })
             : t('noticeLabel', { level: t(style.label), title: notification.title })
         }
-        className="grid min-w-0 flex-1 grid-cols-[1.6rem_minmax(0,1fr)_auto] items-center gap-1.5 px-2 text-left outline-none transition-colors enabled:cursor-pointer enabled:hover:bg-foreground/8 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default"
+        className="grid min-w-0 flex-1 grid-cols-[1.75rem_minmax(0,1fr)] items-center gap-2 px-2 text-left outline-none transition-colors enabled:cursor-pointer enabled:hover:bg-foreground/[0.04] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default"
       >
-        <span className={cn('grid size-6 place-items-center rounded-md', style.icon)}>
+        <span
+          key={`icon:${notification.notificationId}`}
+          className={cn(
+            'grid size-7 place-items-center rounded-lg',
+            style.icon,
+            latest && motion.incoming
+          )}
+        >
           <NotificationLevelIcon level={notification.level} />
         </span>
-        <span className="min-w-0">
-          <span className="block truncate text-sm font-medium leading-5 text-foreground">
-            {notification.title}
-          </span>
+        <span
+          key={notification.notificationId}
+          className={cn('min-w-0', latest && motion.incoming)}
+        >
+          <span className="block truncate text-sm font-medium leading-5">{notification.title}</span>
           {notification.description ? (
             <span className="block truncate text-xs leading-5 text-muted-foreground">
               {notification.description}
             </span>
           ) : null}
         </span>
-        {!mobile && latest && moreCount > 0 ? (
-          <span className="px-1 text-xs tabular-nums text-muted-foreground">+{moreCount}</span>
-        ) : null}
       </button>
-      {mobile && latest && moreCount > 0 ? (
+      {latest && moreCount > 0 ? (
         <button
           data-testid="app-notification-more"
           type="button"
           disabled={busy}
           onClick={onToggleMore}
-          aria-label={t('olderNotices', { count: moreCount })}
-          className="mr-1 grid size-7 shrink-0 place-items-center self-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-foreground/8 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:opacity-50"
+          aria-label={
+            expanded ? t('close', { ns: 'common' }) : t('olderNotices', { count: moreCount })
+          }
+          aria-expanded={expanded}
+          aria-controls={historyId}
+          className="mr-1 flex h-7 min-w-9 shrink-0 items-center justify-center gap-0.5 self-center rounded-md px-1 text-xs tabular-nums text-muted-foreground outline-none transition-colors hover:bg-foreground/8 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:opacity-50"
         >
-          <EllipsisIcon className="size-4" />
+          <span>+{moreCount}</span>
+          <ChevronUpIcon
+            className={cn(
+              'size-3 transition-transform duration-200 motion-reduce:transition-none',
+              expanded && 'rotate-180'
+            )}
+          />
         </button>
       ) : null}
       {showDismiss ? (
@@ -167,7 +186,11 @@ export function L2WorkbenchNotifications({
   notifications,
   onConsume,
   onDismiss
-}: L2WorkbenchNotificationsProps): React.JSX.Element | null {
+}: L2WorkbenchNotificationsProps): React.JSX.Element {
+  const { t } = useTranslation('workbench')
+  const historyId = useId()
+  const slotRef = useRef<HTMLDivElement | null>(null)
+  const pinnedRef = useRef(false)
   const panelRef = useRef<HTMLDivElement | null>(null)
   const historyRef = useRef<HTMLDivElement | null>(null)
   const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -175,14 +198,15 @@ export function L2WorkbenchNotifications({
   const [expanded, setExpanded] = useState(false)
   const [busyNotificationId, setBusyNotificationId] = useState<string | null>(null)
 
-  const latest = notifications.at(-1) ?? null
-  const history = notifications.slice(0, -1)
-  const canExpand = history.length > 0
+  const visible = notifications.length > 0
+  const [displayedNotifications, setDisplayedNotifications] = useState(notifications)
+  if (visible && displayedNotifications !== notifications) setDisplayedNotifications(notifications)
+  const latest = displayedNotifications.at(-1) ?? null
+  const history = displayedNotifications.slice(0, -1)
+  const canExpand = visible && history.length > 0
+  if (!canExpand && expanded) setExpanded(false)
   const visibleExpanded = expanded && canExpand
-  const expandedHeight =
-    COLLAPSED_HEIGHT_PX +
-    Math.min(history.length, MAX_VISIBLE_HISTORY_CARDS) * HISTORY_CARD_HEIGHT_PX +
-    8
+  const expandedHeight = 6 + Math.min(history.length, MAX_VISIBLE_HISTORY_CARDS) * 3.5
 
   const clearOpenTimer = useCallback((): void => {
     if (openTimerRef.current) clearTimeout(openTimerRef.current)
@@ -200,6 +224,7 @@ export function L2WorkbenchNotifications({
   const close = useCallback((): void => {
     clearOpenTimer()
     clearCloseTimer()
+    pinnedRef.current = false
     setExpanded(false)
   }, [clearCloseTimer, clearOpenTimer])
   const scheduleOpen = useCallback((): void => {
@@ -209,11 +234,27 @@ export function L2WorkbenchNotifications({
     openTimerRef.current = setTimeout(open, OPEN_DELAY_MS)
   }, [canExpand, clearCloseTimer, clearOpenTimer, mobile, open])
   const scheduleClose = useCallback((): void => {
-    if (mobile) return
+    if (pinnedRef.current) return
     clearOpenTimer()
     clearCloseTimer()
     closeTimerRef.current = setTimeout(close, CLOSE_DELAY_MS)
-  }, [clearCloseTimer, clearOpenTimer, close, mobile])
+  }, [clearCloseTimer, clearOpenTimer, close])
+
+  useLayoutEffect(() => {
+    if (!visible && panelRef.current?.contains(document.activeElement)) slotRef.current?.focus()
+  }, [visible])
+
+  useEffect(() => {
+    if (!canExpand) {
+      pinnedRef.current = false
+      clearOpenTimer()
+      clearCloseTimer()
+    }
+    if (visible || displayedNotifications.length === 0) return
+    // 只保留退场所需的展示快照；新通知到来时取消清理，不重放旧内容。
+    const timer = setTimeout(() => setDisplayedNotifications([]), EXIT_DURATION_MS)
+    return () => clearTimeout(timer)
+  }, [canExpand, clearCloseTimer, clearOpenTimer, displayedNotifications.length, visible])
 
   useEffect(() => {
     if (!visibleExpanded) return
@@ -222,12 +263,18 @@ export function L2WorkbenchNotifications({
   }, [history.length, visibleExpanded])
 
   useEffect(() => {
-    if (!mobile || !visibleExpanded) return
+    if (!visibleExpanded) return
     const handlePointerDown = (event: PointerEvent): void => {
       if (!panelRef.current?.contains(event.target as Node)) close()
     }
     const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') close()
+      if (event.key !== 'Escape') return
+      if (panelRef.current?.contains(document.activeElement)) {
+        panelRef.current
+          .querySelector<HTMLButtonElement>('[data-testid="app-notification-more"]')
+          ?.focus()
+      }
+      close()
     }
     document.addEventListener('pointerdown', handlePointerDown)
     document.addEventListener('keydown', handleKeyDown)
@@ -235,7 +282,7 @@ export function L2WorkbenchNotifications({
       document.removeEventListener('pointerdown', handlePointerDown)
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [close, mobile, visibleExpanded])
+  }, [close, visibleExpanded])
 
   useEffect(
     () => () => {
@@ -249,14 +296,14 @@ export function L2WorkbenchNotifications({
     async (notification: L3AppNotification): Promise<void> => {
       if (!notification.event || busyNotificationId) return
       setBusyNotificationId(notification.notificationId)
-      setExpanded(false)
+      close()
       try {
         await onConsume(notification)
       } finally {
         setBusyNotificationId(null)
       }
     },
-    [busyNotificationId, onConsume]
+    [busyNotificationId, close, onConsume]
   )
   const dismiss = useCallback(
     async (notificationId: string): Promise<void> => {
@@ -274,66 +321,89 @@ export function L2WorkbenchNotifications({
     if (event.pointerType === 'mouse') scheduleOpen()
   }
   const handlePointerLeave = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (event.pointerType === 'mouse') scheduleClose()
+    if (event.pointerType === 'mouse' && !event.currentTarget.contains(document.activeElement))
+      scheduleClose()
   }
   const handleBlur = (event: FocusEvent<HTMLDivElement>): void => {
     if (!event.currentTarget.contains(event.relatedTarget)) scheduleClose()
   }
 
-  if (!latest) return null
-
   return (
-    <div data-testid="app-notification-slot" className="relative z-20 h-16 shrink-0">
+    <div
+      ref={slotRef}
+      tabIndex={-1}
+      data-testid="app-notification-slot"
+      data-visible={visible ? 'true' : 'false'}
+      className={motion.slot}
+    >
       <div
         ref={panelRef}
         data-testid="app-notification-panel"
         data-expanded={visibleExpanded ? 'true' : 'false'}
+        inert={!visible}
+        aria-hidden={!visible}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
         onFocus={() => {
           if (!mobile) open()
         }}
         onBlur={handleBlur}
-        className={cn(
-          'absolute inset-x-0 bottom-0 flex max-h-[calc(100dvh-8rem)] flex-col overflow-hidden bg-sidebar text-sidebar-foreground transition-[height,box-shadow] duration-150 ease-out motion-reduce:transition-none',
-          visibleExpanded && 'shadow-lg duration-200'
-        )}
-        style={{ height: visibleExpanded ? expandedHeight : COLLAPSED_HEIGHT_PX }}
+        className={motion.panel}
+        style={{ height: `calc(${visibleExpanded ? expandedHeight : 3.5}rem + 2px)` }}
       >
-        <div
-          ref={historyRef}
-          className={cn(
-            'pi-desk-chat-scrollbar absolute inset-x-0 bottom-16 top-0 space-y-1 overflow-y-auto px-2 pt-2',
-            !visibleExpanded && 'invisible'
-          )}
-        >
-          {history.map((notification) => (
-            <NotificationCard
-              key={notification.notificationId}
-              notification={notification}
-              latest={false}
-              mobile={mobile}
-              moreCount={0}
-              busy={busyNotificationId !== null}
-              onConsume={() => void consume(notification)}
-              onDismiss={() => void dismiss(notification.notificationId)}
-              onToggleMore={() => undefined}
-              showDismiss
-            />
-          ))}
-        </div>
-        <div className="absolute inset-x-0 bottom-0 h-16 px-2 py-1">
-          <NotificationCard
-            notification={latest}
-            latest
-            mobile={mobile}
-            moreCount={history.length}
-            busy={busyNotificationId !== null}
-            onConsume={() => void consume(latest)}
-            onDismiss={() => void dismiss(latest.notificationId)}
-            onToggleMore={() => setExpanded((current) => !current)}
-            showDismiss={!mobile || history.length === 0 || visibleExpanded}
-          />
+        <div className={motion.surface}>
+          <div
+            id={historyId}
+            className={motion.history}
+            inert={!visibleExpanded}
+            aria-hidden={!visibleExpanded}
+          >
+            <div className={motion.heading}>
+              {t('notificationsTitle')}
+              <span className="font-normal tabular-nums text-muted-foreground">
+                {displayedNotifications.length}
+              </span>
+            </div>
+            <div ref={historyRef} className={cn('pi-desk-chat-scrollbar', motion.historyList)}>
+              {history.map((notification) => (
+                <NotificationCard
+                  key={notification.notificationId}
+                  notification={notification}
+                  latest={false}
+                  mobile={mobile}
+                  moreCount={0}
+                  busy={busyNotificationId !== null}
+                  onConsume={() => void consume(notification)}
+                  onDismiss={() => void dismiss(notification.notificationId)}
+                  onToggleMore={() => undefined}
+                  showDismiss
+                />
+              ))}
+            </div>
+          </div>
+          <div className={motion.latest}>
+            {latest ? (
+              <NotificationCard
+                notification={latest}
+                latest
+                mobile={mobile}
+                moreCount={history.length}
+                expanded={visibleExpanded}
+                historyId={historyId}
+                busy={busyNotificationId !== null}
+                onConsume={() => void consume(latest)}
+                onDismiss={() => void dismiss(latest.notificationId)}
+                onToggleMore={() => {
+                  if (pinnedRef.current) close()
+                  else {
+                    pinnedRef.current = true
+                    open()
+                  }
+                }}
+                showDismiss={!mobile || history.length === 0 || visibleExpanded}
+              />
+            ) : null}
+          </div>
         </div>
       </div>
     </div>

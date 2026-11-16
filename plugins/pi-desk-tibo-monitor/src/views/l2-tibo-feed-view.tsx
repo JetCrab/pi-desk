@@ -17,7 +17,6 @@ export function TiboFeedView({
   selectedId,
   error,
   onSelectPost,
-  onSettings,
   children
 }: {
   snapshot: TiboSnapshot
@@ -25,17 +24,20 @@ export function TiboFeedView({
   selectedId: string | null
   error: string | null
   onSelectPost(id: string): void
-  onSettings(): void
-  children: ReactNode
+  children?: ReactNode
 }): React.JSX.Element {
   const [visibleCount, setVisibleCount] = useState(10)
   const history = useRef<HTMLDetailsElement>(null)
-  const failure = error ?? snapshot.status.error
   return (
     <div className="tibo-feed">
-      {failure ? (
+      {error ? (
         <PluginAlert tone="error" density="compact">
-          {failure}
+          {error}
+        </PluginAlert>
+      ) : null}
+      {snapshot.status.error && snapshot.status.error !== error ? (
+        <PluginAlert tone="error" density="compact">
+          {snapshot.status.error}
         </PluginAlert>
       ) : null}
       {snapshot.records.length > 1 ? (
@@ -98,9 +100,6 @@ export function TiboFeedView({
       ) : (
         <div className="tibo-empty">
           <p>{tiboText(region, '暂无动态', 'No posts yet')}</p>
-          <PluginButton variant="secondary" onClick={onSettings}>
-            {tiboText(region, '设置', 'Settings')}
-          </PluginButton>
         </div>
       )}
     </div>

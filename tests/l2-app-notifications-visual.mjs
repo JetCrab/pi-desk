@@ -1,19 +1,20 @@
 import assert from 'node:assert/strict'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { once } from 'node:events'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-
+import WebSocket from 'ws'
 import {
   createCdpPage,
   evaluate,
   navigate,
-  publishScreenshots,
   reservePort,
   screenshot,
   setViewport,
   spawnEdge,
   stopBrowserTree,
   waitFor,
+  waitForBrowserReady,
   waitForHttp
 } from './l4-browser-cdp-runtime.mjs'
 import {
@@ -23,410 +24,427 @@ import {
 } from './l4-e2e-server-runtime.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const edgePath = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
-const testRoot = join(projectRoot, 'temp', 'pi', 'app-notifications-visual', String(process.pid))
-const agentDir = join(testRoot, 'agent')
-const projectDir = join(testRoot, 'project')
-const pluginDir = join(testRoot, 'notification-plugin')
-const workSessionStorePath = join(agentDir, 'pi-desk', 'work-sessions.json')
-const temporaryDesktopCollapsed = join(testRoot, 'desktop-collapsed.png')
-const temporaryDesktopExpanded = join(testRoot, 'desktop-expanded.png')
-const temporaryMobileCollapsed = join(testRoot, 'mobile-collapsed.png')
-const temporaryMobileExpanded = join(testRoot, 'mobile-expanded.png')
-const desktopCollapsedOutput = join(
-  projectRoot,
-  'temp',
-  '验收',
-  '客户端_桌面',
-  '全局通知__默认单行.png'
-)
-const desktopExpandedOutput = join(
-  projectRoot,
-  'temp',
-  '验收',
-  '客户端_桌面',
-  '全局通知__悬停展开.png'
-)
-const mobileCollapsedOutput = join(
-  projectRoot,
-  'temp',
-  '验收',
-  '客户端_移动端',
-  '全局通知__默认单行.png'
-)
-const mobileExpandedOutput = join(
-  projectRoot,
-  'temp',
-  '验收',
-  '客户端_移动端',
-  '全局通知__三点展开.png'
-)
+const runId = `notification-island-${process.pid}`
+const runRoot = join(projectRoot, 'temp/run/app-notifications', runId)
+const piRoot = join(projectRoot, 'temp/pi/app-notifications-visual', runId)
+const buildRoot = join(projectRoot, 'temp/build/app-notifications', runId)
+const agentDir = join(piRoot, 'agent')
+const pluginDir = join(piRoot, 'notification-plugin')
+const projectDir = join(runRoot, 'project')
 const password = 'Qq.445566'
-const workId = 'app-notification-visual'
-
+const clientId = crypto.randomUUID()
+const slotSelector = '[data-testid="app-notification-slot"]'
+const panelSelector = '[data-testid="app-notification-panel"]'
+const moreSelector = '[data-testid="app-notification-more"]'
+const latestSelector = '[data-latest="true"]'
+const q = (selector) => `document.querySelector(${JSON.stringify(selector)})`
+const evidence = []
+const checks = []
+const browserErrors = []
 let appPort = 0
 let cdpPort = 0
 let serverRuntime
-let browserProcess
+let browser
+let client
+let driver
+let touch = false
 let serverOutput = ''
-
-function closeTo(actual, expected, tolerance = 1) {
-  assert.ok(
-    Math.abs(actual - expected) <= tolerance,
-    `尺寸不符合预期：actual=${actual}, expected=${expected}`
-  )
-}
 
 async function createFixture() {
   await prepareIsolatedPiDirectory(agentDir)
-  await mkdir(dirname(workSessionStorePath), { recursive: true })
   await mkdir(projectDir, { recursive: true })
+  await mkdir(join(agentDir, 'pi-desk'), { recursive: true })
   await mkdir(join(pluginDir, 'browser'), { recursive: true })
-
   process.env.PI_CODING_AGENT_DIR = agentDir
   process.env.PI_CODING_AGENT_SESSION_DIR = join(agentDir, 'sessions')
   const { SessionManager } = await import('@earendil-works/pi-coding-agent')
   const manager = SessionManager.create(projectDir)
-  const timestamp = Date.now()
   manager.appendMessage({
     role: 'user',
-    content: [{ type: 'text', text: '全局通知视觉验收' }],
-    timestamp
+    content: [{ type: 'text', text: '检查工作区通知' }],
+    timestamp: Date.now()
   })
-  manager.appendMessage({
-    role: 'assistant',
-    content: [{ type: 'text', text: '准备展示全局通知。' }],
-    api: 'openai-responses',
-    provider: 'test',
-    model: 'test-model',
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
-    },
-    stopReason: 'stop',
-    timestamp: timestamp + 1
-  })
-  manager.appendSessionInfo('全局通知视觉验收')
-
+  manager.appendSessionInfo('工作区通知')
   await writeFile(
-    workSessionStorePath,
-    `${JSON.stringify(
-      {
-        workSessions: [{ workId, cwd: projectDir, sessionId: manager.getSessionId() }],
-        pinnedCount: 0
-      },
-      null,
-      2
-    )}\n`,
-    'utf8'
+    join(agentDir, 'pi-desk', 'work-sessions.json'),
+    JSON.stringify({
+      workSessions: [
+        { workId: 'notification-visual', cwd: projectDir, sessionId: manager.getSessionId() }
+      ],
+      pinnedCount: 0
+    })
   )
-  await writeFile(
-    join(agentDir, 'settings.json'),
-    JSON.stringify({ packages: [pluginDir] }),
-    'utf8'
-  )
+  await writeFile(join(agentDir, 'settings.json'), JSON.stringify({ packages: [pluginDir] }))
   await writeFile(
     join(pluginDir, 'package.json'),
     JSON.stringify({
       name: 'app-notification-visual-fixture',
       type: 'module',
       piDesk: { entry: './entry.mjs' }
-    }),
-    'utf8'
+    })
   )
   await writeFile(
     join(pluginDir, 'entry.mjs'),
     `export default {
   name: 'notification-fixture',
   setup(plugin) {
-    plugin.setState({ status: 'ready' })
     plugin.registerBrowserEntry('./browser/entry.js')
-    const notifications = [
-      { level: 'info', title: '插件依赖已经重新加载', description: '12 分钟前' },
-      { level: 'success', title: '桌面端验收截图已登记', description: '8 分钟前' },
-      { level: 'info', title: '有 3 个后台任务仍在运行', description: '5 分钟前' },
-      { level: 'warning', title: '发布需要一次确认', description: '2 分钟前' },
-      {
-        level: 'success',
-        title: '最新构建完成，可以查看交付物',
-        description: '刚刚',
-        event: { name: 'open-result', data: { runId: 'run-latest' } }
-      }
-    ]
-    for (const notification of notifications) plugin.notifications.publish(notification)
+    plugin.registerMethod('publish', async input => ({ notificationId: plugin.notifications.publish(input) }))
+    plugin.registerMethod('delete', async input => {
+      plugin.notifications.delete(input.notificationId)
+      return {}
+    })
   }
-}
-`,
-    'utf8'
+}`
   )
   await writeFile(
-    join(pluginDir, 'browser', 'entry.js'),
+    join(pluginDir, 'browser/entry.js'),
     `export default function entry(plugin) {
   plugin.notifications.onEvent('open-result', ({ data }) => {
     plugin.notify({ level: 'success', title: '通知事件已执行', description: String(data.runId) })
   })
-}
-`,
-    'utf8'
+}`
   )
 }
 
-async function waitForAnimations(client, label) {
-  await waitFor(
-    client,
-    `[...document.getAnimations()].every((animation) => animation.playState !== 'running')`,
-    label,
-    () => serverOutput
-  )
-}
-
-async function readLayout(client) {
-  return evaluate(
-    client,
-    `(() => {
-      const rect = (selector) => {
-        const element = document.querySelector(selector);
-        if (!(element instanceof HTMLElement)) return null;
-        const value = element.getBoundingClientRect();
-        return { top: value.top, right: value.right, bottom: value.bottom, left: value.left, width: value.width, height: value.height };
-      };
-      const panel = document.querySelector('[data-testid="app-notification-panel"]');
-      const notificationCards = [...document.querySelectorAll('[data-testid^="app-notification-"]')]
-        .filter((element) => element.getAttribute('data-testid') !== 'app-notification-slot' && element.getAttribute('data-testid') !== 'app-notification-panel' && element.getAttribute('data-testid') !== 'app-notification-more');
-      return {
-        sidebar: rect('aside'),
-        sessionList: rect('[data-testid="work-session-list"]'),
-        slot: rect('[data-testid="app-notification-slot"]'),
-        panel: rect('[data-testid="app-notification-panel"]'),
-        latest: rect('[data-latest="true"]'),
-        shortcuts: rect('[data-testid="sidebar-shortcuts"]'),
-        expanded: panel?.getAttribute('data-expanded') === 'true',
-        panelBorderTop: panel instanceof HTMLElement ? getComputedStyle(panel).borderTopWidth : null,
-        panelBorderLeft: panel instanceof HTMLElement ? getComputedStyle(panel).borderLeftWidth : null,
-        titles: notificationCards.map((element) => element.textContent?.trim() ?? ''),
-        latestTitle: document.querySelector('[data-latest="true"]')?.textContent?.trim() ?? '',
-        moreButton: document.querySelector('[data-testid="app-notification-more"]') !== null
-      };
-    })()`
-  )
-}
-
-function assertFixedLayout(before, after) {
-  closeTo(after.sessionList.top, before.sessionList.top)
-  closeTo(after.sessionList.bottom, before.sessionList.bottom)
-  closeTo(after.sessionList.height, before.sessionList.height)
-  closeTo(after.slot.top, before.slot.top)
-  closeTo(after.slot.bottom, before.slot.bottom)
-  closeTo(after.slot.height, 48)
-  closeTo(after.latest.top, before.latest.top)
-  closeTo(after.latest.bottom, before.latest.bottom)
-  closeTo(after.shortcuts.top, before.shortcuts.top)
-  closeTo(after.shortcuts.height, before.shortcuts.height)
-  closeTo(after.panel.bottom, before.panel.bottom)
-}
-
-async function moveMouse(client, rect, ratio = 0.5) {
-  await client.send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved',
-    x: rect.left + rect.width / 2,
-    y: rect.top + rect.height * ratio,
-    button: 'none',
-    pointerType: 'mouse'
+function request(path, body = {}) {
+  return new Promise((resolveRequest, rejectRequest) => {
+    const requestId = crypto.randomUUID()
+    const cleanup = () => {
+      clearTimeout(timer)
+      driver.off('message', onMessage)
+      driver.off('error', onError)
+    }
+    const onError = (error) => {
+      cleanup()
+      rejectRequest(error)
+    }
+    const onMessage = (data) => {
+      const message = JSON.parse(data.toString())
+      if (message.head?.requestId !== requestId) return
+      cleanup()
+      if (message.body.code !== 0) rejectRequest(new Error(message.body.msg))
+      else resolveRequest(message.body.data)
+    }
+    const timer = setTimeout(() => onError(new Error(`请求超时：${path}`)), 15_000)
+    driver.on('message', onMessage)
+    driver.once('error', onError)
+    driver.send(JSON.stringify({ head: { op: 'req', path, requestId }, body }))
   })
 }
-
-async function main() {
-  let client
-  try {
-    await createFixture()
-    appPort = await reservePort()
-    cdpPort = await reservePort()
-    serverRuntime = spawnE2eServer({
-      projectRoot,
-      agentDir,
-      port: appPort,
-      development: true,
-      onOutput: (output) => {
-        serverOutput += output
-      }
+const invoke = (method, input) =>
+  request('plugins/invoke', { scope: 'global', pluginName: 'notification-fixture', method, input })
+const publish = (title, level = 'info', actionable = false) =>
+  invoke('publish', {
+    title,
+    level,
+    description: '工作区 · 通知内容',
+    ...(actionable
+      ? { event: { name: 'open-result', data: { runId: 'notification-visual' } } }
+      : {})
+  })
+const read = (expression) => evaluate(client, expression)
+const wait = (expression, label, timeout = 15_000) =>
+  waitFor(client, expression, label, () => serverOutput, timeout)
+async function stable() {
+  await read(`(async () => {
+    const finite = () => document.getAnimations().filter(a => a.playState === 'running' && Number.isFinite(a.effect.getComputedTiming().endTime));
+    for (let pass=0; pass<8; pass++) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      const animations=finite();
+      if (!animations.length) return;
+      await Promise.allSettled(animations.map(a=>a.finished));
+    }
+    if (finite().length) throw new Error('界面动画未收敛');
+  })()`)
+}
+async function point(selector) {
+  return read(`(() => {
+    const element=${q(selector)};
+    if (!(element instanceof HTMLElement)) throw new Error('未找到操作：'+${JSON.stringify(selector)});
+    const rect=element.getBoundingClientRect();
+    return {x:rect.left+rect.width/2,y:rect.top+rect.height/2};
+  })()`)
+}
+async function click(selector) {
+  const position = await point(selector)
+  if (touch) {
+    await client.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{ ...position, id: 1 }]
     })
-    await waitForHttp(
-      `http://127.0.0.1:${appPort}/api/health`,
-      30_000,
-      'Pi Desk',
-      () => serverOutput
-    )
-
-    browserProcess = spawnEdge(edgePath, cdpPort, join(testRoot, 'edge-profile'), '1440,900')
-    await waitForHttp(`http://127.0.0.1:${cdpPort}/json/version`, 20_000, 'Edge CDP')
-    client = await createCdpPage(cdpPort)
-    await setViewport(client, 1440, 900, false)
-    await navigate(client, `http://127.0.0.1:${appPort}/login`)
-    const login = await evaluate(
-      client,
-      `fetch('/api/auth/login', {
-        method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'X-Pi-Desk-Client-Id': '5a5d88a2-09c2-4df5-971b-79e5bc991a21' },
-        body: JSON.stringify({ password: ${JSON.stringify(password)} })
-      }).then(async response => ({ ok: response.ok, body: await response.json() }))`
-    )
-    assert.equal(login.ok, true, login.body?.msg)
-
-    await navigate(client, `http://127.0.0.1:${appPort}/`)
-    await waitFor(
-      client,
-      `document.querySelector('[data-testid="app-notification-panel"]') !== null && document.querySelector('[data-latest="true"]')?.textContent.includes('最新构建完成')`,
-      '桌面通知默认态',
-      () => serverOutput,
-      30_000
-    )
-    await waitForAnimations(client, '桌面通知出现动画')
-    await evaluate(
-      client,
-      `document.querySelectorAll('nextjs-portal').forEach((element) => { element.style.display = 'none' })`
-    )
-
-    const desktopCollapsed = await readLayout(client)
-    assert.equal(desktopCollapsed.expanded, false)
-    closeTo(desktopCollapsed.slot.height, 48)
-    closeTo(desktopCollapsed.panel.height, 48)
-    closeTo(desktopCollapsed.panel.left, desktopCollapsed.sidebar.left)
-    closeTo(desktopCollapsed.panel.right, desktopCollapsed.sidebar.right)
-    assert.equal(desktopCollapsed.panelBorderTop, '1px')
-    assert.equal(desktopCollapsed.panelBorderLeft, '0px')
-    assert.match(desktopCollapsed.latestTitle, /最新构建完成/)
-    await writeFile(temporaryDesktopCollapsed, await screenshot(client))
-
-    await moveMouse(client, desktopCollapsed.latest)
-    await waitFor(
-      client,
-      `document.querySelector('[data-testid="app-notification-panel"]')?.getAttribute('data-expanded') === 'true'`,
-      '桌面 Hover 展开通知'
-    )
-    await waitForAnimations(client, '桌面通知展开动画')
-    const desktopExpanded = await readLayout(client)
-    assertFixedLayout(desktopCollapsed, desktopExpanded)
-    assert.equal(desktopExpanded.expanded, true)
-    assert.ok(desktopExpanded.panel.height > desktopCollapsed.panel.height)
-    assert.ok(desktopExpanded.panel.top < desktopCollapsed.panel.top)
-    assert.match(desktopExpanded.titles[0], /插件依赖已经重新加载/)
-    assert.match(desktopExpanded.titles.at(-1), /最新构建完成/)
-
-    await moveMouse(client, desktopExpanded.panel, 0.2)
-    await waitFor(
-      client,
-      `(() => {
-        const panel = document.querySelector('[data-testid="app-notification-panel"]');
-        const rect = panel?.getBoundingClientRect();
-        const target = rect ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height * 0.2) : null;
-        return panel?.getAttribute('data-expanded') === 'true' && target !== null && panel.contains(target);
-      })()`,
-      '鼠标进入上拉通知区后保持展开'
-    )
-    await writeFile(temporaryDesktopExpanded, await screenshot(client))
-
+    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  } else {
+    await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...position })
     await client.send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: 900,
-      y: 20,
-      button: 'none',
-      pointerType: 'mouse'
+      type: 'mousePressed',
+      ...position,
+      button: 'left',
+      clickCount: 1
     })
-    await waitFor(
-      client,
-      `document.querySelector('[data-testid="app-notification-panel"]')?.getAttribute('data-expanded') === 'false'`,
-      '桌面通知移出收起'
-    )
-
-    await setViewport(client, 390, 844, true)
-    await waitFor(
-      client,
-      `document.documentElement.clientWidth === 390 && document.querySelector('[aria-label="显示工作会话菜单"]') !== null`,
-      '移动工作台布局'
-    )
-    await evaluate(client, `document.querySelector('[aria-label="显示工作会话菜单"]')?.click()`)
-    await waitFor(
-      client,
-      `(() => {
-        const drawer = document.querySelector('[aria-label="关闭工作会话菜单"]')?.nextElementSibling;
-        const panel = drawer?.querySelector('[data-testid="app-notification-panel"]');
-        return drawer instanceof HTMLElement && panel instanceof HTMLElement && drawer.getBoundingClientRect().left >= -1;
-      })()`,
-      '移动通知抽屉'
-    )
-    await waitForAnimations(client, '移动抽屉动画')
-
-    const mobileCollapsed = await readLayout(client)
-    assert.equal(mobileCollapsed.expanded, false)
-    assert.equal(mobileCollapsed.moreButton, true)
-    closeTo(mobileCollapsed.slot.height, 48)
-    closeTo(mobileCollapsed.panel.height, 48)
-    await writeFile(temporaryMobileCollapsed, await screenshot(client))
-
-    await evaluate(
-      client,
-      `document.querySelector('[data-testid="app-notification-more"]')?.click()`
-    )
-    await waitFor(
-      client,
-      `document.querySelector('[data-testid="app-notification-panel"]')?.getAttribute('data-expanded') === 'true'`,
-      '手机三点展开通知'
-    )
-    await waitForAnimations(client, '手机通知展开动画')
-    const mobileExpanded = await readLayout(client)
-    assertFixedLayout(mobileCollapsed, mobileExpanded)
-    assert.equal(mobileExpanded.expanded, true)
-    assert.ok(mobileExpanded.panel.top < mobileCollapsed.panel.top)
-    assert.match(mobileExpanded.titles.at(-1), /最新构建完成/)
-    await writeFile(temporaryMobileExpanded, await screenshot(client))
-
-    const consumed = await evaluate(
-      client,
-      `(() => {
-        const button = [...document.querySelectorAll('button')].find((item) => item.getAttribute('aria-label')?.includes('最新构建完成') && item.getAttribute('aria-label')?.includes('点击处理'));
-        if (!(button instanceof HTMLElement)) return false;
-        button.click();
-        return true;
-      })()`
-    )
-    assert.equal(consumed, true)
-    await waitFor(
-      client,
-      `document.body.innerText.includes('通知事件已执行') && !document.querySelector('[data-latest="true"]')?.textContent.includes('最新构建完成')`,
-      '通知 Event 消费并删除',
-      () => serverOutput
-    )
-
-    await publishScreenshots([
-      [desktopCollapsedOutput, await readFile(temporaryDesktopCollapsed)],
-      [desktopExpandedOutput, await readFile(temporaryDesktopExpanded)],
-      [mobileCollapsedOutput, await readFile(temporaryMobileCollapsed)],
-      [mobileExpandedOutput, await readFile(temporaryMobileExpanded)]
-    ])
-    console.log(
-      JSON.stringify(
-        {
-          screenshots: [
-            desktopCollapsedOutput,
-            desktopExpandedOutput,
-            mobileCollapsedOutput,
-            mobileExpandedOutput
-          ]
-        },
-        null,
-        2
-      )
-    )
-  } finally {
-    client?.close()
-    await stopBrowserTree(browserProcess, cdpPort)
-    if (serverRuntime) await stopE2eServerTree(serverRuntime)
-    await rm(testRoot, { recursive: true, force: true })
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      ...position,
+      button: 'left',
+      clickCount: 1
+    })
   }
 }
+async function move(selector) {
+  await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...(await point(selector)) })
+}
+async function capture(name) {
+  const path = join(runRoot, `${name}.png`)
+  await writeFile(path, await screenshot(client))
+  evidence.push(path)
+}
+async function layout() {
+  return read(`(() => {
+    const rect=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,height:r.height}};
+    return {slot:rect(${JSON.stringify(slotSelector)}),panel:rect(${JSON.stringify(panelSelector)}),list:rect('[data-testid="work-session-list"]'),footer:rect('[data-testid="sidebar-shortcuts"]'),rootSize:parseFloat(getComputedStyle(document.documentElement).fontSize)};
+  })()`)
+}
+function closeTo(actual, expected) {
+  assert.ok(Math.abs(actual - expected) < 1, `几何不符合预期：${actual} / ${expected}`)
+}
+async function startFrames() {
+  await read(`(() => {
+    window.__noticeFrames=[];
+    window.__noticeSampling=true;
+    const frame=()=>{
+      const slot=${q(slotSelector)}, panel=${q(panelSelector)}, footer=document.querySelector('[data-testid="sidebar-shortcuts"]');
+      window.__noticeFrames.push({height:slot.getBoundingClientRect().height,opacity:Number(getComputedStyle(panel).opacity),footer:footer.getBoundingClientRect().top,text:panel.textContent});
+      if(window.__noticeSampling) requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  })()`)
+}
+async function stopFrames() {
+  return read(`(() => {window.__noticeSampling=false;return window.__noticeFrames})()`)
+}
+function assertMotion(frames, from, to, label) {
+  closeTo(frames[0].height, from)
+  closeTo(frames.at(-1).height, to)
+  assert.ok(
+    frames.some((f) => f.height > Math.min(from, to) + 1 && f.height < Math.max(from, to) - 1),
+    `${label}没有中间高度`
+  )
+  assert.ok(
+    frames.some((f) => f.opacity > 0.01 && f.opacity < 0.99),
+    `${label}没有透明度过渡`
+  )
+  closeTo(Math.max(...frames.map((f) => f.footer)), Math.min(...frames.map((f) => f.footer)))
+  checks.push({ label, frames: frames.length })
+}
+async function waitLatest(title) {
+  await wait(
+    `${q(latestSelector)}?.textContent.includes(${JSON.stringify(title)}) && ${q(slotSelector)}.dataset.visible==='true'`,
+    `显示通知：${title}`
+  )
+}
 
-await main()
+let failure
+try {
+  await createFixture()
+  appPort = await reservePort()
+  serverRuntime = spawnE2eServer({
+    projectRoot,
+    agentDir,
+    port: appPort,
+    development: true,
+    nextDirectory: buildRoot,
+    onOutput: (output) => {
+      serverOutput = (serverOutput + output).slice(-2 * 1024 * 1024)
+    }
+  })
+  await waitForHttp(
+    `http://127.0.0.1:${appPort}/api/health`,
+    60_000,
+    '隔离 Pi Desk',
+    () => serverOutput
+  )
+  cdpPort = await reservePort()
+  browser = spawnEdge(
+    'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    cdpPort,
+    join(runRoot, 'browser-profile'),
+    '1360,900'
+  )
+  await waitForBrowserReady(browser, cdpPort)
+  client = await createCdpPage(cdpPort)
+  client.events.set('Runtime.exceptionThrown', new Set([(event) => browserErrors.push(event)]))
+  await setViewport(client, 1360, 900, false)
+  await navigate(client, `http://127.0.0.1:${appPort}/login`)
+  const login = await read(
+    `fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json','X-Pi-Desk-Client-Id':crypto.randomUUID()},body:JSON.stringify({password:${JSON.stringify(password)}})}).then(r=>r.json())`
+  )
+  assert.equal(login.code, 0, login.msg)
+  const cookies = await client.send('Network.getCookies', {
+    urls: [`http://127.0.0.1:${appPort}/`]
+  })
+  driver = new WebSocket(`ws://127.0.0.1:${appPort}/api/ws?clientId=${clientId}`, 'pi-desk.v1', {
+    headers: {
+      Cookie: cookies.cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ')
+    },
+    handshakeTimeout: 15_000
+  })
+  await once(driver, 'open')
+  await request('work-sessions/list')
+  await navigate(client, `http://127.0.0.1:${appPort}/`)
+  await wait(`${q(slotSelector)} !== null`, '工作台通知插槽', 60_000)
+  await stable()
+  closeTo((await layout()).slot.height, 0)
+  await read(
+    `document.querySelectorAll('nextjs-portal').forEach(element=>element.style.display='none'); document.documentElement.classList.remove('dark')`
+  )
+
+  await startFrames()
+  await publish('代码检查已完成', 'success')
+  await waitLatest('代码检查已完成')
+  await stable()
+  const fullHeight = (await layout()).slot.height
+  assertMotion(await stopFrames(), 0, fullHeight, '首条通知平滑入场')
+  await capture('desktop-collapsed')
+  await startFrames()
+  await click(`${latestSelector} button[title]`)
+  await wait(`${q(slotSelector)}.dataset.visible==='false'`, '最后一条删除')
+  await stable()
+  const exit = await stopFrames()
+  assertMotion(exit, fullHeight, 0, '最后一条平滑退场')
+  assert.ok(
+    exit.filter((f) => f.height > 2).every((f) => f.text.includes('代码检查已完成')),
+    '退场期间内容不能提前清空'
+  )
+  await wait(`${q(latestSelector)}===null`, '退场快照释放')
+
+  const old = await publish('即将删除的通知')
+  await waitLatest('即将删除的通知')
+  await invoke('delete', { notificationId: old.notificationId })
+  await wait(`${q(slotSelector)}.dataset.visible==='false'`, '快速删除已生效')
+  const active = await publish('新的工作区通知', 'success')
+  await waitLatest('新的工作区通知')
+  await stable()
+  closeTo((await layout()).slot.height, fullHeight)
+  assert.equal(await read(`${q(panelSelector)}.inert`), false)
+  checks.push('退场中新通知接管，无旧快照覆盖')
+
+  await publish('插件依赖已重新加载')
+  await publish('发布需要一次确认', 'warning')
+  await publish('最新构建完成，可以查看交付物', 'success', true)
+  await waitLatest('最新构建完成')
+  await stable()
+  const collapsed = await layout()
+  await move('[data-testid="sidebar-shortcuts"]')
+  await move(latestSelector)
+  await wait(`${q(panelSelector)}.dataset.expanded==='true'`, '桌面悬停展开')
+  await stable()
+  const expanded = await layout()
+  for (const key of ['slot', 'list', 'footer']) {
+    closeTo(expanded[key].height, collapsed[key].height)
+    closeTo(expanded[key].bottom, collapsed[key].bottom)
+  }
+  closeTo(expanded.panel.bottom, collapsed.panel.bottom)
+  assert.ok(expanded.panel.top < collapsed.panel.top)
+  await capture('desktop-expanded')
+  await move('[data-testid="sidebar-shortcuts"]')
+  await wait(`${q(panelSelector)}.dataset.expanded==='false'`, '移出收起')
+  await click(moreSelector)
+  await stable()
+  await move('[data-testid="sidebar-shortcuts"]')
+  assert.equal(await read(`${q(moreSelector)}.getAttribute('aria-expanded')`), 'true')
+  await client.send('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    key: 'Escape',
+    code: 'Escape',
+    windowsVirtualKeyCode: 27
+  })
+  await client.send('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'Escape',
+    code: 'Escape',
+    windowsVirtualKeyCode: 27
+  })
+  await wait(`${q(panelSelector)}.dataset.expanded==='false'`, 'Escape 收起')
+  checks.push('历史展开不挤压会话，悬停、点击保持和键盘收起通过')
+
+  await read(
+    `document.documentElement.classList.add('dark'); document.documentElement.style.fontSize='150%'`
+  )
+  await click(moreSelector)
+  await stable()
+  const scaled = await layout()
+  closeTo(scaled.slot.height, scaled.rootSize * 4.5)
+  assert.ok(scaled.panel.bottom <= scaled.footer.top)
+  assert.equal(await read(`document.documentElement.scrollWidth<=innerWidth`), true)
+  await capture('desktop-dark-large-text')
+  await click(moreSelector)
+  await read(
+    `document.documentElement.classList.remove('dark'); document.documentElement.style.removeProperty('font-size')`
+  )
+
+  await setViewport(client, 390, 844, true)
+  await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
+  touch = true
+  const showMenu = 'button[aria-label="显示工作会话菜单"]'
+  await wait(`${q(showMenu)}!==null`, '移动菜单入口')
+  await click(showMenu)
+  await stable()
+  await wait(
+    `${q('[data-testid="mobile-work-session-drawer"]')}.dataset.open==='true'`,
+    '侧栏已打开'
+  )
+  await capture('mobile-collapsed')
+  await click(moreSelector)
+  await wait(`${q(panelSelector)}.dataset.expanded==='true'`, '触控展开')
+  await stable()
+  await capture('mobile-expanded')
+  await click(`${latestSelector} button:not([title]):not([data-testid])`)
+  await wait(
+    `document.body.textContent.includes('通知事件已执行') && !${q(latestSelector)}.textContent.includes('最新构建完成')`,
+    '真实通知事件消费后删除'
+  )
+  checks.push('移动触控展开及真实事件消费删除通过')
+
+  await client.send('Emulation.setEmulatedMedia', {
+    features: [{ name: 'prefers-reduced-motion', value: 'reduce' }]
+  })
+  assert.equal(await read(`getComputedStyle(${q(slotSelector)}).transitionDuration`), '0s')
+  await invoke('delete', { notificationId: active.notificationId })
+  assert.equal(browserErrors.length, 0, JSON.stringify(browserErrors))
+  checks.push('150% 字号、明暗主题、减少动态效果、无页面异常通过')
+  console.log(JSON.stringify({ checks, evidence }, null, 2))
+} catch (error) {
+  failure = error
+  if (client) await capture('failure').catch(() => {})
+} finally {
+  const cleanupErrors = []
+  driver?.terminate()
+  client?.close()
+  for (const operation of [
+    () => stopBrowserTree(browser, cdpPort),
+    () => (serverRuntime ? stopE2eServerTree(serverRuntime) : undefined)
+  ]) {
+    try {
+      await operation()
+    } catch (error) {
+      cleanupErrors.push(error)
+    }
+  }
+  await mkdir(runRoot, { recursive: true })
+  await writeFile(join(runRoot, 'server.log'), serverOutput)
+  await writeFile(
+    join(runRoot, 'checks.json'),
+    JSON.stringify({ checks, evidence, failed: Boolean(failure) }, null, 2)
+  )
+  if (!failure && cleanupErrors.length === 0) {
+    await rm(join(runRoot, 'browser-profile'), { recursive: true, force: true })
+    await rm(piRoot, { recursive: true, force: true })
+    await rm(buildRoot, { recursive: true, force: true })
+    console.log('隔离服务与浏览器进程树已终止，端口已释放。截图待人工复核：' + runRoot)
+  }
+  if (failure || cleanupErrors.length)
+    throw new AggregateError(
+      [failure, ...cleanupErrors].filter(Boolean),
+      '通知验收失败；现场：' + runRoot
+    )
+}

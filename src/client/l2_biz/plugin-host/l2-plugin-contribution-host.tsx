@@ -1,6 +1,7 @@
 'use client'
 
-import { AlertTriangleIcon, LoaderCircleIcon, RefreshCwIcon } from 'lucide-react'
+import { AlertTriangleIcon, RefreshCwIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
@@ -247,7 +248,7 @@ export function L2PluginContributionHost({
               : 'absolute inset-0 justify-center bg-popover p-6'
           )}
         >
-          <LoaderCircleIcon className="mr-2 size-4 shrink-0 animate-spin" />
+          <L4LoadingSpinner className="mr-2 size-4 shrink-0" />
           <span className="min-w-0 truncate">{t('viewLoading')}</span>
         </div>
       ) : null}

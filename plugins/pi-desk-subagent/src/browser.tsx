@@ -11,6 +11,7 @@ import {
   PluginCard,
   PluginErrorBoundary,
   PluginScroll,
+  PluginSpinner,
   PluginSurface,
   useMessageDetail,
   useMessageHandle
@@ -34,8 +35,7 @@ button.subagent-message-header:hover{background:var(--pi-desk-plugin-muted,var(-
 .subagent-message-status-success{color:var(--status-success,var(--foreground))}
 .subagent-message-status-warning{color:var(--status-warning,var(--foreground))}
 .subagent-message-status-error{color:var(--pi-desk-plugin-destructive,var(--destructive))}
-.subagent-message-status-running::before{content:"";width:.625rem;height:.625rem;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:subagent-message-spin .8s linear infinite}
-.subagent-message-list .subagent-message-status-running::before{content:none;animation:none}
+.subagent-message-status-spinner{width:.875rem;height:.875rem;flex-shrink:0}
 .subagent-message-chevron{width:.875rem;height:.875rem;transition:transform .15s}
 .subagent-message-chevron[data-open="true"]{transform:rotate(180deg)}
 .subagent-message-task{grid-column:2/-1;display:flex;min-width:0;align-items:baseline;gap:.5rem}
@@ -59,9 +59,8 @@ button.subagent-message-header:hover{background:var(--pi-desk-plugin-muted,var(-
 .subagent-record-meta time{margin-left:auto;font-variant-numeric:tabular-nums}
 .subagent-records-scroll{max-height:min(24rem,55dvh)}
 .subagent-records-more{border-top:1px solid var(--pi-desk-plugin-border,var(--border));padding:.25rem .75rem}
-@keyframes subagent-message-spin{to{transform:rotate(360deg)}}
 @container(max-width:22rem){.subagent-message-task{flex-wrap:wrap}.subagent-message-title{flex-basis:100%}.subagent-message-id{font-size:.75rem}.subagent-record-head{gap:.5rem}}
-@media(prefers-reduced-motion:reduce){.subagent-message-status-running::before{animation:none;border-style:dotted}.subagent-message-chevron{transition:none}}
+@media(prefers-reduced-motion:reduce){.subagent-message-chevron{transition:none}}
 `
 
 type ViewKind = 'start' | 'return' | 'list' | 'control'
@@ -312,6 +311,9 @@ function SubagentMessage({
         <span className="subagent-message-action">{operation}</span>
       </span>
       <span className={`subagent-message-status subagent-message-status-${status.tone}`}>
+        {status.tone === 'running' && kind !== 'list' ? (
+          <PluginSpinner className="subagent-message-status-spinner" />
+        ) : null}
         <span>{status.label}</span>
         {expandable ? (
           <svg

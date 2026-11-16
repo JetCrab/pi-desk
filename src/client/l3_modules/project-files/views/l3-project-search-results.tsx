@@ -1,6 +1,7 @@
 'use client'
 
-import { ChevronRightIcon, LoaderCircleIcon, SearchIcon } from 'lucide-react'
+import { ChevronRightIcon, SearchIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useId, useState, type ReactElement, type ReactNode, type Ref } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
@@ -148,7 +149,7 @@ export function L3ProjectSearchResults({
             </div>
           ) : search.status === 'loading' ? (
             <div className="flex min-h-10 items-center gap-2 px-3 text-xs text-muted-foreground">
-              <LoaderCircleIcon className="size-3.5 animate-spin" />
+              <L4LoadingSpinner className="size-3.5" />
               {t('searching')}
             </div>
           ) : search.status === 'error' ? (

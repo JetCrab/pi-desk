@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import {
@@ -9,7 +10,6 @@ import {
   FileTextIcon,
   FolderIcon,
   GlobeIcon,
-  LoaderCircleIcon,
   PackageIcon,
   SearchIcon
 } from 'lucide-react'
@@ -126,7 +126,7 @@ function Directory({
               <FileCodeIcon className="size-3.5 shrink-0" />
             )}
             <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-            {opening && <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin" />}
+            {opening && <L4LoadingSpinner className="size-3.5 shrink-0" />}
           </Button>
         )
       })}
@@ -235,7 +235,7 @@ function Skill({
           )}
         </div>
         {pending ? (
-          <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+          <L4LoadingSpinner className="size-3.5 shrink-0 text-muted-foreground" />
         ) : skill.packageSource ? (
           <PackageIcon
             aria-label={t('packageSkill')}
@@ -316,7 +316,7 @@ function Scope({
           )}
         </div>
         {state?.loading ? (
-          <LoaderCircleIcon className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+          <L4LoadingSpinner className="size-3.5 shrink-0 text-muted-foreground" />
         ) : state?.data ? (
           <span className="text-xs tabular-nums text-muted-foreground">
             {query ? skills.length : state.data.skills.length}

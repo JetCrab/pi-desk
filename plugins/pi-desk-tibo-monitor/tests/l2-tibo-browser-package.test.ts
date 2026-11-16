@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { readFile, readdir } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { dirname, join, relative, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
+import { build } from 'esbuild'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -28,7 +29,7 @@ test('环境归档分别声明Tibo配置与可选业务历史', async () => {
 
 // 曾因 TypeScript 允许、但 Host Runtime 未导出的 ReactDOM API 导致通知 Chunk 无法加载。
 test('轻量 Entry 和 Lazy Chunk 只使用真实 Host Runtime 提供的模块与导出', async () => {
-  const browser = join(root, 'dist', 'browser')
+  const browser = resolve(root, '../../temp/build/tibo-browser-contract/in-memory')
   const hostFiles = [
     fileURLToPath(import.meta.resolve('@jetcrab/pi-desk-sdk/host-runtime/base.js')),
     join(root, '..', 'pi-desk-sdk', 'dist', 'host-runtime', 'base.js')
@@ -66,10 +67,26 @@ test('轻量 Entry 和 Lazy Chunk 只使用真实 Host Runtime 提供的模块�
     'react-dom/client',
     '@jetcrab/pi-desk-sdk/react/base'
   ])
-  const paths = (await readdir(browser, { recursive: true })).filter((path) => path.endsWith('.js'))
-  assert.ok(paths.length > 1, 'Browser 必须保持懒加载')
-  for (const path of paths) {
-    const text = await readFile(join(browser, path), 'utf8')
+  const result = await build({
+    entryPoints: [join(root, 'src', 'l2-browser-entry.ts')],
+    bundle: true,
+    splitting: true,
+    format: 'esm',
+    platform: 'browser',
+    target: 'es2022',
+    minify: true,
+    define: { 'process.env.NODE_ENV': '"production"' },
+    external: [...allowed],
+    outdir: browser,
+    entryNames: 'entry',
+    chunkNames: 'chunks/[name]-[hash]',
+    write: false
+  })
+  const files = result.outputFiles.filter((file) => file.path.endsWith('.js'))
+  assert.ok(files.length > 1, 'Browser 必须保持懒加载')
+  for (const output of files) {
+    const path = relative(browser, output.path)
+    const text = output.text
     if (path === 'entry.js') assert.ok(Buffer.byteLength(text) < 20 * 1024)
     const file = ts.createSourceFile(path, text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS)
     for (const node of file.statements) {

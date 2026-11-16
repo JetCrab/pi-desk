@@ -8,12 +8,12 @@ import {
   FolderOpenIcon,
   GitBranchIcon,
   Globe2Icon,
-  LoaderCircleIcon,
   PlusIcon,
   RefreshCwIcon
 } from 'lucide-react'
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import type { L2WorkSessionGitBranchTarget } from '@common/l2_biz/work-session/l2-work-session-git-contract'
 import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
@@ -361,9 +361,11 @@ export function L2GitBranchPicker({
             disabled={workspace?.heads.status === 'loading'}
             onClick={() => void runtime.refreshHeads(target.cwd)}
           >
-            <RefreshCwIcon
-              className={cn('size-4', workspace?.heads.status === 'loading' && 'animate-spin')}
-            />
+            {workspace?.heads.status === 'loading' ? (
+              <L4LoadingSpinner className="size-4" />
+            ) : (
+              <RefreshCwIcon className="size-4" />
+            )}
           </Button>
           <Button type="button" size="sm" variant="ghost" onClick={onClose}>
             {t('close')}
@@ -485,9 +487,7 @@ export function L2GitBranchPicker({
                       size="sm"
                       disabled={!newBranchName.trim() || operationPending}
                     >
-                      {operationPending ? (
-                        <LoaderCircleIcon className="size-3.5 animate-spin" />
-                      ) : null}
+                      {operationPending ? <L4LoadingSpinner className="size-3.5" /> : null}
                       {t('createAndSwitch')}
                     </Button>
                     <Button
@@ -519,7 +519,7 @@ export function L2GitBranchPicker({
                   </p>
                 ) : branches?.status === 'loading' && !branchData ? (
                   <div className="flex min-h-24 items-center justify-center gap-2 text-xs text-muted-foreground">
-                    <LoaderCircleIcon className="size-4 animate-spin" /> {t('loadingBranches')}
+                    <L4LoadingSpinner className="size-4" /> {t('loadingBranches')}
                   </div>
                 ) : branches?.status === 'error' ? (
                   <div className="flex min-h-24 flex-col items-center justify-center gap-2 text-center text-xs text-destructive">

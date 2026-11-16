@@ -1266,12 +1266,46 @@ input[type='checkbox']:focus-visible {
   padding-top: 16px;
   margin-top: 8px;
 }
-.spinning {
-  animation: spin 900ms linear infinite;
+.loading-spinner > circle {
+  opacity: 0.15;
+  transform: scale(0.6);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: matrix-wave 1.2s ease-in-out infinite;
 }
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
+.loading-spinner > circle:nth-child(2),
+.loading-spinner > circle:nth-child(4) {
+  animation-delay: 0.1s;
+}
+.loading-spinner > circle:nth-child(3),
+.loading-spinner > circle:nth-child(5),
+.loading-spinner > circle:nth-child(7) {
+  animation-delay: 0.2s;
+}
+.loading-spinner > circle:nth-child(6),
+.loading-spinner > circle:nth-child(8) {
+  animation-delay: 0.3s;
+}
+.loading-spinner > circle:nth-child(9) {
+  animation-delay: 0.4s;
+}
+@keyframes matrix-wave {
+  0%,
+  60%,
+  100% {
+    opacity: 0.15;
+    transform: scale(0.6);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loading-spinner > circle {
+    animation: none;
+    opacity: 1;
+    transform: none;
   }
 }
 @keyframes blink {

@@ -246,14 +246,6 @@
   color: var(--muted-foreground);
   font-size: 0.875rem;
 }
-.spinner {
-  animation: spin 1.2s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 @container stage (min-width:640px) {
   .desk > aside {
     display: flex;
@@ -291,10 +283,5 @@
   }
   .taskRow > svg:last-child {
     display: block;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation: none;
   }
 }

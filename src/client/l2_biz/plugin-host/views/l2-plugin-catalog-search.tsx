@@ -172,9 +172,11 @@ export function L2PluginCatalogSearch(props: CatalogSearchProps): React.JSX.Elem
                     >
                       {item.name}
                     </Button>
-                    <span className="text-xs text-muted-foreground">
-                      v{healthy && plugin.version ? plugin.version : item.version}
-                    </span>
+                    {(healthy ? plugin.version : item.version) ? (
+                      <span className="text-xs text-muted-foreground">
+                        v{healthy ? plugin.version : item.version}
+                      </span>
+                    ) : null}
                     {healthy && plugin.updateAvailable ? (
                       <span className="rounded-md bg-status-success/10 px-2 py-0.5 text-xs font-medium text-status-success">
                         {plugin.availableVersion

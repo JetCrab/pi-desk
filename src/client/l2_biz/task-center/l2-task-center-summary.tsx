@@ -2,16 +2,10 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  ArrowUpRightIcon,
-  CheckIcon,
-  CircleStopIcon,
-  LoaderCircleIcon,
-  OctagonAlertIcon
-} from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
+import { CheckIcon, CircleStopIcon, OctagonAlertIcon } from 'lucide-react'
 import { PluginStatusCapsule } from '@jetcrab/pi-desk-sdk/react/base'
 import type { L2TaskSummary } from '@common/l2_biz/task-center/l2-task-center-contract'
-import { Button } from '@client/l4_foundation/ui/shadcn/button'
 
 const STATUS_LABELS = {
   running: 'statusRunning',
@@ -30,8 +24,7 @@ const STATUS_COLORS = {
 } as const
 
 function StatusIcon({ task }: { task: L2TaskSummary }): React.JSX.Element {
-  if (task.status === 'running')
-    return <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" />
+  if (task.status === 'running') return <L4LoadingSpinner className="size-4" />
   if (task.status === 'completed') return <CheckIcon className="size-4 text-status-success" />
   if (task.status === 'stopped') return <CircleStopIcon className="size-4 text-muted-foreground" />
   return <OctagonAlertIcon className={`size-4 ${STATUS_COLORS[task.status]}`} />
@@ -93,18 +86,6 @@ export function L2TaskCenterSummary({
       meta={highlighted && running.length === 1 ? t('statusRunning') : undefined}
     >
       <div className="p-4" data-testid="task-capsule-preview">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="text-sm font-semibold">{t('title')}</h3>
-            <span className="text-xs text-muted-foreground">
-              {t('recordCount', { count: tasks.length })}
-            </span>
-          </div>
-          <Button type="button" variant="ghost" size="sm" onClick={() => showTask()}>
-            {t('open')}
-            <ArrowUpRightIcon />
-          </Button>
-        </div>
         <div className="space-y-1">
           {preview.map((task) => (
             <button

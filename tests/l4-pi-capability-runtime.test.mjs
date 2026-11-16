@@ -40,7 +40,7 @@ function tool(name) {
   }
 }
 
-async function createSession(root, readMode, readToolName = () => 'fixture_tool') {
+async function createSession(root, readMode, readToolName = () => 'fixture_tool', options = {}) {
   const cwd = join(root, 'project')
   const agentDir = join(root, 'agent')
   await mkdir(join(cwd, '.pi', 'skills', 'allowed'), { recursive: true })
@@ -57,7 +57,7 @@ async function createSession(root, readMode, readToolName = () => 'fixture_tool'
   )
   await mkdir(join(agentDir, 'sessions'), { recursive: true })
 
-  const capability = new L4PiCapabilityRuntime(readMode)
+  const capability = new L4PiCapabilityRuntime(readMode, options.readAppend)
   const pluginCalls = []
   const lateTools = []
   const inputCalls = []
@@ -67,8 +67,9 @@ async function createSession(root, readMode, readToolName = () => 'fixture_tool'
       name: 'capability-fixture',
       factory: (pi) => {
         registerTool = (definition) => pi.registerTool(definition)
-        bindSessionPlugin(pi, 'fixture').onCapabilitiesChange((rules) => {
+        bindSessionPlugin(pi, 'fixture').onCapabilitiesChange(async (rules) => {
           pluginCalls.push(rules)
+          await options.onRules?.(rules)
         })
         pi.registerTool(tool(readToolName()))
         pi.on('session_start', () => {
@@ -141,6 +142,119 @@ async function createSession(root, readMode, readToolName = () => 'fixture_tool'
     resourceLoader: session.resourceLoader
   }
 }
+
+function deferred() {
+  let resolvePromise
+  const promise = new Promise((resolve) => {
+    resolvePromise = resolve
+  })
+  return { promise, resolve: resolvePromise }
+}
+
+test('真实能力消费者串行处理任务正文与UI切换，旧读取和旧异步回调不覆盖新规则', async (context) => {
+  const root = resolve('temp/pi/l4-pi-capability-runtime', `prompt-order-${randomUUID()}`)
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const reading = deferred()
+  const releaseRead = deferred()
+  const callbackStarted = deferred()
+  const releaseCallback = deferred()
+  let holdRead = false
+  let append = 'INITIAL_APPEND'
+  let mode = limitedMode()
+  const applied = []
+  const runtime = await createSession(root, () => mode, undefined, {
+    readAppend: async () => {
+      const value = append
+      if (holdRead) {
+        holdRead = false
+        reading.resolve()
+        await releaseRead.promise
+      }
+      return value
+    },
+    onRules: async (rules) => {
+      if (rules.appendSystemPrompt === 'TASK_APPEND') {
+        callbackStarted.resolve()
+        await releaseCallback.promise
+      }
+      applied.push(rules)
+    }
+  })
+  context.after(() => {
+    releaseRead.resolve()
+    releaseCallback.resolve()
+    runtime.capability.dispose()
+    runtime.session.dispose()
+  })
+  holdRead = true
+  append = 'TASK_APPEND'
+  const task = runtime.capability.readAppendForTask()
+  await reading.promise
+  mode = { name: 'UI mode', tools: { allow: ['write'] }, skills: { allow: ['blocked'] } }
+  append = 'UI_APPEND'
+  const update = runtime.capability.apply()
+  releaseRead.resolve()
+  await callbackStarted.promise
+  assert.deepEqual(runtime.session.getActiveToolNames(), ['read', 'fixture_tool'])
+  assert.equal(runtime.pluginCalls.length, 2)
+  releaseCallback.resolve()
+  assert.equal(await task, 'TASK_APPEND')
+  await update
+  assert.deepEqual(
+    applied.map((rules) => rules.appendSystemPrompt),
+    ['INITIAL_APPEND', 'TASK_APPEND', 'UI_APPEND']
+  )
+  assert.deepEqual(applied.at(-1).tools, { allow: ['write'] })
+  assert.deepEqual(runtime.session.getActiveToolNames(), ['write'])
+  assert.deepEqual(
+    runtime.resourceLoader.getSkills().skills.map((skill) => skill.name),
+    ['blocked']
+  )
+  assert.equal(await runtime.capability.readAppendForTask(), 'UI_APPEND')
+  assert.equal(runtime.pluginCalls.length, 3)
+})
+
+test('真实AgentSession重载后丢弃未完成的旧正文读取，不通知新生命周期的消费者', async (context) => {
+  const root = resolve('temp/pi/l4-pi-capability-runtime', `prompt-reload-${randomUUID()}`)
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const reading = deferred()
+  const releaseRead = deferred()
+  let holdRead = false
+  let append = 'INITIAL_APPEND'
+  const runtime = await createSession(root, () => undefined, undefined, {
+    readAppend: async () => {
+      const value = append
+      if (holdRead) {
+        holdRead = false
+        reading.resolve()
+        await releaseRead.promise
+      }
+      return value
+    }
+  })
+  context.after(() => {
+    releaseRead.resolve()
+    runtime.capability.dispose()
+    runtime.session.dispose()
+  })
+  holdRead = true
+  append = 'STALE_APPEND'
+  const staleRead = runtime.capability.readAppendForTask()
+  const staleRejected = assert.rejects(staleRead, /Pi 会话实例已失效/)
+  await reading.promise
+  await runtime.session.reload()
+  append = 'RELOADED_APPEND'
+  const update = runtime.capability.apply()
+  releaseRead.resolve()
+  await staleRejected
+  await update
+  assert.deepEqual(
+    runtime.pluginCalls.map((rules) => rules.appendSystemPrompt),
+    ['INITIAL_APPEND', 'RELOADED_APPEND']
+  )
+  assert.equal(await runtime.capability.readAppendForTask(), 'RELOADED_APPEND')
+  assert.equal(runtime.pluginCalls.length, 2)
+})
 
 function limitedMode() {
   return {

@@ -1,8 +1,8 @@
 'use client'
 
-import { LoaderCircle } from 'lucide-react'
 import { useReducedMotion } from 'motion/react'
 import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import type { ShowcaseSceneProps } from '../../l2-showcase-story'
 import { DemoDevices } from '../l2-demo-devices'
 import { AssistantMessage, Chat, Composer, Desk, ProcessRow, UserMessage } from '../l2-demo-ui'
@@ -93,7 +93,7 @@ function SyncDevice({
           {(step === 1 || step === 4) && (
             <ProcessRow>
               <span className={styles.working} data-guide-target="sync-working">
-                <LoaderCircle size={14} />
+                <L4LoadingSpinner size={14} />
                 正在处理这条要求
               </span>
             </ProcessRow>

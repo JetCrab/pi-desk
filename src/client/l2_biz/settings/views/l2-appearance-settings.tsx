@@ -41,7 +41,7 @@ export function L2AppearanceSettings(): React.JSX.Element {
 
   return (
     <section aria-labelledby="settings-appearance-title" className="@container grid gap-6">
-      <h2 id="settings-appearance-title" className="text-xl font-semibold">
+      <h2 id="settings-appearance-title" className="text-xl font-semibold sm:sr-only">
         {t('appearance')}
       </h2>
       <div className="grid min-w-0 gap-6 @min-[40rem]:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">

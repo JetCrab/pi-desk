@@ -6,14 +6,11 @@ import type {
   BrowserSettingsPageTarget
 } from '@jetcrab/pi-desk-sdk/browser'
 import {
-  PluginActionRow,
+  PluginButton,
   PluginConfirmDialog,
   PluginErrorBoundary,
   PluginLoadingState,
-  PluginPanelHeader,
-  PluginSurface,
-  PluginTab,
-  PluginTabList
+  PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
 import { tiboText } from './l4-tibo-locale.js'
 import { useTiboRegion, useTiboPage, useTiboPost } from './l2-browser-hooks.js'
@@ -56,47 +53,39 @@ function Settings({
   return (
     <PluginSurface className="tibo-page">
       <style>{TIBO_STYLES}</style>
-      <PluginPanelHeader
-        title={tiboText(region, 'Tibo 动态', 'Tibo posts')}
-        density="compact"
-        actions={
-          <PluginActionRow align="end" style={{ maxWidth: '50cqw' }}>
-            <PluginTabList label={tiboText(region, 'Tibo 页面', 'Tibo pages')}>
-              <PluginTab
-                active={state.view === 'posts'}
-                disabled={!state.snapshot || state.saving}
-                onClick={() => void state.showPosts()}
-              >
-                {tiboText(region, '动态', 'Posts')}
-              </PluginTab>
-              <PluginTab
-                active={state.view === 'settings'}
-                disabled={!state.snapshot || state.saving}
-                onClick={state.showSettings}
-              >
-                {tiboText(region, '设置', 'Settings')}
-              </PluginTab>
-            </PluginTabList>
-            <a
-              href="https://pidesk.dev/docs/tibo/"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                minHeight: '2rem',
-                color: 'var(--muted-foreground)',
-                fontSize: '.875rem',
-                whiteSpace: 'nowrap',
-                textDecoration: 'underline',
-                textUnderlineOffset: '.2em'
-              }}
+      <header className="tibo-page-header">
+        {state.view === 'settings' ? (
+          <div className="tibo-header-context">
+            <PluginButton
+              variant="ghost"
+              disabled={state.saving}
+              onClick={() => void state.showPosts()}
             >
-              {tiboText(region, '使用说明 ↗', 'Usage guide ↗')}
-            </a>
-          </PluginActionRow>
-        }
-      />
+              {tiboText(region, '← 返回动态', '← Back to posts')}
+            </PluginButton>
+            <h2 className="tibo-page-title">{tiboText(region, 'Tibo 设置', 'Tibo settings')}</h2>
+          </div>
+        ) : (
+          <h2 className="tibo-page-title tibo-root-title">
+            {tiboText(region, 'Tibo 动态', 'Tibo posts')}
+          </h2>
+        )}
+        <div className="tibo-header-actions">
+          {state.view === 'posts' ? (
+            <PluginButton variant="ghost" onClick={state.showSettings}>
+              {tiboText(region, '设置', 'Settings')}
+            </PluginButton>
+          ) : null}
+          <a
+            className="tibo-guide"
+            href="https://pidesk.dev/docs/tibo/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {tiboText(region, '使用说明 ↗', 'Usage guide ↗')}
+          </a>
+        </div>
+      </header>
       <PluginLoadingState
         loading={state.loading && !state.snapshot}
         error={!state.snapshot ? state.error : null}
@@ -104,7 +93,9 @@ function Settings({
         loadingLabel={tiboText(region, '正在加载…', 'Loading…')}
         retryLabel={tiboText(region, '重新加载', 'Reload')}
       >
-        {state.view === 'settings' ? <TiboSettingsView state={state} region={region} /> : null}
+        {state.view === 'settings' || state.view === 'setup' ? (
+          <TiboSettingsView state={state} region={region} />
+        ) : null}
         {state.view === 'posts' && state.snapshot ? (
           <TiboFeedView
             snapshot={state.snapshot}
@@ -112,7 +103,6 @@ function Settings({
             selectedId={selected?.id ?? null}
             error={state.error}
             onSelectPost={setSelectedId}
-            onSettings={state.showSettings}
           >
             {selected ? (
               <PostPreview key={selected.id} host={host} signal={signal} post={selected} />

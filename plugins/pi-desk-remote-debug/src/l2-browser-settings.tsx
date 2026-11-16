@@ -42,8 +42,8 @@ function Settings({
   return (
     <PluginSurface className="remote-debug-settings" data-remote-debug-settings="">
       <style>{REMOTE_DEBUG_LAYOUT}</style>
-      <div className="remote-debug-heading">
-        <h2>远程调试</h2>
+      <div className="remote-debug-heading remote-debug-settings-heading">
+        <h2 className="remote-debug-settings-title">远程调试</h2>
         <div className="remote-debug-actions">
           <a
             href="https://pidesk.dev/docs/remote-debug/"

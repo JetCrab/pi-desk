@@ -70,6 +70,8 @@ plugin.push('changed', {})
 
 Node `plugin.setState()` 则整体替换自身全局状态；Browser 通过 `host.globalState.getSnapshot()/subscribe()` 只读。两者不是同一槽位，均不得读写其他插件状态。宿主地区设置由 `host.settings.getSnapshot()/subscribe()` 只读，不另存权威副本。
 
+独立创建子会话的插件通过 `onCapabilitiesChange(handler)` 接收能力规则。除 `tools`、`skills` 和自身 `capabilities` 外，宿主可提供解析后的 `appendSystemPrompt`：空字符串表示不追加，缺失保持旧宿主行为。子会话应保留自己的角色指令并采用这份正文，不自行重读全局提示词而破坏模式覆盖。父任务读取到正文变化时也会等待回调更新；回调不得等待当前 Agent 任务结束。追加内容按 `before_agent_start` 的独立任务取快照；同任务的工具续轮、steering 和 follow-up 保持快照。类型以 `/capabilities` 和 `/session` 声明为准。
+
 ### 配置与凭据（Node）
 
 Node Entry 的 `setup(plugin)` 和原生扩展的 `bindSessionPlugin()` 均提供已绑定插件身份的 `plugin.config`。插件不传任意文件路径或密钥，不重复传插件名。宿主使用 `pi-desk.<功能分组>`，插件使用 `plugins.<plugin.name>`。原生绑定可独立运行，不要求常驻 Global Host；Browser 通过插件 Method 操作，不直接访问配置文件。

@@ -18,9 +18,6 @@
   align-items: center;
   gap: 8px;
 }
-.working svg {
-  animation: working 1.2s linear infinite;
-}
 .application {
   width: 100%;
   min-height: 180px;
@@ -105,21 +102,11 @@
   font-size: 0.875rem;
   line-height: 1.7;
 }
-@keyframes working {
-  to {
-    transform: rotate(360deg);
-  }
-}
 @container stage (min-width:640px) {
   .desk > aside {
     display: flex;
     width: 28%;
     min-width: 220px;
     max-width: 300px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .working svg {
-    animation: none;
   }
 }

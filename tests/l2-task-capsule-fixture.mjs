@@ -177,7 +177,7 @@ export async function checkTaskCapsule({ client, viewport, settle, results, runR
   await evaluate(client, 'window.__setCapsuleTasks(3)')
   await waitFor(
     client,
-    'document.querySelector("[data-testid=task-capsule-preview]")?.textContent.includes("3 条执行记录")',
+    'document.querySelector("[data-testid=task-capsule-preview]")?.querySelectorAll("button").length === 3',
     '预览中的并行任务实时增加'
   )
   await evaluate(client, 'window.__setCapsuleTasks(2)')
@@ -212,20 +212,17 @@ export async function checkTaskCapsule({ client, viewport, settle, results, runR
     `(() => {
     const preview = document.querySelector('[data-testid=task-capsule-preview]');
     const buttons = [...preview.querySelectorAll('button')];
-    const open = buttons.find(button => button.textContent.includes('打开任务中心'));
-    const heading = preview.querySelector('h3').getBoundingClientRect();
-    const action = open.getBoundingClientRect();
     const probe = document.createElement('span');
     probe.style.background = 'var(--popover)'; document.body.append(probe);
     const expected = getComputedStyle(probe).backgroundColor; probe.remove();
-    return { counts: buttons.filter(button => !button.textContent.includes('打开任务中心')).map(button => button.textContent.match(/执行中/g)?.length ?? 0),
-      topRight: action.left > heading.right && action.top < heading.bottom,
+    return { counts: buttons.map(button => button.textContent.match(/执行中/g)?.length ?? 0),
+      headerAbsent: !preview.textContent.includes('任务中心') && !preview.textContent.includes('执行记录'),
       background: getComputedStyle(document.querySelector('[data-slot=status-capsule-popup]')).backgroundColor,
       expected, title: document.querySelector('[data-slot=status-capsule-trigger]').getAttribute('title') };
   })()`
   )
   assert.deepEqual(presentation.counts, [1, 1], '任务状态被重复展示')
-  assert.equal(presentation.topRight, true, '任务入口不在右上角')
+  assert.equal(presentation.headerAbsent, true, '任务浮层仍有顶部标题、记录数或打开入口')
   assert.equal(presentation.background, presentation.expected, '胶囊未采用主题面板色')
   assert.equal(presentation.title, null, '胶囊仍有多余原生悬浮提示')
   results.push({ label: `${prefix}主题与去重`, presentation })

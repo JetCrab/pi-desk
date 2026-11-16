@@ -1,6 +1,7 @@
 'use client'
 
-import { AlertTriangleIcon, LoaderCircleIcon, RefreshCwIcon } from 'lucide-react'
+import { AlertTriangleIcon, RefreshCwIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import {
   createContext,
   useContext,
@@ -63,7 +64,7 @@ function publicSnapshot(message: L3ConversationDisplayMessage): PublicMessageSna
   }
 }
 
-class L3ConversationBrowserMessageHandle implements BrowserMessageHandle {
+export class L3ConversationBrowserMessageHandle implements BrowserMessageHandle {
   private snapshot: PublicMessageSnapshot
   private loader: L3ConversationPluginDetailLoader
   private message: L3ConversationDisplayMessage
@@ -128,6 +129,7 @@ class L3ConversationBrowserMessageHandle implements BrowserMessageHandle {
     if (this.snapshot === next) return
     const projectionChanged =
       this.basic !== basic ||
+      this.snapshot.fixed.hasDetail !== next.fixed.hasDetail ||
       (this.snapshot.detail !== undefined && next.detail === undefined) ||
       this.snapshot.fixed.viewKey !== next.fixed.viewKey ||
       ('entryId' in this.snapshot.location &&
@@ -259,7 +261,7 @@ function MessageErrorView({
                       .finally(() => setLoading(false))
                   }}
                 >
-                  {loading ? <LoaderCircleIcon className="animate-spin" /> : null}
+                  {loading ? <L4LoadingSpinner /> : null}
                   {t('loadDetail')}
                 </Button>
               ) : null}
@@ -288,7 +290,7 @@ function MessageErrorView({
                     .finally(() => setRecovering(false))
                 }}
               >
-                {recovering ? <LoaderCircleIcon className="animate-spin" /> : null}
+                {recovering ? <L4LoadingSpinner /> : null}
                 {t('useBasicPresentation')}
               </Button>
             ) : null}
@@ -310,7 +312,7 @@ function MessageErrorView({
                     .finally(() => setRetrying(false))
                 }}
               >
-                {retrying ? <LoaderCircleIcon className="animate-spin" /> : <RefreshCwIcon />}
+                {retrying ? <L4LoadingSpinner /> : <RefreshCwIcon />}
                 {t('retry')}
               </Button>
             ) : null}
@@ -330,7 +332,7 @@ function MessagePendingView({
   return (
     <div className="rounded-lg border bg-muted/30 p-3 text-sm" aria-busy="true">
       <div className="flex items-center gap-2 text-muted-foreground" role="status">
-        <LoaderCircleIcon className="size-4 animate-spin" />
+        <L4LoadingSpinner className="size-4" />
         {t('viewLoading')}
       </div>
       <details className="mt-2">

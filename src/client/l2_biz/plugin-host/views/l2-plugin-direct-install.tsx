@@ -20,10 +20,12 @@ import {
   SelectTrigger,
   SelectValue
 } from '@client/l4_foundation/ui/shadcn/select'
+import type { L2PluginDevAvailability } from '../hooks/l2-use-plugin-dev-availability'
 import { L2PluginManagementChannel } from './l2-plugin-management-channel'
 import { L2PluginDownloadSourceSelector } from './l2-plugin-download-source'
 
 interface DirectInstallProps {
+  dev: L2PluginDevAvailability
   source: string
   isNpm: boolean
   multiple: boolean
@@ -83,6 +85,7 @@ export function L2PluginDirectInstall(props: DirectInstallProps): React.JSX.Elem
                 <span>{t('installChannel')}</span>
                 <L2PluginManagementChannel
                   value={props.tag}
+                  dev={props.dev}
                   label={t('installChannel')}
                   placeholder={t('defaultChannel')}
                   disabled={props.pending}
@@ -172,7 +175,13 @@ export function L2PluginDirectInstall(props: DirectInstallProps): React.JSX.Elem
       ) : null}
       <Button
         size="sm"
-        disabled={props.disabled || props.loading || props.pending || !props.source.trim()}
+        disabled={
+          props.disabled ||
+          props.loading ||
+          props.pending ||
+          !props.source.trim() ||
+          (props.tag === 'dev' && !props.dev.version)
+        }
         onClick={props.onInstall}
       >
         {t(props.pending ? 'installing' : props.multiple ? 'batchInstall' : 'install')}

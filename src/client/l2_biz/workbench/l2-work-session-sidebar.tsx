@@ -22,7 +22,6 @@ import {
   FolderTreeIcon,
   FolderSearchIcon,
   ExternalLinkIcon,
-  LoaderCircleIcon,
   MessageSquareTextIcon,
   PinIcon,
   PinOffIcon,
@@ -37,6 +36,7 @@ import {
   Trash2Icon
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import {
   memo,
   useCallback,
@@ -655,7 +655,7 @@ const SortableWorkSessionRow = memo(function SortableWorkSessionRow({
           disabled={actionsDisabled || deleting || syncing}
           onClick={() => onReloadChat(workSession)}
         >
-          {syncing ? <LoaderCircleIcon className="animate-spin" /> : <RefreshCwIcon />}
+          {syncing ? <L4LoadingSpinner /> : <RefreshCwIcon />}
           {t('reloadChatData')}
         </ContextMenuItem>
         <ContextMenuItem
@@ -837,11 +837,7 @@ function L2WorkSessionSidebarComponent({
               key: 'refresh-files',
               label: t('refreshFiles'),
               disabled: !canBrowseFiles || fileRefreshLoading,
-              icon: fileRefreshLoading ? (
-                <LoaderCircleIcon className="animate-spin" />
-              ) : (
-                <RefreshCwIcon />
-              ),
+              icon: fileRefreshLoading ? <L4LoadingSpinner /> : <RefreshCwIcon />,
               busy: fileRefreshLoading,
               testId: 'project-files-refresh',
               onSelect: onRefreshFiles
@@ -850,11 +846,7 @@ function L2WorkSessionSidebarComponent({
         : pluginHeaderActions.map((action, index) => ({
             key: String(index),
             label: action.label,
-            icon: action.busy ? (
-              <LoaderCircleIcon className="animate-spin" />
-            ) : (
-              <L4PluginIcon icon={action.icon} />
-            ),
+            icon: action.busy ? <L4LoadingSpinner /> : <L4PluginIcon icon={action.icon} />,
             disabled: action.disabled || action.busy,
             busy: action.busy,
             onSelect: () => {
@@ -1109,7 +1101,7 @@ function L2WorkSessionSidebarComponent({
           >
             {search.loading ? (
               <p className="flex items-center justify-center gap-2">
-                <LoaderCircleIcon className="size-4 animate-spin" />
+                <L4LoadingSpinner className="size-4" />
                 {t('searchingSessions')}
               </p>
             ) : search.error ? (

@@ -1,13 +1,8 @@
 'use client'
 
-import {
-  CodeIcon,
-  LoaderCircleIcon,
-  MoreHorizontalIcon,
-  RefreshCwIcon,
-  SaveIcon
-} from 'lucide-react'
+import { CodeIcon, MoreHorizontalIcon, RefreshCwIcon, SaveIcon } from 'lucide-react'
 import { useState } from 'react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useTranslation } from 'react-i18next'
 import type { BrowserBeforeLeaveHandler } from '@jetcrab/pi-desk-sdk/browser'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
@@ -19,12 +14,10 @@ import { useL2ModelSettings, type ModelSettingsTab } from '../hooks/l2-use-model
 import { L2ModelNativeDialog } from './l2-model-native-dialog'
 import { L2ModelPresetSettings } from './l2-model-preset-settings'
 import { L2ModelProviderSettings } from './l2-model-provider-settings'
-import { L2ProjectModelDefaultSettings } from './l2-project-model-default-settings'
 
 const MODEL_SETTINGS_TABS: Array<{ value: ModelSettingsTab; label: string }> = [
   { value: 'providers', label: 'modelProviders' },
-  { value: 'presets', label: 'modelPresets' },
-  { value: 'project-default', label: 'projectDefault' }
+  { value: 'presets', label: 'modelPresets' }
 ]
 
 function ModelSettingsPlaceholder({
@@ -41,7 +34,7 @@ function ModelSettingsPlaceholder({
     <div className="flex min-h-72 flex-col items-center justify-center gap-3 p-5 text-sm text-muted-foreground">
       {loading ? (
         <span className="flex items-center gap-2">
-          <LoaderCircleIcon className="size-4 animate-spin" /> {t('loadingModels')}
+          <L4LoadingSpinner className="size-4" /> {t('loadingModels')}
         </span>
       ) : (
         <>
@@ -99,7 +92,6 @@ export function L2ModelSettingsView({
     catalogUpdatedAt,
     loadError,
     dialog,
-    setProjectDefaultDirty,
     changeProviders,
     changePresets,
     selectTab,
@@ -146,7 +138,7 @@ export function L2ModelSettingsView({
             onClick={refreshCatalog}
             disabled={refreshing}
           >
-            <RefreshCwIcon className={cn(refreshing && 'animate-spin')} />
+            {refreshing ? <L4LoadingSpinner /> : <RefreshCwIcon />}
             {refreshing ? t('refreshingCatalog') : t('refreshCatalog')}
           </Button>
         </div>
@@ -201,13 +193,7 @@ export function L2ModelSettingsView({
           tab === 'presets' ? 'overflow-y-auto' : 'overflow-hidden'
         )}
       >
-        {tab === 'project-default' ? (
-          <L2ProjectModelDefaultSettings
-            biz={biz}
-            presets={settings?.presets ?? []}
-            onDirtyChange={setProjectDefaultDirty}
-          />
-        ) : !settings ? (
+        {!settings ? (
           <ModelSettingsPlaceholder loading={loading} error={loadError} onRetry={retry} />
         ) : null}
         {settings ? (
@@ -244,7 +230,7 @@ export function L2ModelSettingsView({
           </>
         ) : null}
       </div>
-      {tab !== 'project-default' && settings ? (
+      {settings ? (
         <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t bg-card px-4 py-3">
           <span
             className={cn('text-xs text-muted-foreground', formInvalid && 'text-destructive')}
@@ -272,7 +258,7 @@ export function L2ModelSettingsView({
               onClick={saveConfig}
               disabled={saving || !formDirty || formInvalid || serviceDirty}
             >
-              {saving ? <LoaderCircleIcon className="animate-spin" /> : <SaveIcon />}
+              {saving ? <L4LoadingSpinner /> : <SaveIcon />}
               {saving ? t('savingModels') : t('saveModels')}
             </Button>
           </div>

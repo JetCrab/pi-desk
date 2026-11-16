@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { L2ChatSource } from '../src/common/l2_biz/chat/l2-chat-contract'
+import { L2_EMPTY_CHAT_SOURCE_STATE } from '../src/common/l2_biz/chat/l2-chat-state'
+import type { L2ChatSourceEvent } from '../src/common/l2_biz/chat/l2-chat-websocket-contract'
+import type { L2WorkSessionStatus } from '../src/common/l2_biz/work-session/l2-work-session-contract'
 import type { L2WorkbenchBiz } from '../src/client/l2_biz/workbench/l2-workbench-biz'
 import type { L2WorkbenchChatRuntime } from '../src/client/l2_biz/workbench/l2-workbench-chat'
 import { createL2WorkbenchChatInputRuntime } from '../src/client/l2_biz/workbench/l2-workbench-chat-input-runtime'
@@ -72,12 +75,36 @@ function createFixture(input: L2WorkbenchStoredInput = { text: '保留这条输�
       await hooks.interrupt()
     }
   } as unknown as L2WorkbenchBiz
+  let onSourceEvent: Parameters<L2WorkbenchChatRuntime['subscribeSourceEvents']>[0] | undefined
   const chat = {
     getSourceState: () => ({ syncStatus: 'ready' }),
-    subscribeSourceEvents: () => () => undefined
+    subscribeSourceEvents(
+      listener: Parameters<L2WorkbenchChatRuntime['subscribeSourceEvents']>[0]
+    ) {
+      onSourceEvent = listener
+      return () => {
+        onSourceEvent = undefined
+      }
+    }
   } as unknown as L2WorkbenchChatRuntime
   const runtime = createL2WorkbenchChatInputRuntime(biz, chat, repository)
-  return { runtime, hooks, sent, interrupted, stored: () => ({ draft, outbox }) }
+  const push = (event: L2ChatSourceEvent): void => {
+    onSourceEvent?.({ source, event }, L2_EMPTY_CHAT_SOURCE_STATE)
+  }
+  const reconcile = (status: L2WorkSessionStatus): void => {
+    runtime.reconcileWorkSessions([
+      {
+        ...source,
+        cwd: '/fixture',
+        projectName: 'fixture',
+        sessionTitle: null,
+        status,
+        messageCounts: { user: 1, total: 1 },
+        lastMessageUpdatedAt: null
+      }
+    ])
+  }
+  return { runtime, hooks, sent, interrupted, push, reconcile, stored: () => ({ draft, outbox }) }
 }
 
 test('草稿落盘期间停止：不发请求，保留输入，下一次发送不继承停止意图', async () => {
@@ -93,6 +120,7 @@ test('草稿落盘期间停止：不发请求，保留输入，下一次发送�
     await Promise.all([sending, stopping])
     assert.deepEqual(fixture.sent, [])
     assert.deepEqual(fixture.interrupted, [])
+    assert.equal(fixture.runtime.getState(source).pendingStart, null)
     assert.equal(fixture.runtime.getState(source).text, '尚未发出的草稿')
     assert.equal(fixture.runtime.getState(source).outbox, null)
     assert.equal(fixture.stored().draft?.text, '尚未发出的草稿')
@@ -132,6 +160,7 @@ test('移入Outbox期间停止：文字和图片恢复草稿且图片地址仍�
     const state = fixture.runtime.getState(source)
     assert.deepEqual(fixture.sent, [])
     assert.deepEqual(fixture.interrupted, [])
+    assert.equal(state.pendingStart, null)
     assert.equal(state.text, '带图片的草稿')
     assert.equal(state.images.length, 1)
     assert.equal(await (await fetch(state.images[0]!.objectUrl)).text(), 'image-content')
@@ -237,6 +266,7 @@ test('点击停止后发送结果未知：保留未知Outbox，不重发或假�
     const stopping = Promise.allSettled([fixture.runtime.interrupt(source)])
     accepted.reject(failure)
     await Promise.all([sending, stopping])
+    assert.equal(fixture.runtime.getState(source).pendingStart, null)
     assert.equal(fixture.runtime.getState(source).outbox?.status, 'unknown')
     assert.equal(fixture.runtime.getState(source).text, '')
     assert.equal(fixture.stored().outbox?.text, '保留这条输入')
@@ -275,6 +305,134 @@ test('运行中准备后续输入时停止：立即中断当前回复，同时�
     assert.equal(fixture.runtime.getState(source).outbox, null)
   } finally {
     gate.resolve()
+    fixture.runtime.dispose()
+  }
+})
+
+test('发送确认先到：等待运行接管期间保留停止状态，普通列表刷新不清除', async () => {
+  const fixture = createFixture()
+  try {
+    await fixture.runtime.loadSource(source)
+    const sending = fixture.runtime.send(source, 'auto')
+    assert.deepEqual(fixture.runtime.getState(source).pendingStart, { tempId: null })
+    await sending
+    assert.equal(fixture.runtime.getState(source).outbox, null)
+    assert.deepEqual(fixture.runtime.getState(source).pendingStart, { tempId: 'accepted-input' })
+    fixture.reconcile('idle')
+    assert.ok(fixture.runtime.getState(source).pendingStart)
+    fixture.reconcile('main_running')
+    assert.equal(fixture.runtime.getState(source).pendingStart, null)
+    fixture.reconcile('completed')
+    assert.equal(fixture.runtime.getState(source).pendingStart, null)
+  } finally {
+    fixture.runtime.dispose()
+  }
+})
+
+test('运行及结束先到：迟到的发送确认不能重新挂起停止状态', async () => {
+  const fixture = createFixture()
+  const started = Promise.withResolvers<void>()
+  const accepted = Promise.withResolvers<{ tempId: string }>()
+  fixture.hooks.send = async () => {
+    started.resolve()
+    return accepted.promise
+  }
+  try {
+    await fixture.runtime.loadSource(source)
+    const sending = fixture.runtime.send(source, 'auto')
+    await started.promise
+    fixture.reconcile('main_running')
+    fixture.reconcile('completed')
+    accepted.resolve({ tempId: 'accepted-input' })
+    await sending
+    assert.equal(fixture.runtime.getState(source).pendingStart, null)
+  } finally {
+    accepted.resolve({ tempId: 'accepted-input' })
+    fixture.runtime.dispose()
+  }
+})
+
+for (const beforeAcceptance of [true, false]) {
+  test(`输入撤回${beforeAcceptance ? '先于' : '晚于'}发送确认：只释放匹配输入的等待状态`, async () => {
+    const fixture = createFixture()
+    const started = Promise.withResolvers<void>()
+    const accepted = Promise.withResolvers<{ tempId: string }>()
+    fixture.hooks.send = async () => {
+      started.resolve()
+      return accepted.promise
+    }
+    try {
+      await fixture.runtime.loadSource(source)
+      const sending = fixture.runtime.send(source, 'auto')
+      await started.promise
+      fixture.push({ type: 'message_discard', location: { tempId: 'unrelated-input' } })
+      if (beforeAcceptance)
+        fixture.push({ type: 'message_discard', location: { tempId: 'accepted-input' } })
+      accepted.resolve({ tempId: 'accepted-input' })
+      await sending
+      if (!beforeAcceptance) {
+        assert.ok(fixture.runtime.getState(source).pendingStart)
+        fixture.push({ type: 'message_discard', location: { tempId: 'accepted-input' } })
+      }
+      await Promise.resolve()
+      assert.equal(fixture.runtime.getState(source).pendingStart, null)
+    } finally {
+      accepted.resolve({ tempId: 'accepted-input' })
+      fixture.runtime.dispose()
+    }
+  })
+}
+
+test('等待运行时停止失败可重试，成功后释放等待状态', async () => {
+  const fixture = createFixture()
+  try {
+    await fixture.runtime.loadSource(source)
+    await fixture.runtime.send(source, 'auto')
+    fixture.hooks.interrupt = async () => {
+      throw new Error('停止失败')
+    }
+    await assert.rejects(fixture.runtime.interrupt(source), /停止失败/)
+    assert.ok(fixture.runtime.getState(source).pendingStart)
+    fixture.hooks.interrupt = async () => undefined
+    await fixture.runtime.interrupt(source)
+    assert.equal(fixture.runtime.getState(source).pendingStart, null)
+  } finally {
+    fixture.runtime.dispose()
+  }
+})
+
+test('重连快照或Source失效释放等待，不自动停止或重发', async () => {
+  const fixture = createFixture()
+  try {
+    await fixture.runtime.loadSource(source)
+    await fixture.runtime.send(source, 'auto')
+    fixture.push({
+      type: 'session_sync',
+      mode: 'full',
+      baseCursor: null,
+      messages: [],
+      temporaryMessages: [],
+      runtime: L2_EMPTY_CHAT_SOURCE_STATE.runtime
+    })
+    assert.equal(fixture.runtime.getState(source).pendingStart, null)
+    fixture.runtime.setText(source, '新输入')
+    await fixture.runtime.send(source, 'auto')
+    fixture.runtime.reconcileWorkSessions([])
+    assert.equal(fixture.runtime.getState(source).pendingStart, null)
+    assert.equal(fixture.sent.length, 2)
+    assert.deepEqual(fixture.interrupted, [])
+  } finally {
+    fixture.runtime.dispose()
+  }
+})
+
+test('运行中追加输入不会建立等待运行状态', async () => {
+  const fixture = createFixture()
+  try {
+    await fixture.runtime.loadSource(source)
+    await fixture.runtime.send(source, 'follow_up', true)
+    assert.equal(fixture.runtime.getState(source).pendingStart, null)
+  } finally {
     fixture.runtime.dispose()
   }
 })

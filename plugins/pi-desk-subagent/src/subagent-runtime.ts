@@ -40,7 +40,10 @@ import {
   type SubagentName
 } from './agent-config.js'
 import { createExternalResearchExtension } from './external-research.js'
-import { SubagentCapabilities } from './subagent-capabilities.js'
+import {
+  SubagentCapabilities,
+  SUBAGENT_CAPABILITIES_EXTENSION_NAME
+} from './subagent-capabilities.js'
 import { isCapabilityAllowed, type SessionCapabilityRules } from '@jetcrab/pi-desk-sdk/capabilities'
 import {
   createResearchCoordinatorExtension,
@@ -1232,7 +1235,7 @@ export class SubagentRuntime {
         ? [{ name: 'mcp', builtin: true, replaceable: true, factory: createMcpExtension() }]
         : []),
       {
-        name: 'subagent-capabilities',
+        name: SUBAGENT_CAPABILITIES_EXTENSION_NAME,
         hidden: true,
         factory: (pi: ExtensionAPI): void => capabilityRuntime.extension(pi)
       },
@@ -1278,7 +1281,8 @@ export class SubagentRuntime {
         noPromptTemplates: true,
         noThemes: true,
         extensionFactories,
-        extensionsOverride: excludeSubagentPackageExtensions
+        extensionsOverride: (loaded) =>
+          capabilityRuntime.extensions(excludeSubagentPackageExtensions(loaded))
       }
     })
     for (const diagnostic of services.diagnostics) {

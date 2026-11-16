@@ -1,15 +1,21 @@
 export const TIBO_STYLES = `
 .tibo-page{display:grid;gap:1.5rem;min-width:0;padding:1rem;container-type:inline-size}
+.tibo-page-header,.tibo-header-context,.tibo-header-actions{display:flex;align-items:center;gap:.5rem 1rem;flex-wrap:wrap;min-width:0}
+.tibo-page-header{justify-content:space-between}
+.tibo-header-actions{margin-left:auto}
+.tibo-page-title{margin:0;font-size:1.125rem;font-weight:600;line-height:1.4}
+.tibo-root-title{display:none}
+.tibo-guide{display:inline-flex;align-items:center;min-height:2rem;color:var(--muted-foreground);font-size:.875rem;text-decoration:underline;text-underline-offset:.2em}
 .tibo-settings,.tibo-feed{display:grid;gap:1.5rem;min-width:0}
-.tibo-form{display:grid;gap:.75rem;max-width:40rem;min-width:0}
-.tibo-history,.tibo-advanced,.tibo-status-details{min-width:0}
-.tibo-history>summary,.tibo-advanced>summary,.tibo-status-details>summary{width:fit-content;min-height:2rem;align-content:center;font-size:.875rem;cursor:pointer}
-.tibo-advanced[open]>.tibo-fields,.tibo-status-details[open]>.tibo-status{margin-top:.75rem}
-.tibo-status-details>p,.tibo-status-details>div{margin-top:.5rem}
-.tibo-history>summary:focus-visible,.tibo-advanced>summary:focus-visible,.tibo-status-details>summary:focus-visible,.tibo-original>summary:focus-visible,.tibo-analysis>summary:focus-visible,.tibo-time-details>summary:focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:.375rem}
+.tibo-form{display:grid;gap:1.5rem;max-width:40rem;min-width:0}
+.tibo-model-field{display:grid;gap:.5rem;min-width:0}
+.tibo-form-actions{padding-top:.75rem;border-top:1px solid var(--border)}
+.tibo-history{min-width:0}
+.tibo-history>summary{width:fit-content;min-height:2rem;align-content:center;font-size:.875rem;cursor:pointer}
+.tibo-history>summary:focus-visible,.tibo-original>summary:focus-visible,.tibo-analysis>summary:focus-visible,.tibo-time-details>summary:focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:.375rem}
 .tibo-toggle{display:flex;align-items:center;gap:.5rem;min-height:2rem;cursor:pointer;width:fit-content}
 .tibo-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem}
-.tibo-status,.tibo-record-top,.tibo-meta{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.tibo-record-top,.tibo-meta{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
 .tibo-note{color:var(--muted-foreground);font-size:.75rem;line-height:1.5;overflow-wrap:anywhere}
 .tibo-form>p.tibo-note{font-size:.875rem}
 .tibo-page p,.tibo-post p{margin:0}
@@ -36,6 +42,7 @@ export const TIBO_STYLES = `
 .tibo-original .tibo-copy{margin-top:.5rem;font-size:.875rem;line-height:1.6}
 .tibo-reason{max-width:46rem;line-height:1.6;margin:.5rem 0}
 .tibo-time{display:grid;gap:.25rem;padding:.5rem 0;border-bottom:1px solid var(--border)}
+@container(max-width:40rem){.tibo-root-title{display:block}}
 @container(max-width:32rem){.tibo-fields{grid-template-columns:minmax(0,1fr)}}
 @media(prefers-reduced-motion:reduce){.tibo-record{transition:none}}
 `

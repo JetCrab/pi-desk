@@ -22,7 +22,8 @@ import {
 import { spawnE2eServer, stopE2eServerTree } from './l4-e2e-server-runtime.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const taskId = `selective-restore-${process.pid}`
+const taskId = `selective-restore-${Date.now()}-${process.pid}`
+const browserHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
 const testRoot = join(projectRoot, 'temp/pi/environment-e2e', taskId)
 const agentDir = join(testRoot, 'agent')
 const sourceAgent = join(testRoot, 'source/agent')
@@ -42,6 +43,7 @@ let success = false
 let sourceSessionId = ''
 let childSessionId = ''
 let existingSessionFile = ''
+let cdpPort = 0
 
 async function put(path, data) {
   await mkdir(dirname(path), { recursive: true })
@@ -125,7 +127,9 @@ async function setup() {
   await mkdir(sourceProject, { recursive: true })
   await put(keyPath, randomBytes(32))
   // 原生 Pi 还会发现 HOME/.agents/skills，AgentDir 隔离之外也绑定测试 HOME。
-  process.env.HOME = join(testRoot, 'home')
+  process.env.HOME = join(agentDir, 'home')
+  process.env.USERPROFILE = join(agentDir, 'home')
+  await mkdir(join(agentDir, 'home'), { recursive: true })
   process.env.PI_CODING_AGENT_DIR = agentDir
   process.env.PI_CODING_AGENT_SESSION_DIR = join(agentDir, 'sessions')
   process.env.TSX_TSCONFIG_PATH = join(projectRoot, 'tsconfig.json')
@@ -246,10 +250,9 @@ async function setup() {
 
 async function capturePreview() {
   const executable =
-    process.env.PI_DESK_E2E_BROWSER ??
-    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
+    process.env.PI_DESK_E2E_BROWSER ?? 'C:/Program Files/Google/Chrome/Application/chrome.exe'
   assert.ok(existsSync(executable), '需要可用的隔离验收浏览器')
-  const cdpPort = await reservePort()
+  cdpPort = await reservePort()
   browser = spawnEdge(executable, cdpPort, join(testRoot, 'browser'))
   await waitForBrowserReady(browser, cdpPort)
   client = await createCdpPage(cdpPort)
@@ -263,7 +266,7 @@ async function capturePreview() {
     60000
   )
   await clickAriaLabel(client, '设置')
-  await clickAriaLabel(client, '设置分类：环境备份与恢复')
+  await clickAriaLabel(client, '设置分类：系统与数据')
   await waitFor(
     client,
     `document.querySelector('#environment-package')?.disabled === false`,
@@ -428,6 +431,10 @@ try {
   const preview = (await post('/api/environment/preview', { id: firstId, password })).data
   assert.equal(preview.items.filter((item) => item.category === 'session').length, 1)
   assert.equal(preview.items.find((item) => item.sessionId === sourceSessionId).files, 2)
+  for (const [key, value] of Object.entries(browserHome)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
   await capturePreview()
   const originalSession = await readFile(existingSessionFile)
   const originalPiSettings = await readFile(join(agentDir, 'settings.json'))
@@ -522,8 +529,13 @@ try {
 } finally {
   await put(join(evidence, 'server.log'), output)
   client?.close()
-  if (browser) await stopBrowserTree(browser)
+  if (browser) await stopBrowserTree(browser, cdpPort)
   if (server) await stopE2eServerTree(server)
-  if (success) await rm(testRoot, { recursive: true, force: true })
-  else console.error(`失败现场：${evidence}`)
+  if (success) {
+    await rm(testRoot, { recursive: true, force: true })
+    await rm(join(projectRoot, 'temp/build/environment-e2e', taskId), {
+      recursive: true,
+      force: true
+    })
+  } else console.error(`失败现场：${evidence}`)
 }

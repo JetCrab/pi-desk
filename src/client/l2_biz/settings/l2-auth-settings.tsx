@@ -3,7 +3,6 @@
 import {
   ChevronRightIcon,
   DicesIcon,
-  LoaderCircleIcon,
   LogOutIcon,
   ShieldCheckIcon,
   ShieldOffIcon
@@ -11,6 +10,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { L4PasswordInput } from '@client/l4_foundation/ui/l4-password-input'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useL2AuthSettings } from './hooks/l2-use-auth-settings'
 
 export function L2AuthSettings(): React.JSX.Element {
@@ -22,7 +22,7 @@ export function L2AuthSettings(): React.JSX.Element {
 
   return (
     <section aria-labelledby="auth-settings-title" className="@container min-w-0 space-y-6">
-      <h2 id="auth-settings-title" className="text-xl font-semibold">
+      <h2 id="auth-settings-title" className="text-xl font-semibold sm:sr-only">
         {t('settings:loginProtection')}
       </h2>
       {state.loading ? (
@@ -51,7 +51,7 @@ export function L2AuthSettings(): React.JSX.Element {
                 onClick={() => void state.logout()}
               >
                 {state.signingOut ? (
-                  <LoaderCircleIcon className="motion-safe:animate-spin" aria-hidden="true" />
+                  <L4LoadingSpinner aria-hidden="true" />
                 ) : (
                   <LogOutIcon aria-hidden="true" />
                 )}
@@ -117,9 +117,7 @@ export function L2AuthSettings(): React.JSX.Element {
               ) : null}
               <p className="text-sm text-muted-foreground">{t('saveEffect')}</p>
               <Button type="submit" disabled={busy}>
-                {state.saving ? (
-                  <LoaderCircleIcon className="motion-safe:animate-spin" aria-hidden="true" />
-                ) : null}
+                {state.saving ? <L4LoadingSpinner aria-hidden="true" /> : null}
                 {t(state.saving ? 'saving' : enabled ? 'saveAndSignIn' : 'enable')}
               </Button>
             </div>

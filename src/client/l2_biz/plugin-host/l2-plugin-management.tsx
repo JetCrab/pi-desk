@@ -6,7 +6,10 @@ import { useTranslation } from 'react-i18next'
 import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import type { L2PluginCatalogItem } from '@common/l2_biz/plugin/l2-plugin-catalog-contract'
-import type { L2PluginManagementSnapshot } from '@common/l2_biz/plugin/l2-plugin-management-contract'
+import type {
+  L2PluginManagementItem,
+  L2PluginManagementSnapshot
+} from '@common/l2_biz/plugin/l2-plugin-management-contract'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@client/l4_foundation/ui/shadcn/popover'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@client/l4_foundation/ui/shadcn/tabs'
@@ -28,6 +31,7 @@ import {
   useL2PluginManagement
 } from './l2-use-plugin-management'
 import { useL2PluginCatalog } from './hooks/l2-use-plugin-catalog'
+import { useL2PluginDevAvailability } from './hooks/l2-use-plugin-dev-availability'
 import { useL2PluginDownloadSource } from './hooks/l2-use-plugin-download-source'
 import { useL2PluginDirectInstall } from './hooks/l2-use-plugin-direct-install'
 import { L2PluginDownloadSourceSelector } from './views/l2-plugin-download-source'
@@ -78,11 +82,26 @@ export function L2PluginManagement({
     onRestartScheduled,
     basicMode
   })
-  const catalog = useL2PluginCatalog(biz, tab === 'search')
   const download = useL2PluginDownloadSource(biz, () => {
     if (!basicMode) void management.refresh()
   })
-  const direct = useL2PluginDirectInstall(biz, snapshot?.plugins)
+  const downloadContext = JSON.stringify(download.settings?.downloadSource ?? null)
+  useEffect(() => {
+    queueMicrotask(() => {
+      setCatalogTag('')
+      setCatalogVersionExplicit(false)
+    })
+  }, [downloadContext])
+  const catalog = useL2PluginCatalog(
+    biz,
+    tab === 'search',
+    download.settings?.downloadSource ?? null
+  )
+  const direct = useL2PluginDirectInstall(
+    biz,
+    snapshot?.plugins,
+    download.settings?.downloadSource ?? null
+  )
   const disabled = basicMode || management.requests.has('reload')
   const browserErrors = new Map(
     management.pluginHost.getFailedEntries().map((item) => [item.pluginName, item.error.message])
@@ -92,6 +111,14 @@ export function L2PluginManagement({
     (plugin) =>
       management.detailSource &&
       pluginRequestKey(plugin.source) === pluginRequestKey(management.detailSource)
+  )
+  const installedDev = useL2PluginDevAvailability(
+    biz,
+    selectedPlugin?.source.startsWith('npm:')
+      ? (pluginNpmSpec(selectedPlugin.source)?.name ?? null)
+      : null,
+    undefined,
+    JSON.stringify([downloadContext, selectedPlugin?.source])
   )
   const catalogPlugin = catalog.selection
     ? snapshot?.plugins.find(
@@ -214,6 +241,32 @@ export function L2PluginManagement({
       )
       .map((plugin) => plugin.source) ?? []
   const operationMessage = (phase?: string): string | null => (phase ? t(`phase_${phase}`) : null)
+  const retryPlugin = (plugin: L2PluginManagementItem): void => {
+    if (plugin.operation?.phase === 'failed') {
+      const action = plugin.operation.action
+      if (action === 'add') {
+        closeDetail()
+        direct.setOpen(true)
+        direct.changeSource(plugin.source)
+        setTab('installed')
+      } else if (action === 'apply') management.handleControlAction(plugin, 'reload')
+      else if (action === 'del') management.handleControlAction(plugin, 'remove')
+      else management.handleControlAction(plugin, action)
+    } else if (plugin.updateError && !plugin.error && plugin.status !== 'failed') {
+      void management.refresh([plugin.source])
+    } else management.handleControlAction(plugin, 'reload')
+  }
+  const reinstall = (): void => {
+    if (!selectedPlugin?.version) return
+    const spec = pluginNpmSpec(selectedPlugin.source)
+    if (!spec) return
+    closeDetail()
+    setTab('installed')
+    direct.changeSource(`npm:${spec.name}@${selectedPlugin.version}`)
+    direct.setOverride('default')
+    direct.setRegistry('')
+    direct.setOpen(true)
+  }
   const openDirect = (): void => {
     setTab('installed')
     direct.setOpen(true)
@@ -234,7 +287,9 @@ export function L2PluginManagement({
           </Button>
         ) : null}
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="min-w-0 text-xl font-semibold [overflow-wrap:anywhere]">
+          <h2
+            className={`min-w-0 text-xl font-semibold [overflow-wrap:anywhere] ${detailOpen ? '' : 'sm:hidden'}`}
+          >
             {detailOpen
               ? selectedPlugin
                 ? pluginDisplayName(selectedPlugin)
@@ -242,43 +297,59 @@ export function L2PluginManagement({
               : t('title')}
           </h2>
           <div className="flex flex-wrap items-center gap-2">
-            {!detailOpen ? (
-              <Popover>
-                <PopoverTrigger render={<Button size="sm" variant="ghost" />}>
-                  {t('downloadSource')}：
-                  {download.loading && !download.settings
-                    ? t('loading')
-                    : t(`download_${download.settings?.downloadSource.mode ?? download.mode}`)}
-                  <ChevronDownIcon className="size-4" />
-                </PopoverTrigger>
-                <PopoverContent
-                  align="end"
-                  positionerClassName="z-[150]"
-                  className="w-80 max-w-[calc(100vw-2rem)]"
-                >
-                  <L2PluginDownloadSourceSelector
-                    id="plugin-default-download"
-                    mode={download.mode}
-                    registry={download.registry}
-                    savedRegistry={
-                      download.settings?.downloadSource.mode === 'custom'
-                        ? download.settings.downloadSource.registry
-                        : undefined
-                    }
-                    recommendedRegistry={download.settings?.recommendedRegistry}
-                    loading={download.loading}
-                    saving={download.saving}
-                    error={download.error}
-                    onMode={(mode) => {
-                      if (mode !== 'default') download.changeMode(mode)
-                    }}
-                    onRegistry={download.setRegistry}
-                    onSave={() => void download.save()}
-                    onRetry={() => void download.retry()}
-                  />
-                </PopoverContent>
-              </Popover>
-            ) : null}
+            <Popover>
+              <PopoverTrigger render={<Button size="sm" variant="ghost" />}>
+                {t('downloadSource')}：
+                {download.loading && !download.settings
+                  ? t('loading')
+                  : t(`download_${download.settings?.downloadSource.mode ?? download.mode}`)}
+                <ChevronDownIcon className="size-4" />
+              </PopoverTrigger>
+              <PopoverContent
+                align="end"
+                positionerClassName="z-[150]"
+                className="w-80 max-w-[calc(100vw-2rem)]"
+              >
+                <L2PluginDownloadSourceSelector
+                  id="plugin-default-download"
+                  mode={download.mode}
+                  registry={download.registry}
+                  savedRegistry={
+                    download.settings?.downloadSource.mode === 'custom'
+                      ? download.settings.downloadSource.registry
+                      : undefined
+                  }
+                  recommendedRegistry={download.settings?.recommendedRegistry}
+                  loading={download.loading}
+                  saving={download.saving}
+                  error={download.error}
+                  onMode={(mode) => {
+                    if (mode !== 'default') download.changeMode(mode)
+                  }}
+                  onRegistry={download.setRegistry}
+                  onSave={() => void download.save()}
+                  onRetry={() => void download.retry()}
+                />
+              </PopoverContent>
+            </Popover>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={disabled || management.loading}
+              onClick={() => void management.refresh()}
+            >
+              {t(management.loading ? 'checkingUpdates' : 'checkUpdates')}
+            </Button>
+            <Button
+              size="sm"
+              disabled={disabled}
+              onClick={() => {
+                closeDetail()
+                openDirect()
+              }}
+            >
+              {t('directInstall')}
+            </Button>
             {basicMode || snapshot?.restartRequired ? (
               <Button
                 size="sm"
@@ -374,6 +445,7 @@ export function L2PluginManagement({
             {direct.open ? (
               <div className="pi-desk-chat-scrollbar max-h-1/2 shrink-0 overflow-y-auto">
                 <L2PluginDirectInstall
+                  dev={direct.dev}
                   source={direct.source}
                   isNpm={Boolean(direct.spec)}
                   multiple={direct.sources.length > 1}
@@ -461,7 +533,7 @@ export function L2PluginManagement({
               onFilter={setFilter}
               onDetail={openInstalled}
               onAction={management.handleControlAction}
-              onRefresh={() => void management.refresh()}
+              onRetry={retryPlugin}
             />
             {!snapshot?.plugins.length && !direct.open ? (
               <Button
@@ -528,7 +600,20 @@ export function L2PluginManagement({
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                    {selectedPlugin.version ? <span>v{selectedPlugin.version}</span> : null}
+                    <span>
+                      {t(
+                        selectedPlugin.status === 'failed'
+                          ? 'abnormal'
+                          : selectedPlugin.status === 'disabled'
+                            ? 'disabled'
+                            : selectedPlugin.status === 'ready'
+                              ? 'loaded'
+                              : 'notLoaded'
+                      )}
+                    </span>
+                    {selectedPlugin.version ? (
+                      <span className="tabular-nums">v{selectedPlugin.version}</span>
+                    ) : null}
                     {selectedPlugin.updateAvailable ? (
                       <span className="rounded-md bg-status-success/10 px-2 py-0.5 text-xs font-medium text-status-success">
                         {selectedPlugin.availableVersion
@@ -552,6 +637,7 @@ export function L2PluginManagement({
                 ) : null}
                 <L2PluginManagementFeedback
                   plugin={selectedPlugin}
+                  onRetry={() => retryPlugin(selectedPlugin)}
                   requestError={management.errors[pluginRequestKey(selectedPlugin.source)]}
                   browserError={
                     selectedPlugin.pluginName
@@ -560,17 +646,29 @@ export function L2PluginManagement({
                   }
                 />
               </div>
+              <dl className="grid min-w-0 gap-3 border-y py-4 text-sm">
+                <div>
+                  <dt className="text-xs text-muted-foreground">{t('source')}</dt>
+                  <dd className="mt-1 font-mono [overflow-wrap:anywhere]">
+                    {selectedPlugin.source}
+                  </dd>
+                </div>
+                {selectedPlugin.version ? (
+                  <div>
+                    <dt className="text-xs text-muted-foreground">{t('installedVersion')}</dt>
+                    <dd className="mt-1 tabular-nums">v{selectedPlugin.version}</dd>
+                  </div>
+                ) : null}
+              </dl>
               {selectedPlugin.source.startsWith('npm:') ? (
-                <Collapsible className="rounded-lg border">
-                  <CollapsibleTrigger className="group flex min-h-9 w-full items-center justify-between px-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                    {t('advancedOptions')}
-                    <ChevronDownIcon className="size-4 transition-transform group-aria-expanded:rotate-180" />
-                  </CollapsibleTrigger>
-                  <CollapsibleContent keepMounted className="hidden data-open:block">
-                    <div className="px-3 pb-3">
+                <section className="space-y-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-2">
+                      <p className="text-sm font-medium">{t('installChannel')}</p>
                       <L2PluginManagementChannel
                         value={selectedPlugin.updateTag ?? 'latest'}
                         label={t('installChannel')}
+                        dev={installedDev}
                         disabled={disabled || busy(selectedPlugin.source)}
                         onChange={(tag) =>
                           void management.executeBatch({
@@ -581,8 +679,19 @@ export function L2PluginManagement({
                         }
                       />
                     </div>
-                  </CollapsibleContent>
-                </Collapsible>
+                    {selectedPlugin.version ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={disabled || busy(selectedPlugin.source)}
+                        onClick={reinstall}
+                      >
+                        {t('reinstallVersion', { version: selectedPlugin.version })}
+                      </Button>
+                    ) : null}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{t('channelHelp')}</p>
+                </section>
               ) : null}
               {management.detailLoading ? (
                 <p role="status" className="text-sm text-muted-foreground">
@@ -617,9 +726,19 @@ export function L2PluginManagement({
               </Collapsible>
               {management.detailError ? (
                 <Collapsible className="space-y-2 text-sm">
-                  <p role="alert" className="text-destructive">
-                    {t('detailFailed')}
-                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p role="alert" className="text-destructive">
+                      {t('detailFailed')}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy(selectedPlugin.source)}
+                      onClick={() => void management.loadDetail(selectedPlugin.source)}
+                    >
+                      {t('retry')}
+                    </Button>
+                  </div>
                   <CollapsibleTrigger className="group flex min-h-8 items-center gap-2 text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     {t('errorDetails')}
                     <ChevronDownIcon className="size-4 transition-transform group-aria-expanded:rotate-180" />
@@ -653,6 +772,7 @@ export function L2PluginManagement({
               ) : null}
               {catalog.detail ? (
                 <L2PluginCatalogDetailView
+                  dev={catalog.dev}
                   detail={catalog.detail}
                   disabled={disabled || Boolean(catalog.detailError)}
                   pending={catalogPending || catalog.detailLoading}
@@ -679,6 +799,7 @@ export function L2PluginManagement({
                   }
                   channel={catalogTag}
                   onChannel={(tag) => {
+                    if (tag === 'dev' && !catalog.dev.version) return
                     setCatalogTag(tag)
                     setCatalogVersionExplicit(false)
                     void catalog.loadDetail(
@@ -688,24 +809,36 @@ export function L2PluginManagement({
                   }}
                   downloadMode={catalog.downloadMode}
                   downloadRegistry={catalog.downloadRegistry}
-                  onDownloadMode={catalog.setDownloadMode}
-                  onDownloadRegistry={catalog.setDownloadRegistry}
+                  onDownloadMode={(mode) => {
+                    setCatalogTag('')
+                    catalog.setDownloadMode(mode)
+                  }}
+                  onDownloadRegistry={(registry) => {
+                    setCatalogTag('')
+                    catalog.setDownloadRegistry(registry)
+                  }}
                   onVersion={(version) => {
                     setCatalogVersionExplicit(true)
                     void catalog.loadDetail(catalog.selection!, version)
                   }}
-                  onInstall={() =>
+                  onInstall={() => {
+                    if (catalogTag === 'dev' && !catalog.dev.version) return
                     catalog.installDetail((input, detail) =>
                       management.requestInstall(
                         {
                           ...input,
-                          source: catalogVersionExplicit ? input.source : `npm:${detail.name}`,
+                          source:
+                            catalogVersionExplicit ||
+                            catalogPlugin?.version === detail.version ||
+                            catalog.downloadMode !== 'default'
+                              ? input.source
+                              : `npm:${detail.name}`,
                           ...(catalogTag ? { tag: catalogTag } : {})
                         },
                         detail
                       )
                     )
-                  }
+                  }}
                   onUpdate={() => {
                     if (catalogPlugin)
                       void management.execute({ kind: 'update', source: catalogPlugin.source })

@@ -1046,6 +1046,25 @@ fn run_environment_operation(
             } => {
                 auto_start = enabled;
                 open_on_ready = open;
+                #[cfg(unix)]
+                if enabled {
+                    for target in state.config()?.targets {
+                        if target.server.is_none() || cancelled() {
+                            continue;
+                        }
+                        let result = package_directory(&state, &target.url).and_then(|directory| {
+                            process::recover_service(
+                                &directory,
+                                config::target_port(&target.url)?,
+                                PORT_RELEASE_TIMEOUT,
+                                &state.log_path,
+                            )
+                        });
+                        if let Err(error) = result {
+                            set_phase(&state, &target.url, ServerPhase::Failed(error));
+                        }
+                    }
+                }
                 checked_environment(&state, &cancelled)?;
             }
             EnvironmentOperation::Select(component, archive) => {
@@ -2065,6 +2084,13 @@ fn launch_service(
         return Err("操作已取消".to_string().into());
     }
     let port = config::target_port(url)?;
+    let record_directory = package_directory(state, url)?;
+    process::recover_service(
+        &record_directory,
+        port,
+        PORT_RELEASE_TIMEOUT,
+        &state.log_path,
+    )?;
     service_port::wait_until_free(port, PORT_RELEASE_TIMEOUT, &state.log_path)?;
     if cancelled() {
         return Err("操作已取消".to_string().into());
@@ -2096,8 +2122,15 @@ fn launch_service(
         state.config_path.as_os_str().to_owned(),
     ));
     environment.push(("PI_DESK_DESKTOP_ENVIRONMENT_VERSION".into(), "1".into()));
-    let mut child =
-        process::spawn_with_environment(&command, directory.as_deref(), &log, &environment)?;
+    let mut child = process::spawn_service(
+        &command,
+        directory.as_deref(),
+        &log,
+        &environment,
+        &record_directory,
+        port,
+        crate::environment::requires_pi(server),
+    )?;
     let started = Instant::now();
     let mut next_health_log = Duration::ZERO;
     let health_url = format!("http://127.0.0.1:{port}{}", server.ready_path);
@@ -2225,6 +2258,9 @@ fn stop_active_child(state: &ShellState, url: &str) -> Result<(), String> {
             &format!("url={url} pid={}", child.child.id()),
         );
         if let Err(error) = stop_service_child(state, url, &mut child.child) {
+            if let Ok(mut runtimes) = state.target_runtimes.lock() {
+                runtimes.entry(url.to_string()).or_default().child = Some(child);
+            }
             set_phase(state, url, ServerPhase::Failed(error.clone()));
             return Err(error);
         }
@@ -2851,8 +2887,7 @@ mod tests {
         directory
     }
 
-    #[test]
-    fn managed_service_receives_environment_capability_without_persisting_it() {
+    fn check_managed_service_environment(pi_service: bool) {
         struct Fixture {
             directory: PathBuf,
             state: ShellState,
@@ -2882,6 +2917,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 fs.writeFileSync('capability.json', JSON.stringify({
   version: process.env.PI_DESK_DESKTOP_ENVIRONMENT_VERSION,
+  parentStdin: process.env.PI_DESK_DESKTOP_PARENT_STDIN ?? null,
   executable: process.env.PI_DESK_DESKTOP_EXECUTABLE,
   config: process.env.PI_DESK_DESKTOP_CONFIG,
 }));
@@ -2896,7 +2932,7 @@ http.createServer((req, res) => res.writeHead(204).end()).listen(Number(process.
         let server = crate::config::ServerConfig {
             start_command: "node service.cjs {port}".into(),
             ready_path: "/health".into(),
-            package: None,
+            package: pi_service.then(|| default_server_config().package.unwrap()),
         };
         let mut config = DesktopConfig::default();
         config.tunnel.control_key = "ab".repeat(32);
@@ -2931,6 +2967,14 @@ http.createServer((req, res) => res.writeHead(204).end()).listen(Number(process.
         let capability: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(capability["version"], "1");
         assert_eq!(
+            capability["parentStdin"],
+            if cfg!(unix) && pi_service {
+                serde_json::json!("1")
+            } else {
+                serde_json::Value::Null
+            }
+        );
+        assert_eq!(
             capability["executable"],
             std::env::current_exe().unwrap().to_string_lossy().as_ref()
         );
@@ -2949,6 +2993,16 @@ http.createServer((req, res) => res.writeHead(204).end()).listen(Number(process.
             "不能写 Pi 设置或 JSONL"
         );
         assert!(!fixture.state.runtime_path.exists());
+    }
+
+    #[test]
+    fn managed_service_receives_environment_capability_without_persisting_it() {
+        check_managed_service_environment(false);
+    }
+
+    #[test]
+    fn only_pi_desk_services_on_unix_receive_the_parent_stdin_marker() {
+        check_managed_service_environment(true);
     }
 
     #[test]

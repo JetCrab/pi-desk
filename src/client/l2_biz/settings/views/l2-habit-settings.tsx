@@ -85,7 +85,7 @@ export function L2HabitSettings(): React.JSX.Element {
   return (
     <section aria-labelledby="settings-habits-title" className="@container grid min-w-0 gap-6">
       <div>
-        <h2 id="settings-habits-title" className="text-xl font-semibold">
+        <h2 id="settings-habits-title" className="text-xl font-semibold sm:sr-only">
           {t('habits')}
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">{t('browserOnly')}</p>

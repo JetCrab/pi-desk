@@ -1,6 +1,7 @@
 'use client'
 
-import { CheckIcon, CopyIcon, EraserIcon, Layers3Icon, LoaderCircleIcon } from 'lucide-react'
+import { CheckIcon, CopyIcon, EraserIcon, Layers3Icon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { copyL4BrowserText } from '@client/l4_foundation/lib/l4-browser-clipboard'
@@ -339,7 +340,7 @@ export function L2WorkbenchContextUsage({
               aria-busy={ignorePending}
               onClick={() => void onIgnoreContext()}
             >
-              {ignorePending ? <LoaderCircleIcon className="animate-spin" /> : <EraserIcon />}
+              {ignorePending ? <L4LoadingSpinner /> : <EraserIcon />}
               {ignorePending ? t('ignoring') : t('ignore')}
             </Button>
             <Button
@@ -350,7 +351,7 @@ export function L2WorkbenchContextUsage({
               aria-busy={compactPending}
               onClick={() => void onCompactContext()}
             >
-              {compactPending ? <LoaderCircleIcon className="animate-spin" /> : <Layers3Icon />}
+              {compactPending ? <L4LoadingSpinner /> : <Layers3Icon />}
               {compactPending ? t('compacting') : t('compact')}
             </Button>
           </div>

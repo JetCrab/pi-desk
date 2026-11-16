@@ -52,7 +52,10 @@ export function createRemoteDebugBrowserTunnels(
   function reconcile(): void {
     if (disposed) return
     const runs = readRuns(host.globalState.getSnapshot())
-    const readyRuns = runs.filter((run) => run.status === 'running' && run.gatewayPort)
+    // Gateway 监听不代表隧道已发布；publicUrl 仅在 CLI 确认监听后出现。
+    const readyRuns = runs.filter(
+      (run) => run.status === 'running' && run.gatewayPort && run.publicUrl
+    )
     const readyIds = new Set(readyRuns.map((run) => run.runId))
     for (const [runId, connection] of connections) {
       if (readyIds.has(runId)) continue
@@ -60,7 +63,7 @@ export function createRemoteDebugBrowserTunnels(
       connections.delete(runId)
       snapshots = new Map(snapshots)
       snapshots.delete(runId)
-      close(connection.handle, connection.context, 'Run结束或已不再运行')
+      close(connection.handle, connection.context, 'Run结束或隧道发布不再就绪')
       changed()
     }
     const tunnels = host.tunnels

@@ -1,6 +1,7 @@
 'use client'
 
-import { ArrowRightIcon, LanguagesIcon, LoaderCircleIcon } from 'lucide-react'
+import { ArrowRightIcon, LanguagesIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useL4ClientId } from '@client/l4_foundation/lib/l4-client-id'
@@ -108,9 +109,7 @@ export function L2Login(): React.JSX.Element {
               </p>
             ) : null}
             <Button className={styles.submit} type="submit" disabled={submitting}>
-              {submitting ? (
-                <LoaderCircleIcon className="motion-safe:animate-spin" aria-hidden="true" />
-              ) : null}
+              {submitting ? <L4LoadingSpinner aria-hidden="true" /> : null}
               {submitting ? t('submitting') : t('submit')}
               {!submitting ? <ArrowRightIcon aria-hidden="true" /> : null}
             </Button>

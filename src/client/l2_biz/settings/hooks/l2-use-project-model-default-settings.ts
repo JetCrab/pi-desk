@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { BrowserBeforeLeaveHandler } from '@jetcrab/pi-desk-sdk/browser'
 import type {
   L2ModelOption,
   L2ModelPreset,
@@ -15,242 +16,320 @@ import {
 import { readL4PiDirectoriesCache } from '@client/l4_foundation/storage/l4-pi-directory-cache'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
 import { useL4ConfirmDialog } from '@client/l4_foundation/ui/l4-confirm-dialog'
-import type { L2ModelSettingsBiz } from '../l2-model-settings-biz'
+import {
+  saveL2ProjectDefaultChanges,
+  type L2ModelSettingsBiz,
+  type L2ProjectDefaultChanges
+} from '../l2-model-settings-biz'
 import {
   readL2ProjectModelDefaultCache,
   saveL2ProjectModelDefaultCache
 } from '../l2-model-settings-cache'
 
-interface ProjectModelDefaultSettingsState {
+type DefaultMode = string | null | undefined
+
+export interface L2ProjectModelDefaultSettingsState {
   directories: L2PiDirectoryListResponse['directories']
-  cwd: string
-  loadedCwd: string | null
+  cwd: string | null
   models: L2ModelOption[]
+  presets: L2ModelPreset[]
   selection: L2ModelSelection | null
   fixed: boolean
+  defaultMode: DefaultMode
+  modelReady: boolean
+  modeReady: boolean
   directoriesLoading: boolean
   projectLoading: boolean
-  projectRefreshing: boolean
+  modeLoading: boolean
   saving: boolean
-  projectReady: boolean
+  dirty: boolean
+  canSave: boolean
   directoriesError: string | null
   projectError: string | null
+  modeError: string | null
+  presetsError: string | null
+  saveErrors: { model?: string; mode?: string }
+  savedOwners: string[]
   dialog: React.JSX.Element | null
-  selectProject: (nextCwd: string) => Promise<boolean>
+  selectProject: (nextCwd: string | null) => Promise<boolean>
   changeFixed: (value: boolean) => void
+  changeDefaultMode: (value: DefaultMode) => void
   selectModel: (model: L2ModelOption) => void
   selectThinking: (value: string) => void
   applyPreset: (preset: L2ModelPreset) => void
   retryDirectories: () => void
   retryProject: () => void
+  retryMode: () => void
+  retryPresets: () => void
   save: () => Promise<void>
+}
+
+function sameSelection(first: L2ModelSelection | null, second: L2ModelSelection | null): boolean {
+  return (
+    first === second ||
+    (first !== null &&
+      second !== null &&
+      first.provider === second.provider &&
+      first.modelId === second.modelId &&
+      first.thinkingLevel === second.thinkingLevel)
+  )
 }
 
 export function useL2ProjectModelDefaultSettings(
   biz: L2ModelSettingsBiz,
-  onDirtyChange?: (dirty: boolean) => void
-): ProjectModelDefaultSettingsState {
+  onBeforeLeaveChange: (handler: BrowserBeforeLeaveHandler | null) => void
+): L2ProjectModelDefaultSettingsState {
   const { t } = useTranslation('settings')
   const toast = useL4AppToast()
   const { confirm, dialog } = useL4ConfirmDialog()
   const [directories, setDirectories] = useState<L2PiDirectoryListResponse['directories']>([])
-  const [cwd, setCwd] = useState('')
+  const [cwd, setCwd] = useState<string | null>(null)
   const [models, setModels] = useState<L2ModelOption[]>([])
+  const [presets, setPresets] = useState<L2ModelPreset[]>([])
   const [selection, setSelection] = useState<L2ModelSelection | null>(null)
   const [fixed, setFixed] = useState(false)
+  const [modelBaseline, setModelBaseline] = useState<L2ModelSelection | null | undefined>()
+  const [modeBaseline, setModeBaseline] = useState<{
+    cwd: string | null
+    value: DefaultMode
+  } | null>(null)
+  const [defaultMode, setDefaultMode] = useState<DefaultMode>()
+  const [modelCwd, setModelCwd] = useState<string | null>(null)
   const [directoriesLoading, setDirectoriesLoading] = useState(true)
   const [projectLoading, setProjectLoading] = useState(false)
-  const [projectRefreshing, setProjectRefreshing] = useState(false)
+  const [modeLoading, setModeLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [loadedCwd, setLoadedCwd] = useState<string | null>(null)
   const [directoriesError, setDirectoriesError] = useState<string | null>(null)
   const [projectError, setProjectError] = useState<string | null>(null)
+  const [modeError, setModeError] = useState<string | null>(null)
+  const [presetsError, setPresetsError] = useState<string | null>(null)
+  const [saveErrors, setSaveErrors] = useState<{ model?: string; mode?: string }>({})
+  const [savedOwners, setSavedOwners] = useState<string[]>([])
   const [directoryAttempt, setDirectoryAttempt] = useState(0)
   const [projectAttempt, setProjectAttempt] = useState(0)
-  const projectReady =
-    loadedCwd === cwd && projectError === null && !projectLoading && !projectRefreshing
-  const projectDraftDirtyRef = useRef(false)
-  const projectCwdRef = useRef('')
-  const projectRequestRef = useRef(0)
-  const markDraftDirty = useCallback(
-    (dirty: boolean): void => {
-      projectDraftDirtyRef.current = dirty
-      onDirtyChange?.(dirty)
-    },
-    [onDirtyChange]
-  )
+  const [modeAttempt, setModeAttempt] = useState(0)
+  const [presetsAttempt, setPresetsAttempt] = useState(0)
+  const requestRef = useRef(0)
+  const savingRef = useRef(false)
+  const modelDirty =
+    cwd !== null &&
+    modelCwd === cwd &&
+    modelBaseline !== undefined &&
+    !sameSelection(fixed ? selection : null, modelBaseline)
+  const modeDirty = modeBaseline?.cwd === cwd && defaultMode !== modeBaseline.value
+  const dirty = modelDirty || modeDirty
+  const dirtyRef = useRef({ model: false, mode: false })
+  useEffect(() => {
+    dirtyRef.current = { model: modelDirty, mode: modeDirty }
+  }, [modelDirty, modeDirty])
+  const modelReady =
+    cwd !== null &&
+    modelCwd === cwd &&
+    modelBaseline !== undefined &&
+    !projectLoading &&
+    !projectError
+  const modeReady = modeBaseline?.cwd === cwd && !modeLoading && !modeError
+  const canSave =
+    !saving &&
+    dirty &&
+    (!modelDirty || (modelReady && (!fixed || selection !== null))) &&
+    (!modeDirty || modeReady)
 
-  function applyProjectResult(result: L2ProjectModelDefaultGetResponse): void {
-    setModels(result.models)
-    setFixed(result.default !== null)
-    setSelection(
-      result.default ??
-        (result.models[0]
-          ? {
-              provider: result.models[0].provider,
-              modelId: result.models[0].modelId,
-              thinkingLevel: result.models[0].thinkingLevels[0]
-            }
-          : null)
-    )
-  }
+  const beforeLeave = useCallback(async (): Promise<boolean> => {
+    if (savingRef.current) return false
+    if (!dirty) return true
+    return confirm({
+      title: t('discardProjectDefaultsTitle'),
+      description: t('discardProjectDefaultsDescription'),
+      confirmLabel: t('discardModelConfirm')
+    })
+  }, [confirm, dirty, t])
+
+  useEffect(() => {
+    onBeforeLeaveChange(dirty || saving ? beforeLeave : null)
+    return () => onBeforeLeaveChange(null)
+  }, [beforeLeave, dirty, onBeforeLeaveChange, saving])
+
+  useEffect(() => {
+    if (!dirty && !saving) return
+    const preventReload = (event: BeforeUnloadEvent): void => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', preventReload)
+    return () => window.removeEventListener('beforeunload', preventReload)
+  }, [dirty, saving])
 
   useEffect(() => {
     let disposed = false
-    const cachedResponse = L2PiDirectoryListResponseSchema.safeParse(readL4PiDirectoriesCache())
-    const cachedDirectories = cachedResponse.success ? cachedResponse.data.directories : null
-    queueMicrotask((): void => {
+    const parsed = L2PiDirectoryListResponseSchema.safeParse(readL4PiDirectoriesCache())
+    const cached = parsed.success ? parsed.data.directories : null
+    queueMicrotask(() => {
       if (disposed) return
       setDirectoriesError(null)
-      setDirectoriesLoading(!cachedDirectories)
-      if (cachedDirectories) {
-        setDirectories(cachedDirectories)
-        setCwd((current): string =>
-          current && cachedDirectories.some((directory) => directory.cwd === current)
-            ? current
-            : (cachedDirectories[0]?.cwd ?? '')
-        )
-      }
+      setDirectoriesLoading(!cached)
+      if (cached) setDirectories(cached)
     })
-
-    void (async (): Promise<void> => {
-      try {
-        const result = await biz.listDirectories()
-        if (disposed) return
-        setDirectories(result.directories)
-        setCwd((current): string =>
-          current && result.directories.some((directory) => directory.cwd === current)
-            ? current
-            : (result.directories[0]?.cwd ?? '')
-        )
-      } catch (error) {
-        if (!disposed && !cachedDirectories) {
-          const message = error instanceof Error ? error.message : t('projectDirectoriesFailed')
-          console.warn('[Pi Desk][ProjectModelDefault] 读取项目目录失败', { message })
-          setDirectoriesError(message)
-        }
-      } finally {
+    void biz
+      .listDirectories()
+      .then((result) => {
+        if (!disposed) setDirectories(result.directories)
+      })
+      .catch((error: unknown) => {
+        if (disposed || cached) return
+        const message = error instanceof Error ? error.message : t('projectDirectoriesFailed')
+        console.warn('[Pi Desk][ProjectDefaults] 读取项目目录失败', { message })
+        setDirectoriesError(message)
+      })
+      .finally(() => {
         if (!disposed) setDirectoriesLoading(false)
-      }
-    })()
-    return (): void => {
+      })
+    return () => {
       disposed = true
     }
   }, [biz, t, directoryAttempt])
 
   useEffect(() => {
     let disposed = false
-    const request = ++projectRequestRef.current
-    function isCurrent(): boolean {
-      return !disposed && request === projectRequestRef.current
-    }
-    const projectChanged = projectCwdRef.current !== cwd
-    projectCwdRef.current = cwd
-    if (projectChanged) markDraftDirty(false)
-    if (!cwd) {
-      queueMicrotask((): void => {
-        if (!isCurrent()) return
-        setModels([])
-        setSelection(null)
-        setFixed(false)
-        setLoadedCwd(null)
-        setProjectError(null)
-        setProjectLoading(false)
-        setProjectRefreshing(false)
+    void biz
+      .getSettings()
+      .then((result) => {
+        if (!disposed) {
+          setPresets(result.presets)
+          setPresetsError(null)
+        }
       })
-      return (): void => {
-        disposed = true
-      }
-    }
-
-    const cached = readL2ProjectModelDefaultCache(cwd)
-    queueMicrotask((): void => {
-      if (!isCurrent()) return
-      setProjectError(null)
-      // 同一项目重试或后台刷新时，缓存和远端结果都不能替换未保存草稿。
-      if (!projectDraftDirtyRef.current) {
-        if (cached) {
-          applyProjectResult(cached)
-          setLoadedCwd(cwd)
-        }
-      }
-      setProjectLoading(!cached && !projectDraftDirtyRef.current)
-      setProjectRefreshing(Boolean(cached) || projectDraftDirtyRef.current)
-    })
-
-    void (async (): Promise<void> => {
-      try {
-        const result = await biz.getProjectDefault(cwd)
-        if (!isCurrent()) return
-        if (!projectDraftDirtyRef.current) applyProjectResult(result)
-        setLoadedCwd(cwd)
-      } catch (error) {
-        if (isCurrent()) {
-          const message = error instanceof Error ? error.message : t('projectDefaultFailed')
-          console.warn('[Pi Desk][ProjectModelDefault] 读取项目模型配置失败', { cwd, message })
-          setProjectError(message)
-        }
-      } finally {
-        if (isCurrent()) {
-          setProjectLoading(false)
-          setProjectRefreshing(false)
-        }
-      }
-    })()
-    return (): void => {
+      .catch((error: unknown) => {
+        if (!disposed)
+          setPresetsError(error instanceof Error ? error.message : t('modelsLoadFailed'))
+      })
+    return () => {
       disposed = true
     }
-  }, [biz, cwd, t, markDraftDirty, projectAttempt])
+  }, [biz, t, presetsAttempt])
 
-  async function selectProject(nextCwd: string): Promise<boolean> {
-    if (saving) return false
-    if (nextCwd === cwd) return true
-    if (
-      projectDraftDirtyRef.current &&
-      !(await confirm({
-        title: t('discardModelTitle'),
-        description: t('discardModelDescription'),
-        confirmLabel: t('discardModelConfirm')
-      }))
-    ) {
-      return false
+  useEffect(() => {
+    if (cwd === null) return
+    let disposed = false
+    const request = requestRef.current
+    const isCurrent = (): boolean => !disposed && request === requestRef.current
+    function apply(result: L2ProjectModelDefaultGetResponse): void {
+      setModels(result.models)
+      setModelBaseline(result.default)
+      setFixed(result.default !== null)
+      setSelection(
+        result.default ??
+          (result.models[0]
+            ? {
+                provider: result.models[0].provider,
+                modelId: result.models[0].modelId,
+                thinkingLevel: result.models[0].thinkingLevels[0]
+              }
+            : null)
+      )
     }
-    projectRequestRef.current += 1
-    setProjectRefreshing(true)
+    queueMicrotask(() => {
+      if (!isCurrent()) return
+      setProjectError(null)
+      setProjectLoading(true)
+      const cached = readL2ProjectModelDefaultCache(cwd)
+      if (cached && !dirtyRef.current.model) apply(cached)
+    })
+    void biz
+      .getProjectDefault(cwd)
+      .then((result) => {
+        if (!isCurrent()) return
+        if (!dirtyRef.current.model) apply(result)
+        setModelCwd(cwd)
+      })
+      .catch((error: unknown) => {
+        if (!isCurrent()) return
+        const message = error instanceof Error ? error.message : t('projectDefaultFailed')
+        console.warn('[Pi Desk][ProjectDefaults] 读取项目模型失败', { cwd, message })
+        setProjectError(message)
+      })
+      .finally(() => {
+        if (isCurrent()) setProjectLoading(false)
+      })
+    return () => {
+      disposed = true
+    }
+  }, [biz, cwd, t, projectAttempt])
+
+  useEffect(() => {
+    let disposed = false
+    const request = requestRef.current
+    const isCurrent = (): boolean => !disposed && request === requestRef.current
+    queueMicrotask(() => {
+      if (!isCurrent()) return
+      setModeLoading(true)
+      setModeError(null)
+    })
+    void biz
+      .getCapabilityModeDefault(cwd)
+      .then((result) => {
+        if (!isCurrent() || dirtyRef.current.mode) return
+        setDefaultMode(result.defaultMode)
+        setModeBaseline({ cwd, value: result.defaultMode })
+      })
+      .catch((error: unknown) => {
+        if (!isCurrent()) return
+        const message = error instanceof Error ? error.message : t('projectModeLoadFailed')
+        console.warn('[Pi Desk][ProjectDefaults] 读取默认模式失败', { cwd, message })
+        setModeError(message)
+      })
+      .finally(() => {
+        if (isCurrent()) setModeLoading(false)
+      })
+    return () => {
+      disposed = true
+    }
+  }, [biz, cwd, t, modeAttempt])
+
+  async function selectProject(nextCwd: string | null): Promise<boolean> {
+    if (nextCwd === cwd) return true
+    if (!(await beforeLeave())) return false
+    requestRef.current += 1
+    dirtyRef.current = { model: false, mode: false }
+    setModelCwd(null)
+    setModelBaseline(undefined)
+    setModeBaseline(null)
+    setModels([])
+    setSelection(null)
+    setFixed(false)
+    setDefaultMode(undefined)
+    setProjectError(null)
+    setModeError(null)
+    setSaveErrors({})
+    setSavedOwners([])
     setCwd(nextCwd)
     return true
   }
 
   function changeFixed(value: boolean): void {
-    if (!projectReady || saving) return
-    markDraftDirty(true)
-    setFixed(value)
+    if (modelReady && !savingRef.current) setFixed(value)
   }
-
+  function changeDefaultMode(value: DefaultMode): void {
+    if (modeReady && !savingRef.current) setDefaultMode(value)
+  }
   function selectModel(model: L2ModelOption): void {
-    if (!projectReady || saving) return
-    markDraftDirty(true)
+    if (!modelReady || savingRef.current) return
     setSelection({
       provider: model.provider,
       modelId: model.modelId,
       thinkingLevel: model.thinkingLevels[0]
     })
   }
-
   function selectThinking(value: string): void {
-    if (!projectReady || saving) return
+    if (!modelReady || savingRef.current || !selection) return
     const model = models.find(
-      (item): boolean => item.provider === selection?.provider && item.modelId === selection.modelId
+      (item) => item.provider === selection.provider && item.modelId === selection.modelId
     )
-    const level = model?.thinkingLevels.find((item): boolean => item === value)
-    if (!selection || !level) return
-    markDraftDirty(true)
-    setSelection({ ...selection, thinkingLevel: level })
+    const level = model?.thinkingLevels.find((item) => item === value)
+    if (level) setSelection({ ...selection, thinkingLevel: level })
   }
-
   function applyPreset(preset: L2ModelPreset): void {
-    if (!projectReady || saving) return
-    markDraftDirty(true)
+    if (!modelReady || savingRef.current) return
     setSelection({
       provider: preset.provider,
       modelId: preset.modelId,
@@ -258,40 +337,48 @@ export function useL2ProjectModelDefaultSettings(
     })
   }
 
-  function retryDirectories(): void {
-    setDirectoryAttempt((attempt): number => attempt + 1)
-  }
-
-  function retryProject(): void {
-    projectRequestRef.current += 1
-    setProjectRefreshing(true)
-    setProjectAttempt((attempt): number => attempt + 1)
-  }
-
   async function save(): Promise<void> {
-    if (
-      !cwd ||
-      !projectReady ||
-      projectLoading ||
-      projectRefreshing ||
-      saving ||
-      (fixed && !selection)
-    ) {
-      return
+    if (!canSave || savingRef.current) return
+    const changes: L2ProjectDefaultChanges = {
+      ...(modelDirty && cwd !== null ? { model: { cwd, default: fixed ? selection : null } } : {}),
+      ...(modeDirty ? { mode: { cwd, ...(defaultMode !== undefined ? { defaultMode } : {}) } } : {})
     }
+    savingRef.current = true
     setSaving(true)
+    setSaveErrors({})
+    setSavedOwners([])
     try {
-      await biz.replaceProjectDefault({ cwd, default: fixed ? selection : null })
-      saveL2ProjectModelDefaultCache({
-        cwd,
-        default: fixed ? selection : null,
-        models
-      })
-      markDraftDirty(false)
-      toast.success(fixed ? t('projectDefaultSaved') : t('projectDefaultGlobalSaved'))
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : t('projectDefaultSaveFailed'))
+      const result = await saveL2ProjectDefaultChanges(biz, changes)
+      const errors: { model?: string; mode?: string } = {}
+      const saved: string[] = []
+      if (result.model?.status === 'fulfilled' && changes.model) {
+        setModelBaseline(changes.model.default)
+        saveL2ProjectModelDefaultCache({ ...changes.model, models })
+        saved.push(t('projectDefaultModel'))
+      } else if (result.model?.status === 'rejected') {
+        errors.model =
+          result.model.reason instanceof Error
+            ? result.model.reason.message
+            : t('projectDefaultSaveFailed')
+      }
+      if (result.mode?.status === 'fulfilled' && changes.mode) {
+        setModeBaseline({ cwd, value: changes.mode.defaultMode })
+        saved.push(t('projectDefaultMode'))
+      } else if (result.mode?.status === 'rejected') {
+        errors.mode =
+          result.mode.reason instanceof Error
+            ? result.mode.reason.message
+            : t('projectModeSaveFailed')
+      }
+      setSaveErrors(errors)
+      setSavedOwners(saved)
+      if (errors.model || errors.mode) {
+        console.warn('[Pi Desk][ProjectDefaults] 保存默认配置未全部成功', { cwd, errors, saved })
+      } else {
+        toast.success(t('projectDefaultsSaved'))
+      }
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
@@ -299,25 +386,36 @@ export function useL2ProjectModelDefaultSettings(
   return {
     directories,
     cwd,
-    loadedCwd,
     models,
+    presets,
     selection,
     fixed,
+    defaultMode,
+    modelReady,
+    modeReady,
     directoriesLoading,
     projectLoading,
-    projectRefreshing,
+    modeLoading,
     saving,
-    projectReady,
+    dirty,
+    canSave,
     directoriesError,
     projectError,
+    modeError,
+    presetsError,
+    saveErrors,
+    savedOwners,
     dialog,
     selectProject,
     changeFixed,
+    changeDefaultMode,
     selectModel,
     selectThinking,
     applyPreset,
-    retryDirectories,
-    retryProject,
+    retryDirectories: () => setDirectoryAttempt((attempt) => attempt + 1),
+    retryProject: () => setProjectAttempt((attempt) => attempt + 1),
+    retryMode: () => setModeAttempt((attempt) => attempt + 1),
+    retryPresets: () => setPresetsAttempt((attempt) => attempt + 1),
     save
   }
 }

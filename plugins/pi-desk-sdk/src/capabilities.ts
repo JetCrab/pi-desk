@@ -39,6 +39,7 @@ export const CapabilityModeKeySchema = z.string().min(1).max(64)
 export const CapabilityModeSchema = z
   .object({
     name: z.string().trim().min(1).max(64),
+    promptSource: z.enum(['global', 'none', 'custom']).optional(),
     tools: CapabilityRuleSchema.optional(),
     skills: CapabilityRuleSchema.optional(),
     plugins: z
@@ -70,7 +71,8 @@ export const SessionCapabilityRulesSchema = z
   .object({
     tools: CapabilityRuleSchema,
     skills: CapabilityRuleSchema,
-    capabilities: z.record(CapabilityKeySchema, CapabilityRuleSchema)
+    capabilities: z.record(CapabilityKeySchema, CapabilityRuleSchema),
+    appendSystemPrompt: z.string().optional()
   })
   .strict()
 

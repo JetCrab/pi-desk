@@ -16,7 +16,6 @@ const paths = {
     'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8M9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1Z',
   globe: 'M22 12A10 10 0 1 1 2 12a10 10 0 0 1 20 0ZM2 12h20M12 2a16 16 0 0 1 0 20 16 16 0 0 1 0-20',
   alert: 'M22 12A10 10 0 1 1 2 12a10 10 0 0 1 20 0ZM12 7v6m0 4h.01',
-  loader: 'M12 2a10 10 0 1 1-10 10',
   stop: 'M5 5h14v14H5z',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
   close: 'm6 6 12 12M6 18 18 6',
@@ -28,12 +27,33 @@ export function DesktopIcon({
   name,
   spinning = false
 }: {
-  name: keyof typeof paths
+  name: keyof typeof paths | 'loader'
   spinning?: boolean
 }): React.JSX.Element {
+  if (name === 'loader' || spinning) {
+    return (
+      <svg
+        className="icon loading-spinner"
+        viewBox="0 0 25 25"
+        aria-hidden="true"
+        fill="currentColor"
+        stroke="none"
+      >
+        <circle cx="2.5" cy="2.5" r="2.5" />
+        <circle cx="12.5" cy="2.5" r="2.5" />
+        <circle cx="22.5" cy="2.5" r="2.5" />
+        <circle cx="2.5" cy="12.5" r="2.5" />
+        <circle cx="12.5" cy="12.5" r="2.5" />
+        <circle cx="22.5" cy="12.5" r="2.5" />
+        <circle cx="2.5" cy="22.5" r="2.5" />
+        <circle cx="12.5" cy="22.5" r="2.5" />
+        <circle cx="22.5" cy="22.5" r="2.5" />
+      </svg>
+    )
+  }
   return (
     <svg
-      className={`icon${spinning ? ' spinning' : ''}`}
+      className="icon"
       viewBox="0 0 24 24"
       aria-hidden="true"
       fill="none"

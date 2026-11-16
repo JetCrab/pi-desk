@@ -1,6 +1,6 @@
 'use client'
 
-import { LoaderCircleIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import {
   forwardRef,
   useCallback,
@@ -284,7 +284,7 @@ function L4CodePreviewComponent(
       <div ref={hostRef} className={`size-full ${markerStyles.host}`} />
       {loadState === 'loading' ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 bg-background text-sm text-muted-foreground">
-          <LoaderCircleIcon className="size-4 animate-spin" /> {t('codeLoading')}
+          <L4LoadingSpinner className="size-4" /> {t('codeLoading')}
         </div>
       ) : null}
       {loadState === 'error' ? (

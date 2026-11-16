@@ -14,6 +14,7 @@ export function L2CapabilityModesConfirm({
   deleteName,
   saving,
   error,
+  unsavedNames,
   onCancel,
   onDelete,
   onLeave
@@ -22,6 +23,7 @@ export function L2CapabilityModesConfirm({
   deleteName: string | null
   saving: boolean
   error: string | null
+  unsavedNames: string[]
   onCancel: () => void
   onDelete: () => void
   onLeave: (choice: 'save' | 'discard') => void
@@ -34,15 +36,24 @@ export function L2CapabilityModesConfirm({
         if (!next && !saving) onCancel()
       }}
     >
-      <L4AppDialogContent className="z-[150]" showCloseButton={!saving}>
+      <L4AppDialogContent className="z-[150]" backdropClassName="z-[140]" showCloseButton={!saving}>
         <L4AppDialogHeader className="p-4 pr-12">
           <L4AppDialogTitle>{deleteName ? t('deleteConfirm') : t('saveConfirm')}</L4AppDialogTitle>
           <L4AppDialogDescription>
             {deleteName ? t('deleteDescription', { name: deleteName }) : t('unsavedDescription')}
           </L4AppDialogDescription>
         </L4AppDialogHeader>
+        {!deleteName && unsavedNames.length > 0 && (
+          <ul className="max-h-40 space-y-1 overflow-y-auto px-4 pb-3 text-sm">
+            {unsavedNames.map((name, index) => (
+              <li key={index} className="break-words">
+                {name}
+              </li>
+            ))}
+          </ul>
+        )}
         {error && (
-          <p role="alert" className="px-4 pb-3 text-sm text-destructive">
+          <p role="alert" className="whitespace-pre-wrap px-4 pb-3 text-sm text-destructive">
             {error}
           </p>
         )}
@@ -51,7 +62,7 @@ export function L2CapabilityModesConfirm({
             {t('cancel')}
           </Button>
           {deleteName ? (
-            <Button variant="destructive" onClick={onDelete}>
+            <Button variant="destructive" disabled={saving} onClick={onDelete}>
               {t('delete')}
             </Button>
           ) : (

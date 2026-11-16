@@ -108,6 +108,7 @@ export function ProfileCard({
   let localUrl = active?.status !== 'stopping' ? active?.localUrl : null
   let pathLabel: string | null = null
   let connectionStatus: string | null = null
+  let connectionFailed = false
   const localWorkbench = ['localhost', '127.0.0.1', '[::1]'].includes(
     globalThis.location?.hostname ?? ''
   )
@@ -122,13 +123,28 @@ export function ProfileCard({
       }
       if (!localUrl) connectionStatus = '本地连接尚未就绪'
     } else if (tunnel?.status === 'failed') {
-      connectionStatus = `本地连接失败${tunnel.error ? `：${tunnel.error}` : ''}`
+      if (tunnel.error === '启用隧道前请填写控制服务地址') {
+        connectionStatus = '未启用：当前电脑尚未配置隧道控制服务地址'
+      } else if (tunnel.error === '启用隧道前请填写控制密钥') {
+        connectionStatus = '未启用：当前电脑尚未配置隧道控制密钥'
+      } else {
+        connectionStatus = `本地连接失败${tunnel.error ? `：${tunnel.error}` : ''}`
+        connectionFailed = true
+      }
     } else if (tunnel?.status === 'recovering') {
       connectionStatus = '正在恢复本地连接…'
     } else if (tunnel?.status === 'closed') {
       connectionStatus = '本地连接已关闭'
+    } else if (active.failure && !active.publicUrl) {
+      connectionStatus = '本地连接不可用：远端隧道未就绪'
+      connectionFailed = true
     } else {
-      connectionStatus = active.status === 'starting' ? '等待调试入口就绪' : '正在建立本地连接…'
+      connectionStatus =
+        active.status === 'starting'
+          ? '等待调试入口就绪'
+          : active.publicUrl
+            ? '正在建立本地连接…'
+            : '正在准备本地连接…'
     }
   }
   const publicUrl = active?.status === 'running' ? active.publicUrl : null
@@ -196,7 +212,7 @@ export function ProfileCard({
           <span
             className="remote-debug-connection-status"
             role="status"
-            style={tunnel?.status === 'failed' ? { color: 'var(--destructive)' } : undefined}
+            style={connectionFailed ? { color: 'var(--destructive)' } : undefined}
           >
             {connectionStatus}
           </span>

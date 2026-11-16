@@ -1,8 +1,9 @@
 'use client'
 
-import { Check, Database, Globe, LoaderCircle, SquareChartGantt, X } from 'lucide-react'
+import { Check, Database, Globe, SquareChartGantt, X } from 'lucide-react'
 import { motion } from 'motion/react'
 import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import type { ShowcaseSceneProps } from '../../l2-showcase-story'
 import { useDemoState } from '../../hooks/l2-use-demo-state'
 import { useDemoColumnMotion } from '../../hooks/l2-use-demo-column-motion'
@@ -88,7 +89,7 @@ function Conversation({
         {step === 4 && (
           <ProcessRow>
             <span className={styles.working} data-guide-target="pin-working">
-              <LoaderCircle size={14} />
+              <L4LoadingSpinner size={14} />
               正在整理发布清单
             </span>
           </ProcessRow>
@@ -141,7 +142,7 @@ function Conversation({
         <ProcessRow>
           {step < 5 ? (
             <span className={styles.working}>
-              <LoaderCircle size={14} />
+              <L4LoadingSpinner size={14} />
               正在检查手机布局
             </span>
           ) : (

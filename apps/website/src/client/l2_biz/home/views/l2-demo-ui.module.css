@@ -161,19 +161,6 @@
   width: 16px;
   height: 16px;
 }
-.runningGrip {
-  opacity: 0;
-  animation: grip-frame 800ms steps(1, end) infinite;
-}
-@keyframes grip-frame {
-  0% {
-    opacity: 1;
-  }
-  10%,
-  100% {
-    opacity: 0;
-  }
-}
 .shortcuts {
   display: flex;
   flex-direction: column;
@@ -562,14 +549,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.taskSpinner {
-  animation: task-spin 1.2s linear infinite;
-}
-@keyframes task-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 .badge {
   display: inline-flex;
@@ -1103,12 +1082,5 @@
 @media (prefers-reduced-motion: reduce) {
   .action {
     transition: none;
-  }
-  .taskSpinner {
-    animation: none;
-  }
-  .runningGrip {
-    animation: none;
-    opacity: 1;
   }
 }

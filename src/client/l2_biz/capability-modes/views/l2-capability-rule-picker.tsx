@@ -2,8 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CheckIcon, ListFilterIcon, PlusIcon, SearchIcon, XIcon } from 'lucide-react'
-import { PluginCheckbox, PluginSurface } from '@jetcrab/pi-desk-sdk/react/base'
+import { CodeIcon, PlusIcon, SearchIcon, XIcon } from 'lucide-react'
 import {
   isCapabilityAllowed,
   type CapabilityOption,
@@ -11,26 +10,28 @@ import {
 } from '@jetcrab/pi-desk-sdk/capabilities'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
-import { cn } from '@client/l4_foundation/lib/l4-utils'
-
-type PolicyKind = 'all' | 'allow' | 'deny' | 'none'
-const POLICIES: Array<{ key: PolicyKind; label: string }> = [
-  { key: 'all', label: 'policyAll' },
-  { key: 'allow', label: 'policyAllow' },
-  { key: 'deny', label: 'policyDeny' },
-  { key: 'none', label: 'policyNone' }
-]
-
-function policyKind(rule: CapabilityRule): PolicyKind {
-  if (rule.allow !== undefined) return rule.allow.length === 0 ? 'none' : 'allow'
-  return rule.deny?.length ? 'deny' : 'all'
-}
+import { Switch } from '@client/l4_foundation/ui/shadcn/switch'
+import { L4ChoiceGroup } from '@client/l4_foundation/ui/l4-choice-group'
+import {
+  L4AppDialogContent,
+  L4AppDialogDescription,
+  L4AppDialogFooter,
+  L4AppDialogHeader,
+  L4AppDialogRoot,
+  L4AppDialogTitle
+} from '@client/l4_foundation/ui/l4-app-dialog'
+import { l2ToggleCapability } from '../l2-capability-modes-model'
 
 interface RulePickerProps {
   label: string
   rule: CapabilityRule
   options: readonly CapabilityOption[]
   disabled: boolean
+  readOnly: boolean
+  query: string
+  rulesOpen: boolean
+  onQueryChange: (query: string) => void
+  onRulesOpenChange: (open: boolean) => void
   onChange: (rule: CapabilityRule) => void
 }
 
@@ -39,262 +40,267 @@ export function L2CapabilityRulePicker({
   rule,
   options,
   disabled,
+  readOnly,
+  query,
+  rulesOpen,
+  onQueryChange,
+  onRulesOpenChange,
   onChange
 }: RulePickerProps): React.JSX.Element {
   const { t } = useTranslation('capabilityModes')
-  const [kind, setKind] = useState<PolicyKind>(() => policyKind(rule))
-  const [exclude, setExclude] = useState(false)
-  const [query, setQuery] = useState('')
-  const [selectedOnly, setSelectedOnly] = useState(false)
+  const [pattern, setPattern] = useState('')
+  const [side, setSide] = useState<'allow' | 'deny'>('deny')
   const [visibleCount, setVisibleCount] = useState(160)
-  const [manual, setManual] = useState<string[]>(() => [
-    ...new Set([...(rule.allow ?? []), ...(rule.deny ?? [])])
-  ])
-  const side = kind === 'deny' || kind === 'all' || (kind === 'allow' && exclude) ? 'deny' : 'allow'
-  const selected = rule[side] ?? []
-  const selectedSet = new Set(selected)
+  const [confirmation, setConfirmation] = useState<{
+    rule: CapabilityRule
+    description: string
+  } | null>(null)
+  const locked = disabled || readOnly
   const values = useMemo(() => {
     const map = new Map(options.map((option) => [option.value, option]))
-    for (const value of [...manual, ...(rule.allow ?? []), ...(rule.deny ?? [])]) {
-      if (!map.has(value)) map.set(value, { value })
+    for (const value of [...(rule.allow ?? []), ...(rule.deny ?? [])]) {
+      if (!value.includes('*') && !map.has(value)) map.set(value, { value })
     }
-    return [...map.values()].sort((left, right) => left.value.localeCompare(right.value))
-  }, [manual, options, rule.allow, rule.deny])
-  const needle = query.trim()
-  const filtered = values.filter((option) => {
-    if (selectedOnly && !selectedSet.has(option.value)) return false
-    return (
-      !needle ||
-      `${option.value} ${option.label ?? ''} ${option.description ?? ''}`
-        .toLowerCase()
-        .includes(needle.toLowerCase()) ||
-      (needle.includes('*') && isCapabilityAllowed({ allow: [needle] }, option.value))
-    )
-  })
+    return [...map.values()]
+  }, [options, rule.allow, rule.deny])
+  const needle = query.trim().toLowerCase()
+  const filtered = values.filter((option) =>
+    `${option.value} ${option.label ?? ''} ${option.description ?? ''}`
+      .toLowerCase()
+      .includes(needle)
+  )
   const shown = filtered.slice(0, visibleCount)
-  const canAdd = needle.length > 0 && needle.length <= 256 && !selectedSet.has(needle)
-
-  function changeKind(next: PolicyKind): void {
-    setKind(next)
-    setExclude(false)
-    setSelectedOnly(false)
-    if (next === 'all') onChange({})
-    else if (next === 'none') onChange({ allow: [] })
-    else if (next === 'deny') onChange({ deny: rule.deny ?? [] })
-    else onChange({ allow: rule.allow ?? [], ...(rule.deny?.length ? { deny: rule.deny } : {}) })
+  const count = values.filter((option) => isCapabilityAllowed(rule, option.value)).length
+  const ruleCount = (rule.allow?.length ?? 0) + (rule.deny?.length ?? 0)
+  const replaceAll = (next: CapabilityRule): void => {
+    if (rule.allow !== undefined || rule.deny?.length)
+      setConfirmation({ rule: next, description: t('resetRulesDescription', { name: label }) })
+    else onChange(next)
   }
-
-  function replaceSelected(next: string[]): void {
-    if (kind === 'all' && next.length > 0) setKind('deny')
-    if (kind === 'none' && next.length > 0) setKind('allow')
-    onChange({ ...rule, [side]: next })
+  const toggle = (value: string, enabled: boolean): void => {
+    const next = l2ToggleCapability(rule, value, enabled)
+    if (next.removedPatterns.length)
+      setConfirmation({
+        rule: next.rule,
+        description: t('removePatternsDescription', { patterns: next.removedPatterns.join(', ') })
+      })
+    else onChange(next.rule)
   }
-
-  function toggle(value: string, checked: boolean): void {
-    replaceSelected(
-      checked ? [...new Set([...selected, value])] : selected.filter((item) => item !== value)
-    )
-  }
-
-  function add(): void {
-    if (!canAdd || disabled) return
-    setManual((current) => [...new Set([...current, needle])])
-    toggle(needle, true)
-    setQuery('')
+  const addPattern = (): void => {
+    const value = pattern.trim()
+    if (!value || locked) return
+    onChange({ ...rule, [side]: [...new Set([...(rule[side] ?? []), value])] })
+    setPattern('')
   }
 
   return (
-    <PluginSurface
-      className="flex min-h-0 flex-1 flex-col"
-      aria-label={t('ruleEditor', { name: label })}
-    >
+    <section className="flex min-h-0 flex-1 flex-col" aria-label={t('ruleEditor', { name: label })}>
       <div className="shrink-0 space-y-3 border-b px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div
-            className="flex flex-wrap gap-1"
-            role="group"
-            aria-label={t('ruleMode', { name: label })}
-          >
-            {POLICIES.map((item) => (
-              <Button
-                key={item.key}
-                size="sm"
-                variant={kind === item.key ? 'secondary' : 'ghost'}
-                aria-pressed={kind === item.key}
-                disabled={disabled}
-                onClick={() => changeKind(item.key)}
-              >
-                {kind === item.key && <CheckIcon className="size-3.5" />}
-                {t(item.label)}
-              </Button>
-            ))}
-          </div>
-          {kind === 'allow' && (
-            <Button
-              size="sm"
-              variant={exclude ? 'secondary' : 'ghost'}
-              disabled={disabled}
-              aria-pressed={exclude}
-              onClick={() => {
-                setExclude(!exclude)
-                setSelectedOnly(false)
-              }}
-            >
-              {t('exclusions')}
-              {rule.deny?.length ? ` · ${rule.deny.length}` : ''}
-            </Button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="relative min-w-0 flex-1">
-            <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-40 flex-1">
+            <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              aria-label={t('ruleSearch')}
-              placeholder={t('ruleSearchPlaceholder')}
-              maxLength={256}
-              className="pl-9 pr-9"
+              aria-label={t('capabilitySearch')}
+              placeholder={t('capabilitySearch')}
+              className="pl-9"
               value={query}
-              disabled={disabled}
               onChange={(event) => {
-                setQuery(event.target.value)
+                onQueryChange(event.target.value)
                 setVisibleCount(160)
               }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
-                  event.preventDefault()
-                  add()
-                }
-              }}
             />
-            {query && (
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label={t('clearSearch')}
-                className="absolute right-0.5 top-1/2 -translate-y-1/2"
-                onClick={() => setQuery('')}
-              >
-                <XIcon className="size-3.5" />
-              </Button>
-            )}
           </div>
+          <Button size="sm" variant="ghost" disabled={locked} onClick={() => replaceAll({})}>
+            {t('policyAll')}
+          </Button>
           <Button
             size="sm"
-            variant={selectedOnly ? 'secondary' : 'ghost'}
-            aria-pressed={selectedOnly}
-            onClick={() => setSelectedOnly(!selectedOnly)}
+            variant="ghost"
+            disabled={locked}
+            onClick={() => replaceAll({ allow: [] })}
           >
-            <ListFilterIcon className="size-4" />
-            <span className="hidden @min-[420px]:inline">{t('selectedOnly')}</span>
-            <span className="@min-[420px]:hidden">{t('selectedShort')}</span>
+            {t('policyNone')}
           </Button>
-        </div>
-        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span>
-            {t(side === 'allow' ? 'allowRules' : 'excludeRules')} ·{' '}
-            {t('selectedCount', { count: selected.length })}
-          </span>
-          <div className="flex items-center gap-1">
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={disabled || shown.length === 0}
-              onClick={() =>
-                replaceSelected([...new Set([...selected, ...shown.map((option) => option.value)])])
-              }
-            >
-              {t('selectVisible')}
-            </Button>
-            {selected.length > 0 && (
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={disabled}
-                onClick={() => replaceSelected([])}
-              >
-                {t('clearSelected')}
-              </Button>
-            )}
-          </div>
-        </div>
-      </div>
-      <div className="pi-desk-chat-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
-        {canAdd && (
           <Button
-            variant="outline"
-            disabled={disabled}
-            className="mb-3 h-auto min-h-9 max-w-full justify-start"
-            onClick={add}
+            size="sm"
+            variant={rulesOpen ? 'secondary' : 'ghost'}
+            aria-expanded={rulesOpen}
+            onClick={() => onRulesOpenChange(!rulesOpen)}
           >
-            <PlusIcon className="size-4 shrink-0" />
-            {t('addRule')} <span className="min-w-0 truncate font-mono">{needle}</span>
+            <CodeIcon className="size-4" />
+            {t('nameRules')}
+            {ruleCount ? ` · ${ruleCount}` : ''}
           </Button>
-        )}
-        <div className="grid min-w-0 grid-cols-1 gap-1 @min-[620px]:grid-cols-2">
-          {shown.map((option) => {
-            const checked = selectedSet.has(option.value)
-            return (
-              <label
-                key={option.value}
-                className={cn(
-                  'flex min-h-9 min-w-0 cursor-pointer items-start gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-muted',
-                  checked && 'bg-accent text-accent-foreground',
-                  disabled && 'pointer-events-none opacity-50'
-                )}
-              >
-                <PluginCheckbox
-                  checked={checked}
-                  disabled={disabled}
-                  aria-label={t(side === 'allow' ? 'allowValue' : 'excludeValue', {
-                    name: option.value
-                  })}
-                  className="mt-1 shrink-0"
-                  onChange={(event) => toggle(option.value, event.target.checked)}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block break-all text-sm font-medium">
-                    {option.label ?? option.value}
-                  </span>
-                  {option.label && option.label !== option.value && (
-                    <span className="block break-all font-mono text-xs text-muted-foreground">
-                      {option.value}
-                    </span>
-                  )}
-                  {option.description ? (
-                    <details
-                      className="mt-0.5 text-xs leading-5 text-muted-foreground"
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      <summary className="line-clamp-1 cursor-pointer list-none">
-                        {option.description}
-                      </summary>
-                      <span className="block whitespace-pre-wrap break-words pt-1 text-sm">
-                        {option.description}
-                      </span>
-                    </details>
-                  ) : option.value.includes('*') ? (
-                    <span className="block text-xs text-muted-foreground">{t('pattern')}</span>
-                  ) : null}
-                </span>
-              </label>
-            )
-          })}
         </div>
+        {readOnly && <p className="text-sm text-muted-foreground">{t('allReadOnly')}</p>}
+        {rulesOpen && (
+          <div className="space-y-3 rounded-lg border p-3">
+            <p className="text-sm text-muted-foreground">{t('rulesDescription')}</p>
+            <label className="flex min-h-8 items-center gap-2 text-sm">
+              <Switch
+                checked={rule.allow === undefined}
+                disabled={locked}
+                onCheckedChange={(checked) => {
+                  const next = { ...rule }
+                  if (checked) delete next.allow
+                  else next.allow = []
+                  if (rule.allow?.length)
+                    setConfirmation({ rule: next, description: t('resetAllowDescription') })
+                  else onChange(next)
+                }}
+              />
+              {t('defaultAvailable')}
+            </label>
+            {!readOnly && (
+              <form
+                className="flex flex-wrap items-center gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  addPattern()
+                }}
+              >
+                <L4ChoiceGroup<'allow' | 'deny'>
+                  label={t('ruleAction')}
+                  layout="segmented"
+                  value={side}
+                  disabled={disabled}
+                  options={[
+                    { value: 'allow', label: t('allowRules') },
+                    { value: 'deny', label: t('excludeRules') }
+                  ]}
+                  onChange={setSide}
+                />
+                <Input
+                  aria-label={t('patternInput')}
+                  placeholder={t('patternPlaceholder')}
+                  maxLength={256}
+                  value={pattern}
+                  disabled={disabled}
+                  className="min-w-32 flex-1 font-mono"
+                  onChange={(event) => setPattern(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && event.nativeEvent.isComposing)
+                      event.preventDefault()
+                  }}
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  type="submit"
+                  disabled={disabled || !pattern.trim()}
+                >
+                  <PlusIcon className="size-4" />
+                  {t('addRule')}
+                </Button>
+              </form>
+            )}
+            {(['allow', 'deny'] as const).map((kind) =>
+              rule[kind]?.length ? (
+                <div key={kind} className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {t(kind === 'allow' ? 'allowRules' : 'excludeRules')}
+                  </span>
+                  {rule[kind]!.map((value) => (
+                    <span
+                      key={value}
+                      className="inline-flex max-w-full items-center gap-1 rounded-md bg-muted px-2 py-1 font-mono text-xs"
+                    >
+                      <span className="break-all">{value}</span>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        className="size-6 shrink-0"
+                        aria-label={t('removeRule', { name: value })}
+                        disabled={locked}
+                        onClick={() =>
+                          onChange({
+                            ...rule,
+                            [kind]: rule[kind]!.filter((entry) => entry !== value)
+                          })
+                        }
+                      >
+                        <XIcon className="size-3.5" />
+                      </Button>
+                    </span>
+                  ))}
+                </div>
+              ) : null
+            )}
+            {ruleCount === 0 && <p className="text-sm text-muted-foreground">{t('noSelection')}</p>}
+          </div>
+        )}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-2">
+        {shown.map((option) => (
+          <label
+            key={option.value}
+            className="flex min-h-12 cursor-pointer items-center gap-3 border-b border-border/60 py-3 last:border-0"
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block break-words text-sm font-medium">
+                {option.label ?? option.value}
+              </span>
+              {option.label && option.label !== option.value && (
+                <span className="block break-all font-mono text-xs text-muted-foreground">
+                  {option.value}
+                </span>
+              )}
+              {option.description && (
+                <span className="mt-1 block whitespace-pre-wrap break-words text-sm text-muted-foreground">
+                  {option.description}
+                </span>
+              )}
+            </span>
+            <Switch
+              aria-label={t('availableValue', { name: option.value })}
+              checked={isCapabilityAllowed(rule, option.value)}
+              disabled={locked}
+              onCheckedChange={(checked) => toggle(option.value, checked)}
+            />
+          </label>
+        ))}
         {shown.length === 0 && (
-          <p className="px-3 py-6 text-sm text-muted-foreground">
-            {needle ? t('noMatches') : selectedOnly ? t('noSelection') : t('enterPattern')}
-          </p>
+          <p className="py-6 text-sm text-muted-foreground">{t('noCapabilityMatches')}</p>
         )}
         {filtered.length > shown.length && (
           <Button
             variant="ghost"
             className="mt-3"
-            onClick={() => setVisibleCount((count) => count + 160)}
+            onClick={() => setVisibleCount((size) => size + 160)}
           >
             {t('moreRules', { count: filtered.length - shown.length })}
           </Button>
         )}
       </div>
-    </PluginSurface>
+      <p className="shrink-0 border-t px-4 py-2 text-xs text-muted-foreground">
+        {t('availableCount', { count, total: values.length })}
+      </p>
+      <L4AppDialogRoot
+        open={confirmation !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmation(null)
+        }}
+      >
+        <L4AppDialogContent className="z-[150]" backdropClassName="z-[140]">
+          <L4AppDialogHeader className="p-4 pr-12">
+            <L4AppDialogTitle>{t('changeRulesConfirm')}</L4AppDialogTitle>
+            <L4AppDialogDescription>{confirmation?.description}</L4AppDialogDescription>
+          </L4AppDialogHeader>
+          <L4AppDialogFooter>
+            <Button variant="outline" onClick={() => setConfirmation(null)}>
+              {t('cancel')}
+            </Button>
+            <Button
+              onClick={() => {
+                if (confirmation) onChange(confirmation.rule)
+                setConfirmation(null)
+              }}
+            >
+              {t('confirmChange')}
+            </Button>
+          </L4AppDialogFooter>
+        </L4AppDialogContent>
+      </L4AppDialogRoot>
+    </section>
   )
 }

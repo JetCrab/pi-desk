@@ -8,7 +8,6 @@ import {
   FoldVerticalIcon,
   GitCompareArrowsIcon,
   ListOrderedIcon,
-  LoaderCircleIcon,
   RefreshCwIcon,
   SearchIcon,
   WrapTextIcon
@@ -23,6 +22,7 @@ import {
   type Ref
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { copyL4BrowserText } from '@client/l4_foundation/lib/l4-browser-clipboard'
 import {
   L4CodePreview,
@@ -447,7 +447,7 @@ function Loading(): React.JSX.Element {
   const { t } = useTranslation('projectFiles')
   return (
     <div className="flex size-full items-center justify-center gap-2 text-sm text-muted-foreground">
-      <LoaderCircleIcon className="size-4 animate-spin" />
+      <L4LoadingSpinner className="size-4" />
       {t('loadingFile')}
     </div>
   )

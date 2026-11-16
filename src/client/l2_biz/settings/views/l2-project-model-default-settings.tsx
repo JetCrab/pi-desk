@@ -1,19 +1,16 @@
 'use client'
 
-import { ArrowLeftIcon, CheckIcon, FolderIcon, LoaderCircleIcon, SaveIcon } from 'lucide-react'
+import { ArrowLeftIcon, CheckIcon, GlobeIcon, SaveIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type {
-  L2ModelOption,
-  L2ModelPreset
-} from '@common/l2_biz/model-settings/l2-model-settings-contract'
+import type { L3CapabilityModeNames } from '@common/l3_modules/capability-modes/l3-capability-modes-contract'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import { L4SearchSelect } from '@client/l4_foundation/ui/l4-search-select'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
 import { L4ChoiceGroup } from '@client/l4_foundation/ui/l4-choice-group'
-import type { L2ModelSettingsBiz } from '../l2-model-settings-biz'
-import { useL2ProjectModelDefaultSettings } from '../hooks/l2-use-project-model-default-settings'
+import type { L2ProjectModelDefaultSettingsState } from '../hooks/l2-use-project-model-default-settings'
 import { Field, FixedSelect } from './l2-model-settings-form'
 
 const THINKING_LABELS = {
@@ -25,12 +22,6 @@ const THINKING_LABELS = {
   xhigh: 'thinkingXhigh',
   max: 'thinkingMax'
 } as const
-
-interface Props {
-  biz: L2ModelSettingsBiz
-  presets: L2ModelPreset[]
-  onDirtyChange?: (dirty: boolean) => void
-}
 
 function modelKey(provider: string, modelId: string): string {
   return JSON.stringify([provider, modelId])
@@ -45,59 +36,93 @@ function projectName(cwd: string): string {
   )
 }
 
+function RequestError({
+  message,
+  onRetry,
+  disabled = false
+}: {
+  message: string | null
+  onRetry: () => void
+  disabled?: boolean
+}): React.JSX.Element | null {
+  const { t } = useTranslation('common')
+  if (!message) return null
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm">
+      <p role="alert" className="min-w-0 flex-1 break-words text-destructive">
+        {message}
+      </p>
+      <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={onRetry}>
+        {t('retry')}
+      </Button>
+    </div>
+  )
+}
+
 export function L2ProjectModelDefaultSettings({
-  biz,
-  presets,
-  onDirtyChange
-}: Props): React.JSX.Element {
+  state,
+  modeNames
+}: {
+  state: L2ProjectModelDefaultSettingsState
+  modeNames: L3CapabilityModeNames
+}): React.JSX.Element {
   const { t } = useTranslation('settings')
-  const state = useL2ProjectModelDefaultSettings(biz, onDirtyChange)
   const [query, setQuery] = useState('')
   const [mobileDetail, setMobileDetail] = useState(false)
+  const global = state.cwd === null
   const selectedModel = state.models.find(
-    (model): boolean =>
+    (model) =>
       model.provider === state.selection?.provider && model.modelId === state.selection.modelId
   )
-  const applicablePresets = presets.filter((preset): boolean =>
+  const applicablePresets = state.presets.filter((preset) =>
     state.models.some(
-      (model): boolean =>
+      (model) =>
         model.provider === preset.provider &&
         model.modelId === preset.modelId &&
         model.thinkingLevels.includes(preset.thinkingLevel)
     )
   )
-  const visibleDirectories = state.directories.filter((directory): boolean =>
+  const visibleDirectories = state.directories.filter((directory) =>
     directory.cwd.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
   )
-  const modelOptions = state.models.map(
-    (model): { value: string; label: string; description: string } => ({
-      value: modelKey(model.provider, model.modelId),
-      label: model.name || model.modelId,
-      description: model.provider
-    })
-  )
-  const formDisabled = !state.projectReady || state.saving
-  const displayedCwd = state.loadedCwd ?? state.cwd
+  const modelOptions = state.models.map((model) => ({
+    value: modelKey(model.provider, model.modelId),
+    label: model.name || model.modelId,
+    description: model.provider
+  }))
+  const modelDisabled = !state.modelReady || state.saving
+  const modeDisabled = !state.modeReady || state.saving
+  const missingMode =
+    typeof state.defaultMode === 'string' && !Object.hasOwn(modeNames, state.defaultMode)
+  const modeOptions = [
+    ...(!global ? [{ value: 'follow', label: t('projectModeFollowGlobal') }] : []),
+    { value: 'all', label: t('projectModeAllEnabled') },
+    ...Object.entries(modeNames).map(([key, name]) => ({ value: `mode:${key}`, label: name })),
+    ...(missingMode
+      ? [
+          {
+            value: `mode:${state.defaultMode}`,
+            label: t('projectModeMissing', { key: state.defaultMode })
+          }
+        ]
+      : [])
+  ]
 
-  async function selectProject(cwd: string): Promise<void> {
+  async function selectProject(cwd: string | null): Promise<void> {
     if (await state.selectProject(cwd)) setMobileDetail(true)
   }
 
-  function selectModel(value: string): void {
-    const model = state.models.find(
-      (item): boolean => modelKey(item.provider, item.modelId) === value
-    )
-    if (model) state.selectModel(model)
-  }
-
   return (
-    <section className="@container/project-default h-full min-h-0 overflow-hidden bg-card">
+    <section
+      aria-label={t('projectDefault')}
+      className="@container/project-default h-full min-h-0 overflow-hidden bg-card"
+    >
       <div className="grid h-full min-h-0 grid-cols-1 @[48rem]/project-default:grid-cols-[18rem_minmax(0,1fr)]">
         <aside
           aria-label={t('projectList')}
           className={cn(
             'min-h-0 min-w-0 flex-col bg-sidebar @[48rem]/project-default:flex @[48rem]/project-default:border-r',
-            mobileDetail && state.cwd ? 'hidden' : 'flex'
+            mobileDetail ? 'hidden' : 'flex'
           )}
         >
           <div className="shrink-0 space-y-3 p-3">
@@ -106,23 +131,33 @@ export function L2ProjectModelDefaultSettings({
               value={query}
               aria-label={t('projectSearch')}
               placeholder={t('projectSearch')}
-              onChange={(event): void => setQuery(event.target.value)}
+              onChange={(event) => setQuery(event.target.value)}
             />
           </div>
           <div className="pi-desk-chat-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+            <Button
+              type="button"
+              variant="ghost"
+              aria-current={global ? 'true' : undefined}
+              disabled={state.saving}
+              className={cn(
+                'mb-3 h-auto min-h-14 w-full justify-start whitespace-normal px-3 py-2 text-left',
+                global && 'bg-accent text-accent-foreground ring-1 ring-border ring-inset'
+              )}
+              onClick={() => void selectProject(null)}
+            >
+              <GlobeIcon aria-hidden="true" className="size-4 shrink-0" />
+              <span className="min-w-0 flex-1">{t('projectGlobalReference')}</span>
+              {global ? <CheckIcon aria-hidden="true" className="size-4 shrink-0" /> : null}
+            </Button>
             {state.directoriesLoading && state.directories.length === 0 ? (
               <div className="flex items-center justify-center gap-2 px-3 py-6 text-sm text-muted-foreground">
-                <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
+                <L4LoadingSpinner aria-hidden="true" className="size-4" />
                 {t('projectLoading')}
               </div>
             ) : state.directoriesError ? (
-              <div className="space-y-3 px-3 py-6 text-sm">
-                <p role="alert" className="break-words text-destructive">
-                  {state.directoriesError}
-                </p>
-                <Button type="button" variant="outline" size="sm" onClick={state.retryDirectories}>
-                  {t('retry', { ns: 'common' })}
-                </Button>
+              <div className="px-3 py-6">
+                <RequestError message={state.directoriesError} onRetry={state.retryDirectories} />
               </div>
             ) : visibleDirectories.length === 0 ? (
               <p className="px-3 py-6 text-center text-sm text-muted-foreground">
@@ -130,7 +165,7 @@ export function L2ProjectModelDefaultSettings({
               </p>
             ) : (
               <div className="space-y-1">
-                {visibleDirectories.map((directory): React.JSX.Element => {
+                {visibleDirectories.map((directory) => {
                   const selected = directory.cwd === state.cwd
                   return (
                     <Button
@@ -143,9 +178,7 @@ export function L2ProjectModelDefaultSettings({
                         'h-auto min-h-14 w-full items-start justify-start gap-2 whitespace-normal px-3 py-2 text-left',
                         selected && 'bg-accent text-accent-foreground ring-1 ring-border ring-inset'
                       )}
-                      onClick={(): void => {
-                        void selectProject(directory.cwd)
-                      }}
+                      onClick={() => void selectProject(directory.cwd)}
                     >
                       <span className="min-w-0 flex-1">
                         <span className="flex items-start gap-2">
@@ -170,83 +203,61 @@ export function L2ProjectModelDefaultSettings({
             )}
           </div>
         </aside>
-
         <section
-          aria-label={t('projectDefaultSource')}
+          aria-label={global ? t('projectGlobalReference') : t('projectDefault')}
           className={cn(
             'min-h-0 min-w-0 flex-col @[48rem]/project-default:flex',
-            mobileDetail && state.cwd ? 'flex' : 'hidden'
+            mobileDetail ? 'flex' : 'hidden'
           )}
         >
-          {!state.cwd ? (
-            <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
-              <FolderIcon aria-hidden="true" className="size-6 shrink-0" />
-              {t('selectProjectToConfigure')}
-            </div>
-          ) : (
-            <>
-              <div className="shrink-0 border-b px-4 py-2 @[48rem]/project-default:hidden">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={(): void => setMobileDetail(false)}
-                >
-                  <ArrowLeftIcon aria-hidden="true" />
-                  {t('backProjectList')}
-                </Button>
-              </div>
-              <div className="pi-desk-chat-scrollbar min-h-0 flex-1 overflow-y-auto p-4 @[48rem]/project-default:p-6">
-                <div className="max-w-[40rem] space-y-6">
-                  <header className="space-y-1">
-                    <h3 className="flex items-center gap-2 text-lg font-semibold">
-                      <span className="min-w-0 break-all">{projectName(displayedCwd)}</span>
-                      <span className="inline-flex size-4 shrink-0">
-                        {!state.projectReady && !state.projectError && (
-                          <LoaderCircleIcon
-                            role="status"
-                            aria-label={t('projectLoading')}
-                            className="size-4 animate-spin text-muted-foreground"
-                          />
-                        )}
-                      </span>
-                    </h3>
-                    <p className="break-all text-sm text-muted-foreground">{displayedCwd}</p>
-                  </header>
-
-                  {state.projectError ? (
-                    <div className="flex flex-wrap items-center gap-2 text-sm">
-                      <p role="alert" className="min-w-0 flex-1 break-words text-destructive">
-                        {state.projectError}
-                      </p>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={state.retryProject}
-                        disabled={state.projectLoading || state.projectRefreshing}
+          <div className="shrink-0 border-b px-4 py-2 @[48rem]/project-default:hidden">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setMobileDetail(false)}>
+              <ArrowLeftIcon aria-hidden="true" />
+              {t('backProjectList')}
+            </Button>
+          </div>
+          <div className="pi-desk-chat-scrollbar min-h-0 flex-1 overflow-y-auto p-4 @[48rem]/project-default:p-6">
+            <div className="max-w-[40rem] space-y-6">
+              <header className="space-y-1">
+                <h3 className="break-all text-lg font-semibold">
+                  {state.cwd === null ? t('projectGlobalReference') : projectName(state.cwd)}
+                </h3>
+                {!global ? (
+                  <p className="break-all text-sm text-muted-foreground">{state.cwd}</p>
+                ) : null}
+              </header>
+              <section className="space-y-3" aria-label={t('projectDefaultModel')}>
+                <h4 className="text-sm font-semibold">{t('projectDefaultModel')}</h4>
+                {global ? (
+                  <p className="text-sm text-muted-foreground">{t('projectModelManagedByPi')}</p>
+                ) : (
+                  <>
+                    <RequestError
+                      message={state.projectError}
+                      onRetry={state.retryProject}
+                      disabled={state.projectLoading || state.saving}
+                    />
+                    {state.projectLoading ? (
+                      <p
+                        role="status"
+                        className="flex items-center gap-2 text-sm text-muted-foreground"
                       >
-                        {t('retry', { ns: 'common' })}
-                      </Button>
-                    </div>
-                  ) : null}
-                  {state.loadedCwd !== null ? (
-                    <fieldset disabled={formDisabled} className="min-w-0 space-y-6">
-                      <div className="space-y-1">
-                        <p className="text-sm font-medium">{t('projectDefaultSource')}</p>
-                        <L4ChoiceGroup
-                          label={t('projectDefaultSource')}
-                          value={state.fixed ? 'fixed' : 'global'}
-                          layout="segmented"
-                          disabled={formDisabled}
-                          options={[
-                            { value: 'global', label: t('projectFollowGlobal') },
-                            { value: 'fixed', label: t('projectFixed') }
-                          ]}
-                          onChange={(value): void => state.changeFixed(value === 'fixed')}
-                        />
-                      </div>
-
+                        <L4LoadingSpinner aria-hidden="true" className="size-4" />
+                        {t('projectLoading')}
+                      </p>
+                    ) : null}
+                    <fieldset disabled={modelDisabled} className="min-w-0 space-y-4">
+                      <L4ChoiceGroup
+                        label={t('projectDefaultSource')}
+                        value={state.fixed ? 'fixed' : 'global'}
+                        layout="segmented"
+                        disabled={modelDisabled}
+                        options={[
+                          { value: 'global', label: t('projectFollowGlobal') },
+                          { value: 'fixed', label: t('projectFixed') }
+                        ]}
+                        onChange={(value) => state.changeFixed(value === 'fixed')}
+                      />
                       {state.fixed ? (
                         <div className="space-y-3">
                           <Field label={t('projectDefaultModel')}>
@@ -259,32 +270,34 @@ export function L2ProjectModelDefaultSettings({
                               options={modelOptions}
                               ariaLabel={t('projectDefaultModel')}
                               searchPlaceholder={t('modelSearch')}
-                              disabled={formDisabled || state.models.length === 0}
-                              onChange={selectModel}
+                              disabled={modelDisabled || state.models.length === 0}
+                              onChange={(value) => {
+                                const model = state.models.find(
+                                  (item) => modelKey(item.provider, item.modelId) === value
+                                )
+                                if (model) state.selectModel(model)
+                              }}
                             />
                           </Field>
                           <Field label={t('thinkingLevel')}>
                             <FixedSelect
                               value={state.selection?.thinkingLevel ?? ''}
-                              options={(selectedModel?.thinkingLevels ?? []).map(
-                                (level): { value: string; label: string } => ({
-                                  value: level,
-                                  label: t(THINKING_LABELS[level])
-                                })
-                              )}
+                              options={(selectedModel?.thinkingLevels ?? []).map((level) => ({
+                                value: level,
+                                label: t(THINKING_LABELS[level])
+                              }))}
                               ariaLabel={t('projectDefaultThinking')}
                               allowEmpty={false}
                               onChange={state.selectThinking}
                             />
                           </Field>
-
                           {applicablePresets.length > 0 ? (
                             <div>
                               <p className="text-sm font-medium">{t('fromPreset')}</p>
                               <div className="mt-2 flex flex-wrap gap-2">
-                                {applicablePresets.map((preset, index): React.JSX.Element => {
-                                  const model: L2ModelOption | undefined = state.models.find(
-                                    (item): boolean =>
+                                {applicablePresets.map((preset, index) => {
+                                  const model = state.models.find(
+                                    (item) =>
                                       item.provider === preset.provider &&
                                       item.modelId === preset.modelId
                                   )
@@ -294,9 +307,9 @@ export function L2ProjectModelDefaultSettings({
                                       type="button"
                                       variant="outline"
                                       size="xs"
-                                      disabled={formDisabled}
+                                      disabled={modelDisabled}
                                       className="h-auto min-h-7 max-w-full whitespace-normal text-left"
-                                      onClick={(): void => state.applyPreset(preset)}
+                                      onClick={() => state.applyPreset(preset)}
                                     >
                                       <span
                                         className="size-2 shrink-0 rounded-full bg-current"
@@ -315,27 +328,99 @@ export function L2ProjectModelDefaultSettings({
                         </div>
                       ) : null}
                     </fieldset>
-                  ) : null}
-                </div>
-              </div>
-              <div className="shrink-0 border-t px-4 py-3 @[48rem]/project-default:px-6">
-                <Button
-                  type="button"
-                  onClick={state.save}
-                  disabled={
-                    !state.projectReady || formDisabled || (state.fixed && !state.selection)
+                    <RequestError
+                      message={state.presetsError}
+                      onRetry={state.retryPresets}
+                      disabled={state.saving}
+                    />
+                  </>
+                )}
+                {state.saveErrors.model ? (
+                  <p role="alert" className="break-words text-sm text-destructive">
+                    {t('projectOwnerSaveFailed', {
+                      owner: t('projectDefaultModel'),
+                      message: state.saveErrors.model
+                    })}
+                  </p>
+                ) : null}
+              </section>
+              <section className="space-y-3 border-t pt-6" aria-label={t('projectDefaultMode')}>
+                <h4 className="text-sm font-semibold">
+                  {global ? t('projectGlobalDefaultMode') : t('projectDefaultMode')}
+                </h4>
+                <RequestError
+                  message={state.modeError}
+                  onRetry={state.retryMode}
+                  disabled={state.modeLoading || state.saving}
+                />
+                {state.modeLoading ? (
+                  <p
+                    role="status"
+                    className="flex items-center gap-2 text-sm text-muted-foreground"
+                  >
+                    <L4LoadingSpinner aria-hidden="true" className="size-4" />
+                    {t('projectLoading')}
+                  </p>
+                ) : null}
+                <L4SearchSelect
+                  value={
+                    state.defaultMode === undefined
+                      ? global
+                        ? 'all'
+                        : 'follow'
+                      : state.defaultMode === null
+                        ? 'all'
+                        : `mode:${state.defaultMode}`
                   }
-                >
-                  {state.saving ? (
-                    <LoaderCircleIcon aria-hidden="true" className="animate-spin" />
-                  ) : (
-                    <SaveIcon aria-hidden="true" />
-                  )}
-                  {state.saving ? t('savingModels') : t('saveProjectDefault')}
-                </Button>
-              </div>
-            </>
-          )}
+                  options={modeOptions}
+                  ariaLabel={global ? t('projectGlobalDefaultMode') : t('projectDefaultMode')}
+                  searchPlaceholder={t('projectModeSearch')}
+                  disabled={modeDisabled}
+                  onChange={(value) =>
+                    state.changeDefaultMode(
+                      value === 'follow' ? undefined : value === 'all' ? null : value.slice(5)
+                    )
+                  }
+                />
+                {missingMode ? (
+                  <p role="status" className="text-sm text-muted-foreground">
+                    {t('projectModeMissingDescription')}
+                  </p>
+                ) : null}
+                <p className="text-sm text-muted-foreground">
+                  {t('projectDefaultsApplyDescription')}
+                </p>
+                {state.saveErrors.mode ? (
+                  <p role="alert" className="break-words text-sm text-destructive">
+                    {t('projectOwnerSaveFailed', {
+                      owner: t('projectDefaultMode'),
+                      message: state.saveErrors.mode
+                    })}
+                  </p>
+                ) : null}
+              </section>
+            </div>
+          </div>
+          <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-4 py-3 @[48rem]/project-default:px-6">
+            <div role="status" className="min-w-0 text-sm text-muted-foreground">
+              {state.savedOwners.length > 0 ? (
+                <p>{t('projectOwnersSaved', { owners: state.savedOwners.join(', ') })}</p>
+              ) : null}
+              {state.saveErrors.model || state.saveErrors.mode ? (
+                <p>{t('projectDefaultsRetryFailed')}</p>
+              ) : state.dirty ? (
+                <p>{t('projectDefaultsUnsaved')}</p>
+              ) : null}
+            </div>
+            <Button type="button" onClick={state.save} disabled={!state.canSave}>
+              {state.saving ? (
+                <L4LoadingSpinner aria-hidden="true" />
+              ) : (
+                <SaveIcon aria-hidden="true" />
+              )}
+              {state.saving ? t('savingModels') : t('saveProjectDefault')}
+            </Button>
+          </footer>
         </section>
       </div>
       {state.dialog}

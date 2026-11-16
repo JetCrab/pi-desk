@@ -6,11 +6,11 @@ import {
   FolderIcon,
   GitBranchIcon,
   ListFilterIcon,
-  LoaderCircleIcon,
   SearchIcon
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import type { L4GitRepository } from '@common/l4_foundation/git/l4-git-contract'
 import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
@@ -90,7 +90,7 @@ function DirectoryFeedback({
   if (!state || state.status === 'idle' || state.status === 'loading') {
     return (
       <div className="flex min-h-8 items-center gap-2 px-2 text-xs text-muted-foreground">
-        <LoaderCircleIcon className="size-3.5 animate-spin" /> {t('reading')}
+        <L4LoadingSpinner className="size-3.5" /> {t('reading')}
       </div>
     )
   }

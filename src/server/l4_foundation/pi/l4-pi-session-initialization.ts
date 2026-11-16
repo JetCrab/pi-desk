@@ -4,6 +4,8 @@ import {
   createAgentSessionFromServices,
   type AgentSession,
   type AgentSessionServices,
+  type BeforeAgentStartEvent,
+  type ExtensionContext,
   type ResourceLoader,
   type Extension,
   type ExtensionHandler,
@@ -21,6 +23,8 @@ import {
   type L4PiDeskCommandResult
 } from '@server/l4_foundation/pidesk/l4-pidesk-runtime'
 import { L4PiCapabilityRuntime } from './l4-pi-capability-runtime'
+import { L4PiSystemPromptRuntime } from './l4-pi-system-prompt-runtime'
+import { getL4CapabilityModesStore } from '@server/l4_foundation/capability-modes/l4-capability-modes-store'
 import { createL4PiBasicSessionServices } from './l4-pi-basic-session-services'
 import { L4PiSessionResources } from './l4-pi-session-resources'
 import { clearL4PiPluginCodeCache } from './l4-pi-plugin-module-loader'
@@ -41,6 +45,8 @@ interface InitializationOptions {
   mode: 'normal' | 'basic'
   resources: L4PiSessionResources
   readCapabilities: () => CapabilityMode | undefined
+  initializeCapabilities?: () => Promise<void>
+  readAppendSystemPrompt?: () => Promise<string>
   onInput: ExtensionHandler<InputEvent, InputEventResult>
   onMessageEnd: (event: MessageEndEvent) => MessageEndEventResult | undefined
   onTree?: () => void
@@ -52,6 +58,7 @@ interface InitializationOptions {
 /** 每次创建独占资源和会话访问权；超时撤销不依赖扩展关闭钩子返回。 */
 export class L4PiSessionInitialization {
   readonly capabilities: L4PiCapabilityRuntime
+  readonly systemPrompt: L4PiSystemPromptRuntime
   readonly plugins: L4PiSessionPluginRuntime
   readonly messages: L4PiSessionMessageGate
   readonly ui: L4PiUiRuntime
@@ -73,7 +80,10 @@ export class L4PiSessionInitialization {
     this.retired = retiredInitializations.get(options.resources) ?? new Set()
     retiredInitializations.set(options.resources, this.retired)
     this.ui = options.ui ?? new L4PiUiRuntime()
-    this.capabilities = new L4PiCapabilityRuntime(options.readCapabilities)
+    const readAppend =
+      options.readAppendSystemPrompt ?? (() => getL4CapabilityModesStore().resolvePrompt(null))
+    this.capabilities = new L4PiCapabilityRuntime(options.readCapabilities, readAppend)
+    this.systemPrompt = new L4PiSystemPromptRuntime(() => this.capabilities.readAppendForTask())
     this.plugins = new L4PiSessionPluginRuntime({
       onChanged: () => {
         if (this.active) options.pluginEvents.onChanged()
@@ -163,6 +173,8 @@ export class L4PiSessionInitialization {
         this.options.resources.reset()
         this.assertActive()
       }
+      await this.options.initializeCapabilities?.()
+      this.assertActive()
       return this.create()
     }
     this.execution = initialize()
@@ -215,6 +227,7 @@ export class L4PiSessionInitialization {
     this.messages.dispose()
     this.plugins.dispose()
     this.capabilities.dispose()
+    this.systemPrompt.dispose()
     const session = this.session
     this.session = null
     try {
@@ -293,6 +306,7 @@ export class L4PiSessionInitialization {
         () => {
           this.ui.reset(false)
           this.plugins.reset()
+          this.systemPrompt.reset()
         }
       )
       extension.handlers.set('message_end', [
@@ -301,7 +315,15 @@ export class L4PiSessionInitialization {
           return this.options.onMessageEnd(event as MessageEndEvent)
         }
       ])
-      extension.handlers.set('session_tree', [async () => this.options.onTree?.()])
+      extension.handlers.set('before_agent_start', [
+        async (event) => this.systemPrompt.apply(event as BeforeAgentStartEvent)
+      ])
+      extension.handlers.set('session_tree', [
+        async () => {
+          this.systemPrompt.reset()
+          this.options.onTree?.()
+        }
+      ])
       extension.handlers.set('session_before_tree', [
         async (event) => {
           if ((event as SessionBeforeTreeEvent).signal.aborted) return { cancel: true }
@@ -314,7 +336,18 @@ export class L4PiSessionInitialization {
     }
     const services =
       this.options.mode === 'basic'
-        ? await createL4PiBasicSessionServices({ cwd: this.options.cwd, createHostExtension })
+        ? await createL4PiBasicSessionServices({
+            cwd: this.options.cwd,
+            createHostExtension: () => {
+              const host = createHostExtension()
+              host.handlers
+                .get('before_agent_start')!
+                .unshift(async (_event, context) =>
+                  this.systemPrompt.start(context as ExtensionContext)
+                )
+              return host
+            }
+          })
         : await this.options.resources.createServices(
             this.options.cwd,
             {
@@ -332,7 +365,16 @@ export class L4PiSessionInitialization {
                   path: branchPath,
                   resolvedPath: branchPath,
                   sourceInfo: { ...host.sourceInfo, path: branchPath },
-                  handlers: new Map([['session_tree', host.handlers.get('session_tree')!]]),
+                  handlers: new Map([
+                    ['session_tree', host.handlers.get('session_tree')!],
+                    [
+                      'before_agent_start',
+                      [
+                        async (_event, context) =>
+                          this.systemPrompt.start(context as ExtensionContext)
+                      ]
+                    ]
+                  ]),
                   tools: new Map()
                 }
                 host.handlers.delete('session_tree')

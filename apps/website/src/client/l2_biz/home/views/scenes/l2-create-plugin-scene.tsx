@@ -7,11 +7,11 @@ import {
   FileText,
   GitBranch,
   ListTodo,
-  LoaderCircle,
   RefreshCw
 } from 'lucide-react'
 import { useReducedMotion } from 'motion/react'
 import { useState, type ReactElement } from 'react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import type { ShowcaseSceneProps } from '../../l2-showcase-story'
 import { useDemoState } from '../../hooks/l2-use-demo-state'
 import { DemoDevices } from '../l2-demo-devices'
@@ -181,7 +181,7 @@ function PluginDevice({
         {step === 1 && (
           <ProcessRow>
             <span className={styles.working} data-guide-target="plugin-working">
-              <LoaderCircle size={14} />
+              <L4LoadingSpinner size={14} />
               正在生成并构建示例插件
             </span>
           </ProcessRow>

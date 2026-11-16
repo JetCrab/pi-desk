@@ -1,4 +1,8 @@
-import type { CapabilityOption, CapabilityRule } from '@jetcrab/pi-desk-sdk/capabilities'
+import {
+  isCapabilityAllowed,
+  type CapabilityOption,
+  type CapabilityRule
+} from '@jetcrab/pi-desk-sdk/capabilities'
 import type {
   L3CapabilityCatalog,
   L3CapabilityMode,
@@ -7,6 +11,13 @@ import type {
 
 export type L2CapabilityTarget =
   { kind: 'tools' | 'skills' } | { kind: 'plugin'; pluginName: string; group: string }
+
+export interface L2CapabilityModeView {
+  tab: 'prompt' | 'capabilities'
+  groupKey: string
+  queries: Record<string, string>
+  rulesOpen: Record<string, boolean>
+}
 
 export interface L2CapabilityGroup {
   key: string
@@ -81,6 +92,33 @@ export function l2ReplaceCapabilityRule(
   if (Object.keys(plugins).length) next.plugins = plugins
   else delete next.plugins
   return next
+}
+
+export function l2ToggleCapability(
+  rule: CapabilityRule,
+  value: string,
+  enabled: boolean
+): { rule: CapabilityRule; removedPatterns: string[] } {
+  if (!enabled) {
+    return {
+      rule: { ...rule, deny: [...new Set([...(rule.deny ?? []), value])] },
+      removedPatterns: []
+    }
+  }
+  const matches = (pattern: string): boolean => isCapabilityAllowed({ allow: [pattern] }, value)
+  const removedPatterns = (rule.deny ?? []).filter(
+    (pattern) => pattern.includes('*') && matches(pattern)
+  )
+  return {
+    rule: {
+      ...rule,
+      ...(rule.allow !== undefined && !isCapabilityAllowed({ allow: rule.allow }, value)
+        ? { allow: [...rule.allow, value] }
+        : {}),
+      deny: (rule.deny ?? []).filter((pattern) => !matches(pattern))
+    },
+    removedPatterns
+  }
 }
 
 export function l2NewCapabilityModeName(modes: L3CapabilityModes, base: string): string {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import test from 'node:test'
 import {
@@ -14,23 +14,26 @@ import {
   evaluate,
   navigate,
   reservePort,
+  screenshot,
   spawnEdge,
   stopBrowserTree,
   waitFor,
+  waitForBrowserReady,
   waitForHttp
 } from './l4-browser-cdp-runtime.mjs'
 
 // 原先的“所有会话空闲/任意Node Owner存在就等待重启”已由l1-plugin-apply的热更新链路替代。
 test('基础服务不导入坏插件，管理UI仍可用且拒绝启用外部能力', { timeout: 240000 }, async () => {
   const projectRoot = resolve('.')
-  const root = join(projectRoot, 'temp/pi/l1-plugin-management-m3', `basic-${randomUUID()}`)
+  const runId = `basic-plugin-isolation-${randomUUID()}`
+  const root = join(projectRoot, 'temp/pi/l1-plugin-management-m3', runId)
   const agentDir = join(root, 'agent')
   const pluginRoot = join(root, 'must-not-load')
   const marker = join(root, 'plugin-imported.txt')
   const nextDirectory = process.env.PI_PLUGIN_APPLY_E2E_NEXT_DIR
     ? resolve(process.env.PI_PLUGIN_APPLY_E2E_NEXT_DIR)
-    : join(root, 'next')
-  const evidence = join(projectRoot, 'temp/run/plugin-hot-update', `basic-${process.pid}`)
+    : join(projectRoot, 'temp/build/l1-plugin-management-m3', runId, 'next')
+  const evidence = join(projectRoot, 'temp/run/plugin-hot-update', runId)
   const clientId = randomUUID()
   const tsconfigBefore = await readFile('tsconfig.json', 'utf8')
   const nextEnvBefore = await readFile('next-env.d.ts', 'utf8')
@@ -39,6 +42,7 @@ test('基础服务不导入坏插件，管理UI仍可用且拒绝启用外部能
   let browser
   let page
   let cdpPort
+  let success = false
   const cleanupErrors = []
   try {
     await prepareIsolatedPiDirectory(agentDir)
@@ -61,6 +65,11 @@ test('基础服务不导入坏插件，管理UI仍可用且拒绝启用外部能
       managed: true,
       safeMode: true,
       nextDirectory,
+      environment: {
+        HOME: join(agentDir, 'home'),
+        USERPROFILE: join(agentDir, 'home'),
+        PI_OFFLINE: '1'
+      },
       onOutput: (text) => {
         output += text
       }
@@ -92,11 +101,11 @@ test('基础服务不导入坏插件，管理UI仍可用且拒绝启用外部能
     )
     cdpPort = await reservePort()
     browser = spawnEdge(
-      'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+      process.env.PI_DESK_E2E_BROWSER || 'C:/Program Files/Google/Chrome/Application/chrome.exe',
       cdpPort,
       join(root, 'edge-profile')
     )
-    await waitForHttp(`http://127.0.0.1:${cdpPort}/json/version`, 30000, '基础模式浏览器')
+    await waitForBrowserReady(browser, cdpPort)
     page = await createCdpPage(cdpPort)
     await navigate(page, baseUrl)
     await waitFor(
@@ -126,6 +135,14 @@ test('基础服务不导入坏插件，管理UI仍可用且拒绝启用外部能
     )
     assert.equal(existsSync(marker), false)
     assert.equal(output.includes('插件能力盘点完成'), false)
+    await mkdir(evidence, { recursive: true })
+    await writeFile(join(evidence, 'basic-plugin-management.png'), await screenshot(page))
+    success = true
+  } catch (error) {
+    await mkdir(evidence, { recursive: true })
+    await writeFile(join(evidence, 'failure.txt'), error.stack || String(error))
+    if (page) await writeFile(join(evidence, 'failure.png'), await screenshot(page)).catch(() => {})
+    throw error
   } finally {
     page?.close()
     const clean = async (action) => {
@@ -161,5 +178,14 @@ test('基础服务不导入坏插件，管理UI仍可用且拒绝启用外部能
     await writeFile(join(evidence, 'server.log'), output)
     await writeFile(join(evidence, 'cleanup.json'), JSON.stringify(cleanupErrors))
     assert.deepEqual(cleanupErrors, [])
+    if (success) {
+      await rm(root, { recursive: true, force: true })
+      if (!process.env.PI_PLUGIN_APPLY_E2E_NEXT_DIR)
+        await rm(join(projectRoot, 'temp/build/l1-plugin-management-m3', runId), {
+          recursive: true,
+          force: true
+        })
+    }
+    console.log(`证据目录：${evidence}`)
   }
 })

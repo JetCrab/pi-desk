@@ -1,5 +1,6 @@
 import 'server-only'
 
+import type { z } from 'zod'
 import {
   L2CapabilityModesGetRequestSchema,
   L2CapabilityModesReplaceRequestSchema
@@ -13,54 +14,51 @@ import {
   createL4ApiSuccessResponse
 } from '@server/l4_foundation/http/l4-api-response'
 
-export async function getCapabilityModes(request: Request): Promise<Response> {
+export async function handleCapabilityModesRequest<T>(
+  request: Request,
+  schema: z.ZodType<T>,
+  operation: (input: T) => Promise<unknown>
+): Promise<Response> {
   let payload: unknown
   try {
     payload = await request.json()
   } catch {
     return createL4ApiErrorResponse(400, '请求 JSON 格式无效', { key: 'errors:invalidJson' })
   }
-  if (!L2CapabilityModesGetRequestSchema.safeParse(payload).success) {
-    return createL4ApiErrorResponse(400, '能力模式查询参数无效', {
-      key: 'errors:capabilityGetInvalid'
-    })
+  const input = schema.safeParse(payload)
+  if (!input.success) {
+    return createL4ApiErrorResponse(400, input.error.issues[0]?.message ?? '能力模式参数无效')
   }
   try {
-    return createL4ApiSuccessResponse(await getL2CapabilityModes())
+    return createL4ApiSuccessResponse((await operation(input.data)) ?? {})
   } catch (cause) {
-    console.error('[Pi Desk][Capabilities] 读取模式设置失败', cause)
+    // Store 会跨 Next 入口与热重载存活，不能依赖构造函数的引用身份。
+    if (cause instanceof Error && cause.name === 'L4CapabilityModesInputError') {
+      return createL4ApiErrorResponse(400, cause.message)
+    }
+    console.error('[Pi Desk][Capabilities] 配置请求失败', {
+      path: new URL(request.url).pathname,
+      message: cause instanceof Error ? cause.message : String(cause)
+    })
     return createL4ApiErrorResponse(
       500,
-      cause instanceof Error ? cause.message : '读取能力模式失败',
-      cause instanceof Error ? undefined : { key: 'errors:capabilityGetFailed' }
+      cause instanceof Error ? cause.message : '能力模式配置操作失败'
     )
   }
 }
 
+export async function getCapabilityModes(request: Request): Promise<Response> {
+  return handleCapabilityModesRequest(
+    request,
+    L2CapabilityModesGetRequestSchema,
+    getL2CapabilityModes
+  )
+}
+
 export async function replaceCapabilityModes(request: Request): Promise<Response> {
-  let payload: unknown
-  try {
-    payload = await request.json()
-  } catch {
-    return createL4ApiErrorResponse(400, '请求 JSON 格式无效', { key: 'errors:invalidJson' })
-  }
-  const input = L2CapabilityModesReplaceRequestSchema.safeParse(payload)
-  if (!input.success) {
-    return createL4ApiErrorResponse(
-      400,
-      input.error.issues[0]?.message ?? '能力模式格式无效',
-      input.error.issues[0] ? undefined : { key: 'errors:capabilityReplaceInvalid' }
-    )
-  }
-  try {
-    await replaceL2CapabilityModes(input.data)
-    return createL4ApiSuccessResponse({})
-  } catch (cause) {
-    console.error('[Pi Desk][Capabilities] 保存模式设置失败', cause)
-    return createL4ApiErrorResponse(
-      500,
-      cause instanceof Error ? cause.message : '保存能力模式失败',
-      cause instanceof Error ? undefined : { key: 'errors:capabilityReplaceFailed' }
-    )
-  }
+  return handleCapabilityModesRequest(
+    request,
+    L2CapabilityModesReplaceRequestSchema,
+    replaceL2CapabilityModes
+  )
 }

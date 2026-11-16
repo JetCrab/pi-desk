@@ -51,6 +51,8 @@ export interface L2WorkbenchChatInputState {
   text: string
   images: L2WorkbenchImageAttachment[]
   outbox: L2WorkbenchOutboxState | null
+  // 仅本页发送到运行接管期间保留；确认后的 Pi tempId 用于匹配输入撤回。
+  pendingStart: { tempId: string | null } | null
   followRequested: boolean
   notice: string | null
   error: string | null
@@ -71,7 +73,7 @@ export interface L2WorkbenchChatInputRuntime {
   dismissFeedback: (source: L2ChatSource) => void
   addFiles: (source: L2ChatSource, files: readonly File[]) => Promise<void>
   removeImage: (source: L2ChatSource, localId: string) => void
-  send: (source: L2ChatSource, mode: 'auto' | 'follow_up') => Promise<void>
+  send: (source: L2ChatSource, mode: 'auto' | 'follow_up', running?: boolean) => Promise<void>
   clearFollowRequest: (source: L2ChatSource) => void
   restoreOutbox: (source: L2ChatSource) => Promise<void>
   deleteOutbox: (source: L2ChatSource) => Promise<void>
@@ -100,8 +102,8 @@ export interface L2WorkbenchChatInputRuntime {
 
 interface ActiveSend {
   stopRequested: boolean
-  accepted: Promise<boolean>
-  settleAccepted: (accepted: boolean) => void
+  accepted: Promise<string | null>
+  settleAccepted: (tempId: string | null) => void
 }
 
 interface CachedMessageImage {
@@ -121,6 +123,7 @@ function emptyState(): L2WorkbenchChatInputState {
     text: '',
     images: [],
     outbox: null,
+    pendingStart: null,
     followRequested: false,
     notice: null,
     error: null,
@@ -338,7 +341,7 @@ export function createL2WorkbenchChatInputRuntime(
     const activeSend = activeSends.get(key)
     if (activeSend) {
       activeSend.stopRequested = false
-      activeSend.settleAccepted(false)
+      activeSend.settleAccepted(null)
       activeSends.delete(key)
     }
     const state = statesBySource.get(key)
@@ -375,6 +378,19 @@ export function createL2WorkbenchChatInputRuntime(
       return
     }
     if (event.type === 'message_discard') {
+      const key = sourceKey(source)
+      // 撤回可能先于发送确认到达，只清理同一个 Pi 输入的等待状态。
+      const accepted =
+        activeSends.get(key)?.accepted ??
+        Promise.resolve(statesBySource.get(key)?.pendingStart?.tempId ?? null)
+      void accepted.then((tempId) => {
+        if (
+          tempId === event.location.tempId &&
+          statesBySource.get(key)?.pendingStart?.tempId === tempId
+        ) {
+          replaceState(source, (current) => ({ ...current, pendingStart: null }))
+        }
+      })
       const prefix = `${sourceKey(source)}\u0000temp\u0000${event.location.tempId}\u0000`
       for (const [key, image] of [...messageImages]) {
         if (!key.startsWith(prefix)) continue
@@ -386,6 +402,12 @@ export function createL2WorkbenchChatInputRuntime(
     }
 
     if (event.type === 'session_sync' || event.type === 'runtime_update') {
+      if (
+        event.type === 'session_sync' &&
+        statesBySource.get(sourceKey(source))?.pendingStart?.tempId
+      ) {
+        replaceState(source, (current) => ({ ...current, pendingStart: null }))
+      }
       const validTempIds = new Set([
         ...state.temporaryMessages.map((message) => message.location.tempId),
         ...state.runtime.queues.steering.map((input) => input.tempId),
@@ -518,7 +540,7 @@ export function createL2WorkbenchChatInputRuntime(
       enqueueDraftWrite(source, storedInput(next))
     },
 
-    async send(source, mode): Promise<void> {
+    async send(source, mode, running = false): Promise<void> {
       requireSynchronizedSource(source)
       const key = sourceKey(source)
       const current = ensureState(source)
@@ -541,18 +563,26 @@ export function createL2WorkbenchChatInputRuntime(
         throw new Error(workbenchText('imageBytesLimit'))
       }
 
-      let settleAccepted!: (accepted: boolean) => void
-      const accepted = new Promise<boolean>((resolve) => {
+      let settleAccepted!: (tempId: string | null) => void
+      const accepted = new Promise<string | null>((resolve) => {
         settleAccepted = resolve
       })
       const activeSend: ActiveSend = { stopRequested: false, accepted, settleAccepted }
       activeSends.set(key, activeSend)
-      replaceState(source, (state) => ({ ...state, error: null }))
+      replaceState(source, (state) => ({
+        ...state,
+        pendingStart: running ? null : { tempId: null },
+        error: null
+      }))
       const isActive = (): boolean => !disposed && activeSends.get(key) === activeSend
 
       try {
         await (persistenceTails.get(key) ?? Promise.resolve())
-        if (!isActive() || activeSend.stopRequested) return
+        if (!isActive()) return
+        if (activeSend.stopRequested) {
+          replaceState(source, (state) => ({ ...state, pendingStart: null }))
+          return
+        }
         // 等待草稿落盘期间也可能断线，已知未同步时不把草稿移入 Outbox。
         requireSynchronizedSource(source)
         const input = storedInput(current)
@@ -569,6 +599,7 @@ export function createL2WorkbenchChatInputRuntime(
             error: null
           },
           notice: null,
+          pendingStart: statesBySource.get(key)!.pendingStart,
           error: statesBySource.get(key)?.error ?? null
         })
         notify()
@@ -591,6 +622,7 @@ export function createL2WorkbenchChatInputRuntime(
             text: inputText(current.text, latest.text),
             images: [...current.images, ...latest.images],
             outbox: null,
+            pendingStart: null,
             notice: null
           })
           notify()
@@ -613,7 +645,11 @@ export function createL2WorkbenchChatInputRuntime(
         }
         const response = await biz.sendChat(request)
         if (!isActive() || statesBySource.get(key)?.outbox?.images !== current.images) return
-        activeSend.settleAccepted(true)
+        replaceState(source, (state) => ({
+          ...state,
+          pendingStart: state.pendingStart ? { tempId: response.tempId } : null
+        }))
+        activeSend.settleAccepted(response.tempId)
         // 后续消息推送可紧随发送确认到达，必须在等待本地存储前接好图片缓存。
         // 消息与 Outbox 分别持有地址，清理或丢弃任一方都不撤销另一方的图片。
         current.images.forEach((image, imageIndex) => {
@@ -640,6 +676,7 @@ export function createL2WorkbenchChatInputRuntime(
           workId: source.workId,
           errorName: cause instanceof Error ? cause.name : 'UnknownError'
         })
+        replaceState(source, (state) => ({ ...state, pendingStart: null }))
         const latest = statesBySource.get(key)
         if (latest?.outbox?.images === current.images) {
           statesBySource.set(key, {
@@ -654,7 +691,7 @@ export function createL2WorkbenchChatInputRuntime(
         notify()
         throw cause
       } finally {
-        activeSend.settleAccepted(false)
+        activeSend.settleAccepted(null)
         if (activeSends.get(key) === activeSend) activeSends.delete(key)
       }
     },
@@ -719,7 +756,7 @@ export function createL2WorkbenchChatInputRuntime(
       try {
         await biz.interruptChat({ source })
         if (!disposed && sourcesByKey.has(key)) {
-          replaceState(source, (state) => ({ ...state, error: null }))
+          replaceState(source, (state) => ({ ...state, pendingStart: null, error: null }))
         }
       } catch (cause) {
         console.error('[Pi Desk][WorkbenchChatInput] 停止聊天失败', {
@@ -893,6 +930,12 @@ export function createL2WorkbenchChatInputRuntime(
     },
 
     reconcileWorkSessions(workSessions): void {
+      for (const workSession of workSessions) {
+        if (workSession.status !== 'main_running') continue
+        const key = sourceKey(workSession)
+        const state = statesBySource.get(key)
+        if (state?.pendingStart) statesBySource.set(key, { ...state, pendingStart: null })
+      }
       const valid = new Set(
         workSessions.map((workSession) =>
           sourceKey({

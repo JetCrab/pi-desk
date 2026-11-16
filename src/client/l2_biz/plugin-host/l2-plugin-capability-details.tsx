@@ -1,6 +1,7 @@
 'use client'
 
-import { CheckIcon, CopyIcon, ChevronRightIcon, LoaderCircleIcon } from 'lucide-react'
+import { CheckIcon, CopyIcon, ChevronRightIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
@@ -708,7 +709,7 @@ export function L2PluginCapabilityDetails({
 
       {detailLoading ? (
         <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
-          <LoaderCircleIcon className="size-4 animate-spin" />
+          <L4LoadingSpinner className="size-4" />
           {t('loadingFullDetails')}
         </div>
       ) : detailError ? null : detail ? (

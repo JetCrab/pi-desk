@@ -1,6 +1,13 @@
 export const L2_SETTINGS_MESSAGES = {
   en: {
     title: 'Settings',
+    generalPreferences: 'General preferences',
+    operationReminders: 'Behavior & reminders',
+    systemAndData: 'System & data',
+    accessProtection: 'Access protection',
+    workModes: 'Modes',
+    searchSettings: 'Search settings',
+    searchSettingsEmpty: 'No matching settings pages',
     general: 'General settings',
     workCapabilities: 'Tools & models',
     application: 'Application',
@@ -426,10 +433,41 @@ export const L2_SETTINGS_MESSAGES = {
     projectDefaultModel: 'Default model',
     projectDefaultThinking: 'Project default thinking level',
     fromPreset: 'Choose from presets',
-    saveProjectDefault: 'Save project default'
+    saveProjectDefault: 'Save defaults',
+    projectGlobalReference: 'Pi global defaults',
+    projectModelManagedByPi:
+      'Managed by Pi. Projects without a fixed model follow Pi’s current global selection.',
+    projectDefaultMode: 'Mode',
+    projectGlobalDefaultMode: 'Global default mode',
+    projectModeFollowGlobal: 'Follow global default',
+    projectModeAllEnabled: 'All enabled',
+    projectModeSearch: 'Search saved modes',
+    projectModeMissing: 'Missing mode: {{key}}',
+    projectModeMissingDescription:
+      'This mode no longer exists. New sessions fall back according to the default priority; choose a saved mode to replace the reference.',
+    projectDefaultsApplyDescription:
+      'Defaults apply when a session is created or first bound. Existing sessions keep their current selection.',
+    projectModeLoadFailed: 'Could not load the default mode',
+    projectModeSaveFailed: 'Could not save the default mode',
+    projectDefaultsSaved: 'Defaults saved.',
+    projectOwnerSaveFailed: '{{owner}} was not saved: {{message}}',
+    projectOwnersSaved: 'Saved: {{owners}}',
+    projectDefaultsRetryFailed:
+      'Failed changes are kept. Save again to retry only the remaining changes.',
+    projectDefaultsUnsaved: 'Unsaved changes',
+    discardProjectDefaultsTitle: 'Discard default changes?',
+    discardProjectDefaultsDescription:
+      'Unsaved model and mode changes for this selection will be discarded.'
   },
   'zh-CN': {
     title: '设置',
+    generalPreferences: '通用偏好',
+    operationReminders: '操作提醒',
+    systemAndData: '系统与数据',
+    accessProtection: '访问保护',
+    workModes: '模式',
+    searchSettings: '搜索设置',
+    searchSettingsEmpty: '没有匹配的设置页面',
     general: '通用设置',
     workCapabilities: '工作能力',
     application: '应用',
@@ -834,6 +872,26 @@ export const L2_SETTINGS_MESSAGES = {
     projectDefaultModel: '默认模型',
     projectDefaultThinking: '项目默认思考等级',
     fromPreset: '从常用组合选择',
-    saveProjectDefault: '保存项目默认'
+    saveProjectDefault: '保存默认配置',
+    projectGlobalReference: 'Pi 全局参照',
+    projectModelManagedByPi: '由 Pi 管理。项目未固定模型时，沿用 Pi 全局当前值。',
+    projectDefaultMode: '模式',
+    projectGlobalDefaultMode: '全局默认模式',
+    projectModeFollowGlobal: '跟随全局默认',
+    projectModeAllEnabled: '全开',
+    projectModeSearch: '搜索已保存模式',
+    projectModeMissing: '模式已不存在：{{key}}',
+    projectModeMissingDescription:
+      '引用的模式已被删除。新会话按默认优先级回退，可选择已保存模式替换此引用。',
+    projectDefaultsApplyDescription: '默认配置在新建或首次绑定会话时生效，已有会话保留当前选择。',
+    projectModeLoadFailed: '默认模式加载失败',
+    projectModeSaveFailed: '默认模式保存失败',
+    projectDefaultsSaved: '默认配置已保存。',
+    projectOwnerSaveFailed: '{{owner}}未保存：{{message}}',
+    projectOwnersSaved: '已保存：{{owners}}',
+    projectDefaultsRetryFailed: '失败项的修改已保留，再次保存仅重试尚未保存的范围。',
+    projectDefaultsUnsaved: '有未保存的修改',
+    discardProjectDefaultsTitle: '放弃默认配置修改？',
+    discardProjectDefaultsDescription: '当前对象未保存的模型与模式修改将被放弃。'
   }
 } as const

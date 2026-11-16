@@ -14,7 +14,6 @@ import {
   FileTextIcon,
   FolderIcon,
   Layers3Icon,
-  LoaderCircleIcon,
   RotateCcwIcon,
   SearchIcon,
   TerminalIcon,
@@ -33,6 +32,7 @@ import {
 } from 'react'
 import { useStickToBottom, useStickToBottomContext } from 'use-stick-to-bottom'
 import { useTranslation } from 'react-i18next'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { L3_CONVERSATION_LOCALE_MESSAGES } from '@common/l3_modules/conversation/l3-conversation-locale-messages'
 import type { PluginJsonObject } from '@jetcrab/pi-desk-sdk/browser'
 import type { L3ConversationMessageUsage } from '@common/l3_modules/conversation/l3-conversation-contract'
@@ -1530,7 +1530,7 @@ function CompactionMessage({
           )}
         >
           {message.temporary ? (
-            <LoaderCircleIcon className="size-3.5 animate-spin" aria-hidden="true" />
+            <L4LoadingSpinner className="size-3.5" aria-hidden="true" />
           ) : (
             <Layers3Icon className="size-3.5" aria-hidden="true" />
           )}

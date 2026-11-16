@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { randomBytes, scryptSync } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -6,19 +7,24 @@ import {
   createCdpPage,
   evaluate,
   navigate,
-  publishScreenshots,
   reservePort,
   screenshot,
   setViewport,
   spawnEdge,
   stopBrowserTree,
   waitFor,
+  waitForBrowserReady,
   waitForHttp
 } from './l4-browser-cdp-runtime.mjs'
 import { spawnE2eServer, stopE2eServerTree } from './l4-e2e-server-runtime.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const testRoot = join(projectRoot, 'temp/pi/skills-settings-e2e', String(process.pid))
+const runId = `skills-edit-guard-${Date.now()}-${process.pid}`
+const testRoot = join(projectRoot, 'temp/pi/skills-settings-e2e', runId)
+const evidence = join(projectRoot, 'temp/run/skills-settings-e2e', runId)
+const buildRoot = join(projectRoot, 'temp/build/skills-settings-e2e', runId)
+const browserHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
+const password = 'Qq.445566'
 const agentDir = join(testRoot, 'agent')
 const projectA = join(testRoot, 'projects', '订单服务')
 const projectB = join(testRoot, 'projects', '移动应用')
@@ -27,7 +33,7 @@ const referenceA = join(dirname(entryA), 'references/check.md')
 const entryGlobal = join(agentDir, 'skills/global-notes/SKILL.md')
 const managedRoot = join(agentDir, 'npm/node_modules/@skills-fixture/catalog')
 const entryManaged = join(managedRoot, 'skills/managed-notes/SKILL.md')
-const captures = []
+let success = false
 let serverRuntime
 let browser
 let client
@@ -52,6 +58,13 @@ async function fixture() {
   process.env.PI_OFFLINE = '1'
   await mkdir(join(agentDir, 'sessions'), { recursive: true })
   await mkdir(join(agentDir, 'home'), { recursive: true })
+  const salt = randomBytes(16)
+  const hash = scryptSync(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 })
+  await put(
+    join(agentDir, 'config/pi-desk.yaml'),
+    `pi-desk:\n  auth:\n    passwordHash: "scrypt:${salt.toString('hex')}:${hash.toString('hex')}"\n`
+  )
+  await put(join(agentDir, 'pi-desk/auth-session-key'), randomBytes(32).toString('hex'))
   await mkdir(join(projectA, '.git'), { recursive: true })
   await mkdir(join(projectB, '.git'), { recursive: true })
   await put(
@@ -227,11 +240,7 @@ async function capture(name, condition) {
     '弹层进入稳定展示状态'
   )
   const bytes = await screenshot(client)
-  await put(join(testRoot, 'captures', `${condition}-${name}.png`), bytes)
-  captures.push([
-    join(projectRoot, 'temp/验收', `客户端_${condition}`, `Skills管理__${name}.png`),
-    bytes
-  ])
+  await put(join(evidence, `${condition}-${name}.png`), bytes)
 }
 async function api(path, body) {
   return evaluate(
@@ -250,6 +259,7 @@ async function main() {
       agentDir,
       port: appPort,
       development: true,
+      nextDirectory: join(buildRoot, 'next'),
       onOutput: (text) => {
         serverOutput = (serverOutput + text).slice(-150000)
       }
@@ -260,12 +270,16 @@ async function main() {
       'Pi Desk',
       () => serverOutput
     )
+    for (const [key, value] of Object.entries(browserHome)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
     browser = spawnEdge(
-      'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+      process.env.PI_DESK_E2E_BROWSER || 'C:/Program Files/Google/Chrome/Application/chrome.exe',
       cdpPort,
       join(testRoot, 'edge-profile')
     )
-    await waitForHttp(`http://127.0.0.1:${cdpPort}/json/version`, 20000, 'Edge')
+    await waitForBrowserReady(browser, cdpPort)
     client = await createCdpPage(cdpPort)
     await client.send('Page.addScriptToEvaluateOnNewDocument', {
       source: `
@@ -297,13 +311,18 @@ async function main() {
     await navigate(client, `http://127.0.0.1:${appPort}/login`)
     const unauthenticated = await api('/api/skills/list', { cwd: null })
     assert.equal(unauthenticated.status, 401)
-    const login = await api('/api/auth/login', { password: 'Qq.445566' })
+    const login = await api('/api/auth/login', { password })
     assert.equal(login.status, 200)
+    await navigate(client, `http://127.0.0.1:${appPort}/`)
+    await wait(
+      `document.querySelector('[data-testid="work-session-row-skills-work-0"]') !== null`,
+      '会话列表初始化',
+      60000
+    )
     await evaluate(
       client,
-      `localStorage.setItem('pi-desk:workbench-layout',JSON.stringify({primaryWorkId:'skills-work-0'}))`
+      `document.querySelector('[data-testid="work-session-row-skills-work-0"]').click()`
     )
-    await navigate(client, `http://127.0.0.1:${appPort}/`)
     await wait(
       `document.querySelector('[data-work-id="skills-work-0"] textarea') !== null`,
       '工作区初始化',
@@ -398,7 +417,7 @@ async function main() {
       ),
       true
     )
-    await click('设置分类：关于')
+    await click('设置分类：系统与数据')
     await wait(`document.body.innerText.includes('保存文件修改？')`, '切换分类触发未保存确认')
     await clickText('取消')
     await wait(`!document.body.innerText.includes('保存文件修改？')`, '取消后继续编辑')
@@ -569,9 +588,10 @@ async function main() {
     console.log(
       'PASS: Skills HTTP、项目去重、多文件、中文编辑、保存/失败/离开保护、只读及桌面/移动布局'
     )
+    success = true
   } catch (error) {
     // 失败诊断覆盖同一位置，浏览器 profile 和隔离会话在 finally 中释放。
-    const failureRoot = join(dirname(testRoot), 'failure')
+    const failureRoot = evidence
     try {
       if (client) await put(join(failureRoot, 'failure.png'), await screenshot(client))
       await put(join(failureRoot, 'server.log'), serverOutput)
@@ -584,9 +604,13 @@ async function main() {
     } finally {
       if (serverRuntime) await stopE2eServerTree(serverRuntime)
     }
-    await rm(testRoot, { recursive: true, force: true })
+    await put(join(evidence, 'server.log'), serverOutput)
+    if (success) {
+      await rm(testRoot, { recursive: true, force: true })
+      await rm(buildRoot, { recursive: true, force: true })
+    }
+    console.log(`证据目录：${evidence}`)
   }
-  await publishScreenshots(captures)
 }
 
 main().catch((error) => {

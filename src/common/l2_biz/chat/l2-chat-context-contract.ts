@@ -12,13 +12,15 @@ export const L2ChatModelContextToolSchema = z
 
 export const L2ChatModelContextGetRequestSchema = z
   .object({
-    source: L2ChatSourceSchema
+    source: L2ChatSourceSchema,
+    previewAppendSystemPrompt: z.string().optional()
   })
   .strict()
 
 export const L2ChatModelContextGetResponseSchema = z
   .object({
     systemPrompt: z.string(),
+    baseSystemPrompt: z.string().optional(),
     tools: z.array(L2ChatModelContextToolSchema)
   })
   .strict()

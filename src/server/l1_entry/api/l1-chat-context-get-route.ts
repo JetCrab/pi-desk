@@ -1,10 +1,6 @@
 import 'server-only'
 
 import { L2ChatModelContextGetRequestSchema } from '@common/l2_biz/chat/l2-chat-context-contract'
-import {
-  L2ChatLifecycleBlockedError,
-  L2ChatSourceBindingError
-} from '@server/l2_biz/work-session/l2-work-session-chat-runtime'
 import { getL2WorkSessionManage } from '@server/l2_biz/work-session/l2-work-session-manage'
 import {
   createL4ApiErrorResponse,
@@ -32,10 +28,11 @@ export async function POST(request: Request): Promise<Response> {
       await getL2WorkSessionManage().getChatModelContext(input.data)
     )
   } catch (error) {
-    if (error instanceof L2ChatSourceBindingError) {
+    // App Runtime 可跨 Next 模块重载存活，错误实例可能来自另一份模块构造函数。
+    if (error instanceof Error && error.name === 'L2ChatSourceBindingError') {
       return createL4ApiErrorResponse(409, '聊天 Source 已过期', { key: 'errors:sourceExpired' })
     }
-    if (error instanceof L2ChatLifecycleBlockedError) {
+    if (error instanceof Error && error.name === 'L2ChatLifecycleBlockedError') {
       return createL4ApiErrorResponse(409, '工作会话正在替换或切换分支', {
         key: 'errors:chatSourceBusy'
       })

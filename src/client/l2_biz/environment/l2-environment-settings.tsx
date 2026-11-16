@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
-import { LoaderCircleIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
 import { Checkbox } from '@client/l4_foundation/ui/shadcn/checkbox'
@@ -81,7 +81,7 @@ export function L2EnvironmentSettings({ clientId }: { clientId: string }): React
   return (
     <section aria-labelledby="environment-title" className="min-w-0 space-y-6">
       <header className="space-y-2">
-        <h2 id="environment-title" className="text-xl font-semibold">
+        <h2 id="environment-title" className="text-xl font-semibold sm:sr-only">
           {t('environmentBackup')}
         </h2>
         <p className="text-sm text-muted-foreground">{t('environment.description')}</p>
@@ -132,7 +132,7 @@ export function L2EnvironmentSettings({ clientId }: { clientId: string }): React
       ) : null}
       {pendingText ? (
         <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
-          <LoaderCircleIcon aria-hidden="true" className="size-4 motion-safe:animate-spin" />
+          <L4LoadingSpinner aria-hidden="true" className="size-4" />
           {t(`environment.${pendingText}`)}
         </p>
       ) : null}

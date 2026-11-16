@@ -78,7 +78,7 @@ export function L2RegionSettings({
   return (
     <section className="@container min-w-0 space-y-6" aria-labelledby="region-settings-title">
       {dialog}
-      <h2 id="region-settings-title" className="text-xl font-semibold">
+      <h2 id="region-settings-title" className="text-xl font-semibold sm:sr-only">
         {t('region')}
       </h2>
       <div className="grid max-w-[40rem] gap-6 @min-[32rem]:grid-cols-2">

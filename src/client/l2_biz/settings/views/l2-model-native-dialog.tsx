@@ -1,6 +1,6 @@
 'use client'
 
-import { LoaderCircleIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useTranslation } from 'react-i18next'
 import {
   L4AppDialogRoot,
@@ -70,7 +70,7 @@ export function L2ModelNativeDialog({
             {t('cancel', { ns: 'common' })}
           </Button>
           <Button type="button" disabled={saving || !dirty} onClick={onSave}>
-            {saving ? <LoaderCircleIcon className="animate-spin" /> : null}
+            {saving ? <L4LoadingSpinner /> : null}
             {saving ? t('savingModels') : t('saveNativeConfig')}
           </Button>
         </L4AppDialogFooter>

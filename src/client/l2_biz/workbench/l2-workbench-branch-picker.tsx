@@ -1,6 +1,7 @@
 'use client'
 
-import { CheckIcon, ChevronRightIcon, LoaderCircleIcon, SearchIcon, XIcon } from 'lucide-react'
+import { CheckIcon, ChevronRightIcon, SearchIcon, XIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useTranslation } from 'react-i18next'
 import { motion, useIsPresent, useReducedMotion } from 'motion/react'
 import {
@@ -252,7 +253,7 @@ function RunningConfirmation({
             onClick={() => choose(index)}
           >
             {confirmation.waiting && option.confirm ? (
-              <LoaderCircleIcon className="size-4 animate-spin" />
+              <L4LoadingSpinner className="size-4" />
             ) : null}
             {option.label}
           </button>
@@ -732,7 +733,7 @@ export function L2WorkbenchBranchPicker({
                         <span className="text-destructive">{model.detailError}</span>
                       ) : (
                         <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                          <LoaderCircleIcon className="size-3.5 animate-spin" />
+                          <L4LoadingSpinner className="size-3.5" />
                           {t('loadingEntry')}
                         </span>
                       )
@@ -781,7 +782,7 @@ export function L2WorkbenchBranchPicker({
 
             {model.pending && !model.runningConfirmation ? (
               <div className="flex shrink-0 items-center gap-2 border-b bg-primary/8 px-2.5 py-1.5 text-xs text-muted-foreground">
-                <LoaderCircleIcon className="size-3.5 animate-spin text-primary" />
+                <L4LoadingSpinner className="size-3.5 text-primary" />
                 {t('branchWorking')}
               </div>
             ) : null}
@@ -789,7 +790,7 @@ export function L2WorkbenchBranchPicker({
             {model.loading && !model.tree ? (
               <div className="grid min-h-0 flex-1 place-items-center text-sm text-muted-foreground">
                 <div className="flex items-center gap-2">
-                  <LoaderCircleIcon className="size-4 animate-spin" />
+                  <L4LoadingSpinner className="size-4" />
                   {t('branchLoading')}
                 </div>
               </div>

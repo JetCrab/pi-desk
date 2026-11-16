@@ -18,6 +18,7 @@ import {
   UserIcon
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
@@ -459,7 +460,7 @@ export function L2WorkbenchPickerDialog({
 
             {showInitialLoading ? (
               <div className="flex min-h-36 flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
-                <RefreshCwIcon className="size-5 animate-spin" />
+                <L4LoadingSpinner className="size-5" />
                 <p>{loadingText}</p>
               </div>
             ) : pickerView === 'history' ? (
@@ -568,11 +569,7 @@ export function L2WorkbenchPickerDialog({
                               title={buttonTitle}
                               className={buttonVariants({ variant: 'outline' })}
                             >
-                              {replacing ? (
-                                <RefreshCwIcon className="size-3.5 animate-spin" />
-                              ) : (
-                                buttonLabel
-                              )}
+                              {replacing ? <L4LoadingSpinner className="size-3.5" /> : buttonLabel}
                             </button>
                           </div>
 
@@ -669,7 +666,7 @@ export function L2WorkbenchPickerDialog({
                               ) : null}
                               {expanded.loading && expanded.messages.length === 0 ? (
                                 <div className="flex min-h-16 items-center justify-center text-muted-foreground">
-                                  <RefreshCwIcon className="size-4 animate-spin" />
+                                  <L4LoadingSpinner className="size-4" />
                                 </div>
                               ) : expanded.messages.length === 0 ? (
                                 <p className="py-4 text-center text-xs text-muted-foreground">
@@ -713,7 +710,7 @@ export function L2WorkbenchPickerDialog({
                                   })}
                                 >
                                   {expanded.loading ? (
-                                    <RefreshCwIcon className="size-3.5 animate-spin" />
+                                    <L4LoadingSpinner className="size-3.5" />
                                   ) : null}
                                   {t('loadMore')}
                                 </button>
@@ -818,7 +815,7 @@ export function L2WorkbenchPickerDialog({
                         className={buttonVariants({ variant: 'outline' })}
                       >
                         {restoring ? (
-                          <RefreshCwIcon className="size-3.5 animate-spin" />
+                          <L4LoadingSpinner className="size-3.5" />
                         ) : (
                           <RotateCcwIcon className="size-3.5" />
                         )}
@@ -865,7 +862,7 @@ export function L2WorkbenchPickerDialog({
                         </span>
                         {creating ? (
                           <span className="flex min-h-10 shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-                            <RefreshCwIcon className="size-3.5 animate-spin" />
+                            <L4LoadingSpinner className="size-3.5" />
                             {t('creating')}
                           </span>
                         ) : (
@@ -889,7 +886,7 @@ export function L2WorkbenchPickerDialog({
                           className={buttonVariants({ variant: 'ghost', size: 'icon' })}
                         >
                           {ignoring ? (
-                            <RefreshCwIcon className="size-3.5 animate-spin" />
+                            <L4LoadingSpinner className="size-3.5" />
                           ) : (
                             <EyeOffIcon className="size-4" />
                           )}
@@ -975,7 +972,11 @@ export function L2WorkbenchPickerDialog({
               title={t('refreshList')}
               className={buttonVariants({ variant: 'outline', size: 'icon' })}
             >
-              <RefreshCwIcon className={`size-4${loading ? ' animate-spin' : ''}`} />
+              {loading ? (
+                <L4LoadingSpinner className="size-4" />
+              ) : (
+                <RefreshCwIcon className="size-4" />
+              )}
             </button>
           </div>
         </L4AppDialogFooter>

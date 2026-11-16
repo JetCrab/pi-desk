@@ -2,13 +2,8 @@
 
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  ArrowLeftIcon,
-  ChevronRightIcon,
-  FolderIcon,
-  FolderOpenIcon,
-  LoaderCircleIcon
-} from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
+import { ArrowLeftIcon, ChevronRightIcon, FolderIcon, FolderOpenIcon } from 'lucide-react'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
 import type { L2ProjectPicker } from '../hooks/l2-use-project-picker'
@@ -93,7 +88,7 @@ export function L2ProjectPickerView({
           </div>
         ) : picker.loading ? (
           <div role="status" className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-            <LoaderCircleIcon className="size-4 animate-spin" />
+            <L4LoadingSpinner className="size-4" />
             {t('loadingDirectories')}
           </div>
         ) : browsing && picker.browser ? (

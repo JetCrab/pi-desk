@@ -98,7 +98,8 @@ export class L4PiWorkSessionRuntime {
   private indexedEntryCount: number
   private pendingBranchAppend: L4PendingBranchAppend | null = null
   private capabilityModeValue: string | null = null
-  private capabilityTail: Promise<void> = Promise.resolve()
+  private readonly capabilityInitialization: Promise<void>
+  private capabilityTail: Promise<void>
   private readonly unsubscribeCapabilities: () => void
   private disposed = false
   private closePromise: Promise<void> | null = null
@@ -109,12 +110,25 @@ export class L4PiWorkSessionRuntime {
   ) {
     this.indexedEntryCount = sessionManager.getEntries().length
     this.branchIdValue = branchIndex.branchIdForHead(sessionManager.getLeafId())
+    this.capabilityInitialization = getL4CapabilityModesStore()
+      .resolveDefault(this.cwd)
+      .then((key) => {
+        if (!this.disposed) this.capabilityModeValue = key
+      })
+    this.capabilityTail = this.capabilityInitialization.catch(() => undefined)
     this.chatWorker = this.createChatWorker()
     this.unsubscribeCapabilities = getL4CapabilityModesStore().subscribe(() => {
-      if (this.capabilityModeValue === null || this.disposed) return
-      const modes = getL4CapabilityModesStore().read()
-      const key = Object.hasOwn(modes, this.capabilityModeValue) ? this.capabilityModeValue : null
-      void this.setCapabilityMode(key).catch((cause: unknown) => {
+      if (this.disposed) return
+      const sync = this.capabilityTail.then(async () => {
+        this.assertActive()
+        const modes = getL4CapabilityModesStore().read()
+        if (this.capabilityModeValue !== null && !Object.hasOwn(modes, this.capabilityModeValue)) {
+          this.capabilityModeValue = null
+        }
+        if (this.chatWorker.isInitialized) await this.chatWorker.applyCapabilityMode()
+      })
+      this.capabilityTail = sync.catch(() => undefined)
+      void sync.catch((cause: unknown) => {
         console.error('[Pi Desk][Capabilities] 会话同步模式配置失败', {
           sessionId: this.sessionId,
           message: cause instanceof Error ? cause.message : String(cause)
@@ -241,9 +255,9 @@ export class L4PiWorkSessionRuntime {
     return this.chatWorker.getRuntime(false)
   }
 
-  async readModelContext(): Promise<L4PiModelContext> {
+  async readModelContext(previewAppendSystemPrompt?: string): Promise<L4PiModelContext> {
     this.assertActive()
-    return this.chatWorker.readModelContext()
+    return this.chatWorker.readModelContext(previewAppendSystemPrompt)
   }
 
   watchTaskDetail(
@@ -545,6 +559,9 @@ export class L4PiWorkSessionRuntime {
       (entry) => this.confirmAppendedEntry(entry),
       {
         mode: () => this.capabilityModeValue,
+        initialize: () => this.capabilityInitialization,
+        appendSystemPrompt: () =>
+          getL4CapabilityModesStore().resolvePrompt(this.capabilityModeValue),
         rules: () =>
           this.capabilityModeValue === null
             ? undefined

@@ -5,6 +5,7 @@ export const CONTEXT_SETTINGS_STYLES = `
   height: 100%;
   min-height: 0;
   flex-direction: column;
+  container-name: context-settings;
 }
 .pi-desk-ctx-settings [hidden] { display: none; }
 .pi-desk-ctx-settings h3, .pi-desk-ctx-settings p { margin: 0; }
@@ -127,6 +128,11 @@ export const CONTEXT_SETTINGS_STYLES = `
 .pi-desk-ctx-footer { flex: none; border-top: 1px solid var(--border); padding: .75rem 1rem; }
 .pi-desk-ctx-footer-end { margin-left: auto; }
 .pi-desk-ctx-unsaved { color: var(--muted-foreground); font-size: .75rem; }
+@container context-settings (min-width:40rem) {
+  .pi-desk-ctx-settings .pi-desk-ctx-header { padding-top: .75rem; padding-bottom: .5rem; }
+  .pi-desk-ctx-header > .pi-desk-ui-panel-header-main > .pi-desk-ui-panel-header-copy { display: none; }
+  .pi-desk-ctx-header > .pi-desk-ui-panel-header-main { justify-content: flex-end; }
+}
 @container (max-width:48rem) {
   .pi-desk-ctx-rule .pi-desk-ctx-field, .pi-desk-ctx-retain .pi-desk-ctx-field { grid-template-columns: minmax(0,1fr); }
   .pi-desk-ctx-and, .pi-desk-ctx-rule .pi-desk-ctx-delete { align-self: end; margin-bottom: .125rem; min-height: 2rem; }

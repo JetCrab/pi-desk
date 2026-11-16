@@ -26,6 +26,7 @@ import {
   type L2PiDirectoryListResponse
 } from '@common/l2_biz/pi-session/l2-pi-session-contract'
 import type { L2PluginManagementSnapshot } from '@common/l2_biz/plugin/l2-plugin-management-contract'
+import type { L2ChatSource } from '@common/l2_biz/chat/l2-chat-contract'
 import { L2WorkSessionFilePreviewPathSchema } from '@common/l2_biz/work-session/l2-work-session-file-contract'
 import type {
   L2WorkSessionListItem,
@@ -210,6 +211,7 @@ interface L2WorkbenchProps extends L2WorkbenchComposerSlots, L2WorkbenchPluginSe
     open: boolean
     connectionReady: boolean
     initialPage?: 'model-presets'
+    source: L2ChatSource | null
     capabilityModes: L3AppRuntime['capabilityModes']
     workSessions: readonly L2WorkSessionListItem[]
     focusedCwd: string | null
@@ -2119,6 +2121,7 @@ export function L2Workbench({
           open: settingsOpen,
           connectionReady: loadPhase === 'ready',
           initialPage: settingsInitialPage,
+          source: activePluginSource,
           capabilityModes: appRuntime.capabilityModes,
           workSessions,
           focusedCwd: activeCwd,

@@ -23,14 +23,19 @@ import type { CapabilityMode as L3CapabilityMode } from '@jetcrab/pi-desk-sdk/ca
 export class L4PiCapabilityRuntime {
   private readonly registrations = new Map<string, SessionCapabilityRegistration>()
   private rules: L3CapabilityMode | undefined
+  private appendSystemPrompt: string | undefined
   private session: AgentSession | null = null
   private requestedTools = new Set<string>()
   private setTools: ((names: string[]) => void) | null = null
   private originalSetTools: AgentSession['setActiveToolsByName'] | null = null
   private ready = false
   private disposed = false
+  private notificationTail: Promise<void> = Promise.resolve()
 
-  constructor(private readonly readMode: () => L3CapabilityMode | undefined) {
+  constructor(
+    private readonly readMode: () => L3CapabilityMode | undefined,
+    private readonly readAppendSystemPrompt?: () => Promise<string>
+  ) {
     this.rules = readMode()
   }
 
@@ -134,18 +139,68 @@ export class L4PiCapabilityRuntime {
     this.refreshTools()
   }
 
-  async apply(): Promise<void> {
+  apply(): Promise<void> {
     const session = this.session
-    if (this.disposed || !session) return
-    // SDK 重载和动态注册可直接更新激活集合；不能用上一次模式的快照覆盖它。
-    this.rememberRequestedTools(session.getActiveToolNames())
-    this.rules = this.readMode()
-    this.ready = true
-    this.refreshTools()
+    if (this.disposed || !session) return Promise.resolve()
+    const runner = session.extensionRunner
+    const isCurrent = (): boolean =>
+      !this.disposed && this.session === session && session.extensionRunner === runner
+    return this.enqueueNotification(async () => {
+      if (!isCurrent()) return
+      const rules = this.readMode()
+      const append = await this.readAppendSystemPrompt?.()
+      if (!isCurrent()) return
+      // SDK 重载和动态注册可直接更新激活集合；不能用上一次模式的快照覆盖它。
+      this.rememberRequestedTools(session.getActiveToolNames())
+      this.rules = rules
+      this.ready = true
+      this.refreshTools()
+      try {
+        await this.notifyRegistrations(session, append, isCurrent)
+        if (isCurrent()) this.appendSystemPrompt = append
+      } finally {
+        if (isCurrent()) this.refreshTools()
+      }
+    })
+  }
+
+  readAppendForTask(): Promise<string> {
+    const session = this.session
+    const runner = session?.extensionRunner
+    const isCurrent = (): boolean =>
+      !this.disposed && this.session === session && session?.extensionRunner === runner
+    return this.enqueueNotification(async () => {
+      if (!session || !isCurrent()) throw new Error('Pi 会话实例已失效，不能读取任务提示词')
+      const append = await this.readAppendSystemPrompt?.()
+      if (!isCurrent()) throw new Error('Pi 会话实例已失效，不能同步任务提示词')
+      if (append !== this.appendSystemPrompt) {
+        await this.notifyRegistrations(session, append, isCurrent)
+        if (!isCurrent()) throw new Error('Pi 会话实例已失效，不能采用任务提示词')
+        this.appendSystemPrompt = append
+      }
+      return append ?? ''
+    })
+  }
+
+  private enqueueNotification<T>(operation: () => Promise<T>): Promise<T> {
+    const pending = this.notificationTail.then(operation)
+    this.notificationTail = pending.then(
+      () => undefined,
+      () => undefined
+    )
+    return pending
+  }
+
+  private async notifyRegistrations(
+    session: AgentSession,
+    appendSystemPrompt: string | undefined,
+    isCurrent: () => boolean
+  ): Promise<void> {
     const failures: string[] = []
     for (const registration of [...this.registrations.values()]) {
+      if (!isCurrent()) return
       try {
-        await this.applyRegistration(registration)
+        await this.applyRegistration(registration, appendSystemPrompt)
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause)
         console.error('[Pi Desk][Capabilities] 插件应用能力规则失败', {
@@ -156,7 +211,6 @@ export class L4PiCapabilityRuntime {
         failures.push(`${registration.pluginName}：${message}`)
       }
     }
-    this.refreshTools()
     if (failures.length > 0) throw new Error(`能力规则应用失败：${failures.join('；')}`)
   }
 
@@ -175,6 +229,7 @@ export class L4PiCapabilityRuntime {
     this.setTools = null
     this.originalSetTools = null
     this.requestedTools.clear()
+    this.appendSystemPrompt = undefined
   }
 
   private rememberRequestedTools(names: string[]): void {
@@ -197,7 +252,10 @@ export class L4PiCapabilityRuntime {
     )
   }
 
-  private async applyRegistration(registration: SessionCapabilityRegistration): Promise<void> {
+  private async applyRegistration(
+    registration: SessionCapabilityRegistration,
+    appendSystemPrompt = this.appendSystemPrompt
+  ): Promise<void> {
     const session = this.session
     if (
       !session ||
@@ -208,7 +266,8 @@ export class L4PiCapabilityRuntime {
     const rules: SessionCapabilityRules = {
       tools: this.rules?.tools ?? {},
       skills: this.rules?.skills ?? {},
-      capabilities: this.rules?.plugins?.[registration.pluginName] ?? {}
+      capabilities: this.rules?.plugins?.[registration.pluginName] ?? {},
+      ...(appendSystemPrompt === undefined ? {} : { appendSystemPrompt })
     }
     await registration.execute(structuredClone(rules), session.extensionRunner.createContext())
   }
@@ -237,7 +296,13 @@ export class L4PiCapabilityRuntime {
     registration.hostManaged = true
     this.registrations.set(registration.pluginName, registration)
     if (this.ready) {
-      void this.applyRegistration(registration).catch((cause: unknown) => {
+      const session = this.session
+      const runner = session?.extensionRunner
+      void this.enqueueNotification(async () => {
+        if (this.ready && this.session === session && session?.extensionRunner === runner) {
+          await this.applyRegistration(registration)
+        }
+      }).catch((cause: unknown) => {
         console.error('[Pi Desk][Capabilities] 新注册插件应用规则失败', {
           pluginName: registration.pluginName,
           message: cause instanceof Error ? cause.message : String(cause)

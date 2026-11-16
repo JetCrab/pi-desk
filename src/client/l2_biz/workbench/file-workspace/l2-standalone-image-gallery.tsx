@@ -1,6 +1,6 @@
 'use client'
 
-import { LoaderCircleIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { readL3ImagePreviewMode } from '@client/l3_modules/preferences/l3-work-session-file-preferences'
@@ -148,7 +148,7 @@ export function L2StandaloneImageGallery({
             </div>
           ) : (
             <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
-              <LoaderCircleIcon className="size-4 animate-spin" />
+              <L4LoadingSpinner className="size-4" />
               {t('loadingFile')}
             </div>
           )}

@@ -72,15 +72,13 @@ const styles = `
 }
 .subagent-settings-toggle span { overflow-wrap: anywhere; }
 .subagent-settings-fields { display: grid; min-width: 0; gap: .75rem; }
-.subagent-settings-note {
-  margin: 0;
-  color: var(--pi-desk-plugin-muted-foreground, var(--muted-foreground));
-}
 @container subagent-settings (min-width: 34rem) {
   .subagent-settings-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @container subagent-settings (min-width: 40rem) {
-  .subagent-settings .subagent-settings-header { padding: 1.5rem; }
+  .subagent-settings .subagent-settings-header { padding: .75rem 1.5rem; }
+  .subagent-settings-header > .pi-desk-ui-panel-header-main > .pi-desk-ui-panel-header-copy { display: none; }
+  .subagent-settings-header > .pi-desk-ui-panel-header-main { justify-content: flex-end; }
   .subagent-settings-content { padding: 1rem 1.5rem 1.5rem; }
   .subagent-settings-columns, .subagent-settings-agent {
     display: grid;
@@ -221,11 +219,11 @@ function Settings({
       <PluginPanelHeader
         className="subagent-settings-header"
         title="子代理"
-        description="全局默认配置，项目设置优先。"
         actions={
           <PluginActionRow>
             <a
               href="https://pidesk.dev/docs/subagents/"
+              title="全局默认配置，项目设置优先。保存后下次启动或恢复子代理时生效，运行中的任务不受影响。"
               target="_blank"
               rel="noopener noreferrer"
               style={{
@@ -316,9 +314,6 @@ function Settings({
                   {error}
                 </PluginAlert>
               ) : null}
-              <p className="subagent-settings-note">
-                保存后下次启动或恢复子代理时生效，运行中的任务不受影响。
-              </p>
             </>
           ) : null}
         </PluginLoadingState>

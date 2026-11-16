@@ -1,6 +1,7 @@
 'use client'
 
-import { GitBranchIcon, LoaderCircleIcon } from 'lucide-react'
+import { GitBranchIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useEffect, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
@@ -87,7 +88,7 @@ export function L2GitBranchButton({
       }
     >
       {loading ? (
-        <LoaderCircleIcon className="size-4 shrink-0 animate-spin" />
+        <L4LoadingSpinner className="size-4 shrink-0" />
       ) : (
         <GitBranchIcon
           className={cn(

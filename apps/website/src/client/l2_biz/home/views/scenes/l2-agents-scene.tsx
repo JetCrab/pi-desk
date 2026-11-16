@@ -1,16 +1,9 @@
 'use client'
 
-import {
-  ArrowLeft,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  ListTodo,
-  LoaderCircle,
-  X
-} from 'lucide-react'
+import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, ListTodo, X } from 'lucide-react'
 import { useReducedMotion } from 'motion/react'
 import { useState, type ReactElement } from 'react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import type { ShowcaseSceneProps } from '../../l2-showcase-story'
 import { useDemoState } from '../../hooks/l2-use-demo-state'
 import { DemoDevices } from '../l2-demo-devices'
@@ -213,7 +206,7 @@ function AgentsDevice({
                   {completed ? (
                     <CheckCircle2 size={16} className={styles.success} />
                   ) : (
-                    <LoaderCircle size={16} className={styles.spinner} />
+                    <L4LoadingSpinner size={16} />
                   )}
                   <div>
                     <strong>{taskTitle}</strong>
@@ -239,7 +232,7 @@ function AgentsDevice({
                   {completed ? (
                     <CheckCircle2 size={16} className={styles.success} />
                   ) : (
-                    <LoaderCircle size={16} className={styles.spinner} />
+                    <L4LoadingSpinner size={16} />
                   )}
                   <h3>子代理 / explore · {taskTitle}</h3>
                 </div>
@@ -299,7 +292,7 @@ function AgentsDevice({
                   </AssistantMessage>
                 ) : (
                   <div className={styles.activity}>
-                    <LoaderCircle size={14} className={styles.spinner} />
+                    <L4LoadingSpinner size={14} />
                     正在只读检查导出实现
                   </div>
                 )}

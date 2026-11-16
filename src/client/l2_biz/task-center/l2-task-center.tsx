@@ -8,7 +8,6 @@ import {
   CircleStopIcon,
   CopyIcon,
   ListTodoIcon,
-  LoaderCircleIcon,
   OctagonAlertIcon,
   RotateCcwIcon,
   XCircleIcon,
@@ -16,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import {
   type L2TaskDetailBody,
   type L2TaskInfoItem,
@@ -97,7 +97,7 @@ function taskIdentity(task: L2TaskSummary): string {
 function taskStatusIcon(status: L2TaskStatus): React.JSX.Element {
   switch (status) {
     case 'running':
-      return <LoaderCircleIcon className="size-4 animate-spin text-foreground" />
+      return <L4LoadingSpinner className="size-4 text-foreground" />
     case 'completed':
       return <CheckCircle2Icon className="size-4 text-status-success" />
     case 'failed':
@@ -336,11 +336,7 @@ function TaskDetail({
               disabled={interruptPending}
               onClick={() => void interrupt()}
             >
-              {interruptPending ? (
-                <LoaderCircleIcon className="animate-spin" />
-              ) : (
-                <CircleStopIcon />
-              )}
+              {interruptPending ? <L4LoadingSpinner /> : <CircleStopIcon />}
               {confirmingInterrupt ? t('confirmInterrupt') : t('interrupt')}
             </Button>
           ) : null}
@@ -395,7 +391,7 @@ function TaskDetail({
                 </div>
               ) : (
                 <div className="flex items-center gap-2">
-                  <LoaderCircleIcon className="size-4 animate-spin" />
+                  <L4LoadingSpinner className="size-4" />
                   {t('loadingDetail')}
                 </div>
               )}
@@ -404,7 +400,7 @@ function TaskDetail({
         )}
         {state.refreshing ? (
           <div className="pointer-events-none absolute right-3 top-3 flex items-center gap-2 rounded-md border bg-popover px-2 py-1 text-xs text-muted-foreground">
-            <LoaderCircleIcon className="size-3 animate-spin" />
+            <L4LoadingSpinner className="size-3" />
             {t('refreshing')}
           </div>
         ) : null}

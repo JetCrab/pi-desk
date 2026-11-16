@@ -1,10 +1,10 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import {
   CheckIcon,
   CopyIcon,
   FileCodeIcon,
-  LoaderCircleIcon,
   LockKeyholeIcon,
   SaveIcon,
   WrapTextIcon
@@ -104,7 +104,7 @@ export function L2SkillsEditorView(props: EditorViewProps): React.JSX.Element {
             className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground sm:flex"
           >
             {saving || opening ? (
-              <LoaderCircleIcon className="size-3.5 animate-spin" />
+              <L4LoadingSpinner className="size-3.5" />
             ) : dirty ? (
               <span className="size-1.5 rounded-full bg-status-warning" />
             ) : readOnly ? (
@@ -143,11 +143,7 @@ export function L2SkillsEditorView(props: EditorViewProps): React.JSX.Element {
           disabled={!dirty || Boolean(readOnly) || loading || saving}
           onClick={props.onSave}
         >
-          {saving ? (
-            <LoaderCircleIcon className="size-4 animate-spin" />
-          ) : (
-            <SaveIcon className="size-4" />
-          )}
+          {saving ? <L4LoadingSpinner className="size-4" /> : <SaveIcon className="size-4" />}
           {t('save')}
         </Button>
       </div>
@@ -176,7 +172,7 @@ export function L2SkillsEditorView(props: EditorViewProps): React.JSX.Element {
             role="status"
             className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"
           >
-            <LoaderCircleIcon className="size-4 animate-spin" />
+            <L4LoadingSpinner className="size-4" />
             {t('loadingFile')}
           </div>
         ) : file?.kind === 'text' ? (

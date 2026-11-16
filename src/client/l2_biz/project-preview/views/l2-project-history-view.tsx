@@ -1,7 +1,8 @@
 'use client'
 import { useId, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowLeftIcon, CopyIcon, LoaderCircleIcon, RefreshCwIcon } from 'lucide-react'
+import { ArrowLeftIcon, CopyIcon, RefreshCwIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import type { L4GitRepository } from '@common/l4_foundation/git/l4-git-contract'
 import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
@@ -132,7 +133,7 @@ export function L2ProjectHistoryView(props: Props): React.JSX.Element {
                 role="status"
                 className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground"
               >
-                <LoaderCircleIcon className="size-4 animate-spin" />
+                <L4LoadingSpinner className="size-4" />
                 {t('loadingCommits')}
               </div>
             ) : null}
@@ -218,7 +219,7 @@ export function L2ProjectHistoryView(props: Props): React.JSX.Element {
       {feedback(state.changes.error)}
       {state.changes.status === 'loading' ? (
         <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
-          <LoaderCircleIcon className="size-4 animate-spin" />
+          <L4LoadingSpinner className="size-4" />
           {t('loadingChanges')}
         </div>
       ) : null}

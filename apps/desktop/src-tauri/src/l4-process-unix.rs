@@ -1,5 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::io;
+use std::fs;
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 use std::thread;
@@ -16,9 +18,112 @@ struct Process {
     zombie: bool,
 }
 
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Identity {
+    pid: i32,
+    started: u64,
+}
+
+impl Identity {
+    fn of(process: &Process) -> Self {
+        Self {
+            pid: process.pid,
+            started: process.started,
+        }
+    }
+
+    fn matches(&self, process: &Process) -> bool {
+        self.started != 0 && self.pid == process.pid && self.started == process.started
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct ServiceRecord {
+    owner: Identity,
+    root: Identity,
+    #[cfg(target_os = "linux")]
+    boot: String,
+}
+
 pub(super) struct Tree {
     root: Process,
     finished: bool,
+}
+
+pub(super) fn recover(path: &Path, log: &Path) -> io::Result<bool> {
+    let record = match read_record(path)? {
+        Some(record) => record,
+        None => return Ok(false),
+    };
+    #[cfg(target_os = "linux")]
+    if record.boot != boot_id()? {
+        logging::write(
+            log,
+            "process-recover-old-boot",
+            "服务归属记录来自已结束的系统启动，不认领当前进程",
+        );
+        return Ok(true);
+    }
+    if inspect(record.owner.pid)?.is_some_and(|owner| record.owner.matches(&owner) && !owner.zombie)
+    {
+        return Err(io::Error::other(format!(
+            "原桌面进程仍存活 pid={}，拒绝回收服务 pid={}",
+            record.owner.pid, record.root.pid
+        )));
+    }
+    match inspect(record.root.pid)? {
+        Some(root) if record.root.matches(&root) => {
+            logging::write(
+                log,
+                "process-recover",
+                &format!("原桌面已退出，回收服务 pid={}", root.pid),
+            );
+            Tree {
+                root,
+                finished: false,
+            }
+            .stop(true, log)?;
+        }
+        Some(_) => {
+            return Err(io::Error::other(format!(
+                "服务根进程身份不匹配 pid={}，拒绝认领复用 PID 的进程",
+                record.root.pid
+            )));
+        }
+        None => logging::write(
+            log,
+            "process-recover-root-gone",
+            &format!(
+                "服务根进程已不存在 pid={}，不认领未知后代，继续检查端口",
+                record.root.pid
+            ),
+        ),
+    }
+    Ok(true)
+}
+
+fn read_record(path: &Path) -> io::Result<Option<ServiceRecord>> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let record: ServiceRecord = serde_json::from_slice(&bytes)
+        .map_err(|error| io::Error::other(format!("服务归属记录损坏：{error}")))?;
+    if [&record.owner, &record.root]
+        .iter()
+        .any(|identity| identity.pid <= 1 || identity.started == 0)
+    {
+        return Err(io::Error::other("服务归属记录含无效进程身份"));
+    }
+    Ok(Some(record))
+}
+
+#[cfg(target_os = "linux")]
+fn boot_id() -> io::Result<String> {
+    Ok(fs::read_to_string("/proc/sys/kernel/random/boot_id")?
+        .trim()
+        .to_string())
 }
 
 impl Tree {
@@ -28,6 +133,36 @@ impl Tree {
                 .ok_or_else(|| io::Error::other(format!("无法取得托管进程身份 pid={pid}")))?,
             finished: false,
         })
+    }
+
+    pub(super) fn save_record(&self, path: &Path) -> io::Result<()> {
+        let owner = inspect(std::process::id() as i32)?
+            .ok_or_else(|| io::Error::other("无法取得桌面进程身份"))?;
+        let record = ServiceRecord {
+            owner: Identity::of(&owner),
+            root: Identity::of(&self.root),
+            #[cfg(target_os = "linux")]
+            boot: boot_id()?,
+        };
+        let bytes = serde_json::to_vec(&record)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?
+            .write_all(&bytes)
+    }
+
+    pub(super) fn clear_record(&self, path: &Path) -> io::Result<()> {
+        if let Some(record) = read_record(path)? {
+            if !record.root.matches(&self.root) {
+                return Err(io::Error::other("服务归属记录已变化，保持记录不动"));
+            }
+            fs::remove_file(path)?;
+        }
+        Ok(())
     }
 
     // WNOWAIT 保留根进程 PID，直到归属快照和组清理完成，防止回收后 PGID 被复用。
@@ -210,7 +345,6 @@ impl Tree {
                 signal(*group, libc::SIGKILL)?;
             }
             if !remaining {
-                self.finished = true;
                 logging::write(
                     log,
                     "process-tree-exit",
@@ -227,6 +361,7 @@ impl Tree {
                         root.pid
                     )));
                 }
+                self.finished = true;
                 return Ok(());
             }
             if Instant::now() >= deadline {
@@ -366,7 +501,10 @@ fn inspect(_pid: i32) -> io::Result<Option<Process>> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{run_capture, spawn_foreground, stop_child, ManagedProcess};
+    use super::super::{
+        recover_service, run_capture, spawn_foreground, spawn_service, stop_child, ManagedProcess,
+        SERVICE_RECORD_FILE,
+    };
     use super::*;
     use std::fs;
     use std::net::{TcpListener, TcpStream};
@@ -412,6 +550,43 @@ mod tests {
             );
         }
 
+        fn start_service(&mut self, source: &str, parent_stdin: bool) {
+            self.write("root.js", source);
+            self.root = Some(
+                spawn_service(
+                    "exec node root.js",
+                    Some(&self.directory),
+                    &self.directory.join("process.log"),
+                    &[],
+                    &self.directory,
+                    0,
+                    parent_stdin,
+                )
+                .unwrap(),
+            );
+        }
+
+        fn record_path(&self) -> PathBuf {
+            self.directory.join(SERVICE_RECORD_FILE)
+        }
+
+        fn record(&self) -> ServiceRecord {
+            read_record(&self.record_path()).unwrap().unwrap()
+        }
+
+        fn save_record(&self, record: &ServiceRecord) {
+            fs::write(self.record_path(), serde_json::to_vec(record).unwrap()).unwrap();
+        }
+
+        fn recover(&self, port: u16) -> Result<(), String> {
+            recover_service(
+                &self.directory,
+                port,
+                Duration::ZERO,
+                &self.directory.join("process.log"),
+            )
+        }
+
         fn track_detached(&mut self) {
             if self.root.as_ref().is_some_and(|root| root.tree.finished) {
                 return;
@@ -438,7 +613,15 @@ mod tests {
                 if let Ok(bytes) = fs::read(self.directory.join("ready.json")) {
                     if let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                         self.track_detached();
-                        return state["port"].as_u64().unwrap() as u16;
+                        let port = state["port"].as_u64().unwrap() as u16;
+                        if let Some((_, service_port)) = self
+                            .root
+                            .as_mut()
+                            .and_then(|root| root.service_record.as_mut())
+                        {
+                            *service_port = port;
+                        }
+                        return port;
                     }
                 }
                 assert!(Instant::now() < deadline, "测试监听服务未就绪");
@@ -513,6 +696,199 @@ fs.writeFileSync('leaf-pid.txt', String(child.pid));
 process.on('SIGTERM', () => { fs.writeFileSync('terminated.txt', 'SIGTERM'); process.exit(0); });
 setInterval(() => {}, 1000);
 "#;
+
+    fn dead_owner() -> Identity {
+        let mut owner = Command::new("node")
+            .args(["-e", "setInterval(() => {}, 1000)"])
+            .spawn()
+            .unwrap();
+        let process = inspect(owner.id() as i32);
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+        Identity::of(&process.unwrap().unwrap())
+    }
+
+    #[test]
+    fn service_records_its_owner_before_returning_and_normal_stop_removes_record() {
+        let mut fixture = Fixture::new("unix-service-record-stop");
+        fixture.start_service(LISTENER, false);
+        let record = fixture.record();
+        assert_eq!(record.owner.pid, std::process::id() as i32);
+        assert_eq!(record.root.pid, fixture.root.as_ref().unwrap().id() as i32);
+        let port = fixture.ready();
+        stop_child(fixture.root.as_mut().unwrap()).unwrap();
+        assert!(!fixture.record_path().exists());
+        TcpListener::bind(("127.0.0.1", port)).expect("正常停止应释放端口");
+    }
+
+    #[test]
+    fn next_start_reclaims_a_dead_owners_tree_without_touching_an_unrelated_listener() {
+        let mut unrelated = Fixture::new("unix-recovery-unrelated");
+        unrelated.start(LISTENER);
+        let unrelated_port = unrelated.ready();
+        let mut fixture = Fixture::new("unix-recover-dead-owner");
+        fixture.write("leaf.js", LEAF);
+        fixture.start_service(PARENT, false);
+        let port = fixture.ready();
+        let mut record = fixture.record();
+        record.owner = dead_owner();
+        fixture.save_record(&record);
+        fixture.recover(port).unwrap();
+        assert!(!fixture.record_path().exists());
+        TcpListener::bind(("127.0.0.1", port)).expect("回收后应可立即重新绑定端口");
+        TcpStream::connect(("127.0.0.1", unrelated_port)).expect("无关服务应继续监听");
+        assert!(inspect(fixture.detached[0].pid)
+            .unwrap()
+            .is_none_or(|now| now.zombie));
+    }
+
+    #[test]
+    fn recovery_preserves_a_live_owners_service_and_record() {
+        let mut fixture = Fixture::new("unix-recovery-live-owner");
+        fixture.start_service(LISTENER, false);
+        let port = fixture.ready();
+        let record = fs::read(fixture.record_path()).unwrap();
+        assert!(fixture
+            .recover(port)
+            .unwrap_err()
+            .contains("原桌面进程仍存活"));
+        assert_eq!(fs::read(fixture.record_path()).unwrap(), record);
+        TcpStream::connect(("127.0.0.1", port)).expect("存活 owner 的服务不应被停止");
+    }
+
+    #[test]
+    fn recovery_rejects_a_reused_root_pid_without_signalling_it() {
+        let mut fixture = Fixture::new("unix-recovery-root-identity");
+        fixture.start_service(LISTENER, false);
+        let port = fixture.ready();
+        let mut record = fixture.record();
+        record.owner = dead_owner();
+        record.root.started += 1;
+        fixture.save_record(&record);
+        assert!(fixture.recover(port).unwrap_err().contains("身份不匹配"));
+        assert_eq!(fixture.record(), record);
+        TcpStream::connect(("127.0.0.1", port)).expect("身份不符的进程不应被停止");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_previous_boot_record_never_claims_current_processes() {
+        let mut fixture = Fixture::new("unix-recovery-old-boot");
+        fixture.start_service(LISTENER, false);
+        let port = fixture.ready();
+        let mut record = fixture.record();
+        record.boot = "test-previous-boot".into();
+        fixture.save_record(&record);
+        assert!(fixture
+            .recover(port)
+            .unwrap_err()
+            .contains("未停止占用进程"));
+        assert_eq!(fixture.record(), record);
+        TcpStream::connect(("127.0.0.1", port)).expect("跨系统启动的 PID 不应被认领");
+    }
+
+    #[test]
+    fn corrupt_or_absent_records_never_claim_an_existing_listener() {
+        let mut fixture = Fixture::new("unix-recovery-missing-record");
+        fixture.start(LISTENER);
+        let port = fixture.ready();
+        fixture.recover(port).unwrap();
+        assert!(crate::service_port::wait_until_free(
+            port,
+            Duration::ZERO,
+            &fixture.directory.join("process.log"),
+        )
+        .unwrap_err()
+        .contains("未停止占用进程"));
+        fixture.write(SERVICE_RECORD_FILE, "{");
+        assert!(fixture.recover(port).unwrap_err().contains("记录损坏"));
+        assert_eq!(fs::read_to_string(fixture.record_path()).unwrap(), "{");
+        TcpStream::connect(("127.0.0.1", port)).expect("无归属记录的监听不应被停止");
+    }
+
+    #[test]
+    fn gone_root_record_is_kept_until_the_port_is_actually_free() {
+        let mut fixture = Fixture::new("unix-recovery-port-gate");
+        fixture.start_service(LISTENER, false);
+        let port = fixture.ready();
+        let mut record = fixture.record();
+        record.owner = dead_owner();
+        stop_child(fixture.root.as_mut().unwrap()).unwrap();
+        fixture.save_record(&record);
+        let unrelated = TcpListener::bind(("127.0.0.1", port)).unwrap();
+        assert!(fixture
+            .recover(port)
+            .unwrap_err()
+            .contains("未停止占用进程"));
+        assert_eq!(fixture.record(), record);
+        TcpStream::connect(("127.0.0.1", port)).expect("未知监听不应被停止");
+        drop(unrelated);
+        fixture.recover(port).unwrap();
+        assert!(!fixture.record_path().exists());
+    }
+
+    #[test]
+    fn unconfirmed_orphan_cleanup_keeps_the_service_record_even_after_drop() {
+        let mut fixture = Fixture::new("unix-service-orphan-record");
+        fixture.write("leaf.js", LEAF);
+        fixture.start_service(
+            &format!("{PARENT}\nsetInterval(() => {{ if (fs.existsSync('exit-root.txt')) process.exit(0); }}, 10);"),
+            false,
+        );
+        let port = fixture.ready();
+        fs::write(fixture.directory.join("exit-root.txt"), "exit").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !fixture.root.as_ref().unwrap().tree.exited().unwrap() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(fixture.root.as_mut().unwrap().try_wait().is_err());
+        fixture.root.take();
+        assert!(
+            fixture.record_path().exists(),
+            "输出管道未确认释放时应保留记录"
+        );
+        TcpStream::connect(("127.0.0.1", port)).expect("失去父链的独立监听不应被认领");
+    }
+
+    #[test]
+    fn parent_stdin_pipe_is_service_only_and_never_writes_data() {
+        let mut fixture = Fixture::new("unix-service-stdin");
+        fixture.start_service(
+            &format!(
+                "{LISTENER}\nprocess.stdin.on('data', () => fs.writeFileSync('unexpected-data.txt', 'data'));\nprocess.stdin.on('end', () => server.close(() => process.exit(0)));\nprocess.stdin.resume();\nfs.writeFileSync('stdin-marker.txt', String(process.env.PI_DESK_DESKTOP_PARENT_STDIN));"
+            ),
+            true,
+        );
+        let port = fixture.ready();
+        assert_eq!(
+            fs::read_to_string(fixture.directory.join("stdin-marker.txt")).unwrap(),
+            "1"
+        );
+        assert!(!fixture.root.as_ref().unwrap().tree.exited().unwrap());
+        drop(fixture.root.as_mut().unwrap().child.stdin.take());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fixture.root.as_mut().unwrap().try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "关闭写端后服务应因 EOF 退出");
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!fixture.directory.join("unexpected-data.txt").exists());
+        TcpListener::bind(("127.0.0.1", port)).expect("EOF 后服务应释放端口");
+        fixture.write(
+            "ordinary.js",
+            "process.stdin.on('end', () => process.stdout.write(String(process.env.PI_DESK_DESKTOP_PARENT_STDIN)));process.stdin.resume();",
+        );
+        let output = run_capture(
+            "exec node ordinary.js",
+            Some(&fixture.directory),
+            Duration::from_secs(5),
+            &fixture.directory.join("ordinary.log"),
+            &|| false,
+        )
+        .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"undefined");
+    }
 
     #[test]
     fn natural_completion_does_not_wait_for_term_grace_or_report_cleanup_failure() {

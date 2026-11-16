@@ -149,6 +149,7 @@ export function L1HomePage(): React.JSX.Element {
         initialModelTab={input.initialPage === 'model-presets' ? 'presets' : undefined}
         workSessions={input.workSessions}
         focusedCwd={input.focusedCwd}
+        modeNames={input.capabilityModes}
         pluginAttention={input.pluginAttention}
         onOpenChange={input.onOpenChange}
         onBeforeReload={input.onBeforeReload}
@@ -164,6 +165,7 @@ export function L1HomePage(): React.JSX.Element {
         renderCapabilityModesSettings={({ onBeforeLeaveChange }) => (
           <L2CapabilityModesSettings
             modeNames={input.capabilityModes}
+            source={input.source}
             onBeforeLeaveChange={onBeforeLeaveChange}
           />
         )}

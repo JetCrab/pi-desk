@@ -465,7 +465,9 @@ export class L2WorkSessionChatRuntime {
     const record = this.currentRecord(input.source)
     return this.enqueueCommand(record, async () =>
       L2ChatModelContextGetResponseSchema.parse(
-        await getL4PiWorkSessionRuntime(record.source.sessionId).readModelContext()
+        await getL4PiWorkSessionRuntime(record.source.sessionId).readModelContext(
+          input.previewAppendSystemPrompt
+        )
       )
     )
   }

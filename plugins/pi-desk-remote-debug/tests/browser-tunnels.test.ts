@@ -8,7 +8,7 @@ import type {
 } from '@jetcrab/pi-desk-sdk/browser'
 import { createRemoteDebugBrowserTunnels } from '../src/l4-browser-tunnels.js'
 
-test('运行中只映射Gateway一次，界面取消订阅不停止，Run结束与插件退出释放各自连接', async (context) => {
+test('等待隧道发布就绪后只映射Gateway一次，关闭视图保留连接，Run结束与插件退出释放', async (context) => {
   const logs: string[] = []
   context.mock.method(console, 'info', (message: string) => logs.push(message))
   let state: PluginJsonObject = { runs: [{ runId: 'one', status: 'starting', gatewayPort: null }] }
@@ -51,9 +51,20 @@ test('运行中只映射Gateway一次，界面取消订阅不停止，Run结束�
   }
   try {
     assert.deepEqual(opened, [])
-    publish([
-      { runId: 'one', profile: 'web', cwd: '/fixture', status: 'running', gatewayPort: 49100 }
-    ])
+    const running = {
+      runId: 'one',
+      profile: 'web',
+      cwd: '/fixture',
+      status: 'running',
+      gatewayPort: 49100,
+      publicUrl: null
+    }
+    publish([running])
+    store.sync()
+    assert.deepEqual(opened, [])
+    assert.equal(store.getSnapshot().size, 0)
+
+    publish([{ ...running, publicUrl: 'http://tunnel.example:11001' }])
     store.sync()
     assert.deepEqual(opened, [49100])
     const unsubscribeView = store.subscribe(() => undefined)
@@ -75,7 +86,12 @@ test('运行中只映射Gateway一次，界面取消订阅不停止，Run结束�
     )
     publish([
       { runId: 'one', status: 'stopped', gatewayPort: null },
-      { runId: 'two', status: 'running', gatewayPort: 49101 }
+      {
+        runId: 'two',
+        status: 'running',
+        gatewayPort: 49101,
+        publicUrl: 'http://tunnel.example:11002'
+      }
     ])
     await Promise.resolve()
     assert.deepEqual(closed, [49100])
@@ -107,7 +123,16 @@ test('运行中只映射Gateway一次，界面取消订阅不停止，Run结束�
 test('旧客户端缺少能力时保持原访问方式，不创建错误映射', async () => {
   const host = {
     globalState: {
-      getSnapshot: () => ({ runs: [{ runId: 'one', status: 'running', gatewayPort: 49100 }] }),
+      getSnapshot: () => ({
+        runs: [
+          {
+            runId: 'one',
+            status: 'running',
+            gatewayPort: 49100,
+            publicUrl: 'http://tunnel.example:11001'
+          }
+        ]
+      }),
       subscribe: () => () => undefined
     }
   } as unknown as BrowserPluginHost

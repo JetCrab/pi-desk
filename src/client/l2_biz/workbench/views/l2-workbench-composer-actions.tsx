@@ -1,6 +1,7 @@
 'use client'
 
-import { ArrowRightIcon, ArrowUpToLineIcon, LoaderCircleIcon } from 'lucide-react'
+import { ArrowRightIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PromptInputButton } from '@client/l4_foundation/ui/ai-elements/prompt-input'
@@ -64,11 +65,12 @@ function ComposerMorphIcon({ stopping }: { stopping: boolean }): React.JSX.Eleme
       path.setAttribute('d', interpolateOutline(outlines.arrow, outlines.stop, progress))
     }
     const started = performance.now()
-    const duration = 280 * Math.abs(target - start)
+    const duration = 420
     let frame = 0
     const tick = (now: number): void => {
       const elapsed = Math.min(1, (now - started) / duration)
-      paint(start + (target - start) * (1 - (1 - elapsed) ** 3))
+      const eased = elapsed * elapsed * (3 - 2 * elapsed)
+      paint(start + (target - start) * eased)
       if (elapsed < 1) frame = window.requestAnimationFrame(tick)
     }
     const finish = (): void => {
@@ -98,7 +100,6 @@ interface L2WorkbenchComposerActionsProps {
   sendDisabled: boolean
   stopDisabled: boolean
   onSend: () => void
-  onFollowUp: () => void
   onInterrupt: () => void
 }
 
@@ -109,7 +110,6 @@ export function L2WorkbenchComposerActions({
   sendDisabled,
   stopDisabled,
   onSend,
-  onFollowUp,
   onInterrupt
 }: L2WorkbenchComposerActionsProps): React.JSX.Element {
   const { t } = useTranslation('workbench')
@@ -129,16 +129,6 @@ export function L2WorkbenchComposerActions({
           >
             <ArrowRightIcon className="size-4" />
           </PromptInputButton>
-          <PromptInputButton
-            className={styles.actionButton}
-            tooltip={t('sendFollowUp')}
-            aria-label={t('sendFollowUp')}
-            variant="outline"
-            disabled={!expanded || sendDisabled}
-            onClick={onFollowUp}
-          >
-            <ArrowUpToLineIcon className="size-4" />
-          </PromptInputButton>
         </div>
       </div>
       <PromptInputButton
@@ -153,7 +143,7 @@ export function L2WorkbenchComposerActions({
         onClick={stopping ? onInterrupt : undefined}
       >
         {!ready ? (
-          <LoaderCircleIcon className="size-4 animate-spin" />
+          <L4LoadingSpinner className="size-4" />
         ) : (
           <ComposerMorphIcon stopping={stopping} />
         )}

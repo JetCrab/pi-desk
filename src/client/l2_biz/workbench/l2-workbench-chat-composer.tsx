@@ -5,7 +5,6 @@ import {
   EllipsisIcon,
   GitBranchIcon,
   FileTextIcon,
-  LoaderCircleIcon,
   MessageSquarePlusIcon,
   PaperclipIcon,
   RefreshCwIcon,
@@ -14,6 +13,7 @@ import {
   XIcon
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import {
   memo,
   useCallback,
@@ -344,6 +344,7 @@ function L2WorkbenchChatComposerComponent({
     !hasNativeQuestion &&
     inputState.loaded &&
     !inputState.outbox &&
+    !inputState.pendingStart &&
     (inputState.text.trim().length > 0 || inputState.images.length > 0) &&
     inputState.images.length <= 10 &&
     !imageProcessing &&
@@ -465,47 +466,44 @@ function L2WorkbenchChatComposerComponent({
     [idleSending, inputRuntime, source]
   )
 
-  const send = useCallback(
-    async (mode: 'auto' | 'follow_up'): Promise<void> => {
-      if (chatRuntime.getSourceState(source).syncStatus !== 'ready') return
-      if (isReloadCommand) {
-        if (!inputState.loaded || inputState.loading) return
-        await reloadPi(true)
-        return
-      }
-      if (!canSend || sendActionPending) return
+  const send = useCallback(async (): Promise<void> => {
+    if (chatRuntime.getSourceState(source).syncStatus !== 'ready') return
+    if (isReloadCommand) {
+      if (!inputState.loaded || inputState.loading) return
+      await reloadPi(true)
+      return
+    }
+    if (!canSend || sendActionPending) return
 
-      const preview = mainRunning ? null : { text: inputState.text, images: inputState.images }
-      if (preview) setIdleSendPreview(preview)
-      setLocalError(null)
-      try {
-        await inputRuntime.send(source, mode)
-      } catch (cause) {
-        setLocalError(cause instanceof Error ? cause.message : t('sendFailed'))
-      } finally {
-        if (preview) setIdleSendPreview(null)
-      }
-    },
-    [
-      canSend,
-      sendActionPending,
-      chatRuntime,
-      inputRuntime,
-      inputState.images,
-      inputState.loaded,
-      inputState.loading,
-      inputState.text,
-      isReloadCommand,
-      mainRunning,
-      reloadPi,
-      source,
-      t
-    ]
-  )
+    const preview = mainRunning ? null : { text: inputState.text, images: inputState.images }
+    if (preview) setIdleSendPreview(preview)
+    setLocalError(null)
+    try {
+      await inputRuntime.send(source, 'auto', mainRunning)
+    } catch (cause) {
+      setLocalError(cause instanceof Error ? cause.message : t('sendFailed'))
+    } finally {
+      if (preview) setIdleSendPreview(null)
+    }
+  }, [
+    canSend,
+    sendActionPending,
+    chatRuntime,
+    inputRuntime,
+    inputState.images,
+    inputState.loaded,
+    inputState.loading,
+    inputState.text,
+    isReloadCommand,
+    mainRunning,
+    reloadPi,
+    source,
+    t
+  ])
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault()
-    void send('auto')
+    void send()
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -679,7 +677,7 @@ function L2WorkbenchChatComposerComponent({
         />
         {/* 禁用工具只弱化自身，不连带输入区。 */}
         <InputGroup
-          className="overflow-hidden rounded-xl border-border bg-card shadow-xs transition-[background-color,border-color] duration-150 ease-out has-disabled:bg-card has-disabled:opacity-100 dark:shadow-none motion-reduce:transition-none"
+          className="overflow-hidden rounded-xl border-border bg-card shadow-xs transition-[background-color,border-color] duration-150 ease-out has-disabled:bg-card has-disabled:opacity-100 has-[[data-slot=input-group-control]:focus-visible]:border-border has-[[data-slot=input-group-control]:focus-visible]:outline-none dark:shadow-none motion-reduce:transition-none"
           aria-busy={idleSending}
         >
           {composerImages.length > 0 ? (
@@ -801,7 +799,7 @@ function L2WorkbenchChatComposerComponent({
                       onClick={onCloneWorkSession}
                     >
                       {clonePending ? (
-                        <LoaderCircleIcon className="size-4 animate-spin" />
+                        <L4LoadingSpinner className="size-4" />
                       ) : (
                         <CopyPlusIcon className="size-4" />
                       )}
@@ -814,7 +812,7 @@ function L2WorkbenchChatComposerComponent({
                       onClick={onNewSession}
                     >
                       {newSessionPending ? (
-                        <LoaderCircleIcon className="size-4 animate-spin" />
+                        <L4LoadingSpinner className="size-4" />
                       ) : (
                         <MessageSquarePlusIcon className="size-4" />
                       )}
@@ -851,7 +849,7 @@ function L2WorkbenchChatComposerComponent({
                       onClick={() => void reloadPi(false)}
                     >
                       {reloadPending ? (
-                        <LoaderCircleIcon className="size-4 animate-spin" />
+                        <L4LoadingSpinner className="size-4" />
                       ) : (
                         <RefreshCwIcon className="size-4" />
                       )}
@@ -977,12 +975,11 @@ function L2WorkbenchChatComposerComponent({
               <L2WorkbenchComposerActions
                 key={currentSourceKey}
                 ready={chatReady}
-                stopping={idleSending || mainRunning}
+                stopping={idleSending || inputState.pendingStart !== null || mainRunning}
                 expanded={showRunningActions}
                 sendDisabled={!canSend || sendActionPending}
                 stopDisabled={!chatReady || actionPending}
-                onSend={() => void send('auto')}
-                onFollowUp={() => void send('follow_up')}
+                onSend={() => void send()}
                 onInterrupt={() =>
                   void runAction(() => inputRuntime.interrupt(source, mainRunning))
                 }

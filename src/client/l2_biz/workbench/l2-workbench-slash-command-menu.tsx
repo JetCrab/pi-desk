@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { LoaderCircleIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import {
   getL2WorkbenchSlashCommandOptionId,
@@ -117,12 +117,12 @@ export function L2WorkbenchSlashCommandMenu({
 
         {!hasCommands ? (
           <div className="flex min-h-20 items-center justify-center gap-2 px-4 text-xs text-muted-foreground">
-            {loading ? <LoaderCircleIcon className="size-3.5 animate-spin" /> : null}
+            {loading ? <L4LoadingSpinner className="size-3.5" /> : null}
             <span>{loading ? t('slashLoading') : error ? t('slashFailed') : t('slashEmpty')}</span>
           </div>
         ) : status ? (
           <div className="flex min-h-7 items-center gap-2 px-2 text-xs text-muted-foreground">
-            {loading ? <LoaderCircleIcon className="size-3 animate-spin" /> : null}
+            {loading ? <L4LoadingSpinner className="size-3" /> : null}
             <span>{status}</span>
           </div>
         ) : null}

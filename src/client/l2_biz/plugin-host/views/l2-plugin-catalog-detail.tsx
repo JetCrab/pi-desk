@@ -21,11 +21,13 @@ import {
   SelectTrigger,
   SelectValue
 } from '@client/l4_foundation/ui/shadcn/select'
+import type { L2PluginDevAvailability } from '../hooks/l2-use-plugin-dev-availability'
 import { L2PluginReadme } from './l2-plugin-readme'
 import { L2PluginDownloadSourceSelector } from './l2-plugin-download-source'
 import { L2PluginManagementChannel } from './l2-plugin-management-channel'
 
 interface CatalogDetailProps {
+  dev: L2PluginDevAvailability
   detail: L2PluginCatalogDetail
   disabled: boolean
   pending: boolean
@@ -78,6 +80,18 @@ export function L2PluginCatalogDetailView(props: CatalogDetailProps): React.JSX.
             {selectL4LocalizedText(detail.description, locale)}
           </p>
         ) : null}
+        <dl className="space-y-2 text-sm">
+          <div>
+            <dt className="text-xs text-muted-foreground">{t('searchSource')}</dt>
+            <dd className="[overflow-wrap:anywhere]">{detail.registry}</dd>
+          </div>
+          {props.installedVersion ? (
+            <div>
+              <dt className="text-xs text-muted-foreground">{t('installedVersion')}</dt>
+              <dd className="tabular-nums">v{props.installedVersion}</dd>
+            </div>
+          ) : null}
+        </dl>
         {detail.compatible === false ? (
           <p role="alert" className="text-sm text-destructive">
             {t('incompatible')}
@@ -92,6 +106,18 @@ export function L2PluginCatalogDetailView(props: CatalogDetailProps): React.JSX.
           ) : selectedVersionInstalled ? (
             <>
               <span className="text-sm text-muted-foreground">{t('alreadyInstalled')}</span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={
+                  props.disabled ||
+                  detail.compatible === false ||
+                  (props.channel === 'dev' && !props.dev.version)
+                }
+                onClick={props.onInstall}
+              >
+                {t('reinstallVersion', { version: detail.version })}
+              </Button>
               {props.updateAvailable ? (
                 <Button size="sm" disabled={props.disabled} onClick={props.onUpdate}>
                   {t('update')}
@@ -101,7 +127,11 @@ export function L2PluginCatalogDetailView(props: CatalogDetailProps): React.JSX.
           ) : (
             <Button
               size="sm"
-              disabled={props.disabled || detail.compatible === false}
+              disabled={
+                props.disabled ||
+                detail.compatible === false ||
+                (props.channel === 'dev' && !props.dev.version)
+              }
               onClick={props.onInstall}
             >
               {t(props.installed ? 'installVersion' : 'install')}
@@ -145,6 +175,7 @@ export function L2PluginCatalogDetailView(props: CatalogDetailProps): React.JSX.
               <span>{t('installChannel')}</span>
               <L2PluginManagementChannel
                 value={props.channel}
+                dev={props.dev}
                 label={t('installChannel')}
                 placeholder={t('defaultChannel')}
                 disabled={props.pending}

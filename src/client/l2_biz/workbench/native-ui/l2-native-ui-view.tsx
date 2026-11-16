@@ -4,7 +4,6 @@ import {
   Clock3Icon,
   ChevronDownIcon,
   ListChecksIcon,
-  LoaderCircleIcon,
   Maximize2Icon,
   MessageCircleQuestionIcon,
   SquareIcon,
@@ -12,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useId, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import type { L4PiUiRequest, L4PiUiSnapshot } from '@common/l4_foundation/pi/l4-pi-ui-contract'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import {
@@ -253,7 +253,7 @@ export function L2NativeUiQuestions({
             disabled={state.refreshing}
             onClick={model.refresh}
           >
-            {state.refreshing ? <LoaderCircleIcon className="size-3.5 animate-spin" /> : null}
+            {state.refreshing ? <L4LoadingSpinner className="size-3.5" /> : null}
             {t('nativeUiRetry')}
           </Button>
           {!request ? (

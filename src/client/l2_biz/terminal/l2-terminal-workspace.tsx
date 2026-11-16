@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useSyncExternalStore, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { LoaderCircleIcon, TerminalIcon } from 'lucide-react'
+import { TerminalIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { preloadL4TerminalRenderer } from '@client/l4_foundation/terminal/l4-terminal-renderer'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import {
@@ -181,10 +182,7 @@ export function L2TerminalWorkspace({
                 role="status"
                 className="flex min-h-0 flex-1 items-center justify-center gap-2 text-sm text-muted-foreground"
               >
-                <LoaderCircleIcon
-                  className="size-4 shrink-0 motion-safe:animate-spin"
-                  aria-hidden
-                />
+                <L4LoadingSpinner className="size-4 shrink-0" aria-hidden />
                 <span>{t('terminalOpening')}</span>
               </div>
             ) : null}

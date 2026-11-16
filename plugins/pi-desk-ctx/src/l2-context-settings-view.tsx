@@ -483,7 +483,6 @@ export function ContextIgnoreSettingsPage({
       <PluginPanelHeader
         className="pi-desk-ctx-header"
         title="上下文忽略"
-        description="减少历史过程占用，为当前任务留出空间。"
         actions={
           <a
             href="https://pidesk.dev/docs/context/"

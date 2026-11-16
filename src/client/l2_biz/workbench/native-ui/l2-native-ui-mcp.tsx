@@ -1,6 +1,7 @@
 'use client'
 
-import { LoaderCircleIcon, RefreshCwIcon } from 'lucide-react'
+import { RefreshCwIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import type { L2NativeUiState } from './l2-native-ui-biz'
@@ -61,7 +62,7 @@ export function L2NativeUiMcp({
               role="status"
               className="flex items-center gap-2 wrap-anywhere text-sm text-muted-foreground"
             >
-              <LoaderCircleIcon className="size-4 shrink-0 animate-spin" />
+              <L4LoadingSpinner className="size-4 shrink-0" />
               {t('mcpExecuting')} {state.commandPending}
             </p>
           ) : disabled ? (

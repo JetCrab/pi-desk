@@ -17,6 +17,8 @@ use std::sync::{
 };
 
 const TAIL_LIMIT: usize = 64 * 1024;
+#[cfg(unix)]
+const SERVICE_RECORD_FILE: &str = "desktop-service-process.json";
 pub(crate) type ProcessEnvironment = Vec<(OsString, OsString)>;
 
 pub struct ManagedProcess {
@@ -27,6 +29,8 @@ pub struct ManagedProcess {
     tree: unix_tree::Tree,
     #[cfg(unix)]
     readers_stopped: Arc<AtomicBool>,
+    #[cfg(unix)]
+    service_record: Option<(PathBuf, u16)>,
     stdout: Option<JoinHandle<io::Result<Vec<u8>>>>,
     stderr: Option<JoinHandle<io::Result<Vec<u8>>>>,
     log_path: PathBuf,
@@ -44,6 +48,7 @@ impl ManagedProcess {
         if let Some(status) = &result {
             self.stop_tree(false)?;
             self.finish_readers()?;
+            self.clear_service_record()?;
             logging::write(
                 &self.log_path,
                 "process-exit",
@@ -88,6 +93,19 @@ impl ManagedProcess {
         Ok(())
     }
 
+    fn clear_service_record(&mut self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            if let Some((path, port)) = &self.service_record {
+                crate::service_port::wait_until_free(*port, Duration::from_secs(5), &self.log_path)
+                    .map_err(io::Error::other)?;
+                self.tree.clear_record(path)?;
+                self.service_record = None;
+            }
+        }
+        Ok(())
+    }
+
     fn wait_after_stop(&mut self) -> io::Result<ExitStatus> {
         #[cfg(windows)]
         return self.child.wait();
@@ -123,8 +141,10 @@ impl ManagedProcess {
             let pending = [&self.stdout, &self.stderr]
                 .iter()
                 .any(|reader| reader.as_ref().is_some_and(|reader| !reader.is_finished()));
-            self.readers_stopped.store(true, Ordering::Relaxed);
-            pending
+            if pending {
+                self.readers_stopped.store(true, Ordering::Relaxed);
+            }
+            pending || self.readers_stopped.load(Ordering::Relaxed)
         };
         let stdout = join_reader(self.stdout.take());
         let stderr = join_reader(self.stderr.take());
@@ -154,25 +174,38 @@ impl Drop for ManagedProcess {
             #[cfg(windows)]
             return;
         }
-        if stopped.is_ok() {
-            if let Err(error) = self.wait_after_stop() {
+        let waited = if stopped.is_ok() {
+            self.wait_after_stop().map(|_| ()).map_err(|error| {
                 logging::write(
                     &self.log_path,
                     "process-wait-error",
                     &format!("{} {error}", self.context),
                 );
-            }
-        }
+                error
+            })
+        } else {
+            Ok(())
+        };
         #[cfg(unix)]
         if stopped.is_err() {
             let _ = self.child.try_wait();
         }
-        if let Err(error) = self.finish_readers() {
+        let readers = self.finish_readers();
+        if let Err(error) = &readers {
             logging::write(
                 &self.log_path,
                 "process-read-error",
                 &format!("{} {error}", self.context),
             );
+        }
+        if stopped.is_ok() && waited.is_ok() && readers.is_ok() {
+            if let Err(error) = self.clear_service_record() {
+                logging::write(
+                    &self.log_path,
+                    "process-record-error",
+                    &format!("{} {error}", self.context),
+                );
+            }
         }
     }
 }
@@ -186,13 +219,54 @@ pub fn spawn_foreground(
     spawn(command, working_directory, log_path, &[])
 }
 
-pub(crate) fn spawn_with_environment(
+pub(crate) fn recover_service(
+    _record_directory: &Path,
+    _port: u16,
+    _timeout: Duration,
+    _log_path: &Path,
+) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let path = _record_directory.join(SERVICE_RECORD_FILE);
+        let result = (|| -> Result<(), String> {
+            if unix_tree::recover(&path, _log_path).map_err(|error| error.to_string())? {
+                crate::service_port::wait_until_free(_port, _timeout, _log_path)?;
+                std::fs::remove_file(&path).map_err(|error| error.to_string())?;
+                logging::write(
+                    _log_path,
+                    "process-recovered",
+                    &format!("服务归属记录已释放 port={_port} path={}", path.display()),
+                );
+            }
+            Ok(())
+        })();
+        result.map_err(|error| {
+            let detail = format!("恢复托管服务失败（{}）：{error}", path.display());
+            logging::write(_log_path, "process-recover-refused", &detail);
+            detail
+        })?;
+    }
+    Ok(())
+}
+
+pub(crate) fn spawn_service(
     command: &str,
     working_directory: Option<&Path>,
     log_path: &Path,
     environment: &[(OsString, OsString)],
+    record_directory: &Path,
+    port: u16,
+    parent_stdin: bool,
 ) -> Result<ManagedProcess, String> {
-    spawn(command, working_directory, log_path, environment)
+    spawn_command(
+        shell_command(command),
+        command,
+        working_directory,
+        log_path,
+        environment,
+        Some((record_directory, port)),
+        parent_stdin,
+    )
 }
 
 pub fn stop_child(child: &mut ManagedProcess) -> Result<(), String> {
@@ -202,7 +276,9 @@ pub fn stop_child(child: &mut ManagedProcess) -> Result<(), String> {
     let status = child
         .wait_after_stop()
         .map_err(|error| format!("等待命令进程退出失败：{error}"))?;
-    let result = child.finish_readers();
+    let result = child
+        .finish_readers()
+        .and_then(|_| child.clear_service_record());
     logging::write(
         &child.log_path,
         "process-stop",
@@ -267,6 +343,8 @@ pub(crate) fn run_program(
         working_directory,
         log_path,
         environment,
+        None,
+        false,
     )?;
     capture_process(process, timeout, log_path, cancelled)
 }
@@ -356,6 +434,8 @@ fn spawn(
         working_directory,
         log_path,
         environment,
+        None,
+        false,
     )
 }
 
@@ -365,12 +445,22 @@ fn spawn_command(
     working_directory: Option<&Path>,
     log_path: &Path,
     environment: &[(OsString, OsString)],
+    _service_record: Option<(&Path, u16)>,
+    _parent_stdin: bool,
 ) -> Result<ManagedProcess, String> {
     process.envs(environment.iter().cloned());
+    process.stdin(Stdio::null());
+    process.env_remove("PI_DESK_DESKTOP_PARENT_STDIN");
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         process.process_group(0);
+        if _parent_stdin {
+            // Child 持有写端且不写入数据；桌面异常消失时由内核关闭写端。
+            process
+                .stdin(Stdio::piped())
+                .env("PI_DESK_DESKTOP_PARENT_STDIN", "1");
+        }
     }
     #[cfg(windows)]
     {
@@ -378,10 +468,7 @@ fn spawn_command(
         process
             .creation_flags(0x08000000 | windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
     }
-    process
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    process.stdout(Stdio::piped()).stderr(Stdio::piped());
     if let Some(directory) = working_directory {
         process.current_dir(directory);
     }
@@ -436,6 +523,8 @@ fn spawn_command(
         tree,
         #[cfg(unix)]
         readers_stopped: Arc::new(AtomicBool::new(false)),
+        #[cfg(unix)]
+        service_record: None,
         #[cfg(windows)]
         job,
         stdout: None,
@@ -444,6 +533,20 @@ fn spawn_command(
         context,
         output: (Vec::new(), Vec::new()),
     };
+    #[cfg(unix)]
+    if let Some((directory, port)) = _service_record {
+        let path = directory.join(SERVICE_RECORD_FILE);
+        managed
+            .tree
+            .save_record(&path)
+            .map_err(|error| format!("保存服务归属记录失败（{}）：{error}", path.display()))?;
+        logging::write(
+            log_path,
+            "process-recorded",
+            &format!("{} path={}", managed.context, path.display()),
+        );
+        managed.service_record = Some((path, port));
+    }
     let stdout = managed.child.stdout.take().expect("stdout 已配置为 pipe");
     let stderr = managed.child.stderr.take().expect("stderr 已配置为 pipe");
     #[cfg(unix)]
@@ -918,6 +1021,34 @@ mod tests {
         wait_for_process_exit(pid_from(&pid_path));
         assert!(fs::read_to_string(&log).unwrap().contains("reason=已取消"));
 
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn service_launch_keeps_windows_null_stdin_without_the_unix_lifeline_marker() {
+        let directory = test_directory("service-windows-stdin");
+        let script = write_node_script(
+            &directory,
+            "stdin",
+            "process.stdin.on('end', () => process.stdout.write(String(process.env.PI_DESK_DESKTOP_PARENT_STDIN)));process.stdin.resume();",
+        );
+        let log = directory.join("process.log");
+        let process = super::spawn_service(
+            &node_file_command(&script),
+            Some(&directory),
+            &log,
+            &[],
+            &directory,
+            0,
+            true,
+        )
+        .unwrap();
+        let output =
+            super::capture_process(process, Duration::from_secs(5), &log, &|| false).unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"undefined");
+        assert!(!directory.join("desktop-service-process.json").exists());
         fs::remove_dir_all(directory).unwrap();
     }
 

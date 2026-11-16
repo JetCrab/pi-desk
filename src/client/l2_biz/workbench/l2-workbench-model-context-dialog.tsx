@@ -1,6 +1,7 @@
 'use client'
 
 import { CheckIcon, CopyIcon, FileTextIcon, RefreshCwIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { L2ChatSource } from '@common/l2_biz/chat/l2-chat-contract'
@@ -146,7 +147,7 @@ export function L2WorkbenchModelContextDialog({
                 role="status"
                 className="flex items-center gap-2 py-6 text-sm text-muted-foreground"
               >
-                <RefreshCwIcon className="size-4 animate-spin" />
+                <L4LoadingSpinner className="size-4" />
                 {t('contextLoading')}
               </div>
             ) : data.error ? (

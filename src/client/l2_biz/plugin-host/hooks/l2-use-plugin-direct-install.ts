@@ -12,9 +12,14 @@ import type {
 } from '@common/l2_biz/plugin/l2-plugin-management-contract'
 import type { L2PluginManagementBiz } from '../l2-plugin-management-biz'
 import { pluginNpmSpec } from '../l2-use-plugin-management'
+import {
+  useL2PluginDevAvailability,
+  type L2PluginDevAvailability
+} from './l2-use-plugin-dev-availability'
 
 interface PluginDirectInstallState {
   open: boolean
+  dev: L2PluginDevAvailability
   setOpen: (value: boolean) => void
   source: string
   sources: string[]
@@ -39,8 +44,10 @@ interface PluginDirectInstallState {
 
 export function useL2PluginDirectInstall(
   biz: L2PluginManagementBiz,
-  installed: readonly L2PluginManagementItem[] = []
+  installed: readonly L2PluginManagementItem[] = [],
+  defaultSource: L2PluginDownloadSource | null = null
 ): PluginDirectInstallState {
+  const sourceContext = JSON.stringify(defaultSource)
   const { t } = useTranslation('pluginManagement')
   const [open, setOpen] = useState(false)
   const [source, setSource] = useState('')
@@ -60,6 +67,22 @@ export function useL2PluginDirectInstall(
     .map((line) => line.trim())
     .filter(Boolean)
   const spec = sources.length === 1 ? pluginNpmSpec(sources[0]!) : null
+  const customRegistry = override === 'custom' ? L2PluginRegistrySchema.safeParse(registry) : null
+  const lookupRegistry = customRegistry?.success
+    ? customRegistry.data
+    : override === 'official'
+      ? 'https://registry.npmjs.org'
+      : override === 'domestic'
+        ? 'https://registry.npmmirror.com'
+        : undefined
+  const followsOwner =
+    override === 'default' || (override !== 'custom' && override === defaultSource?.mode)
+  const dev = useL2PluginDevAvailability(
+    biz,
+    open && spec && (followsOwner || customRegistry?.success) ? spec.name : null,
+    customRegistry?.success ? customRegistry.data : undefined,
+    JSON.stringify([sourceContext, source, override, registry])
+  )
   useEffect(() => {
     mounted.current = true
     return () => {
@@ -73,9 +96,20 @@ export function useL2PluginDirectInstall(
     setLoading(false)
     setError(null)
   }
+  useEffect(() => {
+    epoch.current += 1
+    queueMicrotask(() => {
+      setDetail(null)
+      setLoading(false)
+      setError(null)
+      setTagValue('')
+      setExplicitVersion(null)
+    })
+  }, [sourceContext])
   const changeSource = (value: string): void => {
     invalidateDetail()
     setExplicitVersion(null)
+    setTagValue('')
     setSource(value)
   }
   const loadDetail = async (version?: string): Promise<L2PluginCatalogDetail | null> => {
@@ -87,18 +121,9 @@ export function useL2PluginDirectInstall(
     const defaultSelector = spec.version ?? (tag || savedTag || 'latest')
     const targetVersion =
       version === '' ? defaultSelector : (version ?? explicitVersion ?? defaultSelector)
-    let lookupRegistry: string | undefined
-    if (override === 'custom') {
-      const parsed = L2PluginRegistrySchema.safeParse(registry)
-      if (!parsed.success) {
-        setError(t('invalidRegistry'))
-        return null
-      }
-      lookupRegistry = parsed.data
-    } else if (override === 'official') {
-      lookupRegistry = 'https://registry.npmjs.org'
-    } else if (override === 'domestic') {
-      lookupRegistry = 'https://registry.npmmirror.com'
+    if (customRegistry && !customRegistry.success) {
+      setError(t('invalidRegistry'))
+      return null
     }
     const request = ++epoch.current
     setLoading(true)
@@ -125,7 +150,7 @@ export function useL2PluginDirectInstall(
     onReady: (input: L2PluginManagementInstallRequest, detail?: L2PluginCatalogDetail) => void,
     onBatch: (items: L2PluginManagementInstallRequest[]) => void
   ): Promise<void> => {
-    if (!sources.length || loading) return
+    if (!sources.length || loading || (tag === 'dev' && !dev.version)) return
     setError(null)
     const parsed =
       override === 'default'
@@ -183,7 +208,15 @@ export function useL2PluginDirectInstall(
   }
   return {
     open,
-    setOpen,
+    // getCatalog cannot preview a different one-shot download policy.
+    dev:
+      open && spec && !followsOwner && !customRegistry
+        ? { loading: false, version: null, error: t('devSourceUnverified') }
+        : dev,
+    setOpen: (value: boolean): void => {
+      if (!value) invalidateDetail()
+      setOpen(value)
+    },
     source,
     sources,
     tag,
@@ -201,11 +234,15 @@ export function useL2PluginDirectInstall(
     override,
     setOverride: (value: PluginDirectInstallState['override']): void => {
       invalidateDetail()
+      setTagValue('')
+      setExplicitVersion(null)
       setOverrideValue(value)
     },
     registry,
     setRegistry: (value: string): void => {
       invalidateDetail()
+      setTagValue('')
+      setExplicitVersion(null)
       setRegistryValue(value)
     },
     loadDetail,

@@ -30,7 +30,25 @@ const PLUGIN_UI_STYLES = `
 .pi-desk-ui-tab:hover{background:color-mix(in oklab,var(--foreground) 8%,transparent);color:var(--foreground)}
 .pi-desk-ui-tab[data-active="true"]{border-bottom-color:var(--foreground);color:var(--foreground)}.pi-desk-ui-tab:focus-visible{outline:2px solid var(--pi-desk-plugin-ring,var(--ring));outline-offset:2px}.pi-desk-ui-tab:disabled{cursor:not-allowed;opacity:.5}
 .pi-desk-ui-key-values{display:grid;min-width:0;gap:.5rem;margin:0}.pi-desk-ui-key-value{display:grid;min-width:0;grid-template-columns:minmax(5rem,auto) minmax(0,1fr) auto;align-items:start;gap:.3rem .65rem}.pi-desk-ui-key-value-label{color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground));font-size:.75rem;line-height:1.45}.pi-desk-ui-key-value-value{min-width:0;margin:0;font-size:.875rem;line-height:1.5;overflow-wrap:anywhere}.pi-desk-ui-key-value-action{display:flex;align-items:center}.pi-desk-ui-key-values-compact{gap:.35rem}.pi-desk-ui-key-values-compact .pi-desk-ui-key-value{grid-template-columns:minmax(3.5rem,auto) minmax(0,1fr) auto;gap:.2rem .5rem}.pi-desk-ui-key-values-compact .pi-desk-ui-key-value-label{font-size:.75rem}.pi-desk-ui-key-values-stacked .pi-desk-ui-key-value{grid-template-columns:minmax(0,1fr);gap:.1rem}.pi-desk-ui-key-values-stacked .pi-desk-ui-key-value-action{justify-self:start}
-.pi-desk-ui-loading{display:flex;min-height:6rem;align-items:center;justify-content:center;gap:.5rem;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground));font-size:.875rem;text-align:center}.pi-desk-ui-loading-error{display:grid;gap:.6rem}.pi-desk-ui-spinner{width:1rem;height:1rem;animation:pi-desk-ui-spin .8s linear infinite;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}@keyframes pi-desk-ui-spin{to{transform:rotate(360deg)}}
+.pi-desk-ui-loading{display:flex;min-height:6rem;align-items:center;justify-content:center;gap:.5rem;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground));font-size:.875rem;text-align:center}.pi-desk-ui-loading-error{display:grid;gap:.6rem}
+.pi-desk-ui-spinner circle {
+  opacity: .15;
+  transform: scale(.6);
+  animation: pi-desk-ui-matrix 1.2s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.pi-desk-ui-spinner circle:nth-child(2), .pi-desk-ui-spinner circle:nth-child(4) { animation-delay: .1s; }
+.pi-desk-ui-spinner circle:nth-child(3), .pi-desk-ui-spinner circle:nth-child(5), .pi-desk-ui-spinner circle:nth-child(7) { animation-delay: .2s; }
+.pi-desk-ui-spinner circle:nth-child(6), .pi-desk-ui-spinner circle:nth-child(8) { animation-delay: .3s; }
+.pi-desk-ui-spinner circle:nth-child(9) { animation-delay: .4s; }
+@keyframes pi-desk-ui-matrix {
+  0%, 60%, 100% { opacity: .15; transform: scale(.6); }
+  30% { opacity: 1; transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pi-desk-ui-spinner circle { animation: none; opacity: 1; transform: none; }
+}
 .pi-desk-ui-split{display:grid;grid-template-columns:minmax(11rem,13.5rem) minmax(0,1fr);gap:1rem;align-items:start}
 .pi-desk-ui-navigation,.pi-desk-ui-content{min-width:0;min-height:0}.pi-desk-ui-navigation{overflow:hidden}
 .pi-desk-ui-list{display:grid;gap:.375rem;min-width:0}.pi-desk-ui-list-compact{gap:.25rem}
@@ -486,12 +504,24 @@ export function PluginKeyValueItem({
 export function PluginSpinner({ className }: { className?: string }): React.JSX.Element {
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="0 0 25 25"
+      width="1rem"
+      height="1rem"
+      fill="currentColor"
+      stroke="none"
       role="status"
       aria-label="正在加载"
       className={classNames('pi-desk-ui-spinner', className)}
     >
-      <path d="M20 12a8 8 0 1 1-5.5-7.6" />
+      <circle cx="2.5" cy="2.5" r="2.5" />
+      <circle cx="12.5" cy="2.5" r="2.5" />
+      <circle cx="22.5" cy="2.5" r="2.5" />
+      <circle cx="2.5" cy="12.5" r="2.5" />
+      <circle cx="12.5" cy="12.5" r="2.5" />
+      <circle cx="22.5" cy="12.5" r="2.5" />
+      <circle cx="2.5" cy="22.5" r="2.5" />
+      <circle cx="12.5" cy="22.5" r="2.5" />
+      <circle cx="22.5" cy="22.5" r="2.5" />
     </svg>
   )
 }

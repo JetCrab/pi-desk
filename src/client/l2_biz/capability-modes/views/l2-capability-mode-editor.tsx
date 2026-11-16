@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { CapabilityRule } from '@jetcrab/pi-desk-sdk/capabilities'
 import type {
@@ -6,11 +6,11 @@ import type {
   L3CapabilityMode
 } from '@common/l3_modules/capability-modes/l3-capability-modes-contract'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
-import { Input } from '@client/l4_foundation/ui/shadcn/input'
 import {
   l2CapabilityGroups,
   l2CapabilityRule,
-  l2ReplaceCapabilityRule
+  l2ReplaceCapabilityRule,
+  type L2CapabilityModeView
 } from '../l2-capability-modes-model'
 import { L2CapabilityRulePicker } from './l2-capability-rule-picker'
 
@@ -19,12 +19,18 @@ export function L2CapabilityModeEditor({
   mode,
   catalog,
   disabled,
+  readOnly,
+  view,
+  onViewChange,
   onChange
 }: {
   modeKey: string
   mode: L3CapabilityMode
   catalog: L3CapabilityCatalog | null
   disabled: boolean
+  readOnly: boolean
+  view: L2CapabilityModeView
+  onViewChange: (view: L2CapabilityModeView) => void
   onChange: (mode: L3CapabilityMode) => void
 }): React.JSX.Element {
   const { t } = useTranslation('capabilityModes')
@@ -32,25 +38,11 @@ export function L2CapabilityModeEditor({
     () => l2CapabilityGroups(catalog, mode, t('groupTools')),
     [catalog, mode, t]
   )
-  const [groupKey, setGroupKey] = useState('tools')
-  const group = groups.find((item) => item.key === groupKey) ?? groups[0]!
+  const group = groups.find((item) => item.key === view.groupKey) ?? groups[0]!
   const changeRule = (rule: CapabilityRule): void =>
     onChange(l2ReplaceCapabilityRule(mode, group.target, rule))
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 border-b px-4 py-3">
-        <label className="flex max-w-xl flex-wrap items-center gap-2 text-sm font-medium">
-          <span>{t('modeName')}</span>
-          <Input
-            aria-label={t('modeName')}
-            value={mode.name}
-            maxLength={64}
-            disabled={disabled}
-            className="min-w-40 flex-1"
-            onChange={(event) => onChange({ ...mode, name: event.target.value })}
-          />
-        </label>
-      </div>
       <div
         className="flex shrink-0 flex-wrap gap-1 border-b px-4 py-2"
         role="tablist"
@@ -63,7 +55,7 @@ export function L2CapabilityModeEditor({
             size="sm"
             role="tab"
             aria-selected={item.key === group.key}
-            onClick={() => setGroupKey(item.key)}
+            onClick={() => onViewChange({ ...view, groupKey: item.key })}
           >
             {item.label}
           </Button>
@@ -75,6 +67,15 @@ export function L2CapabilityModeEditor({
         rule={l2CapabilityRule(mode, group.target)}
         options={group.options}
         disabled={disabled}
+        readOnly={readOnly}
+        query={view.queries[group.key] ?? ''}
+        rulesOpen={view.rulesOpen[group.key] ?? false}
+        onQueryChange={(query) =>
+          onViewChange({ ...view, queries: { ...view.queries, [group.key]: query } })
+        }
+        onRulesOpenChange={(open) =>
+          onViewChange({ ...view, rulesOpen: { ...view.rulesOpen, [group.key]: open } })
+        }
         onChange={changeRule}
       />
     </div>

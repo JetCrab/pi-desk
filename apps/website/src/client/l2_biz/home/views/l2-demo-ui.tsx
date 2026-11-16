@@ -5,7 +5,6 @@ import {
   BatteryFull,
   CornerDownLeft,
   Clock3,
-  LoaderCircle,
   ListTodo,
   Bot,
   Check,
@@ -45,6 +44,7 @@ import {
   type ReactNode
 } from 'react'
 import { L4Otter } from '@client/l4_foundation/ui/otter/l4-otter'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { DemoActivity } from '../hooks/l2-demo-activity'
 import styles from './l2-demo-ui.module.css'
 
@@ -77,7 +77,7 @@ function projectColor(cwd: string): string {
 }
 
 function SessionGrip({ running }: { running?: boolean }): ReactElement {
-  const frames = running ? ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] : ['⠿']
+  if (running) return <L4LoadingSpinner size={16} className={styles.grip} />
   const dots = [
     [5, 3, 1],
     [11, 3, 8],
@@ -88,18 +88,8 @@ function SessionGrip({ running }: { running?: boolean }): ReactElement {
   ]
   return (
     <svg viewBox="0 0 16 16" className={styles.grip} aria-hidden="true">
-      {frames.map((frame, index) => (
-        <g
-          key={frame}
-          className={running ? styles.runningGrip : undefined}
-          style={running ? { animationDelay: `${index * 80 - 800}ms` } : undefined}
-        >
-          {dots
-            .filter(([, , bit]) => frame.charCodeAt(0) & bit)
-            .map(([cx, cy, bit]) => (
-              <circle key={bit} cx={cx} cy={cy} r="1.15" fill="currentColor" />
-            ))}
-        </g>
+      {dots.map(([cx, cy, bit]) => (
+        <circle key={bit} cx={cx} cy={cy} r="1.15" fill="currentColor" />
       ))}
     </svg>
   )
@@ -507,11 +497,7 @@ export function Composer({
           onClick={onTask}
           aria-label={`查看任务：${task}`}
         >
-          {taskRunning ? (
-            <LoaderCircle size={14} className={styles.taskSpinner} />
-          ) : (
-            <Clock3 size={14} />
-          )}
+          {taskRunning ? <L4LoadingSpinner size={14} /> : <Clock3 size={14} />}
           <span>{task}</span>
           <ChevronRight size={14} />
         </button>

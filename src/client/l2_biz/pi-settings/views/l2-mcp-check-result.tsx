@@ -1,4 +1,5 @@
-import { CircleCheckIcon, CircleAlertIcon, LoaderCircleIcon } from 'lucide-react'
+import { CircleCheckIcon, CircleAlertIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import type { L2PiSettingsController } from '../hooks/l2-use-pi-settings'
 import { useL2PiSettingsText } from '../l2-pi-settings-locale'
@@ -14,7 +15,7 @@ export function L2McpCheckResult({
   onDismiss: () => void
 }): React.JSX.Element {
   const t = useL2PiSettingsText()
-  const Icon = check.loading ? LoaderCircleIcon : check.error ? CircleAlertIcon : CircleCheckIcon
+  const Icon = check.loading ? L4LoadingSpinner : check.error ? CircleAlertIcon : CircleCheckIcon
   return (
     <section
       aria-label={t('连接测试结果')}
@@ -24,7 +25,7 @@ export function L2McpCheckResult({
       <p role="status" className="flex items-center gap-2 text-sm font-medium">
         <Icon
           aria-hidden="true"
-          className={`size-4 shrink-0 ${check.loading ? 'motion-safe:animate-spin' : check.error ? 'text-destructive' : ''}`}
+          className={`size-4 shrink-0 ${!check.loading && check.error ? 'text-destructive' : ''}`}
         />
         {t(
           check.loading

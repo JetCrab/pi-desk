@@ -1,6 +1,7 @@
 'use client'
 
-import { CheckIcon, ChevronsUpDownIcon, LoaderCircleIcon } from 'lucide-react'
+import { CheckIcon, ChevronsUpDownIcon } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
@@ -213,11 +214,7 @@ export function L2ModelEditor({
                       aria-busy={loadingCatalog}
                       className="absolute top-0.5 right-0.5 z-10"
                     >
-                      {loadingCatalog ? (
-                        <LoaderCircleIcon className="animate-spin" />
-                      ) : (
-                        <ChevronsUpDownIcon />
-                      )}
+                      {loadingCatalog ? <L4LoadingSpinner /> : <ChevronsUpDownIcon />}
                     </Button>
                   }
                 />
