@@ -30,7 +30,7 @@ const PLUGIN_UI_STYLES = `
 .pi-desk-ui-tab:hover{background:color-mix(in oklab,var(--foreground) 8%,transparent);color:var(--foreground)}
 .pi-desk-ui-tab[data-active="true"]{border-bottom-color:var(--foreground);color:var(--foreground)}.pi-desk-ui-tab:focus-visible{outline:2px solid var(--pi-desk-plugin-ring,var(--ring));outline-offset:2px}.pi-desk-ui-tab:disabled{cursor:not-allowed;opacity:.5}
 .pi-desk-ui-key-values{display:grid;min-width:0;gap:.5rem;margin:0}.pi-desk-ui-key-value{display:grid;min-width:0;grid-template-columns:minmax(5rem,auto) minmax(0,1fr) auto;align-items:start;gap:.3rem .65rem}.pi-desk-ui-key-value-label{color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground));font-size:.75rem;line-height:1.45}.pi-desk-ui-key-value-value{min-width:0;margin:0;font-size:.875rem;line-height:1.5;overflow-wrap:anywhere}.pi-desk-ui-key-value-action{display:flex;align-items:center}.pi-desk-ui-key-values-compact{gap:.35rem}.pi-desk-ui-key-values-compact .pi-desk-ui-key-value{grid-template-columns:minmax(3.5rem,auto) minmax(0,1fr) auto;gap:.2rem .5rem}.pi-desk-ui-key-values-compact .pi-desk-ui-key-value-label{font-size:.75rem}.pi-desk-ui-key-values-stacked .pi-desk-ui-key-value{grid-template-columns:minmax(0,1fr);gap:.1rem}.pi-desk-ui-key-values-stacked .pi-desk-ui-key-value-action{justify-self:start}
-.pi-desk-ui-loading{display:flex;min-height:6rem;align-items:center;justify-content:center;gap:.5rem;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground));font-size:.875rem;text-align:center}.pi-desk-ui-loading-error{display:grid;gap:.6rem}
+.pi-desk-ui-loading{display:flex;min-width:0;min-height:10rem;flex:1 1 auto;flex-direction:column;align-items:center;justify-content:center;gap:.75rem;padding:2rem 1rem;color:var(--pi-desk-plugin-muted-foreground,var(--muted-foreground));font-size:.875rem;line-height:1.5;text-align:center}.pi-desk-ui-loading .pi-desk-ui-spinner{width:1.5rem;height:1.5rem;flex:none}.pi-desk-ui-loading-label{min-width:0;overflow-wrap:anywhere}.pi-desk-ui-loading-error{display:grid;gap:.6rem}
 .pi-desk-ui-spinner circle {
   opacity: .15;
   transform: scale(.6);
@@ -565,8 +565,10 @@ export function PluginLoadingState({
   if (loading) {
     return (
       <div className={classNames('pi-desk-ui-loading', className)} role="status">
-        <PluginSpinner />
-        <span>{loadingLabel}</span>
+        <span aria-hidden="true" style={{ display: 'flex' }}>
+          <PluginSpinner />
+        </span>
+        <span className="pi-desk-ui-loading-label">{loadingLabel}</span>
       </div>
     )
   }

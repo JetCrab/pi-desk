@@ -541,20 +541,15 @@ export function createL2WorkbenchChatInputRuntime(
     },
 
     async send(source, mode, running = false): Promise<void> {
-      requireSynchronizedSource(source)
+      if (chatRuntime.getSourceState(source).syncStatus !== 'ready') return
       const key = sourceKey(source)
       const current = ensureState(source)
-      if (current.outbox || activeSends.has(key)) {
-        throw new Error(workbenchText('resolveOutboxFirst'))
-      }
-      if (!current.text.trim() && current.images.length === 0)
-        throw new Error(workbenchText('emptyInput'))
+      if (current.outbox || activeSends.has(key)) return
+      if (!current.text.trim() && current.images.length === 0) return
       if (current.images.length > MAX_IMAGE_COUNT) {
         throw new Error(workbenchText('imageSendLimit'))
       }
-      if (current.images.some((image) => image.status === 'optimizing')) {
-        throw new Error(workbenchText('imagesPending'))
-      }
+      if (current.images.some((image) => image.status === 'optimizing')) return
       const failedImage = current.images.find((image) => image.status === 'error')
       if (failedImage) throw new Error(failedImage.error ?? workbenchText('imageProcessingFailed'))
       if (
@@ -579,12 +574,11 @@ export function createL2WorkbenchChatInputRuntime(
       try {
         await (persistenceTails.get(key) ?? Promise.resolve())
         if (!isActive()) return
-        if (activeSend.stopRequested) {
+        // 等待草稿落盘期间也可能断线，已知未同步时不把草稿移入 Outbox。
+        if (activeSend.stopRequested || chatRuntime.getSourceState(source).syncStatus !== 'ready') {
           replaceState(source, (state) => ({ ...state, pendingStart: null }))
           return
         }
-        // 等待草稿落盘期间也可能断线，已知未同步时不把草稿移入 Outbox。
-        requireSynchronizedSource(source)
         const input = storedInput(current)
         await repository.moveDraftToOutbox(source, input)
         if (!isActive()) return

@@ -7,7 +7,8 @@ import {
   PluginDialog,
   PluginEmptyState,
   PluginInput,
-  PluginSelect
+  PluginSelect,
+  PluginSpinner
 } from '@jetcrab/pi-desk-sdk/react/base'
 import { useQuotaVisibility } from '../hooks/l2-quota-visibility.js'
 import { quotaText, readQuotaRegion } from '../l2-quota-locale.js'
@@ -71,6 +72,7 @@ export function QuotaVisibilityDialog({
             disabled={model.saving || !model.dirty}
             onClick={model.save}
           >
+            {model.saving ? <PluginSpinner /> : null}
             {t(model.saving ? '保存中…' : '保存')}
           </PluginButton>
         </>

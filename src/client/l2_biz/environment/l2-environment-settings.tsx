@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
 import { Checkbox } from '@client/l4_foundation/ui/shadcn/checkbox'
@@ -90,11 +91,7 @@ export function L2EnvironmentSettings({ clientId }: { clientId: string }): React
           <p className="text-sm text-muted-foreground">{t('environment.desktopScope')}</p>
         ) : null}
       </header>
-      {state.pending === 'load' ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          {t('common:loading')}
-        </p>
-      ) : null}
+      {state.pending === 'load' ? <L4LoadingState>{t('common:loading')}</L4LoadingState> : null}
       {state.capabilities && !canRestart ? (
         <p className="rounded-xl border bg-muted p-4 text-sm">{t('environment.unsupported')}</p>
       ) : null}
@@ -151,13 +148,17 @@ export function L2EnvironmentSettings({ clientId }: { clientId: string }): React
                     : 'environment.operationTitle'
               )}
             </h3>
-            <p role="status" className="text-sm">
-              {operation
-                ? t(
-                    `environment.${operation.phase === 'desktop-staged-restart-required' ? 'phaseDesktopPending' : operation.status}`
-                  )
-                : t('environment.querying')}
-            </p>
+            {operation ? (
+              <p role="status" className="text-sm">
+                {t(
+                  `environment.${operation.phase === 'desktop-staged-restart-required' ? 'phaseDesktopPending' : operation.status}`
+                )}
+              </p>
+            ) : (
+              <L4LoadingState compact className="justify-start py-0">
+                {t('environment.querying')}
+              </L4LoadingState>
+            )}
           </div>
           {operation?.phase ? (
             <p role="status" className="break-words text-sm text-muted-foreground">

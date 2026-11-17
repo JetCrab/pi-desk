@@ -5,6 +5,7 @@ import type { L2McpServerConfig } from '@common/l2_biz/pi-settings/l2-pi-setting
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
 import { Textarea } from '@client/l4_foundation/ui/shadcn/textarea'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import {
   Collapsible,
   CollapsibleContent,
@@ -404,6 +405,7 @@ export function L2McpSettingsEditor({
               (!editor.preview || (collisions.length > 0 && !editor.overwrite)))
           }
         >
+          {check?.loading || saving ? <L4LoadingSpinner aria-hidden="true" /> : null}
           {t(check?.loading ? '正在测试连接…' : saving ? '保存中…' : '保存')}
         </Button>
       </footer>

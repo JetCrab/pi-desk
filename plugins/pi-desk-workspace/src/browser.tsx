@@ -17,6 +17,7 @@ import {
   PluginLoadingState,
   PluginPanelHeader,
   PluginScroll,
+  PluginSpinner,
   PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
 import { useWorkspaceBrowserBiz } from './l2-workspace-browser-biz.js'
@@ -91,6 +92,7 @@ function WorkspaceView({
                 disabled={busy || biz.refreshing || !biz.connectionReady}
                 onClick={() => void biz.refresh()}
               >
+                {biz.refreshing ? <PluginSpinner /> : null}
                 {biz.refreshing ? '刷新中…' : '刷新'}
               </PluginButton>
               <a
@@ -229,6 +231,7 @@ function WorkspaceView({
                   }
                   onClick={biz.executeCommand}
                 >
+                  {busy ? <PluginSpinner /> : null}
                   {busy ? '提交中…' : command ? commandActionLabel(command) : '执行'}
                 </PluginButton>
               </>

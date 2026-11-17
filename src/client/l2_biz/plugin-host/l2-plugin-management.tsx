@@ -11,6 +11,8 @@ import type {
   L2PluginManagementSnapshot
 } from '@common/l2_biz/plugin/l2-plugin-management-contract'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import { Popover, PopoverContent, PopoverTrigger } from '@client/l4_foundation/ui/shadcn/popover'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@client/l4_foundation/ui/shadcn/tabs'
 import {
@@ -300,9 +302,14 @@ export function L2PluginManagement({
             <Popover>
               <PopoverTrigger render={<Button size="sm" variant="ghost" />}>
                 {t('downloadSource')}：
-                {download.loading && !download.settings
-                  ? t('loading')
-                  : t(`download_${download.settings?.downloadSource.mode ?? download.mode}`)}
+                {download.loading && !download.settings ? (
+                  <>
+                    <L4LoadingSpinner aria-hidden="true" />
+                    {t('loading')}
+                  </>
+                ) : (
+                  t(`download_${download.settings?.downloadSource.mode ?? download.mode}`)
+                )}
                 <ChevronDownIcon className="size-4" />
               </PopoverTrigger>
               <PopoverContent
@@ -338,6 +345,7 @@ export function L2PluginManagement({
               disabled={disabled || management.loading}
               onClick={() => void management.refresh()}
             >
+              {management.loading && snapshot ? <L4LoadingSpinner aria-hidden="true" /> : null}
               {t(management.loading ? 'checkingUpdates' : 'checkUpdates')}
             </Button>
             <Button
@@ -694,9 +702,9 @@ export function L2PluginManagement({
                 </section>
               ) : null}
               {management.detailLoading ? (
-                <p role="status" className="text-sm text-muted-foreground">
+                <L4LoadingState compact className="justify-start">
                   {t('loadingPackage')}
-                </p>
+                </L4LoadingState>
               ) : null}
               {management.detail?.readme ? (
                 <L2PluginReadme key={selectedPlugin.source} readme={management.detail.readme} />
@@ -754,9 +762,12 @@ export function L2PluginManagement({
           ) : catalog.selection ? (
             <>
               {catalog.detailLoading ? (
-                <p role="status" className="mb-3 text-sm text-muted-foreground">
+                <L4LoadingState
+                  compact={Boolean(catalog.detail)}
+                  className={catalog.detail ? 'mb-3 justify-start' : undefined}
+                >
                   {t('loadingPackage')}
-                </p>
+                </L4LoadingState>
               ) : null}
               {catalog.detailError ? (
                 <div role="alert" className="mb-3 space-y-2 text-sm">

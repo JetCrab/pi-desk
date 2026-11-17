@@ -18,7 +18,9 @@ import {
   PluginContextMenuTrigger,
   PluginEmptyState,
   PluginErrorBoundary,
+  PluginLoadingState,
   PluginScroll,
+  PluginSpinner,
   PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
 import {
@@ -429,6 +431,7 @@ function DeliverablesView({
                   disabled={loading || reloading}
                   onClick={() => void reloadSession()}
                 >
+                  {reloading ? <PluginSpinner /> : null}
                   {reloading ? '正在重载…' : '重载 Pi 配置'}
                 </PluginButton>
               ) : null}
@@ -444,7 +447,9 @@ function DeliverablesView({
         ) : null}
         {reloadError ? <PluginAlert tone="error">重载失败：{reloadError}</PluginAlert> : null}
         {loading && deliveries.length === 0 ? (
-          <PluginEmptyState>正在读取交付物…</PluginEmptyState>
+          <PluginLoadingState loading loadingLabel="正在读取交付物…">
+            {null}
+          </PluginLoadingState>
         ) : deliveries.length === 0 ? (
           error ? null : (
             <PluginEmptyState>当前会话还没有交付物</PluginEmptyState>
@@ -530,6 +535,7 @@ function DeliverablesView({
             disabled={loadingMore}
             onClick={loadMore}
           >
+            {loadingMore ? <PluginSpinner /> : null}
             {loadingMore ? '加载中…' : '加载更早交付物'}
           </PluginButton>
         ) : null}

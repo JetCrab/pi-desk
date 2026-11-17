@@ -2,6 +2,7 @@
 
 import { PlusIcon } from 'lucide-react'
 import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import { useId, useMemo } from 'react'
 import type { BrowserBeforeLeaveHandler } from '@jetcrab/pi-desk-sdk/browser'
 import { useL4AppSocket } from '@client/l4_foundation/realtime/app-socket/l4-app-socket'
@@ -49,6 +50,7 @@ export function L2PiSettings({
       : `${scopeOptions.find((project) => project.cwd === state.displayCwd)?.projectName ?? t('当前项目')} · ${state.displayCwd}`
   const editing = Boolean(state.editor && state.mcp)
   const busy = state.pending || Boolean(state.check?.loading)
+  const refreshing = state.loading && Boolean(state.mcp)
   const disabled = busy || !state.ready
   const selectedName = state.editor?.kind === 'manual' ? state.editor.draft.originalName : null
   const addManually = (): void => {
@@ -66,8 +68,8 @@ export function L2PiSettings({
       <header className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b p-4 @min-[40rem]/mcp:grid-cols-[auto_minmax(0,1fr)_auto]">
         <h2 className="flex items-center gap-2 text-xl font-semibold">
           <span className="sm:sr-only">MCP</span>
-          <span className={cn('inline-flex size-4', !state.loading && 'sm:hidden')}>
-            {state.loading && (
+          <span className={cn('inline-flex size-4', !refreshing && 'sm:hidden')}>
+            {refreshing && (
               <L4LoadingSpinner
                 role="status"
                 aria-label={t('正在读取配置…')}
@@ -134,9 +136,7 @@ export function L2PiSettings({
         </div>
       )}
       {state.loading && !state.mcp ? (
-        <p role="status" className="p-4 text-sm text-muted-foreground">
-          {t('正在读取配置…')}
-        </p>
+        <L4LoadingState>{t('正在读取配置…')}</L4LoadingState>
       ) : state.mcp ? (
         <div aria-busy={state.loading} className="flex min-h-0 min-w-0 flex-1">
           {state.editor?.kind !== 'json' && state.rows.length > 0 && (

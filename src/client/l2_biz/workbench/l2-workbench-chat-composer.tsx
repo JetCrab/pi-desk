@@ -481,7 +481,10 @@ function L2WorkbenchChatComposerComponent({
     try {
       await inputRuntime.send(source, 'auto', mainRunning)
     } catch (cause) {
-      setLocalError(cause instanceof Error ? cause.message : t('sendFailed'))
+      const outbox = inputRuntime.getState(source).outbox
+      if (outbox?.status !== 'failed' && outbox?.status !== 'unknown') {
+        setLocalError(cause instanceof Error ? cause.message : t('sendFailed'))
+      }
     } finally {
       if (preview) setIdleSendPreview(null)
     }

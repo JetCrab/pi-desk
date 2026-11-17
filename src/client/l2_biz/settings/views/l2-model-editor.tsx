@@ -2,6 +2,7 @@
 
 import { CheckIcon, ChevronsUpDownIcon } from 'lucide-react'
 import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
@@ -228,9 +229,9 @@ export function L2ModelEditor({
                 >
                   <CommandList className="max-h-[min(24rem,var(--available-height))] p-1">
                     {loadingCatalog && candidates.length === 0 ? (
-                      <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+                      <L4LoadingState compact className="px-3 py-6">
                         {t('matchingCatalog')}
-                      </p>
+                      </L4LoadingState>
                     ) : candidates.length === 0 ? (
                       <CommandEmpty className="py-6 text-sm">{t('noCatalogMatches')}</CommandEmpty>
                     ) : (

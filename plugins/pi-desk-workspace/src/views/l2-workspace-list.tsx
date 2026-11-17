@@ -4,7 +4,8 @@ import {
   PluginButton,
   PluginEmptyState,
   PluginList,
-  PluginListItem
+  PluginListItem,
+  PluginSpinner
 } from '@jetcrab/pi-desk-sdk/react/base'
 import type { WorkspaceSnapshotItem } from '../contract.js'
 import {
@@ -94,12 +95,18 @@ export function WorkspaceList({
                       <span
                         className="workspace-list-usage"
                         role="status"
+                        style={
+                          submission && !submission.error
+                            ? { display: 'inline-flex', alignItems: 'center', gap: '.5rem' }
+                            : undefined
+                        }
                         data-error={
                           Boolean(submission?.error) ||
                           Boolean(workspace.issue) ||
                           usage === '最近操作失败'
                         }
                       >
+                        {submission && !submission.error ? <PluginSpinner /> : null}
                         {usage}
                       </span>
                     ) : null}

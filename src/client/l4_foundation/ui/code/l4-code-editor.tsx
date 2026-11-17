@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { editor } from 'monaco-editor'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import {
   createL4MonacoModelUri,
   getL4MonacoLanguage,
@@ -147,14 +148,17 @@ export function L4CodeEditor(props: L4CodeEditorProps): React.JSX.Element {
       className="relative h-full min-h-0 w-full overflow-hidden bg-background"
     >
       <div ref={hostRef} className="size-full" />
-      {!ready && (
-        <div
-          role="status"
-          className="absolute inset-0 flex items-center justify-center p-6 text-sm text-muted-foreground"
-        >
-          {error ? t('editorFailed') : t('editorLoading')}
-        </div>
-      )}
+      {!ready &&
+        (error ? (
+          <div
+            role="status"
+            className="absolute inset-0 flex items-center justify-center p-6 text-sm text-muted-foreground"
+          >
+            {t('editorFailed')}
+          </div>
+        ) : (
+          <L4LoadingState className="absolute inset-0 min-h-0">{t('editorLoading')}</L4LoadingState>
+        ))}
     </div>
   )
 }

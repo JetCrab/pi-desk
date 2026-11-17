@@ -367,7 +367,13 @@ function SubagentMessage({
             <div className="subagent-message-detail">
               <h3 className="subagent-message-detail-label">{detailLabel}</h3>
               {detail.loading ? (
-                <span role="status">正在加载详情…</span>
+                <span
+                  role="status"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '.5rem' }}
+                >
+                  <PluginSpinner />
+                  正在加载详情…
+                </span>
               ) : detail.error ? (
                 <PluginAlert tone="error">
                   {detail.error.message}

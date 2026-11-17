@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import {
@@ -83,9 +84,9 @@ function Directory({
     )
   if (!state?.data)
     return (
-      <p role="status" className="px-4 py-2 text-xs text-muted-foreground">
+      <L4LoadingState compact className="justify-start px-4">
         {t('loadingFolder')}
-      </p>
+      </L4LoadingState>
     )
 
   return (

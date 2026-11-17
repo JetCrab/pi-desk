@@ -4,7 +4,9 @@ import {
   PluginAlert,
   PluginButton,
   PluginEmptyState,
+  PluginLoadingState,
   PluginScroll,
+  PluginSpinner,
   PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
 import { useQuotaBrowse } from '../hooks/l2-quota-browse.js'
@@ -73,8 +75,7 @@ export function QuotaApplication({
   }
 
   let emptyLabel: string
-  if (snapshot.sources.length === 0 && loading) emptyLabel = '正在读取额度…'
-  else if (snapshot.sources.length === 0 && (error || snapshot.error))
+  if (snapshot.sources.length === 0 && (error || snapshot.error))
     emptyLabel = '暂时无法读取额度来源'
   else if (snapshot.sources.length === 0)
     emptyLabel = '尚未启用额度来源，请在“设置 → 额度设置”中添加。'
@@ -111,6 +112,7 @@ export function QuotaApplication({
               disabled={requesting || refreshing}
               onClick={refresh}
             >
+              {requesting || refreshing ? <PluginSpinner /> : null}
               {t(requesting || refreshing ? '刷新中…' : '刷新')}
             </PluginButton>
             <a
@@ -164,7 +166,11 @@ export function QuotaApplication({
             </div>
           </details>
         ) : null}
-        {browse.items.length === 0 ? (
+        {snapshot.sources.length === 0 && loading ? (
+          <PluginLoadingState loading loadingLabel={t('正在读取额度…')}>
+            {null}
+          </PluginLoadingState>
+        ) : browse.items.length === 0 ? (
           <PluginEmptyState density="compact">
             {t(emptyLabel)}
             <div className="quota-actions quota-empty-actions">

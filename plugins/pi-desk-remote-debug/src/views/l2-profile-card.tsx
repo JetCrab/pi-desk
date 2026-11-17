@@ -7,7 +7,8 @@ import {
   PluginCard,
   PluginKeyValueItem,
   PluginKeyValueList,
-  PluginLogViewer
+  PluginLogViewer,
+  PluginSpinner
 } from '@jetcrab/pi-desk-sdk/react/base'
 import type { RemoteDebugProjectProfile, RemoteDebugRun } from '../runtime.js'
 import { formatRemoteDebugTime } from '../browser-time.js'
@@ -181,6 +182,7 @@ export function ProfileCard({
               disabled={pending !== null || active.status === 'stopping'}
               onClick={() => onRestart(active)}
             >
+              {restarting ? <PluginSpinner /> : null}
               {restarting ? '重启中…' : '重启'}
             </PluginButton>
             <PluginButton
@@ -188,6 +190,9 @@ export function ProfileCard({
               disabled={pending !== null || active.status === 'stopping'}
               onClick={() => onStop(active)}
             >
+              {active.status === 'stopping' || pending === `stop:${active.runId}` ? (
+                <PluginSpinner />
+              ) : null}
               {active.status === 'stopping' || pending === `stop:${active.runId}`
                 ? '停止中…'
                 : '停止'}
@@ -195,6 +200,7 @@ export function ProfileCard({
           </>
         ) : (
           <PluginButton variant="primary" disabled={pending !== null} onClick={onStart}>
+            {restarting || pending === `start:${cwd}:${profile.name}` ? <PluginSpinner /> : null}
             {restarting
               ? '重启中…'
               : pending === `start:${cwd}:${profile.name}`
@@ -280,6 +286,7 @@ export function ProfileCard({
                   disabled={pending !== null}
                   onClick={() => onSendFailure(run)}
                 >
+                  {pending === `ai:${run.runId}` ? <PluginSpinner /> : null}
                   {pending === `ai:${run.runId}` ? '发送中…' : '发送给 AI'}
                 </PluginButton>
               </PluginActionRow>

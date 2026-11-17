@@ -9,6 +9,7 @@ import type {
 import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import {
   Collapsible,
   CollapsibleContent,
@@ -100,9 +101,9 @@ export function L2PluginCatalogDetailView(props: CatalogDetailProps): React.JSX.
         ) : null}
         <div className="flex flex-wrap items-center gap-3">
           {props.pending ? (
-            <span role="status" className="text-sm text-muted-foreground">
+            <L4LoadingState compact className="justify-start">
               {props.operationMessage ?? t('submitting')}
-            </span>
+            </L4LoadingState>
           ) : selectedVersionInstalled ? (
             <>
               <span className="text-sm text-muted-foreground">{t('alreadyInstalled')}</span>

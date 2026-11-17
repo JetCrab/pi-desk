@@ -15,6 +15,7 @@ import {
   PluginLoadingState,
   PluginPanelHeader,
   PluginSelect,
+  PluginSpinner,
   PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
 
@@ -240,6 +241,7 @@ function Settings({
               使用说明 ↗
             </a>
             <PluginButton disabled={!dirty || saving} onClick={() => void save()}>
+              {saving ? <PluginSpinner /> : null}
               {saving ? '保存中…' : '保存设置'}
             </PluginButton>
           </PluginActionRow>

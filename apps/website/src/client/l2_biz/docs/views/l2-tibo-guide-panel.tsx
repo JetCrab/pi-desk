@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactElement } from 'react'
 import { Check, ChevronDown, ChevronRight, X } from 'lucide-react'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import styles from './l2-tibo-guide.module.css'
 
 const english =
@@ -104,7 +105,10 @@ function TiboFeed({
           <Check size={14} aria-hidden="true" />
           Tibo 监听设置已保存
         </div>
-        <div className={styles.loading}>正在读取最新动态…</div>
+        <div className={styles.loading} role="status">
+          <L4LoadingSpinner />
+          <span>正在读取最新动态…</span>
+        </div>
         <span>首次抓取建立历史基线，不补发历史通知。</span>
       </div>
     )

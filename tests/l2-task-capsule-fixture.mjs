@@ -35,11 +35,11 @@ export const taskCapsuleFixture = `
       super.send(data);
     }
   };
-  window.__setCapsuleTasks = (count, status = 'running', activity = '验证任务胶囊与聊天位置', completedCount = 0) => {
+  window.__setCapsuleTasks = (count, status = 'running', activity = '验证任务胶囊与聊天位置', completedCount = 0, longTitle = false) => {
     const runtime = structuredClone(window.__capsuleRuntime);
     runtime.plugins['task-center'] = { tasks: Array.from({ length: count + completedCount }, (_, index) => ({
       taskId: 'capsule-task-' + index, taskKind: '测试', taskType: 'fixture',
-      title: index === 0 ? '检查界面结构' : '核对移动端布局',
+      title: index === 0 ? (longTitle ? '检查任务摘要在长标题和较窄窗口下的换行与状态对齐是否正常' : '检查界面结构') : '核对移动端布局',
       activity, info: [], status: index < count ? status : 'completed',
       startedAt: Date.now() - 1000, endedAt: index < count && status === 'running' ? null : Date.now()
     })) };
@@ -204,7 +204,25 @@ export async function checkTaskCapsule({ client, viewport, settle, results, runR
       popup.bottom <= popup.inputTop
   )
   assert.notEqual(popup.color, popup.background)
-  results.push({ label: `${prefix}展开与并行`, popup })
+  const alignment = await evaluate(
+    client,
+    `(() => {
+      const row = document.querySelector('[data-testid=task-capsule-preview] button');
+      const footer = document.querySelector('[data-slot=status-capsule-close]');
+      const rect = element => element.getBoundingClientRect();
+      return {
+        icon: rect(row.children[0]).left - rect(footer.children[0]).left,
+        title: rect(row.children[1]).left - rect(footer.children[1]).left,
+        right: rect(row.lastElementChild).right - rect(footer.lastElementChild).right,
+        vertical: (rect(row.children[1]).top + rect(row.children[1].firstElementChild).height / 2) -
+          (rect(row.lastElementChild).top + rect(row.lastElementChild).height / 2)
+      };
+    })()`
+  )
+  for (const [part, difference] of Object.entries(alignment)) {
+    assert.ok(Math.abs(difference) <= 1, `${part} 未对齐：${difference}px`)
+  }
+  results.push({ label: `${prefix}展开与并行`, popup, alignment })
   await evaluate(client, 'window.__setCapsuleTasks(2, "running", "执行中")')
   await settle(client)
   const presentation = await evaluate(
@@ -227,6 +245,47 @@ export async function checkTaskCapsule({ client, viewport, settle, results, runR
   assert.equal(presentation.title, null, '胶囊仍有多余原生悬浮提示')
   results.push({ label: `${prefix}主题与去重`, presentation })
   await writeFile(join(runRoot, `capsule-${viewport.width}.png`), await screenshot(client))
+  await evaluate(
+    client,
+    `(() => {
+      localStorage.setItem('pi-super-theme', 'light');
+      window.dispatchEvent(new StorageEvent('storage', { key: 'pi-super-theme', newValue: 'light' }));
+      window.__setCapsuleTasks(2, 'running', '执行中', 0, true);
+    })()`
+  )
+  await waitFor(
+    client,
+    'document.querySelector("[data-testid=task-capsule-preview]")?.textContent.includes("较窄窗口")',
+    '长标题任务显示'
+  )
+  await settle(client)
+  const longTitle = await evaluate(
+    client,
+    `(() => {
+      const row = document.querySelector('[data-testid=task-capsule-preview] button');
+      const title = row.children[1].firstElementChild;
+      const status = row.lastElementChild;
+      return { height: title.getBoundingClientRect().height, lineHeight: parseFloat(getComputedStyle(title).lineHeight),
+        titleRight: title.getBoundingClientRect().right, statusLeft: status.getBoundingClientRect().left,
+        background: getComputedStyle(document.querySelector('[data-slot=status-capsule-popup]')).backgroundColor };
+    })()`
+  )
+  assert.ok(longTitle.height > longTitle.lineHeight, '长标题未换行')
+  assert.ok(longTitle.titleRight <= longTitle.statusLeft, '长标题与状态重叠')
+  assert.notEqual(longTitle.background, presentation.background, '亮色主题未生效')
+  await writeFile(
+    join(runRoot, `capsule-light-long-${viewport.width}.png`),
+    await screenshot(client)
+  )
+  await evaluate(
+    client,
+    `(() => {
+      localStorage.setItem('pi-super-theme', 'dark');
+      window.dispatchEvent(new StorageEvent('storage', { key: 'pi-super-theme', newValue: 'dark' }));
+      window.__setCapsuleTasks(2, 'running', '执行中');
+    })()`
+  )
+  await settle(client)
   for (const type of ['keyDown', 'keyUp'])
     await client.send('Input.dispatchKeyEvent', {
       type,
@@ -294,7 +353,7 @@ export async function checkTaskCapsule({ client, viewport, settle, results, runR
       `(() => {
       window.__capsuleRestoreAnimations = [];
       const listener = event => {
-        if (event.target.closest?.('[data-work-id="composer-resize"] [data-slot="status-capsule"]') && event.animationName !== 'spin') window.__capsuleRestoreAnimations.push({type:event.type, property:event.propertyName, name:event.animationName});
+        if (event.target.closest?.('[data-work-id="composer-resize"] [data-slot="status-capsule"]') && !event.target.closest?.('[data-slot="spinner"]')) window.__capsuleRestoreAnimations.push({type:event.type, property:event.propertyName, name:event.animationName});
       };
       document.addEventListener('transitionrun', listener, true);
       document.addEventListener('animationstart', listener, true);

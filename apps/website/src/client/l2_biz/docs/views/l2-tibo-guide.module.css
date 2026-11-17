@@ -368,6 +368,15 @@
 .savedState > span,
 .loading {
   color: var(--muted-foreground);
+  display: flex;
+  min-height: 10rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  font-size: 0.875rem;
+  text-align: center;
 }
 .feed,
 .post {

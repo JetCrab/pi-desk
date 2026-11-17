@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { L4PasswordInput } from '@client/l4_foundation/ui/l4-password-input'
 import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import { useL2AuthSettings } from './hooks/l2-use-auth-settings'
 
 export function L2AuthSettings(): React.JSX.Element {
@@ -26,9 +27,7 @@ export function L2AuthSettings(): React.JSX.Element {
         {t('settings:loginProtection')}
       </h2>
       {state.loading ? (
-        <p className="text-sm text-muted-foreground" role="status">
-          {t('common:loading')}
-        </p>
+        <L4LoadingState>{t('common:loading')}</L4LoadingState>
       ) : state.settings ? (
         <>
           <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-muted p-4">

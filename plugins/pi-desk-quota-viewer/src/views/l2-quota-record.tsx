@@ -1,5 +1,5 @@
 import { useId } from 'react'
-import { PluginButton } from '@jetcrab/pi-desk-sdk/react/base'
+import { PluginButton, PluginSpinner } from '@jetcrab/pi-desk-sdk/react/base'
 import {
   formatCompactCountdown,
   formatTimestamp,
@@ -272,7 +272,13 @@ export function QuotaRecordRow({
               />
             ))
           ) : resetCredits ? null : (
-            <span className="quota-meta quota-metrics-empty">
+            <span
+              className="quota-meta quota-metrics-empty"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '.5rem' }}
+            >
+              {detail.resources.length === 0 && !account?.resources.length && source.refreshing ? (
+                <PluginSpinner />
+              ) : null}
               {t(
                 detail.resources.length > 0
                   ? '更多额度见详情'

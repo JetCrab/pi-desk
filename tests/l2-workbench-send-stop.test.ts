@@ -24,6 +24,7 @@ function createFixture(input: L2WorkbenchStoredInput = { text: '保留这条输�
   const sent: string[] = []
   const interrupted: L2ChatSource[] = []
   const hooks = {
+    syncStatus: 'ready',
     write: async (): Promise<void> => undefined,
     move: async (): Promise<void> => undefined,
     clear: async (): Promise<void> => undefined,
@@ -77,7 +78,7 @@ function createFixture(input: L2WorkbenchStoredInput = { text: '保留这条输�
   } as unknown as L2WorkbenchBiz
   let onSourceEvent: Parameters<L2WorkbenchChatRuntime['subscribeSourceEvents']>[0] | undefined
   const chat = {
-    getSourceState: () => ({ syncStatus: 'ready' }),
+    getSourceState: () => ({ syncStatus: hooks.syncStatus }),
     subscribeSourceEvents(
       listener: Parameters<L2WorkbenchChatRuntime['subscribeSourceEvents']>[0]
     ) {
@@ -106,6 +107,103 @@ function createFixture(input: L2WorkbenchStoredInput = { text: '保留这条输�
   }
   return { runtime, hooks, sent, interrupted, push, reconcile, stored: () => ({ draft, outbox }) }
 }
+
+for (const running of [false, true]) {
+  test(`${running ? '运行中追加' : '空闲发送'}：准备和等待确认期间重复点击静默且只发送一次`, async () => {
+    const fixture = createFixture()
+    const moving = Promise.withResolvers<void>()
+    const moved = Promise.withResolvers<void>()
+    const started = Promise.withResolvers<void>()
+    const accepted = Promise.withResolvers<{ tempId: string }>()
+    fixture.hooks.move = async () => {
+      moving.resolve()
+      await moved.promise
+    }
+    fixture.hooks.send = async () => {
+      started.resolve()
+      return accepted.promise
+    }
+    let sending: Promise<void> | undefined
+    try {
+      await fixture.runtime.loadSource(source)
+      sending = fixture.runtime.send(source, 'auto', running)
+      await moving.promise
+      await assert.doesNotReject(fixture.runtime.send(source, 'auto', running))
+      assert.deepEqual(fixture.sent, [])
+      assert.equal(fixture.runtime.getState(source).text, '保留这条输入')
+      assert.equal(fixture.runtime.getState(source).outbox, null)
+      assert.equal(fixture.runtime.getState(source).error, null)
+
+      moved.resolve()
+      await started.promise
+      fixture.runtime.setText(source, '下一条草稿')
+      await assert.doesNotReject(fixture.runtime.send(source, 'auto', running))
+      assert.equal(fixture.runtime.getState(source).text, '下一条草稿')
+      assert.equal(fixture.runtime.getState(source).outbox?.status, 'sending')
+      assert.equal(fixture.runtime.getState(source).outbox?.error, null)
+
+      accepted.resolve({ tempId: 'accepted-input' })
+      await sending
+      assert.deepEqual(fixture.sent, ['保留这条输入'])
+      assert.equal(fixture.runtime.getState(source).text, '下一条草稿')
+      assert.equal(fixture.runtime.getState(source).outbox, null)
+    } finally {
+      moved.resolve()
+      accepted.resolve({ tempId: 'accepted-input' })
+      await sending
+      fixture.runtime.dispose()
+    }
+  })
+}
+
+test('空输入和同步中点击发送静默，恢复同步后仍可正常发送', async () => {
+  const fixture = createFixture({ text: '  ', images: [] })
+  try {
+    await fixture.runtime.loadSource(source)
+    await assert.doesNotReject(fixture.runtime.send(source, 'auto'))
+    fixture.runtime.setText(source, '同步后再发')
+    fixture.hooks.syncStatus = 'syncing'
+    await assert.doesNotReject(fixture.runtime.send(source, 'auto'))
+    assert.equal(fixture.runtime.getState(source).text, '同步后再发')
+    assert.equal(fixture.runtime.getState(source).outbox, null)
+    assert.equal(fixture.runtime.getState(source).error, null)
+    assert.deepEqual(fixture.sent, [])
+
+    fixture.hooks.syncStatus = 'ready'
+    await fixture.runtime.send(source, 'auto')
+    assert.deepEqual(fixture.sent, ['同步后再发'])
+  } finally {
+    fixture.runtime.dispose()
+  }
+})
+
+test('草稿落盘期间断线静默保留草稿，重连后可重新发送', async () => {
+  const fixture = createFixture()
+  const gate = Promise.withResolvers<void>()
+  fixture.hooks.write = () => gate.promise
+  let sending: Promise<void> | undefined
+  try {
+    await fixture.runtime.loadSource(source)
+    fixture.runtime.setText(source, '断线时保留的草稿')
+    sending = fixture.runtime.send(source, 'auto')
+    fixture.hooks.syncStatus = 'syncing'
+    gate.resolve()
+    await assert.doesNotReject(sending)
+    assert.equal(fixture.runtime.getState(source).text, '断线时保留的草稿')
+    assert.equal(fixture.runtime.getState(source).pendingStart, null)
+    assert.equal(fixture.runtime.getState(source).outbox, null)
+    assert.equal(fixture.runtime.getState(source).error, null)
+    assert.deepEqual(fixture.sent, [])
+
+    fixture.hooks.syncStatus = 'ready'
+    await fixture.runtime.send(source, 'auto')
+    assert.deepEqual(fixture.sent, ['断线时保留的草稿'])
+  } finally {
+    gate.resolve()
+    await sending?.catch(() => undefined)
+    fixture.runtime.dispose()
+  }
+})
 
 test('草稿落盘期间停止：不发请求，保留输入，下一次发送不继承停止意图', async () => {
   const fixture = createFixture()
@@ -271,7 +369,8 @@ test('点击停止后发送结果未知：保留未知Outbox，不重发或假�
     assert.equal(fixture.runtime.getState(source).text, '')
     assert.equal(fixture.stored().outbox?.text, '保留这条输入')
     assert.equal(await fixture.runtime.prepareForPageReload(), false)
-    await assert.rejects(fixture.runtime.send(source, 'auto'))
+    await assert.doesNotReject(fixture.runtime.send(source, 'auto'))
+    assert.equal(fixture.runtime.getState(source).outbox?.status, 'unknown')
     assert.equal(fixture.sent.length, 1)
     assert.deepEqual(fixture.interrupted, [])
   } finally {

@@ -11,6 +11,7 @@ import type {
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
 import { L4SecretInput } from '@client/l4_foundation/ui/l4-secret-input'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import {
   L4AppDialogRoot,
   L4AppDialogContent,
@@ -208,9 +209,7 @@ export function L2ModelAuthDialog({
             ) : null}
             {!state || state.status === 'cancelled' || state.status === 'error' ? (
               loading ? (
-                <p role="status" className="text-sm text-muted-foreground">
-                  {t('accountLoadingProviders')}
-                </p>
+                <L4LoadingState>{t('accountLoadingProviders')}</L4LoadingState>
               ) : (
                 <div className="grid gap-2">
                   <h3 className="text-sm font-semibold">{t('accountChooseProvider')}</h3>
@@ -251,9 +250,9 @@ export function L2ModelAuthDialog({
               />
             ) : null}
             {running && !state.prompt ? (
-              <p role="status" className="text-sm text-muted-foreground">
+              <L4LoadingState compact className="justify-start">
                 {t('accountWaiting')}
-              </p>
+              </L4LoadingState>
             ) : null}
             {state?.status === 'completed' ? (
               <p role="status" className="text-sm">

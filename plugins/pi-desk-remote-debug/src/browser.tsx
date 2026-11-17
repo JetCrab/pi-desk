@@ -17,6 +17,7 @@ import {
   PluginScroll,
   PluginSelect,
   PluginSplitView,
+  PluginSpinner,
   PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
 import type { RemoteDebugBrowserEvents } from './l4-browser-events.js'
@@ -140,6 +141,7 @@ function RemoteDebugApplication({
                 void catalog.refresh()
               }}
             >
+              {catalog.loading ? <PluginSpinner /> : null}
               {catalog.loading ? '同步中…' : '刷新'}
             </PluginButton>
           </div>

@@ -11,6 +11,7 @@ import {
 } from '@common/l3_modules/conversation/l3-conversation-pidesk'
 import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized-text'
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { cn } from '@client/l4_foundation/lib/l4-utils'
 import {
   Collapsible,
@@ -209,7 +210,10 @@ export function L3ConversationPiDeskView({
               tabIndex={0}
             >
               {loading ? (
-                <p className="text-muted-foreground">{t('loadingResult')}</p>
+                <p role="status" className="flex items-center gap-2 text-muted-foreground">
+                  <L4LoadingSpinner className="size-4 shrink-0" aria-hidden="true" />
+                  {t('loadingResult')}
+                </p>
               ) : error ? (
                 <p className="text-destructive [overflow-wrap:anywhere]">{error}</p>
               ) : !output ? (

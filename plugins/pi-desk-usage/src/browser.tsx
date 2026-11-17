@@ -11,7 +11,9 @@ import {
   PluginButton,
   PluginEmptyState,
   PluginErrorBoundary,
+  PluginLoadingState,
   PluginScroll,
+  PluginSpinner,
   PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
 import { UsageReportChart } from './browser-report-chart.js'
@@ -638,6 +640,7 @@ function UsageDashboard({
             disabled={reportLoading}
             onClick={() => void loadReport(true)}
           >
+            {reportLoading ? <PluginSpinner /> : null}
             {reportLoading ? '统计中…' : '刷新'}
           </PluginButton>
           <a
@@ -720,7 +723,9 @@ function UsageDashboard({
             ) : null}
           </div>
           {reportLoading && !report ? (
-            <PluginEmptyState>正在统计近期模型用量…</PluginEmptyState>
+            <PluginLoadingState loading loadingLabel="正在统计近期模型用量…">
+              {null}
+            </PluginLoadingState>
           ) : report ? (
             <UsageReportChart
               points={report.series}
@@ -780,7 +785,9 @@ function UsageDashboard({
             </div>
             {sessionError ? <PluginAlert tone="error">{sessionError}</PluginAlert> : null}
             {sessionLoading && sessionItems.length === 0 ? (
-              <PluginEmptyState>正在读取 Session 用量…</PluginEmptyState>
+              <PluginLoadingState loading loadingLabel="正在读取 Session 用量…">
+                {null}
+              </PluginLoadingState>
             ) : sessionItems.length === 0 ? (
               <PluginEmptyState>当前筛选范围内没有 Session</PluginEmptyState>
             ) : (
@@ -808,6 +815,7 @@ function UsageDashboard({
                     disabled={sessionLoading}
                     onClick={() => void loadSessions(true)}
                   >
+                    {sessionLoading ? <PluginSpinner /> : null}
                     {sessionLoading
                       ? '加载中…'
                       : `加载更多（${sessionItems.length}/${sessionPage?.total}）`}

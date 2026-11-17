@@ -7,8 +7,10 @@ import {
   PluginEmptyState,
   PluginInput,
   PluginListItem,
+  PluginLoadingState,
   PluginScroll,
   PluginSelect,
+  PluginSpinner,
   PluginSurface,
   PluginTab,
   PluginTabList
@@ -76,6 +78,7 @@ export function QuotaSettingsPage({
             disabled={model.dirty || model.loading || model.saving}
             onClick={model.reload}
           >
+            {model.loading ? <PluginSpinner /> : null}
             {t(model.loading ? '加载中…' : '重新加载')}
           </PluginButton>
           {!displayEditing ? (
@@ -150,10 +153,12 @@ export function QuotaSettingsPage({
               viewportClassName="quota-source-navigation-viewport"
               aria-label={t('来源列表')}
             >
-              {sources.length === 0 ? (
-                <PluginEmptyState density="compact">
-                  {t(model.loading ? '正在读取…' : '没有匹配来源')}
-                </PluginEmptyState>
+              {sources.length === 0 && model.loading ? (
+                <PluginLoadingState loading loadingLabel={t('正在读取…')}>
+                  {null}
+                </PluginLoadingState>
+              ) : sources.length === 0 ? (
+                <PluginEmptyState density="compact">{t('没有匹配来源')}</PluginEmptyState>
               ) : (
                 groupChannels(sources).map((channel) => (
                   <div className="quota-source-group" key={channel[0].adapter}>
@@ -291,10 +296,14 @@ export function QuotaSettingsPage({
                   onChange={(source) => model.update(() => source)}
                 />
               </>
+            ) : model.loading ? (
+              <PluginLoadingState loading loadingLabel={t('正在读取额度来源…')}>
+                {null}
+              </PluginLoadingState>
             ) : (
               <PluginEmptyState density="compact">
-                {t(model.loading ? '正在读取额度来源…' : '尚未配置额度来源')}
-                {!model.loading && model.settings.adapters.length > 0 ? (
+                {t('尚未配置额度来源')}
+                {model.settings.adapters.length > 0 ? (
                   <PluginButton size="sm" variant="secondary" onClick={startAdd}>
                     {t('添加来源')}
                   </PluginButton>
@@ -335,6 +344,7 @@ export function QuotaSettingsPage({
             disabled={!model.dirty || model.saving || model.loading}
             onClick={save}
           >
+            {model.saving ? <PluginSpinner /> : null}
             {t(model.saving ? '保存中…' : '保存全部更改')}
           </PluginButton>
         </div>

@@ -434,7 +434,10 @@ function MessageImages({
                 key={`${imageIndex}:${image.width}:${image.height}`}
                 className="grid aspect-square min-h-20 place-items-center rounded-md border bg-muted px-2 text-center text-xs text-muted-foreground"
               >
-                {t('imageLoading')}
+                <span role="status" className="inline-flex items-center gap-2">
+                  <L4LoadingSpinner className="size-4 shrink-0" aria-hidden="true" />
+                  {t('imageLoading')}
+                </span>
               </div>
             )
           }
@@ -640,10 +643,12 @@ function AssistantThinkingStatus(): React.JSX.Element {
 
 function AssistantReasoningContent({
   content,
-  streaming
+  streaming,
+  loading
 }: {
   content: string
   streaming: boolean
+  loading: boolean
 }): React.JSX.Element {
   const { t } = useTranslation('conversation')
   const { scrollRef, contentRef } = useStickToBottom({
@@ -660,14 +665,21 @@ function AssistantReasoningContent({
         className="max-h-56 overflow-y-auto pb-2 pr-2 [scrollbar-gutter:stable] sm:max-h-72"
       >
         <div ref={contentRef}>
-          {/* Streamdown 按节点位置缓存元素；窗口移动时重建，避免等长内容沿用旧文本。 */}
-          <L3ConversationMarkdown
-            key={truncated ? content.length : undefined}
-            isAnimating={streaming}
-            mode={streaming ? 'streaming' : 'static'}
-          >
-            {visibleContent}
-          </L3ConversationMarkdown>
+          {loading ? (
+            <p role="status" className="flex items-center gap-2">
+              <L4LoadingSpinner className="size-4 shrink-0" aria-hidden="true" />
+              {visibleContent}
+            </p>
+          ) : (
+            // Streamdown 按节点位置缓存元素；窗口移动时重建，避免等长内容沿用旧文本。
+            <L3ConversationMarkdown
+              key={truncated ? content.length : undefined}
+              isAnimating={streaming}
+              mode={streaming ? 'streaming' : 'static'}
+            >
+              {visibleContent}
+            </L3ConversationMarkdown>
+          )}
         </div>
       </div>
       {truncated ? (
@@ -736,7 +748,11 @@ function AssistantReasoning({
       >
         <div className="pt-2">
           <div className="border-l pl-4">
-            <AssistantReasoningContent content={content} streaming={thinkingStreaming} />
+            <AssistantReasoningContent
+              content={content}
+              streaming={thinkingStreaming}
+              loading={!thinking && loading}
+            />
           </div>
         </div>
       </CollapsibleContent>
@@ -1116,19 +1132,24 @@ function ToolCardShell({
 
 function ToolDetailMessage({
   children,
-  destructive = false
+  destructive = false,
+  loading = false
 }: {
   children: ReactNode
   destructive?: boolean
+  loading?: boolean
 }): React.JSX.Element {
   return (
     <p
+      role={loading ? 'status' : undefined}
       className={cn(
         styles.detailText,
         'px-3 py-3',
+        loading && 'flex items-center gap-2',
         destructive ? 'text-destructive' : 'text-muted-foreground'
       )}
     >
+      {loading ? <L4LoadingSpinner className="size-4 shrink-0" aria-hidden="true" /> : null}
       {children}
     </p>
   )
@@ -1153,7 +1174,7 @@ function GenericToolResult({
       ? message.detail
       : null
   const output = detail?.output ?? ''
-  if (loading) return <ToolDetailMessage>{t('loadingResult')}</ToolDetailMessage>
+  if (loading) return <ToolDetailMessage loading>{t('loadingResult')}</ToolDetailMessage>
   if (error) return <ToolDetailMessage destructive>{error}</ToolDetailMessage>
   if (!output)
     return message.summary.type === 'tool' && message.summary.images?.length ? (
@@ -1189,7 +1210,7 @@ function ReadToolResult({
   const { t } = useTranslation('conversation')
   const detail =
     message.detail?.type === 'tool' && message.detail.kind === 'read' ? message.detail : null
-  if (loading) return <ToolDetailMessage>{t('loadingRead')}</ToolDetailMessage>
+  if (loading) return <ToolDetailMessage loading>{t('loadingRead')}</ToolDetailMessage>
   if (error) return <ToolDetailMessage destructive>{error}</ToolDetailMessage>
   if (!detail)
     return message.summary.type === 'tool' && message.summary.images?.length ? (
@@ -1257,7 +1278,7 @@ function EditToolResult({
   const { t } = useTranslation('conversation')
   const detail =
     message.detail?.type === 'tool' && message.detail.kind === 'edit' ? message.detail : null
-  if (loading) return <ToolDetailMessage>{t('loadingDiff')}</ToolDetailMessage>
+  if (loading) return <ToolDetailMessage loading>{t('loadingDiff')}</ToolDetailMessage>
   if (error) return <ToolDetailMessage destructive>{error}</ToolDetailMessage>
   if (!detail) return <ToolDetailMessage>{t('diffUnavailable')}</ToolDetailMessage>
   if (detail.contentKind === 'diff') return <DiffContent content={detail.content} />
@@ -1290,7 +1311,7 @@ function WriteToolResult({
   const { t } = useTranslation('conversation')
   const detail =
     message.detail?.type === 'tool' && message.detail.kind === 'write' ? message.detail : null
-  if (loading) return <ToolDetailMessage>{t('loadingWrite')}</ToolDetailMessage>
+  if (loading) return <ToolDetailMessage loading>{t('loadingWrite')}</ToolDetailMessage>
   if (error) return <ToolDetailMessage destructive>{error}</ToolDetailMessage>
   if (!detail) return <ToolDetailMessage>{t('writeUnavailable')}</ToolDetailMessage>
   if (detail.contentKind === 'content' && !detail.content) {
@@ -1554,7 +1575,10 @@ function CompactionMessage({
               className="max-h-80 overflow-y-auto pr-2 [scrollbar-gutter:stable]"
             >
               {loading ? (
-                <p className="text-sm text-muted-foreground">{t('compactionLoading')}</p>
+                <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <L4LoadingSpinner className="size-4 shrink-0" aria-hidden="true" />
+                  {t('compactionLoading')}
+                </p>
               ) : error ? (
                 <p className="text-sm text-destructive">{error}</p>
               ) : detail?.text ? (

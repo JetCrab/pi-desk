@@ -10,6 +10,7 @@ import { selectL4LocalizedText } from '@common/l4_foundation/locale/l4-localized
 import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import {
   Select,
   SelectContent,
@@ -197,13 +198,13 @@ export function L2PluginCatalogSearch(props: CatalogSearchProps): React.JSX.Elem
                 </div>
                 <div className="flex min-h-8 items-center self-start @xl/catalog:justify-end">
                   {pending ? (
-                    <span role="status" className="text-sm text-muted-foreground">
+                    <L4LoadingState compact className="justify-start">
                       {unfinished
                         ? t(`phase_${plugin?.operation?.phase}`)
                         : props.preparing.has(item.name)
                           ? t('loadingPackage')
                           : t('submitting')}
-                    </span>
+                    </L4LoadingState>
                   ) : healthy ? (
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-muted-foreground">{t('alreadyInstalled')}</span>
@@ -251,9 +252,7 @@ export function L2PluginCatalogSearch(props: CatalogSearchProps): React.JSX.Elem
         </div>
       ) : null}
       {props.loading ? (
-        <p role="status" className="py-4 text-sm text-muted-foreground">
-          {t('searching')}
-        </p>
+        <L4LoadingState compact={props.items.length > 0}>{t('searching')}</L4LoadingState>
       ) : !props.error && props.searched && !props.items.length ? (
         <p className="py-8 text-center text-sm text-muted-foreground">{t('noSearchResults')}</p>
       ) : null}

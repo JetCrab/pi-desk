@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import type { L2PluginDownloadSource } from '@common/l2_biz/plugin/l2-plugin-catalog-contract'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import {
   Select,
   SelectContent,
@@ -87,9 +88,9 @@ export function L2PluginDownloadSourceSelector({
           </SelectContent>
         </Select>
         {saving ? (
-          <span role="status" className="text-muted-foreground">
+          <L4LoadingState compact className="justify-start py-0">
             {t('saving')}
-          </span>
+          </L4LoadingState>
         ) : null}
       </div>
       {mode === 'custom' ? (

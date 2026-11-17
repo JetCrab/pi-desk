@@ -2,6 +2,7 @@
 
 import { useTranslation } from 'react-i18next'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import type { L2PluginDevAvailability } from '../hooks/l2-use-plugin-dev-availability'
 import {
   Select,
@@ -71,9 +72,9 @@ export function L2PluginManagementChannel({
         </SelectContent>
       </Select>
       {dev.loading ? (
-        <p role="status" className="text-xs text-muted-foreground">
+        <L4LoadingState compact className="justify-start text-xs">
           {t('checkingDev')}
-        </p>
+        </L4LoadingState>
       ) : null}
       {dev.error ? (
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">

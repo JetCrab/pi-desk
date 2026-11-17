@@ -9,7 +9,9 @@ import {
   PluginBadge,
   PluginButton,
   PluginEmptyState,
+  PluginLoadingState,
   PluginScroll,
+  PluginSpinner,
   PluginSurface
 } from '@jetcrab/pi-desk-sdk/react/base'
 import {
@@ -304,6 +306,7 @@ export function SessionAnalysisPanel({
         </div>
         <div className="usage-profiler-actions">
           <PluginButton variant="secondary" disabled={loading} onClick={() => void load()}>
+            {loading ? <PluginSpinner /> : null}
             {loading ? '分析中…' : '刷新'}
           </PluginButton>
           <a
@@ -338,7 +341,9 @@ export function SessionAnalysisPanel({
           </PluginAlert>
         ) : null}
         {loading && !analysis ? (
-          <PluginEmptyState>正在建立会话使用量、上下文和活动时间轴…</PluginEmptyState>
+          <PluginLoadingState loading loadingLabel="正在建立会话使用量、上下文和活动时间轴…">
+            {null}
+          </PluginLoadingState>
         ) : null}
         {!loading && !analysis ? (
           <PluginEmptyState>当前 Session 暂无可分析数据</PluginEmptyState>
@@ -541,7 +546,16 @@ function TrendDetail({
       </div>
       <div className="usage-profiler-detail-activities">
         <strong className="usage-profiler-muted">主要活动</strong>
-        {loading ? <span className="usage-profiler-muted">正在读取活动…</span> : null}
+        {loading ? (
+          <span
+            className="usage-profiler-muted"
+            role="status"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '.5rem' }}
+          >
+            <PluginSpinner />
+            正在读取活动…
+          </span>
+        ) : null}
         {!loading && activities.length === 0 ? (
           <span className="usage-profiler-muted">该时段无可观测活动</span>
         ) : null}
@@ -641,7 +655,13 @@ function EventList({
   timeZone: string
 }): React.JSX.Element {
   const sourceMap = new Map(sources.map((source) => [source.key, source]))
-  if (loading) return <PluginEmptyState>正在读取活动…</PluginEmptyState>
+  if (loading) {
+    return (
+      <PluginLoadingState loading loadingLabel="正在读取活动…">
+        {null}
+      </PluginLoadingState>
+    )
+  }
   if (items.length === 0) return <PluginEmptyState>当前范围没有可观测活动</PluginEmptyState>
   return (
     <section className="usage-profiler-event-list" aria-label="会话活动列表">

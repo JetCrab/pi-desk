@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import type { L2EnvironmentState } from '../l2-environment-runtime'
 
 export function L2EnvironmentDirectory({
@@ -82,9 +83,12 @@ export function L2EnvironmentDirectory({
         </Button>
       </div>
       {browser.loading ? (
-        <p role="status" className="text-sm text-muted-foreground">
+        <L4LoadingState
+          compact={Boolean(listing)}
+          className={listing ? 'justify-start' : undefined}
+        >
           {t('common:loading')}
-        </p>
+        </L4LoadingState>
       ) : null}
       {browser.error ? (
         <p role="alert" className="break-words text-sm text-destructive">

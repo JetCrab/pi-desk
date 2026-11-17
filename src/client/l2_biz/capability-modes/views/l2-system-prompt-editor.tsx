@@ -4,7 +4,7 @@ import { EyeIcon } from 'lucide-react'
 import type { L2ChatSource } from '@common/l2_biz/chat/l2-chat-contract'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Textarea } from '@client/l4_foundation/ui/shadcn/textarea'
-import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import { L4ChoiceGroup } from '@client/l4_foundation/ui/l4-choice-group'
 import {
   L4AppDialogBody,
@@ -64,10 +64,9 @@ export function L2SystemPromptEditor({
     !source ? (
       <p className="text-sm text-muted-foreground">{t('previewUnavailable')}</p>
     ) : data.loading ? (
-      <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
-        <L4LoadingSpinner className="size-4" />
+      <L4LoadingState compact={original} className={original ? 'justify-start' : 'min-h-72'}>
         {t('previewLoading')}
-      </p>
+      </L4LoadingState>
     ) : data.error ? (
       <div className="space-y-2">
         <p role="alert" className="text-sm text-destructive">
@@ -181,10 +180,7 @@ export function L2SystemPromptEditor({
             </div>
           </div>
         ) : content === null ? (
-          <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
-            <L4LoadingSpinner className="size-4" />
-            {t('promptLoading')}
-          </p>
+          <L4LoadingState className="min-h-72">{t('promptLoading')}</L4LoadingState>
         ) : (
           <>
             <Textarea

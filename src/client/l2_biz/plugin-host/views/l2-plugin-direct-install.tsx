@@ -13,6 +13,8 @@ import type {
 } from '@common/l2_biz/plugin/l2-plugin-catalog-contract'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Textarea } from '@client/l4_foundation/ui/shadcn/textarea'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import {
   Select,
   SelectContent,
@@ -94,6 +96,7 @@ export function L2PluginDirectInstall(props: DirectInstallProps): React.JSX.Elem
               </div>
               {props.isNpm ? (
                 <Button size="sm" variant="outline" disabled={props.loading} onClick={props.onRead}>
+                  {props.loading ? <L4LoadingSpinner aria-hidden="true" /> : null}
                   {t(props.loading ? 'loadingPackage' : 'readPackage')}
                 </Button>
               ) : null}
@@ -169,9 +172,9 @@ export function L2PluginDirectInstall(props: DirectInstallProps): React.JSX.Elem
         </p>
       ) : null}
       {props.operationMessage ? (
-        <p role="status" className="text-sm text-muted-foreground [overflow-wrap:anywhere]">
+        <L4LoadingState compact className="justify-start [overflow-wrap:anywhere]">
           {props.operationMessage}
-        </p>
+        </L4LoadingState>
       ) : null}
       <Button
         size="sm"
@@ -184,6 +187,7 @@ export function L2PluginDirectInstall(props: DirectInstallProps): React.JSX.Elem
         }
         onClick={props.onInstall}
       >
+        {props.pending ? <L4LoadingSpinner aria-hidden="true" /> : null}
         {t(props.pending ? 'installing' : props.multiple ? 'batchInstall' : 'install')}
       </Button>
     </section>

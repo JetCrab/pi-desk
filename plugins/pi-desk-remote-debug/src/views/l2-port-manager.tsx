@@ -4,7 +4,9 @@ import {
   PluginAlert,
   PluginButton,
   PluginEmptyState,
-  PluginInput
+  PluginInput,
+  PluginLoadingState,
+  PluginSpinner
 } from '@jetcrab/pi-desk-sdk/react/base'
 import type { RemoteDebugRegistration, RemoteDebugSettings } from '../l4-remote-debug-contract.js'
 import { projectName, type RangeEditor } from '../l2-browser-biz.js'
@@ -138,6 +140,7 @@ export function PortManager({
           {error ? <PluginAlert tone="error">{error}</PluginAlert> : null}
           <div className="remote-debug-actions">
             <PluginButton type="submit" variant="primary" disabled={busy}>
+              {busy ? <PluginSpinner /> : null}
               {busy ? '保存中…' : '保存端口范围'}
             </PluginButton>
             {dirty ? <span className="remote-debug-caption">有未保存的修改</span> : null}
@@ -217,12 +220,14 @@ export function PortManager({
                 </div>
               ))}
             </div>
+          ) : !settings && loading ? (
+            <PluginLoadingState loading loadingLabel="读取登记中…">
+              {null}
+            </PluginLoadingState>
           ) : (
             <PluginEmptyState>
               {!settings
-                ? loading
-                  ? '读取登记中…'
-                  : '登记列表尚未读取'
+                ? '登记列表尚未读取'
                 : search
                   ? '没有匹配的登记，请调整搜索内容。'
                   : '暂无端口登记'}

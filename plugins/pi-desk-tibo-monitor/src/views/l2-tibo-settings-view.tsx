@@ -6,7 +6,8 @@ import {
   PluginField,
   PluginInput,
   PluginLoadingState,
-  PluginSelect
+  PluginSelect,
+  PluginSpinner
 } from '@jetcrab/pi-desk-sdk/react/base'
 import type { useTiboPage } from '../l2-browser-hooks.js'
 import type { ModelSelection } from '../l4-tibo-protocol.js'
@@ -166,6 +167,7 @@ export function TiboSettingsView({
         ) : null}
         <PluginActionRow className="tibo-form-actions">
           <PluginButton type="submit" disabled={!state.canSave}>
+            {saving ? <PluginSpinner /> : null}
             {saving
               ? tiboText(region, '保存中…', 'Saving…')
               : firstSetup

@@ -110,7 +110,7 @@ test('可用模型使用实际目录名称；保存中禁止提交和取消', ()
   })
   const html = renderToStaticMarkup(createElement(TiboSettingsView, { region, state }))
   assert.ok(html.includes('实际目录模型'))
-  assert.match(html, /<button[^>]*disabled=""[^>]*>保存中…<\/button>/)
+  assert.match(html, /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*保存中…<\/button>/)
   assert.match(html, /<button[^>]*disabled=""[^>]*>取消<\/button>/)
 })
 

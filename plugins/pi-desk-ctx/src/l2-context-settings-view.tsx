@@ -10,6 +10,7 @@ import {
   PluginLoadingState,
   PluginPanelHeader,
   PluginScroll,
+  PluginSpinner,
   PluginSurface,
   PluginTab,
   PluginTabList
@@ -672,6 +673,7 @@ export function ContextIgnoreSettingsPage({
               form={`${tabId}-form`}
               disabled={!settings.dirty || settings.saving}
             >
+              {settings.saving ? <PluginSpinner /> : null}
               {settings.saving ? '保存中…' : '保存设置'}
             </PluginButton>
           </PluginActionRow>

@@ -24,6 +24,7 @@ import { L3ProjectFileBrowser } from '@client/l3_modules/project-files/l3-projec
 import { L3ProjectFileTabs } from '@client/l3_modules/project-files/l3-project-file-tabs'
 import { L3ProjectDocumentView } from '@client/l3_modules/project-files/l3-project-document-view'
 import { useL4AppToast } from '@client/l4_foundation/ui/l4-app-toast'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import { copyL4BrowserText } from '@client/l4_foundation/lib/l4-browser-clipboard'
 import { useL2ProjectPreview } from './hooks/l2-use-project-preview'
 import { L2ProjectHistoryView } from './views/l2-project-history-view'
@@ -182,12 +183,10 @@ export function L2ProjectPreview({
             })
           }}
         />
+      ) : gitState.snapshot.status === 'loading' || gitState.snapshot.status === 'idle' ? (
+        <L4LoadingState>{t('findingGit')}</L4LoadingState>
       ) : (
-        <p className="p-4 text-sm text-muted-foreground">
-          {gitState.snapshot.status === 'loading' || gitState.snapshot.status === 'idle'
-            ? t('findingGit')
-            : (gitState.snapshot.error ?? t('noGit'))}
-        </p>
+        <p className="p-4 text-sm text-muted-foreground">{gitState.snapshot.error ?? t('noGit')}</p>
       )}
     </div>
   )

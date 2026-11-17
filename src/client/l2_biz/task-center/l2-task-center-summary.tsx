@@ -85,7 +85,7 @@ export function L2TaskCenterSummary({
       icon={displayTask ? <StatusIcon task={displayTask} /> : null}
       meta={highlighted && running.length === 1 ? t('statusRunning') : undefined}
     >
-      <div className="p-4" data-testid="task-capsule-preview">
+      <div className="px-1.5 py-4" data-testid="task-capsule-preview">
         <div className="space-y-1">
           {preview.map((task) => (
             <button
@@ -103,7 +103,7 @@ export function L2TaskCenterSummary({
                   <span className="mt-1 block break-words text-xs opacity-70">{task.activity}</span>
                 ) : null}
               </span>
-              <span className={`shrink-0 text-xs ${STATUS_COLORS[task.status]}`}>
+              <span className={`mt-0.5 shrink-0 text-xs ${STATUS_COLORS[task.status]}`}>
                 {t(STATUS_LABELS[task.status])}
               </span>
             </button>

@@ -12,6 +12,7 @@ import {
   PluginErrorBoundary,
   PluginField,
   PluginHostProvider,
+  PluginSpinner,
   PluginSurface,
   PluginTab,
   PluginTabList
@@ -70,6 +71,7 @@ function Settings({
               void state.refresh()
             }}
           >
+            {state.loading ? <PluginSpinner /> : null}
             {state.loading ? '同步中…' : '刷新'}
           </PluginButton>
         </div>
@@ -93,7 +95,11 @@ function Settings({
           className="remote-debug-form-width"
         >
           <div className="remote-debug-address-row">
-            <span className="remote-debug-path">
+            <span
+              className="remote-debug-path"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '.5rem' }}
+            >
+              {!state.settings && state.loading ? <PluginSpinner /> : null}
               {state.settings
                 ? (connectionAddress ?? '未配置')
                 : state.loading

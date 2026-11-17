@@ -12,6 +12,7 @@ import { useL4Region } from '@client/l4_foundation/locale/l4-region-provider'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
 import { Checkbox } from '@client/l4_foundation/ui/shadcn/checkbox'
 import { Input } from '@client/l4_foundation/ui/shadcn/input'
+import { L4LoadingState } from '@client/l4_foundation/ui/loading/l4-loading-state'
 import {
   Select,
   SelectContent,
@@ -205,9 +206,7 @@ export function L2PluginInstalledList(props: InstalledListProps): React.JSX.Elem
       </div>
       <div className="pi-desk-chat-scrollbar min-h-0 overflow-y-auto">
         {props.loading && !props.snapshot ? (
-          <p role="status" className="py-6 text-sm text-muted-foreground">
-            {t('loading')}
-          </p>
+          <L4LoadingState>{t('loading')}</L4LoadingState>
         ) : plugins.length ? (
           <div className={`${styles.list} divide-y rounded-lg border bg-card`}>
             {plugins.map((plugin) => {

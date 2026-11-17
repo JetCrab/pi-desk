@@ -7,6 +7,7 @@ import {
   L4AppDialogTitle
 } from '@client/l4_foundation/ui/l4-app-dialog'
 import { Button } from '@client/l4_foundation/ui/shadcn/button'
+import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-spinner'
 import { useTranslation } from 'react-i18next'
 
 export function L2CapabilityModesConfirm({
@@ -63,6 +64,7 @@ export function L2CapabilityModesConfirm({
           </Button>
           {deleteName ? (
             <Button variant="destructive" disabled={saving} onClick={onDelete}>
+              {saving ? <L4LoadingSpinner aria-hidden="true" /> : null}
               {t('delete')}
             </Button>
           ) : (
@@ -71,6 +73,7 @@ export function L2CapabilityModesConfirm({
                 {t('discard')}
               </Button>
               <Button disabled={saving} onClick={() => onLeave('save')}>
+                {saving ? <L4LoadingSpinner aria-hidden="true" /> : null}
                 {saving ? t('saving') : t('saveContinue')}
               </Button>
             </>
