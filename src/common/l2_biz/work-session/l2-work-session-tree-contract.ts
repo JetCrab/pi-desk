@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { L3ConversationInputImageSchema } from '@common/l3_modules/conversation/l3-conversation-contract'
 import { L4TimestampMsSchema } from '@common/l4_foundation/l4-timestamp-contract'
 import {
   L2PiEntryIdSchema,
@@ -127,7 +128,8 @@ export const L2WorkSessionBranchResponseSchema = z
     workSessions: z.array(L2WorkSessionListItemSchema),
     pinnedCount: L2WorkSessionPinnedCountSchema,
     targetWorkId: L2WorkIdSchema,
-    editorText: z.string().nullable()
+    editorText: z.string().nullable(),
+    editorImages: z.array(L3ConversationInputImageSchema).optional()
   })
   .strict()
   .superRefine((value, context) => {

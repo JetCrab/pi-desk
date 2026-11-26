@@ -1,7 +1,11 @@
 'use client'
 
 import { isL2ChatSendResultUnknown } from '@common/l2_biz/chat/l2-chat-send-error'
-import type { L2ChatSource, L2ChatSourceState } from '@common/l2_biz/chat/l2-chat-contract'
+import type {
+  L2ChatInputImage,
+  L2ChatSource,
+  L2ChatSourceState
+} from '@common/l2_biz/chat/l2-chat-contract'
 import type { L2ChatSourceEventPush } from '@common/l2_biz/chat/l2-chat-websocket-contract'
 import type { L3PiNativeToolsListResponse } from '@common/l3_modules/plugin-host/l3-plugin-native-pi-contract'
 import type { L2PiModelOption, L2PiModelPreset } from '@common/l2_biz/pi-model/l2-pi-model-contract'
@@ -70,6 +74,11 @@ export interface L2WorkbenchChatInputRuntime {
   loadSource: (source: L2ChatSource) => Promise<void>
   setText: (source: L2ChatSource, text: string) => void
   preserveDraftOnBranch: (source: L2ChatSource) => () => void
+  appendResendDraft: (
+    source: L2ChatSource,
+    text: string,
+    images: readonly L2ChatInputImage[]
+  ) => void
   dismissFeedback: (source: L2ChatSource) => void
   addFiles: (source: L2ChatSource, files: readonly File[]) => Promise<void>
   removeImage: (source: L2ChatSource, localId: string) => void
@@ -161,6 +170,22 @@ function tempImageKey(source: L2ChatSource, tempId: string, imageIndex: number):
 
 function durableImageKey(source: L2ChatSource, entryId: string, imageIndex: number): string {
   return `${sourceKey(source)}\u0000entry\u0000${entryId}\u0000${imageIndex}`
+}
+
+function restoreImageAttachment(
+  image: L2ChatInputImage,
+  index: number
+): L2WorkbenchImageAttachment {
+  return createL2WorkbenchImageAttachment(
+    {
+      blob: fromL2ChatImageResponse(image),
+      mimeType: image.mimeType,
+      width: image.width,
+      height: image.height,
+      optimized: true
+    },
+    workbenchText('restoredImage', { count: index + 1 })
+  )
 }
 
 function releaseAttachments(images: readonly L2WorkbenchImageAttachment[]): void {
@@ -490,6 +515,18 @@ export function createL2WorkbenchChatInputRuntime(
       return () => preservedDraftSources.delete(key)
     },
 
+    appendResendDraft(source, text, images): void {
+      const restored = images.map(restoreImageAttachment)
+      const next = replaceState(source, (state) => ({
+        ...state,
+        text: [state.text, text].filter(Boolean).join('\n'),
+        images: [...state.images, ...restored],
+        notice: null,
+        error: null
+      }))
+      enqueueDraftWrite(source, storedInput(next))
+    },
+
     async addFiles(source, files): Promise<void> {
       const current = ensureState(source)
       const available = MAX_IMAGE_COUNT - current.images.length
@@ -771,18 +808,7 @@ export function createL2WorkbenchChatInputRuntime(
       requireSynchronizedSource(source)
       try {
         const restored = await biz.restoreChatQueue({ source })
-        const restoredImages = restored.images.map((image, index) =>
-          createL2WorkbenchImageAttachment(
-            {
-              blob: fromL2ChatImageResponse(image),
-              mimeType: image.mimeType,
-              width: image.width,
-              height: image.height,
-              optimized: true
-            },
-            workbenchText('restoredImage', { count: index + 1 })
-          )
-        )
+        const restoredImages = restored.images.map(restoreImageAttachment)
         const next = replaceState(source, (state) => ({
           ...state,
           text: inputText(restored.text, state.text),

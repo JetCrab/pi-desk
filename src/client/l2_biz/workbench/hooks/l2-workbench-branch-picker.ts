@@ -287,6 +287,8 @@ export function useL2WorkbenchBranchPicker({
       try {
         if (intent.action === 'resend') {
           await chatInputRuntime.loadSource(operationSource)
+          const draft = chatInputRuntime.getState(operationSource)
+          if (!draft.loaded) throw new Error(draft.error ?? l2WorkbenchText('draftLoadFailed'))
           releaseDraft = chatInputRuntime.preserveDraftOnBranch(operationSource)
         }
         const response = await workbenchBiz.branchWorkSession(
@@ -304,6 +306,11 @@ export function useL2WorkbenchBranchPicker({
 
         const targetSource = sourceFor(target)
         if (intent.action === 'resend') {
+          chatInputRuntime.appendResendDraft(
+            targetSource,
+            response.editorText ?? '',
+            response.editorImages ?? []
+          )
           focusWorkSession(target.workId)
         } else if (intent.action === 'tree') {
           focusWorkSession(target.workId)

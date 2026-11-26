@@ -435,6 +435,7 @@ function TaskCenterPanel({
   useSyncExternalStore(runtime.subscribe, getPanelSnapshot, getPanelSnapshot)
   const state = runtime.getState()
   const [mobileDetail, setMobileDetail] = useState(true)
+  const [closing, setClosing] = useState(false)
   const selectedTask = tasks.find((task) => task.taskId === state.selectedTaskId) ?? null
 
   useEffect(() => {
@@ -445,7 +446,9 @@ function TaskCenterPanel({
   const showMobileDetail = mobileDetail && state.selectedTaskId !== null
   const panelOpen = state.open && sameSource(state.source, source)
   if (!panelOpen && !mobileDetail) setMobileDetail(true)
+  if (!panelOpen && closing) setClosing(false)
 
+  const close = (): void => setClosing(true)
   const select = (taskId: string): void => {
     runtime.selectTask(taskId)
     setMobileDetail(true)
@@ -453,15 +456,19 @@ function TaskCenterPanel({
 
   return (
     <L4AppDialogRoot
-      open={panelOpen}
+      open={panelOpen && !closing}
       onOpenChange={(open) => {
-        if (!open) runtime.close()
+        if (!open) close()
+      }}
+      onOpenChangeComplete={(open) => {
+        // 退场期间保持当前列表或详情，动画结束再释放订阅和缓存。
+        if (!open && closing) runtime.close()
       }}
     >
       <L4AppDialogContent
         aria-label={t('title')}
         showCloseButton={false}
-        className="h-[calc(100dvh-2rem)] max-w-[70rem] flex-row bg-background max-lg:h-[var(--pi-desk-content-height)] max-lg:max-h-[var(--pi-desk-content-height)] max-lg:w-dvw max-lg:max-w-none max-lg:rounded-none max-lg:border-0"
+        className="h-[calc(100dvh-2rem)] max-w-[70rem] flex-row bg-background max-lg:h-[var(--pi-desk-content-height)] max-lg:max-h-[var(--pi-desk-content-height)] max-lg:w-dvw max-lg:max-w-none max-lg:rounded-none max-lg:border-0 max-lg:duration-200 max-lg:ease-out max-lg:data-open:slide-in-from-bottom-2 max-lg:data-open:zoom-in-100 max-lg:data-closed:slide-out-to-bottom-2 max-lg:data-closed:zoom-out-100 motion-reduce:animate-none"
       >
         <div
           className={cn(
@@ -483,7 +490,7 @@ function TaskCenterPanel({
               variant="ghost"
               size="icon"
               aria-label={t('close')}
-              onClick={() => runtime.close()}
+              onClick={close}
             >
               <XIcon />
             </Button>
@@ -568,7 +575,7 @@ function TaskCenterPanel({
                 variant="ghost"
                 size="icon"
                 aria-label={t('close')}
-                onClick={() => runtime.close()}
+                onClick={close}
               >
                 <XIcon />
               </Button>
@@ -589,7 +596,7 @@ function TaskCenterPanel({
           variant="ghost"
           size="icon"
           aria-label={t('close')}
-          onClick={() => runtime.close()}
+          onClick={close}
         >
           <XIcon />
         </Button>

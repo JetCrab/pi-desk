@@ -23,13 +23,15 @@ export const taskCapsuleFixture = `
       const message = JSON.parse(data);
       if (message.head?.path === 'task-center/detail-watch' && message.body?.source?.workId === 'composer-resize') {
         const task = window.__capsuleTasks?.find(task => task.taskId === message.body.taskId);
-        queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+        const respond = () => this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
           head: { ...message.head, op: 'resp' },
           body: { code: 0, msg: '', data: { snapshot: task ? {
             taskId: task.taskId, canInterrupt: false,
             body: { kind: 'text', text: task.title + '的执行详情', truncated: false }
           } : null } }
-        }) })));
+        }) }));
+        if (task && window.__holdCapsuleDetail) window.__releaseCapsuleDetail = respond;
+        else queueMicrotask(respond);
         return;
       }
       super.send(data);
@@ -50,6 +52,50 @@ export const taskCapsuleFixture = `
     }) }));
   };
 `
+
+async function startPanelProbe(client) {
+  await evaluate(
+    client,
+    `(() => {
+      const samples = [];
+      const sample = () => {
+        const dialog = document.querySelector('[data-slot="app-dialog-content"]');
+        const title = dialog?.querySelector('h3');
+        const preview = document.querySelector('[data-slot="status-capsule-popup"]');
+        samples.push({
+          dialog: Boolean(dialog),
+          list: Boolean(dialog?.querySelector('[data-slot="app-dialog-title"]')?.checkVisibility()),
+          title: title?.checkVisibility() ? title.textContent : null,
+          output: dialog?.querySelector('pre')?.textContent ?? null,
+          preview: Boolean(preview?.checkVisibility({ visibilityProperty: true }))
+        });
+      };
+      let frame;
+      const tick = () => { sample(); frame = requestAnimationFrame(tick); };
+      const observer = new MutationObserver(sample);
+      observer.observe(document.body, { subtree: true, childList: true, attributes: true });
+      tick();
+      window.__finishTaskPanelProbe = () => {
+        cancelAnimationFrame(frame);
+        observer.disconnect();
+        sample();
+        return samples;
+      };
+    })()`
+  )
+}
+
+async function finishPanelProbe(client) {
+  return evaluate(
+    client,
+    `(async () => {
+      const panel = document.querySelector('[data-slot="app-dialog-content"]');
+      await Promise.all((panel?.getAnimations() ?? []).map(animation => animation.finished.catch(() => {})));
+      await new Promise(requestAnimationFrame);
+      return window.__finishTaskPanelProbe();
+    })()`
+  )
+}
 
 async function click(client, selector) {
   await waitFor(
@@ -122,7 +168,15 @@ export async function checkTaskCapsule({ client, viewport, settle, results, runR
   for (const completedCount of [0, 1]) {
     await evaluate(client, `window.__setCapsuleTasks(1, 'running', '执行中', ${completedCount})`)
     await settle(client)
+    await evaluate(client, 'window.__holdCapsuleDetail = true')
+    await startPanelProbe(client)
     await click(client, '[data-slot="status-capsule-trigger"]')
+    await waitFor(
+      client,
+      'document.querySelector("[role=dialog] h3")?.checkVisibility() && document.querySelector("[role=dialog]")?.textContent.includes("正在加载任务详情")',
+      '慢响应时直接显示详情标题与加载状态'
+    )
+    await evaluate(client, 'window.__holdCapsuleDetail = false; window.__releaseCapsuleDetail()')
     await waitFor(
       client,
       'document.querySelector("[role=dialog] pre")?.textContent === "检查界面结构的执行详情"',
@@ -136,13 +190,22 @@ export async function checkTaskCapsule({ client, viewport, settle, results, runR
       false,
       '单任务仍展开了预览列表'
     )
+    const openingFrames = await finishPanelProbe(client)
+    assert.ok(openingFrames.some((frame) => frame.title?.includes('检查界面结构')))
+    if (viewport.mobile) {
+      assert.ok(
+        openingFrames.every((frame) => !frame.list),
+        '直达详情期间闪现任务列表'
+      )
+    }
+    results.push({ label: `${prefix}直达详情逐帧检查`, samples: openingFrames })
     if (completedCount === 0) {
       await writeFile(
         join(runRoot, `capsule-single-detail-${viewport.width}.png`),
         await screenshot(client)
       )
     }
-    if (viewport.mobile) {
+    if (viewport.mobile && completedCount > 0) {
       await click(client, '[role="dialog"] [aria-label="返回任务列表"]')
       await waitFor(
         client,
@@ -150,6 +213,7 @@ export async function checkTaskCapsule({ client, viewport, settle, results, runR
         '详情可返回任务列表'
       )
     }
+    await startPanelProbe(client)
     for (const type of ['keyDown', 'keyUp']) {
       await client.send('Input.dispatchKeyEvent', {
         type,
@@ -159,6 +223,25 @@ export async function checkTaskCapsule({ client, viewport, settle, results, runR
       })
     }
     await waitFor(client, '!document.querySelector("[role=dialog]")', '单任务详情关闭')
+    const closingFrames = await finishPanelProbe(client)
+    const visibleFrames = closingFrames.filter((frame) => frame.dialog)
+    assert.ok(visibleFrames.length > 0, '未采集到退场过程')
+    if (viewport.mobile && completedCount === 0) {
+      assert.ok(
+        visibleFrames.every((frame) => !frame.list && frame.title?.includes('检查界面结构'))
+      )
+      assert.ok(
+        visibleFrames.every((frame) => frame.output === '检查界面结构的执行详情'),
+        '退场期间详情被清空'
+      )
+    }
+    if (viewport.mobile && completedCount > 0) {
+      assert.ok(
+        visibleFrames.every((frame) => frame.list),
+        '列表退场期间切换为详情'
+      )
+    }
+    results.push({ label: `${prefix}关闭逐帧检查`, samples: closingFrames })
   }
   results.push({ label: `${prefix}单任务及历史记录直达详情`, passed: true })
   await evaluate(client, 'window.__probeFrames(); window.__setCapsuleTasks(2)')
@@ -245,6 +328,40 @@ export async function checkTaskCapsule({ client, viewport, settle, results, runR
   assert.equal(presentation.title, null, '胶囊仍有多余原生悬浮提示')
   results.push({ label: `${prefix}主题与去重`, presentation })
   await writeFile(join(runRoot, `capsule-${viewport.width}.png`), await screenshot(client))
+  await startPanelProbe(client)
+  await click(client, '[data-testid="task-capsule-preview"] button')
+  await waitFor(
+    client,
+    'document.querySelector("[role=dialog] pre")?.textContent === "检查界面结构的执行详情"',
+    '多任务预览直达所选详情'
+  )
+  const handoffFrames = await finishPanelProbe(client)
+  assert.ok(
+    handoffFrames.every((frame) => !frame.dialog || !frame.preview),
+    '预览退场覆盖详情'
+  )
+  if (viewport.mobile) {
+    assert.ok(
+      handoffFrames.every((frame) => !frame.list),
+      '预览交接期间闪现任务列表'
+    )
+  }
+  results.push({ label: `${prefix}预览到详情交接`, samples: handoffFrames })
+  for (const type of ['keyDown', 'keyUp']) {
+    await client.send('Input.dispatchKeyEvent', {
+      type,
+      key: 'Escape',
+      code: 'Escape',
+      windowsVirtualKeyCode: 27
+    })
+  }
+  await waitFor(client, '!document.querySelector("[role=dialog]")', '多任务详情关闭')
+  await click(client, '[data-slot="status-capsule-trigger"]')
+  await waitFor(
+    client,
+    'document.querySelector("[data-testid=task-capsule-preview]")?.checkVisibility({ visibilityProperty: true })',
+    '重新展开预览'
+  )
   await evaluate(
     client,
     `(() => {

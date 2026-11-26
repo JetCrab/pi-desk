@@ -79,6 +79,50 @@ test('弹层打开期间缓存全部访问详情，关闭时整体清空', async
   runtime.dispose()
 })
 
+test('首次打开、重开和切换会话的首个快照直接选中目标任务', async () => {
+  const runtime = createL2TaskCenterRuntime({
+    async watchDetail({ taskId }) {
+      return { snapshot: taskId ? textSnapshot(taskId, taskId) : null }
+    },
+    async interrupt() {},
+    subscribeDetailEvents() {
+      return () => undefined
+    },
+    async getMessageDetail() {
+      throw new Error('unused')
+    },
+    async getImage() {
+      throw new Error('unused')
+    }
+  })
+  const snapshots: Array<{ open: boolean; taskId: string | null; loading: boolean }> = []
+  runtime.subscribe(() => {
+    const state = runtime.getState()
+    snapshots.push({ open: state.open, taskId: state.selectedTaskId, loading: state.loading })
+  })
+
+  try {
+    for (const { source, closeAfter } of [
+      { source: SOURCE, closeAfter: true },
+      { source: SOURCE, closeAfter: false },
+      { source: { ...SOURCE, workId: 'work-2' }, closeAfter: false }
+    ]) {
+      snapshots.length = 0
+      runtime.open(source, 'target')
+      assert.deepEqual(snapshots, [{ open: true, taskId: 'target', loading: true }])
+      await new Promise((resolve) => setImmediate(resolve))
+      assert.ok(snapshots.every((snapshot) => snapshot.open && snapshot.taskId === 'target'))
+      if (closeAfter) runtime.close()
+    }
+    runtime.close()
+    snapshots.length = 0
+    runtime.open(SOURCE, null)
+    assert.deepEqual(snapshots, [{ open: true, taskId: null, loading: false }])
+  } finally {
+    runtime.dispose()
+  }
+})
+
 test('连续会话增量立即应用并按帧合并状态通知', async () => {
   const pushListener: { current: ((push: L2TaskDetailEventPush) => void) | null } = {
     current: null

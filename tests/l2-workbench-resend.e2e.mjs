@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { randomBytes, scryptSync } from 'node:crypto'
 import { once } from 'node:events'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -35,6 +36,7 @@ const image = (
     .png()
     .toBuffer()
 ).toString('base64')
+const password = 'resend-fixture-only'
 const cancellationFlag = join(fixtureRoot, 'cancel-resend')
 const originalText = '检查这张图片。\n保留这行文字并重新分析。'
 const draftText = '尚未发送的下一条草稿'
@@ -89,9 +91,18 @@ export default function(pi) {
       defaultThinkingLevel: 'medium'
     })
   )
+  await writeFile(join(agentDir, 'pi-desk/auth-session-key'), randomBytes(32).toString('hex'))
+  const salt = randomBytes(16)
+  const hash = scryptSync(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 })
+  await mkdir(join(agentDir, 'config'), { recursive: true })
   await writeFile(
-    join(agentDir, 'pi-desk-settings.json'),
-    JSON.stringify({ region: { locale: 'zh-CN', timeZone: 'UTC' } })
+    join(agentDir, 'config/pi-desk.yaml'),
+    JSON.stringify({
+      'pi-desk': {
+        auth: { passwordHash: `scrypt:${salt.toString('hex')}:${hash.toString('hex')}` },
+        settings: { region: { locale: 'zh-CN', timeZone: 'UTC' } }
+      }
+    })
   )
   await writeFile(
     join(agentDir, 'models.json'),
@@ -252,17 +263,14 @@ async function main() {
     const data = await fixture(modelPort)
     const appPort = await reservePort()
     const origin = `http://127.0.0.1:${appPort}`
-    const api = async (path, body) => {
-      const response = await fetch(`${origin}/api/${path}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Pi-Desk-Client-Id': 'e1a51619-9715-408a-84b9-e55fe94c6782'
-        },
-        body: JSON.stringify(body)
-      })
-      return { status: response.status, ...(await response.json()) }
-    }
+    const api = (path, body) =>
+      evaluate(
+        page,
+        `fetch(${JSON.stringify(`/api/${path}`)}, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Pi-Desk-Client-Id': 'e1a51619-9715-408a-84b9-e55fe94c6782' },
+      body: JSON.stringify(${JSON.stringify(body)})
+    }).then(async response => ({status:response.status, ...await response.json()}))`
+      )
     const branch = (entryId, action = 'resend', binding = { workId, sessionId: data.sessionId }) =>
       api('work-sessions/branch', { ...binding, entryId, action })
     server = spawnE2eServer({
@@ -290,6 +298,9 @@ async function main() {
       source: `localStorage.setItem('pi-super:workbench-layout', JSON.stringify({ primaryWorkId: '${workId}' }));`
     })
     await setViewport(page, 1280, 900, false)
+    await navigate(page, `${origin}/login`)
+    const login = await api('auth/login', { password })
+    assert.equal(login.code, 0, login.msg)
     await navigate(page, origin)
     await waitFor(
       page,
@@ -323,10 +334,28 @@ async function main() {
       button.click(); button.click();
     })()`
     )
+    const mergedText = `${draftText}\n${originalText}`
+    await waitFor(
+      page,
+      `document.querySelector('textarea')?.value === ${JSON.stringify(mergedText)} && document.querySelectorAll('form img').length === 2 && document.querySelector('[aria-label="发送消息"]')?.disabled === false`,
+      '双击后图文仅追加一次'
+    )
+    assert.equal(requests.length, 0, '重发本身不能请求模型')
+    assert.equal(
+      (await entries(data.file)).filter((entry) => entry.message?.role === 'user').length,
+      data.original.filter((entry) => entry.message?.role === 'user').length
+    )
+    const editedText = '改为比较这两张图片。'
+    await evaluate(
+      page,
+      `document.querySelector('textarea').focus(); document.querySelector('textarea').select()`
+    )
+    await page.send('Input.insertText', { text: editedText })
+    await evaluate(page, `document.querySelector('[aria-label="发送消息"]').click()`)
     await waitFor(
       page,
       `document.querySelector('[role="log"]')?.innerText.includes('重发结果 1')`,
-      '自动重发并产生新回复',
+      '手动发送后产生新回复',
       () => serverOutput
     )
     await waitUntil(
@@ -338,9 +367,8 @@ async function main() {
         ),
       '新回复落盘'
     )
-    assert.equal(requests.length, 1, '连续点击不能发送两次')
-    assert.equal(await evaluate(page, `document.querySelector('textarea')?.value`), draftText)
-    assert.equal(await evaluate(page, `document.querySelector('footer img')?.naturalWidth`), 120)
+    assert.equal(requests.length, 1, '手动发送只调用一次模型')
+    assert.equal(await evaluate(page, `document.querySelector('textarea')?.value`), '')
     const newEntries = await entries(data.file)
     for (const old of data.original)
       assert.deepEqual(
@@ -353,15 +381,18 @@ async function main() {
     assert.ok(newUser)
     assert.deepEqual(conversationPath(newEntries, newUser.id), [data.root, data.parent, newUser.id])
     assert.deepEqual(
-      newUser.message.content,
-      data.original.find((entry) => entry.id === data.selected).message.content
+      newUser.message.content.filter((part) => part.type === 'text').map((part) => part.text),
+      [editedText]
     )
+    const sentImages = newUser.message.content.filter((part) => part.type === 'image')
+    assert.equal(sentImages.length, 2)
+    assert.equal(sentImages[1].data, image)
     const providerUser = requests[0].messages.filter((message) => message.role === 'user').at(-1)
-    assert.ok(JSON.stringify(providerUser).includes(originalText.replaceAll('\n', '\\n')))
+    assert.ok(JSON.stringify(providerUser).includes(editedText))
     assert.ok(JSON.stringify(providerUser).includes(image))
     assert.ok(!JSON.stringify(requests[0].messages).includes('继续补充细节'))
     assert.ok(!JSON.stringify(requests[0].messages).includes(draftText))
-    results.push('文字和图片重发、旧分支完整、模型上下文正确、重复点击仅发送一次、文字草稿保留')
+    results.push('重发仅回填一次并保留已有图文，手动发送编辑结果，模型上下文正确，旧分支完整')
 
     const returned = await branch(data.oldTail, 'tree')
     assert.equal(returned.code, 0, returned.msg)
@@ -479,66 +510,39 @@ async function main() {
 
     const rootResult = await branch(data.root)
     assert.equal(rootResult.code, 0, rootResult.msg)
-    await waitFor(
-      page,
-      `document.querySelector('[role="log"]')?.innerText.includes('重发结果 2')`,
-      '首条消息重发'
-    )
-    await waitUntil(
-      async () =>
-        (await entries(data.file)).some(
-          (entry) =>
-            entry.message?.role === 'assistant' &&
-            JSON.stringify(entry.message.content).includes('重发结果 2')
-        ),
-      '首条重发落盘'
-    )
-    const rootRecords = await entries(data.file)
-    const newRoot = rootRecords.filter((entry) => entry.message?.role === 'user').at(-1)
-    assert.notEqual(newRoot.id, data.root)
-    assert.deepEqual(conversationPath(rootRecords, newRoot.id), [newRoot.id])
-    assert.deepEqual(
-      requests[1].messages
-        .filter((message) => message.role === 'user')
-        .map((message) =>
-          typeof message.content === 'string'
-            ? message.content
-            : message.content
-                .filter((part) => part.type === 'text')
-                .map((part) => part.text)
-                .join('')
-        ),
-      ['最初的问题。']
-    )
+    assert.equal(rootResult.data.editorText, '最初的问题。')
+    assert.deepEqual(rootResult.data.editorImages, [])
+    const rootTree = await api('work-session-tree/get', { workId, sessionId: data.sessionId })
+    assert.deepEqual(conversationPath(await entries(data.file), rootTree.data.leafEntryId), [])
     const tailResult = await branch(data.tailUser, 'resend', {
       workId: 'resend-tail',
       sessionId: data.tailSessionId
     })
     assert.equal(tailResult.code, 0, tailResult.msg)
-    await waitUntil(
-      async () =>
-        (await entries(data.tailFile)).filter((entry) => entry.message?.role === 'user').length ===
-        2,
-      '末尾用户消息重发'
+    assert.equal(tailResult.data.editorText, '尚未收到回答的末尾消息。')
+    const tailTree = await api('work-session-tree/get', {
+      workId: 'resend-tail',
+      sessionId: data.tailSessionId
+    })
+    assert.equal(tailTree.data.leafEntryId, data.tailParent)
+    assert.equal(
+      (await entries(data.tailFile)).filter((entry) => entry.message?.role === 'user').length,
+      1
     )
-    const tailRecords = await entries(data.tailFile)
-    const tailUsers = tailRecords.filter((entry) => entry.message?.role === 'user')
-    assert.equal(tailUsers[0].parentId, data.tailParent)
-    assert.deepEqual(conversationPath(tailRecords, tailUsers[1].id), [tailUsers[1].id])
-    await waitUntil(
-      async () =>
-        (await entries(data.tailFile)).some(
-          (entry) =>
-            entry.message?.role === 'assistant' &&
-            JSON.stringify(entry.message.content).includes('重发结果 3')
-        ),
-      '末尾重发回复落盘'
-    )
-    results.push('无父节点首条及当前末尾用户消息均生成兄弟分支')
+    assert.equal(requests.length, 1)
+    results.push('首条和末尾用户消息均只切回消息前，不发送')
 
     holdResponse = true
-    const running = await branch(data.selected)
+    const running = await branch(data.oldTail, 'tree')
     assert.equal(running.code, 0, running.msg)
+    await waitFor(
+      page,
+      `(${selectedMessage}) && document.querySelector('textarea')?.disabled === false`,
+      '旧分支可输入'
+    )
+    await evaluate(page, `document.querySelector('textarea').focus()`)
+    await page.send('Input.insertText', { text: '启动运行中验证' })
+    await evaluate(page, `document.querySelector('[aria-label="发送消息"]').click()`)
     await waitFor(
       page,
       `document.querySelector('[role="log"]')?.innerText.includes('正在等待模型继续输出')`,
@@ -549,14 +553,11 @@ async function main() {
     assert.equal(busy.status, 409, JSON.stringify(busy))
     await evaluate(
       page,
-      `(() => {
-      const buttons = [...document.querySelectorAll('[data-chat-user-message] button')];
-      buttons.find(button => button.textContent.trim() === '重发')?.click();
-    })()`
+      `[...(${selectedMessage}).querySelectorAll('button')].find(button => button.textContent.trim() === '重发').click()`
     )
     await waitFor(
       page,
-      `document.body.innerText.includes('确认并继续') && document.body.innerText.includes('从这条消息重新发送')`,
+      `document.body.innerText.includes('确认并继续') && document.body.innerText.includes('将内容放回输入框')`,
       '运行中重发确认'
     )
     holdResponse = false
@@ -566,12 +567,12 @@ async function main() {
     )
     await waitFor(
       page,
-      `document.querySelector('[role="log"]')?.innerText.includes('重发结果 ${count + 1}')`,
-      '停止旧响应后重发',
+      `document.querySelector('textarea')?.value === ${JSON.stringify(originalText)} && document.querySelectorAll('form img').length === 1 && document.querySelector('[aria-label="发送消息"]')?.disabled === false`,
+      '停止旧响应后只回填',
       () => serverOutput
     )
-    assert.equal(requests.length, count + 1)
-    results.push('运行中 API 拒绝；界面确认后停止旧响应并重发')
+    assert.equal(requests.length, count)
+    results.push('运行中 API 拒绝；界面确认后停止旧响应并恢复图文草稿，不发送')
     assert.equal(modelError, undefined)
     succeeded = true
     await writeFile(

@@ -283,13 +283,16 @@ export function createL2TaskCenterRuntime(biz: L2TaskCenterBiz): L2TaskCenterRun
 
     open(sourceInput, preferredTaskId): void {
       const source = L3WorkSessionSourceSchema.parse(sourceInput)
+      const taskId = preferredTaskId?.trim() || null
       if (!state.open || !sameSource(state.source, source)) {
         selectionEpoch += 1
         acceptPush = false
         revokeImages()
-        setState({ ...EMPTY_STATE, open: true, source })
+        // 有目标任务时由 selectTask 一并通知打开和选中，首帧直接进入详情。
+        state = { ...EMPTY_STATE, open: true, source }
+        if (!taskId) notify()
       }
-      if (preferredTaskId) void selectTask(preferredTaskId)
+      if (taskId) void selectTask(taskId)
     },
 
     close,

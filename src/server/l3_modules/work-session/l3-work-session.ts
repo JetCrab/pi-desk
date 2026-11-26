@@ -1,10 +1,7 @@
 import 'server-only'
 
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
-import {
-  L4PiWorkSessionRuntime,
-  type L4PiResendInput
-} from '@server/l4_foundation/pi/l4-pi-work-session-runtime'
+import { L4PiWorkSessionRuntime } from '@server/l4_foundation/pi/l4-pi-work-session-runtime'
 
 export interface WorkSessionInputImage {
   mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
@@ -13,13 +10,11 @@ export interface WorkSessionInputImage {
   height: number
 }
 
-export type WorkSessionSendInput =
-  | {
-      mode: 'auto' | 'follow_up'
-      text: string
-      images: WorkSessionInputImage[]
-    }
-  | L4PiResendInput
+export interface WorkSessionSendInput {
+  mode: 'auto' | 'follow_up'
+  text: string
+  images: WorkSessionInputImage[]
+}
 
 export interface WorkSessionModelInput {
   provider: string
@@ -30,6 +25,7 @@ export interface WorkSessionModelInput {
 export interface WorkSessionBranchResult {
   changed: boolean
   editorText: string | null
+  editorImages?: WorkSessionInputImage[]
 }
 
 export interface WorkSessionCreateBranchedInput {
@@ -68,9 +64,12 @@ export class WorkSession {
     return this.runtime.branchId
   }
 
-  async branch(entryId: string): Promise<WorkSessionBranchResult> {
-    const result = await this.runtime.branch(entryId)
-    return { changed: result.changed, editorText: result.editorText }
+  async branch(
+    entryId: string,
+    action: 'tree' | 'resend' = 'tree'
+  ): Promise<WorkSessionBranchResult> {
+    const { changed, editorText, editorImages } = await this.runtime.branch(entryId, action)
+    return { changed, editorText, editorImages }
   }
 
   async createBranchedSession(

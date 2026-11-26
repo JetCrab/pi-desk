@@ -55,7 +55,7 @@ function fixture(): {
   return { runtime, records, image, reconcile }
 }
 
-test('主动重发切换 Source 时保留最新文字和图片，释放原图片地址', async () => {
+test('主动重发在最新草稿后追加原文和图片，持久化但不进入 Outbox', async () => {
   const { runtime, records, image, reconcile } = fixture()
   try {
     await runtime.loadSource(source)
@@ -65,13 +65,22 @@ test('主动重发切换 Source 时保留最新文字和图片，释放原图片
     reconcile(target)
     release()
     await runtime.loadSource(target)
-    assert.equal(runtime.getState(target).text, '重发等待期间更新的草稿')
+    runtime.appendResendDraft(target, '原文\n第二行', [
+      { mimeType: 'image/png', width: 1, height: 1, data: btoa('original-image') }
+    ])
+    const expectedText = '重发等待期间更新的草稿\n原文\n第二行'
+    assert.equal(runtime.getState(target).text, expectedText)
     assert.equal(runtime.getState(target).images[0]!.blob, image)
     assert.notEqual(runtime.getState(target).images[0]!.objectUrl, previousUrl)
     await assert.rejects(fetch(previousUrl))
     assert.equal(runtime.getState(target).outbox, null)
     assert.equal(await runtime.prepareForPageReload(), true)
-    assert.equal(records.get(key(target))?.text, '重发等待期间更新的草稿')
+    const saved = records.get(key(target))!
+    assert.equal(saved.text, expectedText)
+    assert.deepEqual(await Promise.all(saved.images.map(({ blob }) => blob.text())), [
+      'draft-image',
+      'original-image'
+    ])
     assert.equal(records.has(key(source)), false)
   } finally {
     runtime.dispose()

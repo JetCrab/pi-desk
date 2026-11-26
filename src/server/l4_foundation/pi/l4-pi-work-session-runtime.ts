@@ -60,12 +60,6 @@ export class L4PiSessionResendTargetError extends Error {
   }
 }
 
-export interface L4PiResendInput {
-  mode: 'resend'
-  entryId: string
-  onBranchChanged: () => Promise<void>
-}
-
 export class L4PiSessionCloneEmptyError extends Error {
   constructor() {
     super('Pi session has no durable entry to clone')
@@ -327,35 +321,9 @@ export class L4PiWorkSessionRuntime {
     await this.chatWorker.abortDirectBash()
   }
 
-  async send(input: L4PiChatSendInput | L4PiResendInput): Promise<{ tempId: string }> {
+  async send(input: L4PiChatSendInput): Promise<{ tempId: string }> {
     this.assertActive()
-    if (input.mode !== 'resend') return this.chatWorker.send(input)
-
-    const entry = this.sessionManager.getEntry(input.entryId)
-    if (!entry) throw new L4PiSessionEntryNotFoundError(input.entryId)
-    if (entry.type !== 'message' || entry.message.role !== 'user') {
-      throw new L4PiSessionResendTargetError(input.entryId)
-    }
-    const content = entry.message.content
-    const text =
-      typeof content === 'string'
-        ? content
-        : content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
-    const images =
-      typeof content === 'string'
-        ? []
-        : content.flatMap((part) =>
-            part.type === 'image'
-              ? [{ ...decodeL4PiImage(part.data).metadata, data: part.data }]
-              : []
-          )
-    const blockReason = this.chatWorker.readPluginReloadBlockReason()
-    if (blockReason) throw new L4PiSessionBranchBlockedError(blockReason)
-    const selection = await this.navigateBranch(input.entryId, true, input.onBranchChanged)
-    if (!selection.changed) {
-      throw new L4PiSessionBranchBlockedError('分支切换已取消，未重发消息')
-    }
-    return this.chatWorker.send({ mode: 'auto', text, images })
+    return this.chatWorker.send(input)
   }
 
   async interrupt(): Promise<void> {
@@ -437,21 +405,47 @@ export class L4PiWorkSessionRuntime {
     }
   }
 
-  async branch(entryId: string): Promise<L4PiBranchSelection> {
-    return this.navigateBranch(entryId)
+  private selectResendEntry(
+    entryId: string
+  ): L4PiBranchSelection & { editorImages: L4PiInputImage[] } {
+    const entry = this.sessionManager.getEntry(entryId)
+    if (!entry) throw new L4PiSessionEntryNotFoundError(entryId)
+    if (entry.type !== 'message' || entry.message.role !== 'user') {
+      throw new L4PiSessionResendTargetError(entryId)
+    }
+    const blockReason = this.chatWorker.readPluginReloadBlockReason()
+    if (blockReason) throw new L4PiSessionBranchBlockedError(blockReason)
+    const content = entry.message.content
+    return {
+      selectedEntryId: entryId,
+      targetLeafEntryId: entry.parentId,
+      changed: true,
+      editorText:
+        typeof content === 'string'
+          ? content
+          : content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join(''),
+      editorImages:
+        typeof content === 'string'
+          ? []
+          : content.flatMap((part) =>
+              part.type === 'image'
+                ? [{ ...decodeL4PiImage(part.data).metadata, data: part.data }]
+                : []
+            )
+    }
   }
 
-  private async navigateBranch(
+  async branch(
     entryId: string,
-    beforeUserMessage = false,
-    onBranchChanged?: () => Promise<void>
-  ): Promise<L4PiBranchSelection> {
+    action: 'tree' | 'resend' = 'tree'
+  ): Promise<L4PiBranchSelection & { editorImages?: L4PiInputImage[] }> {
     this.assertActive()
     this.assertBranchable()
     this.syncBranchIndex()
-    const selection: L4PiBranchSelection = beforeUserMessage
-      ? { ...resolveL4PiForkSelection(this.sessionManager, entryId), changed: true }
-      : resolveL4PiBranchSelection(this.sessionManager, entryId)
+    const selection =
+      action === 'resend'
+        ? this.selectResendEntry(entryId)
+        : resolveL4PiBranchSelection(this.sessionManager, entryId)
     if (!selection.changed) return selection
 
     const previousLeaf = this.sessionManager.getLeafId()
@@ -460,7 +454,9 @@ export class L4PiWorkSessionRuntime {
     this.pendingBranchAppend = null
     let changed = false
     try {
-      changed = await this.chatWorker.navigateTree(selection.selectedEntryId, beforeUserMessage)
+      changed = await this.chatWorker.navigateTree(selection.selectedEntryId, action === 'resend')
+      if (!changed && action === 'resend')
+        throw new L4PiSessionBranchBlockedError('分支切换已取消，未回填消息')
       return changed
         ? selection
         : {
@@ -475,8 +471,6 @@ export class L4PiWorkSessionRuntime {
       if (changed || leaf !== previousLeaf) {
         this.pendingBranchAppend = this.branchIndex.predictAppend(leaf)
         this.branchIdValue = this.pendingBranchAppend.branchId
-        // 包括后置钩子抛错的已提交导航；刷新后再恢复消息，不能丢失临时消息。
-        await onBranchChanged?.()
       } else {
         this.pendingBranchAppend = previousPending
       }

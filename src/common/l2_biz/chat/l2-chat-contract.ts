@@ -26,6 +26,7 @@ import {
   L3ConversationDurableMessageLocationSchema,
   L3ConversationDurableMessageSnapshotSchema,
   L3ConversationImageGetResponseSchema,
+  L3ConversationInputImageSchema,
   L3ConversationImageMetadataSchema,
   L3ConversationImageMimeTypeSchema,
   L3ConversationMessageDetailPatchSchema,
@@ -126,9 +127,7 @@ export const L2ChatCursorPositionSchema = z
 
 export const L2ChatCursorSchema = z.union([z.null(), L2ChatCursorPositionSchema])
 
-export const L2ChatInputImageSchema = L2ChatImageMetadataSchema.extend({
-  data: z.string().min(1)
-}).strict()
+export const L2ChatInputImageSchema = L3ConversationInputImageSchema
 
 export const L2ChatModelThinkingLevelSchema = L3PiModelThinkingLevelSchema
 

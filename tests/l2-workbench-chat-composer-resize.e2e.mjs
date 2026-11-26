@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { appendFileSync } from 'node:fs'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,7 +28,9 @@ const taskId = `composer-resize-${process.pid}`
 const runRoot = join(projectRoot, 'temp/run/chat-composer-resize', taskId)
 const agentRoot = join(projectRoot, 'temp/pi/chat-composer-resize-e2e', taskId)
 const agentDir = join(agentRoot, 'agent')
-const buildRoot = join(projectRoot, 'temp/build/chat-composer-resize', taskId)
+const buildRoot = process.env.PI_DESK_E2E_NEXT_DIR
+  ? resolve(projectRoot, process.env.PI_DESK_E2E_NEXT_DIR)
+  : join(projectRoot, 'temp/build/chat-composer-resize', taskId)
 const workId = 'composer-resize'
 let serverOutput = ''
 const results = []
@@ -225,6 +228,7 @@ async function main() {
     await fixture()
     const port = await reservePort()
     cdpPort = await reservePort()
+    console.log(`启动隔离验收：appPort=${port}，cdpPort=${cdpPort}，输出=${runRoot}`)
     server = spawnE2eServer({
       projectRoot,
       agentDir,
@@ -233,9 +237,17 @@ async function main() {
       nextDirectory: buildRoot,
       onOutput: (output) => {
         serverOutput += output
+        appendFileSync(join(runRoot, 'server.log'), output)
       }
     })
     await waitForHttp(`http://127.0.0.1:${port}/api/health`, 60000, 'Pi Desk', () => serverOutput)
+    const warmupStartedAt = performance.now()
+    const warmup = await fetch(`http://127.0.0.1:${port}/`, {
+      signal: AbortSignal.timeout(120_000)
+    })
+    await warmup.text()
+    assert.equal(warmup.ok, true, '首页预热失败')
+    console.log(`首页预热完成，耗时 ${Math.round(performance.now() - warmupStartedAt)}ms。`)
     browser = spawnEdge(
       'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
       cdpPort,
@@ -244,6 +256,22 @@ async function main() {
     )
     await waitForHttp(`http://127.0.0.1:${cdpPort}/json/version`, 20000, 'Edge')
     client = await createCdpPage(cdpPort)
+    const send = client.send.bind(client)
+    client.send = async (method, params) => {
+      let timer
+      try {
+        return await Promise.race([
+          send(method, params),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`浏览器操作超时：${method}`)), 60_000)
+          })
+        ])
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    await client.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+    await client.send('Page.bringToFront')
     await client.send('Page.addScriptToEvaluateOnNewDocument', {
       source: `
       ${capsuleOnly ? taskCapsuleFixture : ''}
@@ -255,6 +283,7 @@ async function main() {
       };
     `
     })
+    console.log('浏览器就绪，加载登录页。')
     await navigate(client, `http://127.0.0.1:${port}/login`)
     const login = await evaluate(
       client,
@@ -271,6 +300,8 @@ async function main() {
       { width: 1200, height: 900, mobile: false },
       { width: 390, height: 844, mobile: true }
     ]) {
+      console.log(`开始 ${viewport.width}×${viewport.height} 交互检查。`)
+      await client.send('Page.bringToFront')
       await setViewport(client, viewport.width, viewport.height, viewport.mobile)
       await navigate(client, `http://127.0.0.1:${port}/?chatScrollDebug=1`)
       await waitFor(
@@ -375,6 +406,9 @@ async function main() {
     }
     success = true
     console.log(capsuleOnly ? '任务胶囊专项回归通过。' : '图片增删、历史阅读和输入框高度回归通过。')
+  } catch (error) {
+    await writeFile(join(runRoot, 'failure.log'), error.stack ?? String(error))
+    throw error
   } finally {
     await writeFile(join(runRoot, 'measurements.json'), JSON.stringify(results, null, 2))
     await writeFile(join(runRoot, 'server.log'), serverOutput)

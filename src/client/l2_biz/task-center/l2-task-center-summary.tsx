@@ -6,6 +6,7 @@ import { L4LoadingSpinner } from '@client/l4_foundation/ui/loading/l4-loading-sp
 import { CheckIcon, CircleStopIcon, OctagonAlertIcon } from 'lucide-react'
 import { PluginStatusCapsule } from '@jetcrab/pi-desk-sdk/react/base'
 import type { L2TaskSummary } from '@common/l2_biz/task-center/l2-task-center-contract'
+import styles from './l2-task-center-summary.module.css'
 
 const STATUS_LABELS = {
   running: 'statusRunning',
@@ -39,6 +40,7 @@ export function L2TaskCenterSummary({
 }): React.JSX.Element {
   const { t } = useTranslation('taskCenter')
   const [open, setOpen] = useState(false)
+  const [openingDetail, setOpeningDetail] = useState(false)
   const running = tasks.filter((task) => task.status === 'running')
   const highlighted = running[0] ?? null
   const [recent, setRecent] = useState<L2TaskSummary | null>(highlighted)
@@ -66,6 +68,7 @@ export function L2TaskCenterSummary({
       : t('title')
   const preview = running.length > 0 ? running.slice(0, 3) : displayTask ? [displayTask] : []
   const showTask = (taskId?: string): void => {
+    setOpeningDetail(true)
     setOpen(false)
     onOpen(taskId)
   }
@@ -75,6 +78,7 @@ export function L2TaskCenterSummary({
       visible={visible}
       open={open}
       onOpenChange={(nextOpen) => {
+        if (nextOpen) setOpeningDetail(false)
         if (nextOpen && running.length === 1 && highlighted) {
           showTask(highlighted.taskId)
           return
@@ -85,7 +89,11 @@ export function L2TaskCenterSummary({
       icon={displayTask ? <StatusIcon task={displayTask} /> : null}
       meta={highlighted && running.length === 1 ? t('statusRunning') : undefined}
     >
-      <div className="px-1.5 py-4" data-testid="task-capsule-preview">
+      <div
+        className={`px-1.5 py-4 ${styles.preview}`}
+        data-opening-detail={openingDetail || undefined}
+        data-testid="task-capsule-preview"
+      >
         <div className="space-y-1">
           {preview.map((task) => (
             <button

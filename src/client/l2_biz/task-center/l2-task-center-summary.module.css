@@ -1,0 +1,5 @@
+/* 详情接管后预览不再反向缩回，避免高层级预览盖住正在打开的详情。 */
+:global([data-slot='status-capsule-popup']):has(.preview[data-opening-detail]) {
+  visibility: hidden;
+  transition: none;
+}

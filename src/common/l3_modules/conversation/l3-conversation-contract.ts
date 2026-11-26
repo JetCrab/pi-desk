@@ -333,6 +333,10 @@ export const L3ConversationMessageDetailResponseSchema = z
   })
   .strict()
 
+export const L3ConversationInputImageSchema = L3ConversationImageMetadataSchema.extend({
+  data: z.string().min(1)
+}).strict()
+
 export const L3ConversationImageGetResponseSchema = z
   .object({
     mimeType: L3ConversationImageMimeTypeSchema,

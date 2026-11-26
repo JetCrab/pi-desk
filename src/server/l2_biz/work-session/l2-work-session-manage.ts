@@ -776,26 +776,13 @@ export class WorkSessionManage {
       if (input.action === 'tree' || input.action === 'resend') {
         const previousItem = this.toListItem(source)
         await this.chat.pauseWorkSession(source.workId)
-        let refreshed = false
         let result: Awaited<ReturnType<WorkSession['branch']>>
         try {
-          if (input.action === 'resend') {
-            await source.send({
-              mode: 'resend',
-              entryId: input.entryId,
-              onBranchChanged: async () => {
-                await this.chat.refreshWorkSession(source, false)
-                refreshed = true
-              }
-            })
-            result = { changed: true, editorText: null }
-          } else {
-            result = await source.branch(input.entryId)
-            if (result.changed) await this.chat.refreshWorkSession(source)
-          }
+          result = await source.branch(input.entryId, input.action)
+          if (result.changed) await this.chat.refreshWorkSession(source)
         } catch (error) {
-          if (source.branchId !== previousItem.branchId || refreshed) {
-            if (!refreshed) await this.chat.refreshWorkSession(source, false)
+          if (source.branchId !== previousItem.branchId) {
+            await this.chat.refreshWorkSession(source, false)
             const changes = this.toChanges(previousItem, this.toListItem(source))
             if (changes) this.publishUpdate({ type: 'update', workId: source.workId, changes })
           }
@@ -820,7 +807,8 @@ export class WorkSessionManage {
         return L2WorkSessionBranchResponseSchema.parse({
           ...snapshot,
           targetWorkId: source.workId,
-          editorText: result.editorText
+          editorText: result.editorText,
+          editorImages: result.editorImages
         })
       }
 
